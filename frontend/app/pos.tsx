@@ -11,6 +11,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -56,6 +57,10 @@ const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigi
 export default function POS() {
   const router = useRouter();
   const { staff } = useLocalSearchParams<{ staff?: string }>();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 900;
+  const isMid = width >= 600;
+  const gridCols = isWide ? 4 : isMid ? 3 : 2;
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -75,6 +80,7 @@ export default function POS() {
   const [showCustomer, setShowCustomer] = useState(false);
   const [showOrderHub, setShowOrderHub] = useState(false);
   const [showParked, setShowParked] = useState(false);
+  const [showCart, setShowCart] = useState(false); // mobile cart sheet
   const [showSuccess, setShowSuccess] = useState<null | {
     order_number: string;
     total: number;
@@ -242,17 +248,20 @@ export default function POS() {
           <Ionicons name="menu" size={24} color="#0F172A" />
         </TouchableOpacity>
 
-        <View style={styles.searchWrap}>
-          <Ionicons name="search" size={18} color="#94A3B8" />
-          <TextInput
-            placeholder="Search Products"
-            placeholderTextColor="#94A3B8"
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            testID="product-search"
-          />
-        </View>
+        {isMid && (
+          <View style={styles.searchWrap}>
+            <Ionicons name="search" size={18} color="#94A3B8" />
+            <TextInput
+              placeholder="Search Products"
+              placeholderTextColor="#94A3B8"
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              testID="product-search"
+            />
+          </View>
+        )}
+        {!isMid && <View style={{ flex: 1 }} />}
 
         <ToolbarIcon
           icon="globe-outline"
@@ -260,37 +269,39 @@ export default function POS() {
           badge={orderHubCount}
           onPress={() => setShowOrderHub(true)}
           testId="toolbar-order-hub"
+          compact={!isWide}
         />
-        <ToolbarIcon
-          icon="file-tray-outline"
-          label="Drawer"
-          onPress={() => setShowDrawer(true)}
-          testId="toolbar-drawer"
-        />
-        <ToolbarIcon
-          icon="pricetag-outline"
-          label="Discount"
-          onPress={() => setShowDiscount(true)}
-          testId="toolbar-discount"
-          disabled={cart.length === 0}
-        />
+        {isMid && (
+          <ToolbarIcon
+            icon="pricetag-outline"
+            label="Discount"
+            onPress={() => setShowDiscount(true)}
+            testId="toolbar-discount"
+            disabled={cart.length === 0}
+            compact={!isWide}
+          />
+        )}
         <ToolbarIcon
           icon="bookmark-outline"
-          label="Save & Retrieve"
+          label="Save"
           badge={parkedCount}
           onPress={() => setShowParked(true)}
           testId="toolbar-parked"
+          compact={!isWide}
         />
         <ToolbarIcon
           icon="person-outline"
           label="Customer"
           onPress={() => setShowCustomer(true)}
           testId="toolbar-customer"
+          compact={!isWide}
         />
-        <View style={styles.staffChip}>
-          <Ionicons name="person-circle" size={22} color="#00B14F" />
-          <Text style={styles.staffText}>{staff || "Admin"}</Text>
-        </View>
+        {isWide && (
+          <View style={styles.staffChip}>
+            <Ionicons name="person-circle" size={22} color="#00B14F" />
+            <Text style={styles.staffText}>{staff || "Admin"}</Text>
+          </View>
+        )}
         <TouchableOpacity
           style={styles.logoutBtn}
           onPress={() => router.replace("/")}
@@ -300,12 +311,62 @@ export default function POS() {
         </TouchableOpacity>
       </View>
 
+      {/* Mobile search bar (below top bar on narrow) */}
+      {!isMid && (
+        <View style={styles.mobileSearchWrap}>
+          <Ionicons name="search" size={18} color="#94A3B8" />
+          <TextInput
+            placeholder="Search Products"
+            placeholderTextColor="#94A3B8"
+            style={styles.searchInput}
+            value={search}
+            onChangeText={setSearch}
+            testID="product-search-mobile"
+          />
+        </View>
+      )}
+
       {/* ============ MAIN LAYOUT ============ */}
-      <View style={styles.main}>
-        {/* Left category rail */}
-        <View style={styles.leftRail} testID="category-rail">
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <CatPill
+      <View style={[styles.main, !isWide && styles.mainStacked]}>
+        {/* Category rail — vertical on wide, horizontal scroll on narrow */}
+        {isWide ? (
+          <View style={styles.leftRail} testID="category-rail">
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <CatPill
+                label="Favorite"
+                active={activeCat === "favorite"}
+                onPress={() => {
+                  setActiveCat("favorite");
+                  setSearch("");
+                }}
+                testId="cat-favorite"
+              />
+              {categories
+                .filter((c) => c.name !== "Favorite")
+                .map((c) => (
+                  <CatPill
+                    key={c.id}
+                    label={c.name}
+                    sub={c.name_th}
+                    active={activeCat === c.id}
+                    onPress={() => {
+                      setActiveCat(c.id);
+                      setSearch("");
+                    }}
+                    testId={`cat-${c.id}`}
+                  />
+                ))}
+            </ScrollView>
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.catStrip}
+            contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
+            testID="category-rail"
+          >
+            <CatChip
               label="Favorite"
               active={activeCat === "favorite"}
               onPress={() => {
@@ -317,10 +378,9 @@ export default function POS() {
             {categories
               .filter((c) => c.name !== "Favorite")
               .map((c) => (
-                <CatPill
+                <CatChip
                   key={c.id}
                   label={c.name}
-                  sub={c.name_th}
                   active={activeCat === c.id}
                   onPress={() => {
                     setActiveCat(c.id);
@@ -330,18 +390,18 @@ export default function POS() {
                 />
               ))}
           </ScrollView>
-        </View>
+        )}
 
         {/* Center product grid */}
         <View style={styles.center}>
           <FlatList
-            key="grid"
+            key={`grid-${gridCols}`}
             data={filteredProducts}
             keyExtractor={(i) => i.id}
-            numColumns={4}
-            contentContainerStyle={{ padding: 14, paddingBottom: 80 }}
-            columnWrapperStyle={{ gap: 12 }}
-            ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+            numColumns={gridCols}
+            contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
+            columnWrapperStyle={{ gap: 10 }}
+            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Ionicons name="search-outline" size={40} color="#CBD5E1" />
@@ -350,7 +410,7 @@ export default function POS() {
             }
             renderItem={({ item }) => (
               <TouchableOpacity
-                style={styles.productCard}
+                style={[styles.productCard, { maxWidth: `${100 / gridCols - 2}%` }]}
                 onPress={() => addToCart(item)}
                 activeOpacity={0.85}
                 testID={`product-${item.id}`}
@@ -365,125 +425,113 @@ export default function POS() {
               </TouchableOpacity>
             )}
           />
-          <View style={styles.scanBar}>
-            <Ionicons name="barcode-outline" size={20} color="#475569" />
-            <Text style={styles.scanText}>Scan Barcode</Text>
-          </View>
-        </View>
-
-        {/* Right cart */}
-        <View style={styles.rightCart} testID="cart-sidebar">
-          <View style={styles.cartHeader}>
-            <View style={styles.tablePill}>
-              <Ionicons name="restaurant-outline" size={14} color="#0F172A" />
-              <Text style={styles.tableText}>Tables</Text>
+          {isWide && (
+            <View style={styles.scanBar}>
+              <Ionicons name="barcode-outline" size={20} color="#475569" />
+              <Text style={styles.scanText}>Scan Barcode</Text>
             </View>
-            {customer && (
-              <View style={styles.custChip}>
-                <View style={[styles.custDot, { backgroundColor: customer.color }]}>
-                  <Text style={styles.custInitial}>
-                    {customer.name[0]?.toUpperCase()}
-                  </Text>
-                </View>
-                <Text style={styles.custName} numberOfLines={1}>
-                  {customer.name}
-                </Text>
-                <TouchableOpacity onPress={() => setCustomer(null)} testID="remove-customer">
-                  <Ionicons name="close" size={16} color="#94A3B8" />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.totalBox}>
-            <Text style={styles.totalLabel}>Sub Total</Text>
-            <Text style={styles.subTotalVal}>{THB(subtotal)}</Text>
-            {discountType !== "none" && (
-              <View style={styles.discRow}>
-                <Text style={styles.discLabel}>
-                  Discount {discountType === "percent" ? `(${discountValue}%)` : ""}
-                </Text>
-                <Text style={styles.discVal}>-{THB(discountAmount)}</Text>
-              </View>
-            )}
-            <View style={styles.totalRow}>
-              <Text style={styles.thbText}>THB</Text>
-              <Text style={styles.totalVal} testID="cart-total">{total.toFixed(2)}</Text>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.payBtn, cart.length === 0 && styles.payBtnDisabled]}
-            disabled={cart.length === 0}
-            onPress={() => setShowPayment(true)}
-            testID="pay-btn"
-          >
-            <Text style={styles.payBtnText}>Pay</Text>
-          </TouchableOpacity>
-
-          <View style={styles.cartListHeader}>
-            <Text style={styles.cartListTitle}>Store</Text>
-            <Text style={styles.cartListCount}>
-              {cart.length} Item{cart.length !== 1 ? "s" : ""} / {cartCount} pcs.
-            </Text>
-          </View>
-
-          <FlatList
-            data={cart}
-            keyExtractor={(i) => i.product_id}
-            ListEmptyComponent={
-              <View style={styles.emptyCart}>
-                <MaterialCommunityIcons name="cart-outline" size={40} color="#CBD5E1" />
-                <Text style={styles.emptyCartText}>Cart is empty</Text>
-                <Text style={styles.emptyCartSub}>Tap a product to add</Text>
-              </View>
-            }
-            renderItem={({ item }) => (
-              <View style={styles.cartItem} testID={`cart-item-${item.product_id}`}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cartItemName} numberOfLines={2}>
-                    {item.name}
-                  </Text>
-                  <Text style={styles.cartItemPrice}>
-                    {THB(item.price)} × {item.qty}
-                  </Text>
-                </View>
-                <View style={styles.qtyCtrl}>
-                  <TouchableOpacity
-                    style={styles.qtyBtn}
-                    onPress={() => updateQty(item.product_id, -1)}
-                    testID={`qty-dec-${item.product_id}`}
-                  >
-                    <Ionicons name="remove" size={16} color="#0F172A" />
-                  </TouchableOpacity>
-                  <Text style={styles.qtyText}>{item.qty}</Text>
-                  <TouchableOpacity
-                    style={styles.qtyBtn}
-                    onPress={() => updateQty(item.product_id, 1)}
-                    testID={`qty-inc-${item.product_id}`}
-                  >
-                    <Ionicons name="add" size={16} color="#0F172A" />
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity
-                  onPress={() => removeItem(item.product_id)}
-                  style={styles.trashBtn}
-                  testID={`remove-${item.product_id}`}
-                >
-                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                </TouchableOpacity>
-              </View>
-            )}
-          />
-
-          {cart.length > 0 && (
-            <TouchableOpacity style={styles.clearBtn} onPress={clearCart} testID="clear-cart">
-              <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
-              <Text style={styles.clearBtnText}>Clear cart</Text>
-            </TouchableOpacity>
           )}
         </View>
+
+        {/* Right cart — sidebar on wide, floating button + modal on narrow */}
+        {isWide ? (
+          <CartSidebar
+            cart={cart}
+            customer={customer}
+            subtotal={subtotal}
+            discountType={discountType}
+            discountValue={discountValue}
+            discountAmount={discountAmount}
+            total={total}
+            cartCount={cartCount}
+            onClear={clearCart}
+            onRemoveCustomer={() => setCustomer(null)}
+            onPay={() => setShowPayment(true)}
+            onInc={(pid) => updateQty(pid, 1)}
+            onDec={(pid) => updateQty(pid, -1)}
+            onRemove={removeItem}
+          />
+        ) : (
+          cart.length > 0 && (
+            <TouchableOpacity
+              style={styles.fabCart}
+              onPress={() => setShowCart(true)}
+              testID="fab-cart"
+            >
+              <View style={styles.fabLeft}>
+                <MaterialCommunityIcons name="cart" size={22} color="#FFFFFF" />
+                <View style={styles.fabBadge}>
+                  <Text style={styles.fabBadgeText}>{cartCount}</Text>
+                </View>
+              </View>
+              <View style={styles.fabMid}>
+                <Text style={styles.fabTotalLabel}>Total</Text>
+                <Text style={styles.fabTotal}>{THB(total)}</Text>
+              </View>
+              <View style={styles.fabRight}>
+                <Text style={styles.fabView}>View</Text>
+                <Ionicons name="chevron-up" size={18} color="#FFFFFF" />
+              </View>
+            </TouchableOpacity>
+          )
+        )}
       </View>
+
+      {/* Mobile cart modal */}
+      <Modal
+        visible={showCart && !isWide}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCart(false)}
+      >
+        <View style={styles.cartSheetOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowCart(false)} />
+          <View style={styles.cartSheet}>
+            <View style={styles.cartSheetHandle} />
+            <View style={styles.cartSheetHeader}>
+              <Text style={styles.cartSheetTitle}>Current Order</Text>
+              <TouchableOpacity onPress={() => setShowCart(false)}>
+                <Ionicons name="close" size={24} color="#475569" />
+              </TouchableOpacity>
+            </View>
+            <CartSidebar
+              cart={cart}
+              customer={customer}
+              subtotal={subtotal}
+              discountType={discountType}
+              discountValue={discountValue}
+              discountAmount={discountAmount}
+              total={total}
+              cartCount={cartCount}
+              onClear={() => {
+                clearCart();
+                setShowCart(false);
+              }}
+              onRemoveCustomer={() => setCustomer(null)}
+              onPay={() => {
+                setShowCart(false);
+                setShowPayment(true);
+              }}
+              onInc={(pid) => updateQty(pid, 1)}
+              onDec={(pid) => updateQty(pid, -1)}
+              onRemove={removeItem}
+              embedded
+            />
+            <TouchableOpacity
+              style={styles.mobileDiscBtn}
+              onPress={() => {
+                setShowCart(false);
+                setShowDiscount(true);
+              }}
+              disabled={cart.length === 0}
+              testID="mobile-discount"
+            >
+              <Ionicons name="pricetag-outline" size={16} color="#00B14F" />
+              <Text style={styles.mobileDiscText}>Add Discount</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* ============ MODALS ============ */}
       <PaymentModal
@@ -546,6 +594,7 @@ function ToolbarIcon({
   badge,
   testId,
   disabled,
+  compact,
 }: {
   icon: any;
   label: string;
@@ -553,23 +602,50 @@ function ToolbarIcon({
   badge?: number;
   testId: string;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.tbItem, disabled && { opacity: 0.4 }]}
+      style={[
+        styles.tbItem,
+        compact && styles.tbItemCompact,
+        disabled && { opacity: 0.4 },
+      ]}
       onPress={onPress}
       disabled={disabled}
       testID={testId}
     >
       <View>
-        <Ionicons name={icon} size={22} color="#0F172A" />
+        <Ionicons name={icon} size={compact ? 20 : 22} color="#0F172A" />
         {badge && badge > 0 ? (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
           </View>
         ) : null}
       </View>
-      <Text style={styles.tbLabel}>{label}</Text>
+      {!compact && <Text style={styles.tbLabel}>{label}</Text>}
+    </TouchableOpacity>
+  );
+}
+
+function CatChip({
+  label,
+  active,
+  onPress,
+  testId,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  testId: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.catChip, active && styles.catChipActive]}
+      onPress={onPress}
+      testID={testId}
+    >
+      <Text style={[styles.catChipText, active && styles.catChipTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -602,6 +678,158 @@ function CatPill({
         </Text>
       )}
     </TouchableOpacity>
+  );
+}
+
+// ---------- Cart Sidebar (shared between desktop sidebar + mobile sheet) ----------
+function CartSidebar({
+  cart,
+  customer,
+  subtotal,
+  discountType,
+  discountValue,
+  discountAmount,
+  total,
+  cartCount,
+  onClear,
+  onRemoveCustomer,
+  onPay,
+  onInc,
+  onDec,
+  onRemove,
+  embedded,
+}: {
+  cart: CartItem[];
+  customer: Customer | null;
+  subtotal: number;
+  discountType: "none" | "amount" | "percent";
+  discountValue: number;
+  discountAmount: number;
+  total: number;
+  cartCount: number;
+  onClear: () => void;
+  onRemoveCustomer: () => void;
+  onPay: () => void;
+  onInc: (pid: string) => void;
+  onDec: (pid: string) => void;
+  onRemove: (pid: string) => void;
+  embedded?: boolean;
+}) {
+  return (
+    <View style={[styles.rightCart, embedded && styles.rightCartEmbedded]} testID="cart-sidebar">
+      <View style={styles.cartHeader}>
+        <View style={styles.tablePill}>
+          <Ionicons name="restaurant-outline" size={14} color="#0F172A" />
+          <Text style={styles.tableText}>Tables</Text>
+        </View>
+        {customer && (
+          <View style={styles.custChip}>
+            <View style={[styles.custDot, { backgroundColor: customer.color }]}>
+              <Text style={styles.custInitial}>
+                {customer.name[0]?.toUpperCase()}
+              </Text>
+            </View>
+            <Text style={styles.custName} numberOfLines={1}>
+              {customer.name}
+            </Text>
+            <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer">
+              <Ionicons name="close" size={16} color="#94A3B8" />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.totalBox}>
+        <Text style={styles.totalLabel}>Sub Total</Text>
+        <Text style={styles.subTotalVal}>{THB(subtotal)}</Text>
+        {discountType !== "none" && (
+          <View style={styles.discRow}>
+            <Text style={styles.discLabel}>
+              Discount {discountType === "percent" ? `(${discountValue}%)` : ""}
+            </Text>
+            <Text style={styles.discVal}>-{THB(discountAmount)}</Text>
+          </View>
+        )}
+        <View style={styles.totalRow}>
+          <Text style={styles.thbText}>THB</Text>
+          <Text style={styles.totalVal} testID="cart-total">
+            {total.toFixed(2)}
+          </Text>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.payBtn, cart.length === 0 && styles.payBtnDisabled]}
+        disabled={cart.length === 0}
+        onPress={onPay}
+        testID="pay-btn"
+      >
+        <Text style={styles.payBtnText}>Pay</Text>
+      </TouchableOpacity>
+
+      <View style={styles.cartListHeader}>
+        <Text style={styles.cartListTitle}>Store</Text>
+        <Text style={styles.cartListCount}>
+          {cart.length} Item{cart.length !== 1 ? "s" : ""} / {cartCount} pcs.
+        </Text>
+      </View>
+
+      <FlatList
+        data={cart}
+        keyExtractor={(i) => i.product_id}
+        style={{ maxHeight: embedded ? 240 : undefined }}
+        ListEmptyComponent={
+          <View style={styles.emptyCart}>
+            <MaterialCommunityIcons name="cart-outline" size={40} color="#CBD5E1" />
+            <Text style={styles.emptyCartText}>Cart is empty</Text>
+            <Text style={styles.emptyCartSub}>Tap a product to add</Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <View style={styles.cartItem} testID={`cart-item-${item.product_id}`}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cartItemName} numberOfLines={2}>
+                {item.name}
+              </Text>
+              <Text style={styles.cartItemPrice}>
+                {THB(item.price)} × {item.qty}
+              </Text>
+            </View>
+            <View style={styles.qtyCtrl}>
+              <TouchableOpacity
+                style={styles.qtyBtn}
+                onPress={() => onDec(item.product_id)}
+                testID={`qty-dec-${item.product_id}`}
+              >
+                <Ionicons name="remove" size={16} color="#0F172A" />
+              </TouchableOpacity>
+              <Text style={styles.qtyText}>{item.qty}</Text>
+              <TouchableOpacity
+                style={styles.qtyBtn}
+                onPress={() => onInc(item.product_id)}
+                testID={`qty-inc-${item.product_id}`}
+              >
+                <Ionicons name="add" size={16} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              onPress={() => onRemove(item.product_id)}
+              style={styles.trashBtn}
+              testID={`remove-${item.product_id}`}
+            >
+              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+        )}
+      />
+
+      {cart.length > 0 && (
+        <TouchableOpacity style={styles.clearBtn} onPress={onClear} testID="clear-cart">
+          <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
+          <Text style={styles.clearBtnText}>Clear cart</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 }
 
@@ -1430,6 +1658,7 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 14, color: "#0F172A", ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   tbItem: { alignItems: "center", paddingHorizontal: 12, minWidth: 64 },
+  tbItemCompact: { minWidth: 40, paddingHorizontal: 6 },
   tbLabel: { fontSize: 10, color: "#475569", marginTop: 2, fontWeight: "500" },
   badge: {
     position: "absolute",
@@ -1458,6 +1687,124 @@ const styles = StyleSheet.create({
 
   // Main
   main: { flex: 1, flexDirection: "row" },
+  mainStacked: { flexDirection: "column" },
+
+  // Mobile search
+  mobileSearchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    margin: 12,
+    marginBottom: 0,
+    height: 44,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+
+  // Horizontal category strip (mobile)
+  catStrip: {
+    maxHeight: 58,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    marginTop: 12,
+    paddingVertical: 10,
+    flexGrow: 0,
+  },
+  catChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  catChipActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
+  catChipText: { fontSize: 13, fontWeight: "600", color: "#475569" },
+  catChipTextActive: { color: "#FFFFFF" },
+
+  // FAB cart (mobile)
+  fabCart: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#00B14F",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  fabLeft: { flexDirection: "row", alignItems: "center" },
+  fabBadge: {
+    marginLeft: -8,
+    marginTop: -10,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fabBadgeText: { color: "#00B14F", fontSize: 11, fontWeight: "700" },
+  fabMid: { flex: 1 },
+  fabTotalLabel: { color: "rgba(255,255,255,0.8)", fontSize: 10, fontWeight: "600" },
+  fabTotal: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  fabRight: { flexDirection: "row", alignItems: "center", gap: 4 },
+  fabView: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
+
+  // Mobile cart bottom sheet
+  cartSheetOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "flex-end" },
+  cartSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 10,
+    paddingBottom: 20,
+    maxHeight: "85%",
+  },
+  cartSheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#CBD5E1",
+    alignSelf: "center",
+    marginBottom: 8,
+  },
+  cartSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  cartSheetTitle: { fontSize: 17, fontWeight: "700", color: "#0F172A" },
+  mobileDiscBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#00B14F",
+  },
+  mobileDiscText: { color: "#00B14F", fontSize: 13, fontWeight: "600" },
 
   // Left rail
   leftRail: {
@@ -1526,6 +1873,10 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderLeftColor: "#E2E8F0",
     padding: 14,
+  },
+  rightCartEmbedded: {
+    width: "100%",
+    borderLeftWidth: 0,
   },
   cartHeader: { gap: 8, marginBottom: 8 },
   tablePill: {

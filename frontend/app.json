@@ -3,7 +3,7 @@
     "name": "BakePOS",
     "slug": "frontend",
     "version": "1.0.0",
-    "orientation": "landscape",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "frontend",
     "userInterfaceStyle": "light",

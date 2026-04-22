@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -14,6 +15,9 @@ const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 
 export default function PinLogin() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 700;
+
   const [pin, setPin] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -57,23 +61,28 @@ export default function PinLogin() {
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "del"];
 
   return (
-    <SafeAreaView style={styles.container} testID="pin-login-screen">
-      <View style={styles.left}>
-        <View style={styles.logoBox}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="storefront" size={48} color="#00B14F" />
+    <SafeAreaView
+      style={[styles.container, !isWide && styles.containerNarrow]}
+      testID="pin-login-screen"
+    >
+      <View style={[styles.left, !isWide && styles.leftNarrow]}>
+        <View style={[styles.logoBox, !isWide && styles.logoBoxNarrow]}>
+          <View style={[styles.logoCircle, !isWide && styles.logoCircleNarrow]}>
+            <Ionicons name="storefront" size={isWide ? 48 : 36} color="#00B14F" />
           </View>
-          <Text style={styles.brand}>BakePOS</Text>
+          <Text style={[styles.brand, !isWide && styles.brandNarrow]}>BakePOS</Text>
           <Text style={styles.brandSub}>Point of Sale</Text>
         </View>
-        <View style={styles.hintBox}>
-          <Text style={styles.hintLabel}>Demo PINs</Text>
-          <Text style={styles.hintText}>1234 · Admin</Text>
-          <Text style={styles.hintText}>0000 · Cashier</Text>
-        </View>
+        {isWide && (
+          <View style={styles.hintBox}>
+            <Text style={styles.hintLabel}>Demo PINs</Text>
+            <Text style={styles.hintText}>1234 · Admin</Text>
+            <Text style={styles.hintText}>0000 · Cashier</Text>
+          </View>
+        )}
       </View>
 
-      <View style={styles.right}>
+      <View style={[styles.right, !isWide && styles.rightNarrow]}>
         <Text style={styles.title}>Enter your PIN</Text>
         <Text style={styles.subtitle}>Staff login required</Text>
 
@@ -111,28 +120,36 @@ export default function PinLogin() {
         </View>
 
         {loading && <ActivityIndicator color="#00B14F" style={{ marginTop: 12 }} />}
+
+        {!isWide && (
+          <View style={styles.hintBoxMobile}>
+            <Text style={styles.hintLabelMobile}>Demo PINs</Text>
+            <Text style={styles.hintTextMobile}>1234 · Admin  ·  0000 · Cashier</Text>
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    flexDirection: "row",
-    backgroundColor: "#FFFFFF",
-  },
+  container: { flex: 1, flexDirection: "row", backgroundColor: "#FFFFFF" },
+  containerNarrow: { flexDirection: "column" },
   left: {
     flex: 1,
     backgroundColor: "#00B14F",
     padding: 48,
     justifyContent: "space-between",
   },
-  logoBox: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "flex-start",
+  leftNarrow: {
+    flex: 0,
+    padding: 32,
+    paddingTop: 48,
+    paddingBottom: 32,
+    alignItems: "center",
   },
+  logoBox: { flex: 1, justifyContent: "center", alignItems: "flex-start" },
+  logoBoxNarrow: { flex: 0, alignItems: "center" },
   logoCircle: {
     width: 96,
     height: 96,
@@ -142,14 +159,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 20,
   },
-  brand: {
-    fontSize: 48,
-    fontWeight: "700",
-    color: "#FFFFFF",
-    letterSpacing: -1,
-  },
+  logoCircleNarrow: { width: 72, height: 72, borderRadius: 36, marginBottom: 12 },
+  brand: { fontSize: 48, fontWeight: "700", color: "#FFFFFF", letterSpacing: -1 },
+  brandNarrow: { fontSize: 32 },
   brandSub: {
-    fontSize: 18,
+    fontSize: 14,
     color: "#E5F7ED",
     marginTop: 4,
     letterSpacing: 2,
@@ -170,40 +184,53 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   hintText: { color: "#FFFFFF", fontSize: 14, fontFamily: "monospace" },
-  right: {
-    flex: 1,
-    padding: 48,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: { fontSize: 28, fontWeight: "700", color: "#0F172A" },
-  subtitle: { fontSize: 14, color: "#94A3B8", marginTop: 6, marginBottom: 40 },
+  right: { flex: 1, padding: 48, alignItems: "center", justifyContent: "center" },
+  rightNarrow: { flex: 1, padding: 24, paddingTop: 32 },
+  title: { fontSize: 26, fontWeight: "700", color: "#0F172A" },
+  subtitle: { fontSize: 14, color: "#94A3B8", marginTop: 6, marginBottom: 32 },
   dots: { flexDirection: "row", gap: 20 },
   dot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 2,
     borderColor: "#CBD5E1",
   },
   dotFilled: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
   error: { color: "#EF4444", fontSize: 13, marginTop: 16, fontWeight: "500" },
   keypad: {
-    marginTop: 32,
-    width: 320,
+    marginTop: 28,
+    width: 280,
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
     gap: 12,
   },
   key: {
-    width: 96,
-    height: 72,
-    borderRadius: 16,
+    width: 80,
+    height: 64,
+    borderRadius: 14,
     backgroundColor: "#F1F5F9",
     alignItems: "center",
     justifyContent: "center",
   },
-  keyEmpty: { width: 96, height: 72 },
-  keyText: { fontSize: 28, fontWeight: "600", color: "#0F172A" },
+  keyEmpty: { width: 80, height: 64 },
+  keyText: { fontSize: 26, fontWeight: "600", color: "#0F172A" },
+  hintBoxMobile: {
+    marginTop: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+  },
+  hintLabelMobile: {
+    fontSize: 10,
+    color: "#94A3B8",
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  hintTextMobile: { fontSize: 12, color: "#475569", fontFamily: "monospace" },
 });
