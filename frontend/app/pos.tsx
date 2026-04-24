@@ -903,6 +903,9 @@ function PaymentModal({
   const change = Math.max(0, paid - total);
   const canPay = paid >= total;
 
+  const { width: winW } = useWindowDimensions();
+  const isNarrow = winW < 720;
+
   const onKey = (k: string) => {
     if (k === "clear") setAmount("");
     else if (k === "back") setAmount((a) => a.slice(0, -1));
@@ -926,9 +929,15 @@ function PaymentModal({
             <View style={{ width: 26 }} />
           </View>
 
-          <View style={styles.paymentBody}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={[
+              styles.paymentBody,
+              isNarrow && { flexDirection: "column", gap: 12, padding: 12 },
+            ]}
+          >
             {/* Methods */}
-            <View style={styles.methodsCol}>
+            <View style={[styles.methodsCol, isNarrow && styles.methodsColNarrow]}>
               {methods.map((m) => (
                 <TouchableOpacity
                   key={m.key}
@@ -1025,7 +1034,7 @@ function PaymentModal({
                 </View>
               </View>
             ) : (
-              <View style={styles.padCol}>
+              <View style={[styles.padCol, isNarrow && { width: "100%", minHeight: 380 }]}>
                 <View style={styles.amountDisplay}>
                   <Text style={styles.thbSmall}>THB</Text>
                   <Text style={styles.amountText} testID="amount-display">
@@ -1059,7 +1068,7 @@ function PaymentModal({
             )}
 
             {/* Right column: totals */}
-            <View style={styles.quickCol}>
+            <View style={[styles.quickCol, isNarrow && { width: "100%" }]}>
               <View style={styles.netBoxV2}>
                 <View style={styles.guestRow}>
                   <Ionicons name="person-outline" size={14} color="#475569" />
@@ -1116,7 +1125,7 @@ function PaymentModal({
                 </View>
               </View>
             </View>
-          </View>
+          </ScrollView>
 
           {/* Footer (only shown for non-Custom/non-QR methods; others have Payment Confirm in right panel) */}
           {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && false && (
@@ -2213,6 +2222,12 @@ const styles = StyleSheet.create({
   },
   paymentBody: { flex: 1, flexDirection: "row", padding: 16, gap: 16 },
   methodsCol: { width: 140, gap: 10 },
+  methodsColNarrow: {
+    width: "100%",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
   methodBtn: {
     padding: 14,
     borderRadius: 12,
@@ -2220,6 +2235,9 @@ const styles = StyleSheet.create({
     borderColor: "#E2E8F0",
     alignItems: "center",
     gap: 6,
+    minWidth: 100,
+    flexGrow: 1,
+    flexBasis: 100,
   },
   methodBtnActive: { borderColor: "#00B14F", backgroundColor: "#E5F7ED" },
   methodText: { fontSize: 12, fontWeight: "600", color: "#475569" },

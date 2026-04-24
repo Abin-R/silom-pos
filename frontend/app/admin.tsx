@@ -119,7 +119,7 @@ export default function Admin() {
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
-      <View style={styles.rootRow}>
+      <View style={[styles.rootRow, !isWide && { flexDirection: "column" }]}>
         {isWide ? (
           Sidebar
         ) : (
