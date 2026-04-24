@@ -451,6 +451,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
   const [activeCat, setActiveCat] = useState<string>("");
   const [tab, setTab] = useState<"movement" | "in" | "out" | "adjust" | "check">("movement");
   const [stockModal, setStockModal] = useState<Product | null>(null);
+  const [sortBy, setSortBy] = useState<"custom" | "name" | "inventory">("custom");
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -463,10 +464,12 @@ function Inventory({ isWide }: { isWide: boolean }) {
   };
   useEffect(() => { load(); }, []);
 
-  const filtered = useMemo(
-    () => products.filter((p) => p.category_id === activeCat),
-    [products, activeCat]
-  );
+  const filtered = useMemo(() => {
+    const list = products.filter((p) => p.category_id === activeCat);
+    if (sortBy === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
+    if (sortBy === "inventory") return [...list].sort((a, b) => a.stock - b.stock);
+    return list;
+  }, [products, activeCat, sortBy]);
   const curCat = categories.find((c) => c.id === activeCat);
 
   const doMovement = async (type: "in" | "out" | "adjust", qty: number) => {
@@ -503,6 +506,21 @@ function Inventory({ isWide }: { isWide: boolean }) {
           <Text style={styles.sectionHeader}>
             {curCat?.name} ({filtered.length})
           </Text>
+          <View style={styles.sortRow}>
+            <Text style={styles.sortLabel}>Sort</Text>
+            {(["custom", "name", "inventory"] as const).map((s) => (
+              <TouchableOpacity
+                key={s}
+                style={[styles.sortTab, sortBy === s && styles.sortTabActive]}
+                onPress={() => setSortBy(s)}
+                testID={`inv-sort-${s}`}
+              >
+                <Text style={[styles.sortTabText, sortBy === s && styles.sortTabTextActive]}>
+                  {s === "custom" ? "Custom" : s === "name" ? "Name" : "Inventory"}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <FlatList
             data={filtered}
             keyExtractor={(i) => i.id}
@@ -1639,6 +1657,21 @@ const styles = StyleSheet.create({
   },
   invTabActive: { borderTopWidth: 2, borderTopColor: "#00B14F" },
   invTabText: { fontSize: 12, color: "#475569", fontWeight: "600" },
+  sortRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  sortLabel: { fontSize: 12, color: "#475569", fontWeight: "600", marginRight: 4 },
+  sortTab: {
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderRadius: 6, borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  sortTabActive: { borderColor: "#00B14F", backgroundColor: "#FFFFFF" },
+  sortTabText: { fontSize: 12, color: "#475569", fontWeight: "600" },
+  sortTabTextActive: { color: "#00B14F" },
 
   // Customers
   custHeader: {
