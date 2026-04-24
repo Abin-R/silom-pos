@@ -768,6 +768,7 @@ function Products() {
   const [activeCat, setActiveCat] = useState<string>("");
   const [edit, setEdit] = useState<Product | "new" | null>(null);
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<"custom" | "name">("custom");
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -787,8 +788,11 @@ function Products() {
       if (cat?.name === "Favorite") list = list.filter((p) => p.is_favorite);
       else list = list.filter((p) => p.category_id === activeCat);
     }
+    if (sort === "name") {
+      list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+    }
     return list;
-  }, [prods, cats, activeCat, q]);
+  }, [prods, cats, activeCat, q, sort]);
 
   const curCat = cats.find((c) => c.id === activeCat);
 
@@ -850,14 +854,37 @@ function Products() {
           <Text style={styles.sectionHeader}>
             {q ? `Search` : curCat?.name} ({filtered.length})
           </Text>
-          <TouchableOpacity
-            style={styles.addProdBtn}
-            onPress={() => setEdit("new")}
-            testID="add-product"
-          >
-            <Ionicons name="add" size={18} color="#FFFFFF" />
-            <Text style={styles.addProdText}>Add Product</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Text style={{ fontSize: 12, color: "#94A3B8" }}>Sort</Text>
+            <View style={styles.sortGroup}>
+              <TouchableOpacity
+                style={[styles.sortBtn, sort === "custom" && styles.sortBtnActive]}
+                onPress={() => setSort("custom")}
+                testID="sort-custom"
+              >
+                <Text style={[styles.sortText, sort === "custom" && { color: "#00B14F" }]}>
+                  Custom
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.sortBtn, sort === "name" && styles.sortBtnActive]}
+                onPress={() => setSort("name")}
+                testID="sort-name"
+              >
+                <Text style={[styles.sortText, sort === "name" && { color: "#00B14F" }]}>
+                  Name
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.addProdBtn}
+              onPress={() => setEdit("new")}
+              testID="add-product"
+            >
+              <Ionicons name="add" size={18} color="#FFFFFF" />
+              <Text style={styles.addProdText}>Add Product</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <FlatList
           data={filtered}
@@ -886,7 +913,9 @@ function Products() {
               </TouchableOpacity>
               <View style={styles.prodTags}>
                 <Text style={styles.tag}>TAX: {item.tax_type}</Text>
-                <Text style={styles.tag}>Type: {item.product_type}</Text>
+                <Text style={[styles.tag, item.product_type === "BOM" && { color: "#00B14F", fontWeight: "700" }]}>
+                  Type: {item.product_type}
+                </Text>
               </View>
               <TouchableOpacity style={styles.editBtn} onPress={() => setEdit(item)} testID={`edit-${item.id}`}>
                 <Ionicons name="create-outline" size={18} color="#475569" />
@@ -1458,6 +1487,16 @@ const styles = StyleSheet.create({
   prodTags: { gap: 2 },
   tag: { fontSize: 10, color: "#475569" },
   editBtn: { padding: 8 },
+  sortGroup: {
+    flexDirection: "row",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+  sortBtn: { paddingHorizontal: 14, paddingVertical: 6 },
+  sortBtnActive: { borderWidth: 1, borderColor: "#00B14F", borderRadius: 5 },
+  sortText: { fontSize: 12, color: "#94A3B8", fontWeight: "600" },
 
   catPick: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,

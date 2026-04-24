@@ -597,6 +597,25 @@ async def seed_data():
         # Brownie Bites
         {"name": "Classic Brownie Bite", "name_th": "บราวนี่คลาสสิก", "price": 45, "cost": 18, "category": "Brownie Bites", "image": IMG["Brownie"], "stock": 50},
         {"name": "Salted Caramel Brownie", "name_th": "ซอลเทดคาราเมล", "price": 55, "cost": 22, "category": "Brownie Bites", "image": IMG["Brownie"], "stock": 36},
+
+        # Mini Birthday Cake (from screenshots)
+        {"name": "Ballerina (Birthday Cake) เค้กวันเกิด", "name_th": "บัลเลริน่า", "price": 650, "cost": 300, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 5},
+        {"name": "Mini Strawberry Shortcake (Mini)", "name_th": "มินิสตรอเบอร์รี่ (มินิ)", "price": 690, "cost": 320, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 4},
+        {"name": "Mini Snowflake Cake", "name_th": "มินิสโนว์เฟลก", "price": 650, "cost": 300, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 3},
+        {"name": "Mini Cherry Amour - 0.5 LB (Birthday)", "name_th": "มินิเชอร์รี่อามัวร์", "price": 690, "cost": 320, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 2},
+        {"name": "mini white glitter queen", "name_th": "มินิไวท์กลิตเตอร์ควีน", "price": 650, "cost": 300, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 6},
+        {"name": "Mini Glitter Baby Blue", "name_th": "มินิกลิตเตอร์เบบี้บลู", "price": 650, "cost": 300, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 4},
+        {"name": "Mini Black Forest Cake", "name_th": "มินิแบล็คฟอเรสต์", "price": 690, "cost": 320, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 3},
+        {"name": "Mini Glitter Pink", "name_th": "มินิกลิตเตอร์พิงค์", "price": 650, "cost": 300, "category": "Mini Birthday Cake", "image": IMG["Cookie Cake"], "stock": 5},
+
+        # Christmas Collection - more
+        {"name": "Xmas Cookies Gift Box ซื้อ 2 แถมคุกกี้ใหญ่", "name_th": "เซ็ตคุกกี้ Xmas", "price": 420, "cost": 200, "category": "Christmas Collection", "image": IMG["Soft Cookies"], "stock": 8},
+        {"name": "Cereal Cookie Crunch", "name_th": "ซีเรียลคุกกี้ครันช์", "price": 180, "cost": 70, "category": "Christmas Collection", "image": IMG["Soft Cookies"], "stock": 12},
+        {"name": "Cornflake Crunch Chocolate Cake Box", "name_th": "คอร์นเฟลกเค้กกรอบ", "price": 390, "cost": 180, "category": "Christmas Collection", "image": IMG["Cookie Cake"], "stock": 6},
+        {"name": "Cornflake Crunch Chocolate Cake (slice)", "name_th": "คอร์นเฟลกเค้กชิ้น", "price": 250, "cost": 120, "category": "Christmas Collection", "image": IMG["Cookie Cake"], "stock": 10},
+
+        # Hot Promotion (BOM / Bundle)
+        {"name": "Buy 2 Get 1 Free! - Dubai Collection", "name_th": "ซื้อ 2 แถม 1 - ดูไบ", "price": 1100, "cost": 0, "category": "Hot Promotion!", "image": IMG["Dubai Chocolate"], "stock": 0, "product_type": "BOM"},
     ]
 
     products = []
@@ -611,7 +630,7 @@ async def seed_data():
             is_favorite=p.get("favorite", False),
             stock=p.get("stock", 0),
             tax_type="V",
-            product_type="P",
+            product_type=p.get("product_type", "P"),
         ))
     await db.products.insert_many([p.model_dump() for p in products])
 

@@ -872,6 +872,14 @@ function PaymentModal({
     { key: "Custom", icon: "wallet-outline" as const },
   ];
 
+  const customOptions = [
+    "EDC Kbank", "EDC Bangkok", "Brave Brand Co.,Ltd",
+    "Thai Dot Com Pay", "คนละครึ่ง", "EDC SCB", "QR",
+  ];
+  const [customPick, setCustomPick] = useState("");
+  const [orderRef, setOrderRef] = useState("");
+  useEffect(() => { if (visible) { setCustomPick(""); setOrderRef(""); } }, [visible]);
+
   const paid = amount ? parseFloat(amount) : total;
   const change = Math.max(0, paid - total);
   const canPay = paid >= total;
@@ -923,40 +931,96 @@ function PaymentModal({
               ))}
             </View>
 
-            {/* Keypad */}
-            <View style={styles.padCol}>
-              <View style={styles.amountDisplay}>
-                <Text style={styles.thbSmall}>THB</Text>
-                <Text style={styles.amountText} testID="amount-display">
-                  {amount || "0"}
+            {/* Dynamic center content per method */}
+            {method === "QR Kbank" || method === "PromptPay" ? (
+              <View style={styles.qrPane} testID="qr-pane">
+                <View style={styles.qrHeader}>
+                  <Text style={styles.qrHeaderText}>
+                    {method === "QR Kbank" ? "Thai QR Payment" : "PromptPay"}
+                  </Text>
+                </View>
+                <View style={styles.qrBrandRow}>
+                  <Text style={styles.brandPill}>PromptPay</Text>
+                  <Text style={styles.brandPill}>VISA</Text>
+                  <Text style={styles.brandPill}>MC</Text>
+                  <Text style={styles.brandPill}>UnionPay</Text>
+                </View>
+                <Text style={styles.qrHint}>
+                  Support payment type Thai QR (PromptPay), Credit Card
                 </Text>
+                <Text style={styles.qrBy}>
+                  By {method === "QR Kbank" ? "KBank" : "Bank"}
+                </Text>
+                <View style={styles.qrBox}>
+                  <Ionicons name="qr-code" size={110} color="#0F172A" />
+                </View>
+                <Text style={styles.qrAmount}>{THB(total)}</Text>
               </View>
-              <View style={styles.padGrid}>
-                {keys.map((k) => (
-                  <TouchableOpacity
-                    key={k}
-                    style={styles.padBtn}
-                    onPress={() => onKey(k)}
-                    testID={`pad-${k}`}
-                  >
-                    {k === "back" ? (
-                      <Ionicons name="backspace-outline" size={22} color="#EF4444" />
-                    ) : (
-                      <Text style={styles.padText}>{k}</Text>
-                    )}
-                  </TouchableOpacity>
-                ))}
+            ) : method === "Custom" ? (
+              <View style={styles.customPane} testID="custom-pane">
+                <TextInput
+                  placeholder="Order Ref.  (Optional)"
+                  style={styles.customRef}
+                  value={orderRef}
+                  onChangeText={setOrderRef}
+                  placeholderTextColor="#94A3B8"
+                  testID="custom-order-ref"
+                />
+                <View style={styles.customAmountRow}>
+                  <Text style={styles.customAmountLabel}>Amount</Text>
+                  <Text style={styles.customAmountVal}>{total.toFixed(2)}</Text>
+                </View>
+                <View style={styles.customGrid}>
+                  {customOptions.map((opt) => (
+                    <TouchableOpacity
+                      key={opt}
+                      style={[styles.customOption, customPick === opt && styles.customOptionActive]}
+                      onPress={() => setCustomPick(opt)}
+                      testID={`custom-${opt}`}
+                    >
+                      <View style={[styles.radio, customPick === opt && styles.radioActive]}>
+                        {customPick === opt && <View style={styles.radioInner} />}
+                      </View>
+                      <Text style={styles.customOptionText}>{opt}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
-              <TouchableOpacity
-                style={styles.clearPadBtn}
-                onPress={() => onKey("clear")}
-                testID="pad-clear"
-              >
-                <Text style={styles.clearPadText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
+            ) : (
+              <View style={styles.padCol}>
+                <View style={styles.amountDisplay}>
+                  <Text style={styles.thbSmall}>THB</Text>
+                  <Text style={styles.amountText} testID="amount-display">
+                    {amount || "0"}
+                  </Text>
+                </View>
+                <View style={styles.padGrid}>
+                  {keys.map((k) => (
+                    <TouchableOpacity
+                      key={k}
+                      style={styles.padBtn}
+                      onPress={() => onKey(k)}
+                      testID={`pad-${k}`}
+                    >
+                      {k === "back" ? (
+                        <Ionicons name="backspace-outline" size={22} color="#EF4444" />
+                      ) : (
+                        <Text style={styles.padText}>{k}</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity
+                  style={styles.clearPadBtn}
+                  onPress={() => onKey("clear")}
+                  testID="pad-clear"
+                >
+                  <Text style={styles.clearPadText}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-            {/* Quick amounts + total */}
+            {/* Right column: totals */}
             <View style={styles.quickCol}>
               <TouchableOpacity
                 style={styles.netBox}
@@ -967,36 +1031,64 @@ function PaymentModal({
                 <Text style={styles.netHint}>Tap to equal Total</Text>
                 <Text style={styles.netVal}>{THB(total)}</Text>
               </TouchableOpacity>
-              {quicks.map((q) => (
-                <TouchableOpacity
-                  key={q}
-                  style={styles.quickBtn}
-                  onPress={() =>
-                    setAmount((a) => {
-                      const cur = parseFloat(a || "0");
-                      return String(cur + q);
-                    })
-                  }
-                  testID={`quick-${q}`}
-                >
-                  <Text style={styles.quickText}>{q.toLocaleString()}</Text>
-                </TouchableOpacity>
-              ))}
+              {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" &&
+                quicks.map((q) => (
+                  <TouchableOpacity
+                    key={q}
+                    style={styles.quickBtn}
+                    onPress={() =>
+                      setAmount((a) => {
+                        const cur = parseFloat(a || "0");
+                        return String(cur + q);
+                      })
+                    }
+                    testID={`quick-${q}`}
+                  >
+                    <Text style={styles.quickText}>{q.toLocaleString()}</Text>
+                  </TouchableOpacity>
+                ))}
+              {(method === "QR Kbank" || method === "PromptPay") && (
+                <View style={styles.qrInstructBox}>
+                  <Ionicons name="information-circle-outline" size={18} color="#475569" />
+                  <Text style={styles.qrInstructText}>
+                    Ask customer to scan the QR on screen to complete payment.
+                  </Text>
+                </View>
+              )}
+              {method === "Custom" && (
+                <View style={styles.summaryBox}>
+                  <Text style={styles.netLabel}>Summary</Text>
+                  <Text style={styles.summaryVal}>{THB(customPick ? total : 0)}</Text>
+                </View>
+              )}
             </View>
           </View>
 
           <View style={styles.paymentFooter}>
             <View style={styles.changeBox}>
-              <Text style={styles.changeLabel}>Change</Text>
-              <Text style={styles.changeVal}>{THB(change)}</Text>
+              <Text style={styles.changeLabel}>
+                {method === "Custom" ? "Summary" : method === "QR Kbank" || method === "PromptPay" ? "Awaiting scan" : "Change"}
+              </Text>
+              <Text style={styles.changeVal}>
+                {method === "Custom" || method === "QR Kbank" || method === "PromptPay" ? THB(total) : THB(change)}
+              </Text>
             </View>
             <TouchableOpacity
-              style={[styles.confirmBtn, !canPay && styles.payBtnDisabled]}
-              disabled={!canPay}
-              onPress={() => onPay(method, paid)}
+              style={[
+                styles.confirmBtn,
+                !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay) && styles.payBtnDisabled,
+              ]}
+              disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay)}
+              onPress={() => {
+                const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` : method;
+                const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom") ? total : paid;
+                onPay(finalMethod, finalPaid);
+              }}
               testID="confirm-payment"
             >
-              <Text style={styles.confirmText}>Confirm Payment</Text>
+              <Text style={styles.confirmText}>
+                {method === "QR Kbank" || method === "PromptPay" ? "Mark Paid" : method === "Custom" ? "Payment Confirm" : "Confirm Payment"}
+              </Text>
               <Ionicons name="arrow-forward" size={20} color="#fff" />
             </TouchableOpacity>
           </View>
@@ -2091,6 +2183,135 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   quickText: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+
+  // QR pane (Thai QR / KBank)
+  qrPane: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 16,
+    alignItems: "center",
+    gap: 10,
+  },
+  qrHeader: {
+    backgroundColor: "#1E3A8A",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignSelf: "stretch",
+    alignItems: "center",
+  },
+  qrHeaderText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  qrBrandRow: { flexDirection: "row", gap: 10, flexWrap: "wrap", justifyContent: "center" },
+  brandPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: "#F1F5F9",
+    borderRadius: 4,
+    fontSize: 11,
+    color: "#475569",
+    fontWeight: "700",
+  },
+  qrHint: { fontSize: 11, color: "#475569", textAlign: "center" },
+  qrBy: { fontSize: 11, color: "#94A3B8" },
+  qrBox: {
+    width: 160,
+    height: 160,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#00B14F",
+    borderRadius: 10,
+  },
+  qrAmount: { fontSize: 22, fontWeight: "700", color: "#00B14F" },
+  qrInstructBox: {
+    backgroundColor: "#F1F5F9",
+    padding: 10,
+    borderRadius: 8,
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "flex-start",
+  },
+  qrInstructText: { flex: 1, fontSize: 11, color: "#475569" },
+
+  // Custom pane
+  customPane: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 14,
+    gap: 12,
+  },
+  customRef: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#0F172A",
+    ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
+  },
+  customAmountRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  customAmountLabel: { fontSize: 14, color: "#475569" },
+  customAmountVal: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  customGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 6,
+  },
+  customOption: {
+    width: "48%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  customOptionActive: { borderColor: "#00B14F", backgroundColor: "#E5F7ED" },
+  radio: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: "#CBD5E1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radioActive: { borderColor: "#00B14F" },
+  radioInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#00B14F",
+  },
+  customOptionText: { flex: 1, fontSize: 12, color: "#0F172A", fontWeight: "500" },
+  summaryBox: {
+    backgroundColor: "#F8FAFC",
+    padding: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  summaryVal: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginTop: 4,
+  },
 
   paymentFooter: {
     flexDirection: "row",
