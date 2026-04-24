@@ -956,6 +956,25 @@ function PaymentModal({
                 </View>
                 <Text style={styles.qrAmount}>{THB(total)}</Text>
               </View>
+            ) : method === "EDC" ? (
+              <View style={styles.edcPane} testID="edc-pane">
+                <View style={styles.edcHero}>
+                  <Ionicons name="tablet-portrait" size={48} color="#00B14F" />
+                  <Ionicons name="swap-horizontal" size={24} color="#94A3B8" />
+                  <Ionicons name="print" size={48} color="#00B14F" />
+                </View>
+                <Text style={styles.edcTitle}>
+                  Connect Silom POS with Electronic Data Capture (EDC) payment terminal
+                </Text>
+                <Text style={styles.edcBody}>
+                  Accept card, PromptPay and all Thai QR payments directly through your EDC terminal.
+                  No more manual entry — the total auto-syncs and you get instant reconciliation.
+                </Text>
+                <Text style={styles.edcBy}>โดย KBank</Text>
+                <TouchableOpacity style={styles.edcRegister} testID="edc-register">
+                  <Text style={styles.edcRegisterText}>สมัครใช้บริการ</Text>
+                </TouchableOpacity>
+              </View>
             ) : method === "Custom" ? (
               <View style={styles.customPane} testID="custom-pane">
                 <TextInput
@@ -1031,7 +1050,7 @@ function PaymentModal({
                 <Text style={styles.netHint}>Tap to equal Total</Text>
                 <Text style={styles.netVal}>{THB(total)}</Text>
               </TouchableOpacity>
-              {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" &&
+              {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" &&
                 quicks.map((q) => (
                   <TouchableOpacity
                     key={q}
@@ -2312,6 +2331,46 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     marginTop: 4,
   },
+
+  // EDC marketing pane
+  edcPane: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 24,
+    alignItems: "center",
+    gap: 14,
+  },
+  edcHero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    marginVertical: 8,
+  },
+  edcTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0F172A",
+    textAlign: "center",
+    lineHeight: 24,
+  },
+  edcBody: {
+    fontSize: 13,
+    color: "#475569",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  edcBy: { fontSize: 12, color: "#94A3B8" },
+  edcRegister: {
+    backgroundColor: "#00B14F",
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  edcRegisterText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
 
   paymentFooter: {
     flexDirection: "row",

@@ -152,13 +152,13 @@ export default function Admin() {
           </>
         )}
         <View style={styles.content}>
-          {section === "reports" && <Reports />}
-          {section === "transactions" && <Transactions />}
-          {section === "inventory" && <Inventory />}
-          {section === "customers" && <Customers />}
-          {section === "products" && <Products />}
+          {section === "reports" && <Reports isWide={isWide} />}
+          {section === "transactions" && <Transactions isWide={isWide} />}
+          {section === "inventory" && <Inventory isWide={isWide} />}
+          {section === "customers" && <Customers isWide={isWide} />}
+          {section === "products" && <Products isWide={isWide} />}
           {section === "drawer" && <Drawer />}
-          {section === "settings" && <SettingsView />}
+          {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
     </SafeAreaView>
@@ -166,7 +166,7 @@ export default function Admin() {
 }
 
 // =================== REPORTS / DASHBOARD ===================
-function Reports() {
+function Reports({ isWide }: { isWide: boolean }) {
   const [period, setPeriod] = useState("month");
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -326,26 +326,42 @@ function GPStat({ label, value, accent }: { label: string; value: string; accent
 }
 
 // =================== TRANSACTIONS ===================
-function Transactions() {
+function Transactions({ isWide }: { isWide: boolean }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showDetail, setShowDetail] = useState(false);
 
   useEffect(() => {
     (async () => {
       const res = await fetch(`${API}/orders`);
       const o: Order[] = await res.json();
       setOrders(o);
-      if (o[0]) setSelected(o[0]);
+      if (o[0] && isWide) setSelected(o[0]);
       setLoading(false);
     })();
-  }, []);
+  }, [isWide]);
 
   if (loading) return <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />;
 
+  // Mobile drill-down: show list OR detail
+  if (!isWide && showDetail && selected) {
+    return (
+      <View style={{ flex: 1 }}>
+        <TouchableOpacity style={styles.backRow} onPress={() => setShowDetail(false)}>
+          <Ionicons name="chevron-back" size={22} color="#00B14F" />
+          <Text style={styles.backText}>Back to transactions</Text>
+        </TouchableOpacity>
+        <ScrollView contentContainerStyle={{ padding: 16 }}>
+          <TransactionDetail order={selected} />
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.twoCol} testID="transactions-section">
-      <View style={styles.txList}>
+    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="transactions-section">
+      <View style={[styles.txList, !isWide && styles.fullCol]}>
         <Text style={styles.sectionHeader}>Sale Transactions</Text>
         <FlatList
           data={orders}
@@ -355,9 +371,9 @@ function Transactions() {
             <TouchableOpacity
               style={[
                 styles.txRow,
-                selected?.id === item.id && styles.txRowActive,
+                selected?.id === item.id && isWide && styles.txRowActive,
               ]}
-              onPress={() => setSelected(item)}
+              onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
               testID={`tx-${item.order_number}`}
             >
               <Ionicons name="folder-outline" size={18} color="#94A3B8" />
@@ -370,60 +386,66 @@ function Transactions() {
           )}
         />
       </View>
-      <View style={styles.txDetail}>
-        <Text style={styles.sectionHeader}>Description</Text>
-        {!selected ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyText}>Please select bill</Text>
-          </View>
-        ) : (
-          <ScrollView contentContainerStyle={{ padding: 20 }}>
-            <View style={styles.receipt}>
-              <Text style={styles.receiptTitle}>{selected.order_number}</Text>
-              <Text style={styles.receiptSub}>
-                {new Date(selected.created_at).toLocaleString()}
-              </Text>
-              <View style={styles.divider2} />
-              {selected.items.map((it: any, i: number) => (
-                <View key={i} style={styles.receiptRow}>
-                  <Text style={styles.receiptItem} numberOfLines={1}>
-                    {it.qty}× {it.name}
-                  </Text>
-                  <Text style={styles.receiptVal}>{THB(it.price * it.qty)}</Text>
-                </View>
-              ))}
-              <View style={styles.divider2} />
-              <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Method</Text>
-                <Text style={styles.receiptVal}>{selected.payment_method || "-"}</Text>
-              </View>
-              <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Source</Text>
-                <Text style={styles.receiptVal}>{selected.source}</Text>
-              </View>
-              {selected.delivery_provider && (
-                <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Delivery</Text>
-                  <Text style={styles.receiptVal}>
-                    {selected.delivery_provider} · {selected.delivery_status}
-                  </Text>
-                </View>
-              )}
-              <View style={styles.divider2} />
-              <View style={styles.receiptRow}>
-                <Text style={styles.receiptTotal}>Total</Text>
-                <Text style={styles.receiptTotal}>{THB(selected.total)}</Text>
-              </View>
+      {isWide && (
+        <View style={styles.txDetail}>
+          <Text style={styles.sectionHeader}>Description</Text>
+          {!selected ? (
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyText}>Please select bill</Text>
             </View>
-          </ScrollView>
-        )}
+          ) : (
+            <ScrollView contentContainerStyle={{ padding: 20 }}>
+              <TransactionDetail order={selected} />
+            </ScrollView>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function TransactionDetail({ order }: { order: Order }) {
+  return (
+    <View style={styles.receipt}>
+      <Text style={styles.receiptTitle}>{order.order_number}</Text>
+      <Text style={styles.receiptSub}>{new Date(order.created_at).toLocaleString()}</Text>
+      <View style={styles.divider2} />
+      {order.items.map((it: any, i: number) => (
+        <View key={i} style={styles.receiptRow}>
+          <Text style={styles.receiptItem} numberOfLines={1}>
+            {it.qty}× {it.name}
+          </Text>
+          <Text style={styles.receiptVal}>{THB(it.price * it.qty)}</Text>
+        </View>
+      ))}
+      <View style={styles.divider2} />
+      <View style={styles.receiptRow}>
+        <Text style={styles.receiptLabel}>Method</Text>
+        <Text style={styles.receiptVal}>{order.payment_method || "-"}</Text>
+      </View>
+      <View style={styles.receiptRow}>
+        <Text style={styles.receiptLabel}>Source</Text>
+        <Text style={styles.receiptVal}>{order.source}</Text>
+      </View>
+      {order.delivery_provider && (
+        <View style={styles.receiptRow}>
+          <Text style={styles.receiptLabel}>Delivery</Text>
+          <Text style={styles.receiptVal}>
+            {order.delivery_provider} · {order.delivery_status}
+          </Text>
+        </View>
+      )}
+      <View style={styles.divider2} />
+      <View style={styles.receiptRow}>
+        <Text style={styles.receiptTotal}>Total</Text>
+        <Text style={styles.receiptTotal}>{THB(order.total)}</Text>
       </View>
     </View>
   );
 }
 
 // =================== INVENTORY ===================
-function Inventory() {
+function Inventory({ isWide }: { isWide: boolean }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
@@ -460,7 +482,7 @@ function Inventory() {
 
   return (
     <View style={{ flex: 1 }} testID="inventory-section">
-      <View style={styles.twoCol}>
+      <View style={[styles.twoCol, !isWide && styles.stackedCol, { flex: 1 }]}>
         <View style={styles.leftNav}>
           <Text style={styles.sectionHeader}>Stock Movement</Text>
           <ScrollView>
@@ -617,7 +639,7 @@ function StockMovementModal({
 }
 
 // =================== CUSTOMERS ===================
-function Customers() {
+function Customers({ isWide }: { isWide: boolean }) {
   const [list, setList] = useState<Customer[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
   const [q, setQ] = useState("");
@@ -649,7 +671,7 @@ function Customers() {
   };
 
   return (
-    <View style={styles.twoCol} testID="customers-section">
+    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="customers-section">
       <View style={styles.leftNav}>
         <View style={styles.custHeader}>
           <Text style={styles.sectionHeader}>Customers</Text>
@@ -762,7 +784,7 @@ function Customers() {
 }
 
 // =================== PRODUCTS ===================
-function Products() {
+function Products({ isWide }: { isWide: boolean }) {
   const [cats, setCats] = useState<Category[]>([]);
   const [prods, setProds] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
@@ -806,7 +828,7 @@ function Products() {
   };
 
   return (
-    <View style={styles.twoCol} testID="products-section">
+    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="products-section">
       <View style={styles.leftNav}>
         <View style={styles.custHeader}>
           <Text style={styles.sectionHeader}>Products</Text>
@@ -1097,7 +1119,7 @@ function Drawer() {
 }
 
 // =================== SETTINGS ===================
-function SettingsView() {
+function SettingsView({ isWide }: { isWide: boolean }) {
   const sections = [
     "Shop", "Floor plan", "Language", "Receipt", "Payment",
     "Drawer", "Sales channels", "Printers", "Customer display",
@@ -1124,7 +1146,7 @@ function SettingsView() {
   };
 
   return (
-    <View style={styles.twoCol} testID="settings-section">
+    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="settings-section">
       <View style={styles.leftNav}>
         <Text style={styles.sectionHeader}>Settings</Text>
         <ScrollView>
@@ -1313,6 +1335,18 @@ const styles = StyleSheet.create({
 
   // Two-column layout
   twoCol: { flex: 1, flexDirection: "row" },
+  stackedCol: { flexDirection: "column" },
+  fullCol: { width: "100%", maxHeight: "100%", flex: 1, borderRightWidth: 0 },
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    padding: 14,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  backText: { color: "#00B14F", fontSize: 14, fontWeight: "600" },
   leftNav: {
     width: 280, backgroundColor: "#FFFFFF",
     borderRightWidth: 1, borderRightColor: "#E2E8F0",
