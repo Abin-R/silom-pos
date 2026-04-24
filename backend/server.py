@@ -28,6 +28,15 @@ class Category(BaseModel):
     name_th: Optional[str] = None
     color: str = "#00B14F"
     order: int = 0
+    source: Optional[str] = None  # e.g. "Grabfood"
+    active: bool = True
+
+
+class CategoryCreate(BaseModel):
+    name: str
+    name_th: Optional[str] = None
+    source: Optional[str] = None
+    active: bool = True
 
 
 class Product(BaseModel):
@@ -35,9 +44,93 @@ class Product(BaseModel):
     name: str
     name_th: Optional[str] = None
     price: float
+    cost: float = 0
     category_id: str
     image_url: str
     is_favorite: bool = False
+    stock: int = 0
+    tax_type: str = "V"  # V=VAT, N=None
+    product_type: str = "P"  # P=Product, S=Service
+    barcode: Optional[str] = None
+
+
+class ProductCreate(BaseModel):
+    name: str
+    name_th: Optional[str] = None
+    price: float
+    cost: float = 0
+    category_id: str
+    image_url: str = ""
+    is_favorite: bool = False
+    stock: int = 0
+    tax_type: str = "V"
+    product_type: str = "P"
+    barcode: Optional[str] = None
+
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    name_th: Optional[str] = None
+    price: Optional[float] = None
+    cost: Optional[float] = None
+    category_id: Optional[str] = None
+    image_url: Optional[str] = None
+    is_favorite: Optional[bool] = None
+    stock: Optional[int] = None
+    tax_type: Optional[str] = None
+    product_type: Optional[str] = None
+    barcode: Optional[str] = None
+
+
+class StockMovement(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    product_id: str
+    product_name: str
+    type: str  # in, out, adjust
+    qty: int
+    note: Optional[str] = None
+    document_no: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class StockMovementCreate(BaseModel):
+    product_id: str
+    type: str
+    qty: int
+    note: Optional[str] = None
+
+
+class Settings(BaseModel):
+    id: str = "shop"
+    shop_name: str = "The rolling pinn"
+    business_type: str = "Restaurant"  # General, Restaurant, Hostel
+    tax_id: Optional[str] = None
+    pos_id: str = "001"
+    branch: str = "Event01"
+    pos_number: str = "001"
+    open_time: str = "09:00"
+    close_time: str = "22:00"
+    tax_percent: float = 7.0
+    tax_mode: str = "exclusive"  # exclusive, inclusive
+    service_charge_enabled: bool = False
+    service_charge_percent: float = 10.0
+    logo_url: Optional[str] = None
+
+
+class SettingsUpdate(BaseModel):
+    shop_name: Optional[str] = None
+    business_type: Optional[str] = None
+    tax_id: Optional[str] = None
+    pos_id: Optional[str] = None
+    branch: Optional[str] = None
+    pos_number: Optional[str] = None
+    open_time: Optional[str] = None
+    close_time: Optional[str] = None
+    tax_percent: Optional[float] = None
+    tax_mode: Optional[str] = None
+    service_charge_enabled: Optional[bool] = None
+    service_charge_percent: Optional[float] = None
+    logo_url: Optional[str] = None
 
 
 class Customer(BaseModel):
@@ -127,14 +220,14 @@ def strip_id(doc):
 
 
 async def gen_order_number() -> str:
-    """Generate unique order number like GF-XXX."""
+    """Generate unique order number like PS001XXXXXX."""
     for _ in range(10):
-        num = uuid.uuid4().int % 1000
-        order_number = f"GF-{num:03d}"
+        num = uuid.uuid4().int % 1000000
+        order_number = f"PS001{num:06d}"
         existing = await db.orders.find_one({"order_number": order_number})
         if not existing:
             return order_number
-    return f"GF-{uuid.uuid4().hex[:4].upper()}"
+    return f"PS001{uuid.uuid4().hex[:6].upper()}"
 
 
 # ---------- Routes ----------
@@ -158,6 +251,30 @@ async def list_categories():
     return [Category(**d) for d in docs]
 
 
+@api_router.post("/categories", response_model=Category)
+async def create_category(body: CategoryCreate):
+    count = await db.categories.count_documents({})
+    c = Category(**body.model_dump(), order=count)
+    await db.categories.insert_one(c.model_dump())
+    return c
+
+
+@api_router.put("/categories/{cid}", response_model=Category)
+async def update_category(cid: str, body: CategoryCreate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    await db.categories.update_one({"id": cid}, {"$set": updates})
+    doc = await db.categories.find_one({"id": cid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return Category(**doc)
+
+
+@api_router.delete("/categories/{cid}")
+async def delete_category(cid: str):
+    await db.categories.delete_one({"id": cid})
+    return {"success": True}
+
+
 @api_router.get("/products", response_model=List[Product])
 async def list_products(category_id: Optional[str] = None, favorite: Optional[bool] = None):
     q = {}
@@ -167,6 +284,163 @@ async def list_products(category_id: Optional[str] = None, favorite: Optional[bo
         q["is_favorite"] = favorite
     docs = await db.products.find(q, {"_id": 0}).to_list(500)
     return [Product(**d) for d in docs]
+
+
+@api_router.post("/products", response_model=Product)
+async def create_product(body: ProductCreate):
+    p = Product(**body.model_dump())
+    await db.products.insert_one(p.model_dump())
+    return p
+
+
+@api_router.put("/products/{pid}", response_model=Product)
+async def update_product(pid: str, body: ProductUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.products.update_one({"id": pid}, {"$set": updates})
+    doc = await db.products.find_one({"id": pid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return Product(**doc)
+
+
+@api_router.delete("/products/{pid}")
+async def delete_product(pid: str):
+    await db.products.delete_one({"id": pid})
+    return {"success": True}
+
+
+# ---------- Stock Movements ----------
+@api_router.get("/stock-movements", response_model=List[StockMovement])
+async def list_stock_movements(product_id: Optional[str] = None):
+    q = {}
+    if product_id:
+        q["product_id"] = product_id
+    docs = await db.stock_movements.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [StockMovement(**d) for d in docs]
+
+
+@api_router.post("/stock-movements", response_model=StockMovement)
+async def create_stock_movement(body: StockMovementCreate):
+    prod = await db.products.find_one({"id": body.product_id}, {"_id": 0})
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+    # Compute new stock
+    delta = body.qty if body.type == "in" else (-body.qty if body.type == "out" else 0)
+    new_stock = prod.get("stock", 0) + delta if body.type != "adjust" else body.qty
+    await db.products.update_one({"id": body.product_id}, {"$set": {"stock": new_stock}})
+    doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
+    mv = StockMovement(
+        product_id=body.product_id,
+        product_name=prod["name"],
+        type=body.type,
+        qty=body.qty,
+        note=body.note,
+        document_no=doc_no,
+    )
+    await db.stock_movements.insert_one(mv.model_dump())
+    return mv
+
+
+# ---------- Settings ----------
+@api_router.get("/settings", response_model=Settings)
+async def get_settings():
+    doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
+    if not doc:
+        s = Settings()
+        await db.settings.insert_one(s.model_dump())
+        return s
+    return Settings(**doc)
+
+
+@api_router.put("/settings", response_model=Settings)
+async def update_settings(body: SettingsUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    await db.settings.update_one({"id": "shop"}, {"$set": updates}, upsert=True)
+    doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
+    return Settings(**doc)
+
+
+# ---------- Dashboard ----------
+@api_router.get("/dashboard")
+async def dashboard(period: str = "month"):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    if period == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "week":
+        start = now - timedelta(days=7)
+    elif period == "year":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start = now - timedelta(days=30)
+
+    docs = await db.orders.find(
+        {"created_at": {"$gte": start.isoformat()}, "status": {"$ne": "cancel"}},
+        {"_id": 0},
+    ).to_list(10000)
+
+    total_sales = sum(o["total"] for o in docs)
+    tx_count = len(docs)
+    avg_bill = (total_sales / tx_count) if tx_count else 0
+    cost_total = 0.0
+    for o in docs:
+        for item in o.get("items", []):
+            # lookup product cost
+            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "cost": 1})
+            if prod:
+                cost_total += (prod.get("cost", 0) or 0) * item.get("qty", 1)
+    profit = total_sales - cost_total
+
+    # Sales by day (last 7 buckets for simplicity)
+    buckets: dict = {}
+    for o in docs:
+        try:
+            d = o["created_at"][:10]
+            buckets[d] = buckets.get(d, 0) + o["total"]
+        except Exception:
+            pass
+    timeline = [{"label": k, "value": v} for k, v in sorted(buckets.items())[-7:]]
+
+    # Top products
+    prod_totals: dict = {}
+    for o in docs:
+        for item in o.get("items", []):
+            key = item["product_id"]
+            prod_totals[key] = prod_totals.get(
+                key, {"product_id": key, "name": item["name"], "total": 0, "qty": 0}
+            )
+            prod_totals[key]["total"] += item["price"] * item["qty"]
+            prod_totals[key]["qty"] += item["qty"]
+    top_products = sorted(prod_totals.values(), key=lambda x: -x["total"])[:5]
+
+    # Top categories
+    cat_totals: dict = {}
+    cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
+    for o in docs:
+        for item in o.get("items", []):
+            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "category_id": 1})
+            if prod:
+                cid = prod.get("category_id", "")
+                cname = cats.get(cid, {}).get("name", "Other")
+                cat_totals[cname] = cat_totals.get(cname, 0) + item["price"] * item["qty"]
+    top_categories = [
+        {"name": k, "total": v}
+        for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
+    ]
+
+    return {
+        "period": period,
+        "total_sales": total_sales,
+        "cost": cost_total,
+        "profit": profit,
+        "gp_percent": (profit / total_sales * 100) if total_sales else 0,
+        "tx_count": tx_count,
+        "avg_bill": avg_bill,
+        "timeline": timeline,
+        "top_products": top_products,
+        "top_categories": top_categories,
+    }
 
 
 @api_router.get("/customers", response_model=List[Customer])
@@ -243,65 +517,86 @@ async def seed_data():
     await db.customers.delete_many({})
     await db.orders.delete_many({})
     await db.parked_orders.delete_many({})
+    await db.stock_movements.delete_many({})
 
-    # Categories
+    # Categories (expanded to match screenshots)
     cats = [
-        {"name": "Favorite", "name_th": "รายการโปรด", "color": "#00B14F", "order": 0},
-        {"name": "Choco Gems", "name_th": "ช็อกโกเจม", "color": "#00B14F", "order": 1},
-        {"name": "Mousse Cake", "name_th": "มูสเค้ก", "color": "#00B14F", "order": 2},
-        {"name": "Soft Cookies", "name_th": "ซอฟต์คุกกี้", "color": "#00B14F", "order": 3},
-        {"name": "Dubai Chocolate", "name_th": "ดูไบช็อกโกแลต", "color": "#00B14F", "order": 4},
-        {"name": "Cookie Cake", "name_th": "คุกกี้เค้ก", "color": "#00B14F", "order": 5},
+        {"name": "Favorite", "name_th": "รายการโปรด", "color": "#00B14F", "order": 0, "source": None},
+        {"name": "Valentine's Collection", "name_th": "วาเลนไทน์", "color": "#EC4899", "order": 1, "source": "Grabfood"},
+        {"name": "Hot Promotion!", "name_th": "โปรโมชั่น", "color": "#F59E0B", "order": 2, "source": "Grabfood"},
+        {"name": "Christmas Collection", "name_th": "คริสต์มาส", "color": "#EF4444", "order": 3, "source": "Grabfood"},
+        {"name": "Cake Slices", "name_th": "เค้กชิ้น", "color": "#94A3B8", "order": 4, "source": "Grabfood"},
+        {"name": "Choco Gems", "name_th": "ช็อกโกเจม", "color": "#00B14F", "order": 5, "source": "Grabfood"},
+        {"name": "Small Cookies", "name_th": "คุกกี้เล็ก", "color": "#00B14F", "order": 6, "source": None},
+        {"name": "Cookie Cake", "name_th": "คุกกี้เค้ก", "color": "#00B14F", "order": 7, "source": "Grabfood"},
+        {"name": "Dream Cake box", "name_th": "ดรีมเค้กบ็อกซ์", "color": "#8B5CF6", "order": 8, "source": "Grabfood"},
+        {"name": "Mini Birthday Cake", "name_th": "มินิเค้กวันเกิด", "color": "#F59E0B", "order": 9, "source": "Grabfood"},
+        {"name": "Brownie Bites", "name_th": "บราวนี่", "color": "#7C2D12", "order": 10, "source": None},
+        {"name": "Say something sweet", "name_th": "คำหวาน", "color": "#EC4899", "order": 11, "source": None},
+        {"name": "Dubai Chocolate", "name_th": "ดูไบช็อกโกแลต", "color": "#92400E", "order": 12, "source": "Grabfood"},
+        {"name": "MEGA Hot Deals", "name_th": "โปรโมชั่นเด็ด", "color": "#DC2626", "order": 13, "source": "Grabfood"},
     ]
     cat_objs = [Category(**c) for c in cats]
     await db.categories.insert_many([c.model_dump() for c in cat_objs])
     cat_map = {c.name: c.id for c in cat_objs}
 
-    # Images by category
     IMG = {
         "Choco Gems": "https://images.pexels.com/photos/9419469/pexels-photo-9419469.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
-        "Mousse Cake": "https://images.unsplash.com/photo-1713274785893-8879f807aff6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxtb3Vzc2UlMjBjYWtlfGVufDB8fHx8MTc3Njg0ODM1Mnww&ixlib=rb-4.1.0&q=85",
+        "Mousse": "https://images.unsplash.com/photo-1713274785893-8879f807aff6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxtb3Vzc2UlMjBjYWtlfGVufDB8fHx8MTc3Njg0ODM1Mnww&ixlib=rb-4.1.0&q=85",
         "Soft Cookies": "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
         "Dubai Chocolate": "https://images.pexels.com/photos/9279001/pexels-photo-9279001.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
         "Cookie Cake": "https://images.unsplash.com/photo-1694588915262-30d22a36b379?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxjb29raWUlMjBjYWtlfGVufDB8fHx8MTc3Njg0ODM1Nnww&ixlib=rb-4.1.0&q=85",
+        "Brownie": "https://images.pexels.com/photos/45202/brownie-dessert-cake-sweet-45202.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "Valentine": "https://images.unsplash.com/photo-1511381939415-e44015466834?w=600",
     }
 
-    # Products (from screenshots + extras)
     products_data = [
-        # Choco Gems
-        {"name": "Chocogems pop Baby edition", "name_th": "ช็อกโกเจมป๊อปเบบี้", "price": 350, "category": "Choco Gems", "image": IMG["Choco Gems"], "favorite": True},
-        {"name": "Choco Gems Pop", "name_th": "ช็อกโกเจมป๊อป", "price": 299, "category": "Choco Gems", "image": IMG["Choco Gems"]},
-        {"name": "Choco Gems Pop Ice Cream", "name_th": "ช็อกโกเจมไอศกรีม", "price": 350, "category": "Choco Gems", "image": IMG["Choco Gems"]},
-        {"name": "Mini Chocogems", "name_th": "มินิช็อกโกเจม", "price": 199, "category": "Choco Gems", "image": IMG["Choco Gems"]},
-
-        # Mousse Cake Collection
-        {"name": "Pink Birthday Cookie Cake (1lb)", "name_th": "พิงค์ เบิร์ธเดย์", "price": 590, "category": "Mousse Cake", "image": IMG["Mousse Cake"], "favorite": True},
-        {"name": "Breakfast Confetti Birthday Sized Cake", "name_th": "เบรกฟาสต์คอนเฟ็ตตี้", "price": 590, "category": "Mousse Cake", "image": IMG["Mousse Cake"]},
-        {"name": "Red Velvet Cookie Cake", "name_th": "เรดเวลเว็ท", "price": 160, "category": "Mousse Cake", "image": IMG["Mousse Cake"]},
-        {"name": "Chocolate Pudding Birthday", "name_th": "ช็อกโกแลตพุดดิ้ง", "price": 1600, "category": "Mousse Cake", "image": IMG["Mousse Cake"]},
-
-        # Soft Cookies
-        {"name": "Biscoff Mochi Cookie", "name_th": "บิสคอฟโมจิ", "price": 160, "category": "Soft Cookies", "image": IMG["Soft Cookies"], "favorite": True},
-        {"name": "Sexy Back Cookie", "name_th": "เซ็กซี่แบ็กคุกกี้", "price": 95, "category": "Soft Cookies", "image": IMG["Soft Cookies"], "favorite": True},
-        {"name": "Cookie Dough Cookie", "name_th": "คุกกี้โด", "price": 160, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "Double Trouble Dark Chocolate", "name_th": "ดับเบิ้ลทรับเบิ้ล", "price": 95, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "The Marching Ladies Cookie", "name_th": "มาร์ชิ่งเลดี้ส์", "price": 95, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "Breakfast Confetti Cookie", "name_th": "เบรกฟาสต์คอนเฟ็ตตี้", "price": 160, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "Firecracker Candle (เทียนพลุ)", "name_th": "เทียนพลุ", "price": 100, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "Box of 9pcs Bae Brownie", "name_th": "แบบราวนี่ 9 ชิ้น", "price": 380, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "CORNFLAKE MARSHMALLOW", "name_th": "คอร์นเฟลกมาร์ชเมลโลว์", "price": 95, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
-        {"name": "Pink Birthday Cookies", "name_th": "พิงค์เบิร์ธเดย์คุกกี้", "price": 160, "category": "Soft Cookies", "image": IMG["Soft Cookies"]},
+        # Favorite / Choco Gems
+        {"name": "Chocogems pop Baby edition", "name_th": "ช็อกโกเจมป๊อปเบบี้", "price": 350, "cost": 180, "category": "Choco Gems", "image": IMG["Choco Gems"], "favorite": True, "stock": 24},
+        {"name": "Choco Gems Pop", "name_th": "ช็อกโกเจมป๊อป", "price": 299, "cost": 150, "category": "Choco Gems", "image": IMG["Choco Gems"], "favorite": True, "stock": 32},
+        {"name": "Mayongchid Choco Gems Pop", "name_th": "มะยงชิดช็อกโกเจม", "price": 350, "cost": 180, "category": "Choco Gems", "image": IMG["Choco Gems"], "favorite": True, "stock": 18},
+        {"name": "Summer Edition Choco Gems Pop (BOX)", "name_th": "ช็อกโกเจมซัมเมอร์", "price": 350, "cost": 180, "category": "Choco Gems", "image": IMG["Choco Gems"], "stock": 12},
 
         # Dubai Chocolate
-        {"name": "Dubai Matcha Strawberry Mochi", "name_th": "ดูไบมัทฉะสตรอเบอร์รี่", "price": 399, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"], "favorite": True},
-        {"name": "Box of 9pcs Red Velvet Cream Cheese", "name_th": "เรดเวลเว็ทครีมชีส", "price": 380, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"]},
-        {"name": "Dubai Chewy Cookies", "name_th": "ดูไบชิววี่", "price": 299, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"]},
-        {"name": "Dubai Classic Bar", "name_th": "ดูไบคลาสสิก", "price": 450, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"]},
+        {"name": "Dubai Matcha Strawberry Mochi กล่อง 4 ชิ้น", "name_th": "ดูไบมัทฉะสตรอเบอร์รี่", "price": 399, "cost": 199, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"], "favorite": True, "stock": 15},
+        {"name": "Dubai Matcha Strawberry Mochi กล่อง 8 ชิ้น", "name_th": "ดูไบมัทฉะสตรอเบอร์รี่ 8", "price": 699, "cost": 350, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"], "stock": 8},
+        {"name": "Dubai Chewy Cookies", "name_th": "ดูไบชิววี่", "price": 299, "cost": 149, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"], "stock": 22},
+        {"name": "Dubai Classic Bar", "name_th": "ดูไบคลาสสิก", "price": 450, "cost": 225, "category": "Dubai Chocolate", "image": IMG["Dubai Chocolate"], "stock": 10},
+
+        # Small Cookies (with negative stocks like the screenshot!)
+        {"name": "Mama OG Dark Chocolate Walnut Cookie", "name_th": "คุกกี้ดาร์กช็อกโกแลต วอลนัท", "price": 95, "cost": 40, "category": "Small Cookies", "image": IMG["Soft Cookies"], "stock": 0},
+        {"name": "The Marching Ladies Cookie", "name_th": "มาร์ชิ่งเลดี้ส์", "price": 95, "cost": 40, "category": "Small Cookies", "image": IMG["Soft Cookies"], "stock": -59},
+        {"name": "Sexy Back Cookie", "name_th": "เซ็กซี่แบ็กคุกกี้", "price": 95, "cost": 40, "category": "Small Cookies", "image": IMG["Soft Cookies"], "favorite": True, "stock": -32},
+        {"name": "CORNFLAKE MARSHMALLOW", "name_th": "คอร์นเฟลกมาร์ชเมลโลว์", "price": 95, "cost": 40, "category": "Small Cookies", "image": IMG["Soft Cookies"], "stock": 0},
+        {"name": "Double Trouble Dark Chocolate Cookie", "name_th": "ดับเบิ้ลทรับเบิ้ล", "price": 95, "cost": 40, "category": "Small Cookies", "image": IMG["Soft Cookies"], "stock": 0},
 
         # Cookie Cake
-        {"name": "Mini Strawberry Shortcake", "name_th": "มินิสตรอเบอร์รี่", "price": 690, "category": "Cookie Cake", "image": IMG["Cookie Cake"]},
-        {"name": "Birthday Cookie Cake (1lb)", "name_th": "เบิร์ธเดย์คุกกี้เค้ก", "price": 590, "category": "Cookie Cake", "image": IMG["Cookie Cake"]},
-        {"name": "Chocolate Fudge Cookie Cake", "name_th": "ช็อกโกแลตฟัดจ์", "price": 690, "category": "Cookie Cake", "image": IMG["Cookie Cake"]},
+        {"name": "Pink Birthday Cookie Cake (1lb)", "name_th": "พิงค์ เบิร์ธเดย์", "price": 590, "cost": 280, "category": "Cookie Cake", "image": IMG["Cookie Cake"], "favorite": True, "stock": 6},
+        {"name": "Breakfast Confetti Birthday Sized Cake", "name_th": "เบรกฟาสต์คอนเฟ็ตตี้", "price": 590, "cost": 280, "category": "Cookie Cake", "image": IMG["Cookie Cake"], "stock": 4},
+        {"name": "Mini Strawberry Shortcake", "name_th": "มินิสตรอเบอร์รี่", "price": 690, "cost": 320, "category": "Cookie Cake", "image": IMG["Cookie Cake"], "stock": 3},
+        {"name": "Chocolate Fudge Cookie Cake", "name_th": "ช็อกโกแลตฟัดจ์", "price": 690, "cost": 320, "category": "Cookie Cake", "image": IMG["Cookie Cake"], "stock": 5},
+
+        # Cake Slices
+        {"name": "Red Velvet Cookie Cake Slice", "name_th": "เรดเวลเว็ทชิ้น", "price": 160, "cost": 70, "category": "Cake Slices", "image": IMG["Cookie Cake"], "stock": 12},
+        {"name": "Chocolate Pudding Slice", "name_th": "ช็อกโกแลตพุดดิ้ง", "price": 160, "cost": 70, "category": "Cake Slices", "image": IMG["Cookie Cake"], "stock": 10},
+
+        # Christmas
+        {"name": "Crystal Velvet Tanghulu Cookie", "name_th": "คริสตัลเวลเว็ท", "price": 160, "cost": 70, "category": "Christmas Collection", "image": IMG["Soft Cookies"], "stock": 18},
+        {"name": "Crystal Blueberry Tanghulu Cookie", "name_th": "คริสตัลบลูเบอร์รี่", "price": 160, "cost": 70, "category": "Christmas Collection", "image": IMG["Soft Cookies"], "stock": 16},
+        {"name": "Snowflake Xmas Tree Cake (mini)", "name_th": "สโนว์เฟลก มินิ", "price": 650, "cost": 300, "category": "Christmas Collection", "image": IMG["Cookie Cake"], "stock": 4},
+        {"name": "Snowflake Xmas Tree Cake (S)", "name_th": "สโนว์เฟลก เอส", "price": 1650, "cost": 800, "category": "Christmas Collection", "image": IMG["Cookie Cake"], "stock": 2},
+
+        # Mousse / Valentine
+        {"name": "Raspberry Mousse", "name_th": "ราสเบอร์รี่ มูส", "price": 95, "cost": 45, "category": "Cake Slices", "image": IMG["Mousse"], "stock": 14},
+        {"name": "Strawberry Love Cake", "name_th": "เค้กความรัก", "price": 590, "cost": 280, "category": "Valentine's Collection", "image": IMG["Valentine"], "stock": 6},
+
+        # Hot Promotion
+        {"name": "Box of 9pcs Bae Brownie", "name_th": "แบบราวนี่ 9 ชิ้น", "price": 380, "cost": 180, "category": "Hot Promotion!", "image": IMG["Brownie"], "stock": 10},
+        {"name": "Firecracker Candle (เทียนพลุ)", "name_th": "เทียนพลุ", "price": 100, "cost": 30, "category": "Hot Promotion!", "image": IMG["Soft Cookies"], "stock": 40},
+
+        # Brownie Bites
+        {"name": "Classic Brownie Bite", "name_th": "บราวนี่คลาสสิก", "price": 45, "cost": 18, "category": "Brownie Bites", "image": IMG["Brownie"], "stock": 50},
+        {"name": "Salted Caramel Brownie", "name_th": "ซอลเทดคาราเมล", "price": 55, "cost": 22, "category": "Brownie Bites", "image": IMG["Brownie"], "stock": 36},
     ]
 
     products = []
@@ -310,9 +605,13 @@ async def seed_data():
             name=p["name"],
             name_th=p.get("name_th"),
             price=p["price"],
+            cost=p.get("cost", 0),
             category_id=cat_map[p["category"]],
             image_url=p["image"],
             is_favorite=p.get("favorite", False),
+            stock=p.get("stock", 0),
+            tax_type="V",
+            product_type="P",
         ))
     await db.products.insert_many([p.model_dump() for p in products])
 
@@ -323,44 +622,97 @@ async def seed_data():
         {"name": "fisa ml", "phone": None, "last_visit": "2026-03-02", "color": "#10B981"},
         {"name": "CEVA AIR OCEAN (THAILAND) CO., LTD.", "phone": None, "color": "#94A3B8"},
         {"name": "CHAGEE (THAILAND) COMPANY LIMITED", "phone": None, "color": "#94A3B8"},
+        {"name": "อาภาทิพ เหรียญเจริญ", "phone": "028320700", "color": "#94A3B8"},
+        {"name": "j k", "phone": None, "color": "#F59E0B"},
+        {"name": "เ อ", "phone": None, "color": "#10B981"},
+        {"name": "cc gg", "phone": "02-2620140", "color": "#334155"},
+        {"name": "Louis Vuitton (Thailand) S.A (Head Office)", "phone": None, "color": "#7C3AED"},
         {"name": "DUCKKING บริษัท ดั๊กคิง จำกัด", "phone": "0385881178", "color": "#F59E0B"},
-        {"name": "fv dff", "phone": "122522", "color": "#10B981"},
     ]
     customers = [Customer(**c) for c in customers_data]
     await db.customers.insert_many([c.model_dump() for c in customers])
 
-    # Seed some delivered orders (Grab) for Order Hub demo
+    # Historical orders (distributed over last 30 days for dashboard)
+    from datetime import timedelta
     now = datetime.now(timezone.utc)
+    import random
+    random.seed(42)
+    order_count = 0
+    for days_ago in range(30):
+        day = now - timedelta(days=days_ago)
+        # 3-8 orders per day, fewer on weekends for realism
+        n = random.randint(3, 8)
+        for _ in range(n):
+            # random items
+            sample = random.sample(products, random.randint(1, 3))
+            items = [OrderItem(
+                product_id=p.id, name=p.name, price=p.price, qty=random.randint(1, 3)
+            ) for p in sample]
+            total = sum(i.price * i.qty for i in items)
+            o = Order(
+                order_number=f"PS001{1000 + order_count:06d}",
+                items=items,
+                subtotal=total,
+                total=total,
+                paid_amount=total,
+                status="completed",
+                source=random.choice(["table", "delivery", "table", "kiosk"]),
+                payment_method=random.choice(["Easy Pay", "PromptPay", "QR Kbank", "Credit"]),
+                delivery_provider="Grab" if random.random() < 0.3 else None,
+                delivery_status="DELIVERED" if random.random() < 0.5 else None,
+                created_time=day.strftime("%H:%M"),
+                created_at=(day - timedelta(hours=random.randint(9, 21))).isoformat(),
+            )
+            await db.orders.insert_one(o.model_dump())
+            order_count += 1
+
+    # Active delivery orders (like the Order Hub screenshot)
     sample_items = [OrderItem(product_id=products[0].id, name=products[0].name, price=products[0].price, qty=1)]
-    demo_orders = [
-        {"order_number": "GF-989", "total": 290.0, "status": "completed", "source": "delivery", "delivery_provider": "Grab", "delivery_status": "DELIVERING", "time": "14:34"},
-        {"order_number": "GF-643", "total": 630.0, "status": "completed", "source": "delivery", "delivery_provider": "Grab", "delivery_status": "DELIVERING", "time": "14:16"},
-        {"order_number": "GF-383", "total": 590.0, "status": "completed", "source": "delivery", "delivery_provider": "Grab", "delivery_status": "DELIVERED", "time": "14:21"},
-        {"order_number": "GF-034", "total": 350.0, "status": "completed", "source": "delivery", "delivery_provider": "Grab", "delivery_status": "DELIVERED", "time": "12:32"},
-        {"order_number": "GF-247", "total": 450.0, "status": "completed", "source": "delivery", "delivery_provider": "Grab", "delivery_status": "DELIVERED", "time": "12:08"},
-    ]
-    for d in demo_orders:
+    for live in [
+        {"num": "PS001989001", "total": 290.0, "status": "completed", "delivery_status": "DELIVERING", "time": "14:34"},
+        {"num": "PS001643001", "total": 630.0, "status": "completed", "delivery_status": "DELIVERING", "time": "14:16"},
+    ]:
         o = Order(
-            order_number=d["order_number"],
+            order_number=live["num"],
             items=sample_items,
-            subtotal=d["total"],
-            total=d["total"],
-            paid_amount=d["total"],
-            status=d["status"],
-            source=d["source"],
+            subtotal=live["total"],
+            total=live["total"],
+            paid_amount=live["total"],
+            status="completed",
+            source="delivery",
             payment_method="PromptPay",
-            delivery_provider=d.get("delivery_provider"),
-            delivery_status=d.get("delivery_status"),
-            created_time=d["time"],
+            delivery_provider="Grab",
+            delivery_status=live["delivery_status"],
+            created_time=live["time"],
             created_at=now.isoformat(),
         )
         await db.orders.insert_one(o.model_dump())
+
+    # Some stock movements (to match the -59 / -32 numbers)
+    marching = next(p for p in products if "Marching Ladies" in p.name)
+    sexy = next(p for p in products if "Sexy Back" in p.name)
+    await db.stock_movements.insert_many([
+        StockMovement(
+            product_id=marching.id, product_name=marching.name,
+            type="out", qty=59, note="Sold on Grabfood",
+            document_no="SM260422143001",
+        ).model_dump(),
+        StockMovement(
+            product_id=sexy.id, product_name=sexy.name,
+            type="out", qty=32, note="Sold on Grabfood",
+            document_no="SM260422143002",
+        ).model_dump(),
+    ])
+
+    # Default settings
+    await db.settings.delete_many({})
+    await db.settings.insert_one(Settings().model_dump())
 
     return {
         "categories": len(cat_objs),
         "products": len(products),
         "customers": len(customers),
-        "orders": len(demo_orders),
+        "orders": order_count + 2,
     }
 
 

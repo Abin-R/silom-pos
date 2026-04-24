@@ -303,6 +303,14 @@ export default function POS() {
           </View>
         )}
         <TouchableOpacity
+          style={styles.adminBtn}
+          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin" } })}
+          testID="goto-admin"
+        >
+          <Ionicons name="grid-outline" size={18} color="#00B14F" />
+          {isWide && <Text style={styles.adminBtnText}>Admin</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.logoutBtn}
           onPress={() => router.replace("/")}
           testID="logout-btn"
@@ -1683,6 +1691,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#E5F7ED",
   },
   staffText: { fontSize: 12, color: "#00B14F", fontWeight: "600" },
+  adminBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#00B14F",
+  },
+  adminBtnText: { fontSize: 12, fontWeight: "700", color: "#00B14F" },
   logoutBtn: { padding: 8 },
 
   // Main

@@ -39,7 +39,9 @@ export default function PinLogin() {
       });
       if (res.ok) {
         const data = await res.json();
-        router.replace({ pathname: "/pos", params: { staff: data.staff_name } });
+        // Admin (1234) goes to back-office; Cashier (0000) to POS
+        const destination = data.staff_name === "Admin" ? "/admin" : "/pos";
+        router.replace({ pathname: destination, params: { staff: data.staff_name } });
       } else {
         setError("Invalid PIN. Try 1234 or 0000.");
         setPin("");
