@@ -212,6 +212,48 @@ class OrderStatusUpdate(BaseModel):
     status: str
 
 
+# ---------- Shift (Cash Drawer) ----------
+class Shift(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    round_number: int
+    start_cash: float = 0
+    opened_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    opened_by: str = "Admin"
+    closed_at: Optional[str] = None
+    closed_by: Optional[str] = None
+    total_sales_cash: float = 0
+    total_paid_in: float = 0
+    total_paid_out: float = 0
+    expected_in_drawer: float = 0
+    actual_in_drawer: Optional[float] = None
+    status: str = "open"
+
+
+class ShiftOpen(BaseModel):
+    start_cash: float = 0
+    opened_by: str = "Admin"
+
+
+class ShiftMovement(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    shift_id: str
+    type: str
+    amount: float
+    note: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ShiftMovementCreate(BaseModel):
+    type: str
+    amount: float
+    note: Optional[str] = None
+
+
+class ShiftClose(BaseModel):
+    actual_in_drawer: float
+    closed_by: str = "Admin"
+
+
 # ---------- Helpers ----------
 def strip_id(doc):
     if doc and "_id" in doc:
@@ -441,6 +483,66 @@ async def dashboard(period: str = "month"):
         "top_products": top_products,
         "top_categories": top_categories,
     }
+
+
+# ---------- Shift endpoints ----------
+@api_router.get("/shifts/current", response_model=Optional[Shift])
+async def get_current_shift():
+    doc = await db.shifts.find_one({"status": "open"}, {"_id": 0}, sort=[("opened_at", -1)])
+    return Shift(**doc) if doc else None
+
+
+@api_router.post("/shifts/open", response_model=Shift)
+async def open_shift(body: ShiftOpen):
+    existing = await db.shifts.find_one({"status": "open"})
+    if existing:
+        raise HTTPException(status_code=400, detail="Shift already open")
+    count = await db.shifts.count_documents({})
+    s = Shift(round_number=count + 1, start_cash=body.start_cash, opened_by=body.opened_by)
+    await db.shifts.insert_one(s.model_dump())
+    return s
+
+
+@api_router.post("/shifts/movement", response_model=ShiftMovement)
+async def add_movement(body: ShiftMovementCreate):
+    shift = await db.shifts.find_one({"status": "open"}, {"_id": 0})
+    if not shift:
+        raise HTTPException(status_code=400, detail="No open shift")
+    mv = ShiftMovement(shift_id=shift["id"], **body.model_dump())
+    await db.shift_movements.insert_one(mv.model_dump())
+    key = "total_paid_in" if body.type == "paid_in" else "total_paid_out"
+    await db.shifts.update_one({"id": shift["id"]}, {"$inc": {key: body.amount}})
+    return mv
+
+
+@api_router.put("/shifts/close", response_model=Shift)
+async def close_shift(body: ShiftClose):
+    shift = await db.shifts.find_one({"status": "open"}, {"_id": 0})
+    if not shift:
+        raise HTTPException(status_code=400, detail="No open shift")
+    # Calculate total_sales_cash from orders paid with cash methods since shift opened
+    cash_orders = await db.orders.find({
+        "created_at": {"$gte": shift["opened_at"]},
+        "payment_method": {"$in": ["Easy Pay", "Cash"]},
+    }, {"_id": 0}).to_list(10000)
+    total_cash = sum(o.get("total", 0) for o in cash_orders)
+    expected = shift["start_cash"] + total_cash + shift.get("total_paid_in", 0) - shift.get("total_paid_out", 0)
+    await db.shifts.update_one({"id": shift["id"]}, {"$set": {
+        "status": "closed",
+        "closed_at": datetime.now(timezone.utc).isoformat(),
+        "closed_by": body.closed_by,
+        "actual_in_drawer": body.actual_in_drawer,
+        "total_sales_cash": total_cash,
+        "expected_in_drawer": expected,
+    }})
+    doc = await db.shifts.find_one({"id": shift["id"]}, {"_id": 0})
+    return Shift(**doc)
+
+
+@api_router.get("/shifts", response_model=List[Shift])
+async def list_shifts():
+    docs = await db.shifts.find({}, {"_id": 0}).sort("opened_at", -1).to_list(100)
+    return [Shift(**d) for d in docs]
 
 
 @api_router.get("/customers", response_model=List[Customer])

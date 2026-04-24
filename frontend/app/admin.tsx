@@ -917,13 +917,18 @@ function Products({ isWide }: { isWide: boolean }) {
               <Image source={{ uri: item.image_url }} style={styles.invImg} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
-                <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 4, alignItems: "center" }}>
                   <Text style={styles.prodPriceLabel}>
-                    <Text style={{ fontWeight: "700", color: "#0F172A" }}>
+                    <Text style={{ fontWeight: "700", color: item.cost === 0 ? "#EF4444" : "#0F172A" }}>
                       {THB(item.price)}
                     </Text>
                   </Text>
                   <Text style={styles.prodPriceLabel}>Cost {THB(item.cost)}</Text>
+                  {item.cost === 0 && (
+                    <View style={styles.warnPill}>
+                      <Text style={styles.warnPillText}>!</Text>
+                    </View>
+                  )}
                 </View>
               </View>
               <TouchableOpacity onPress={() => toggleFav(item)} testID={`fav-${item.id}`}>
@@ -1085,38 +1090,228 @@ function ProductEditModal({
   );
 }
 
-// =================== DRAWER ===================
+// =================== DRAWER / SHIFT ===================
+type ShiftType = {
+  id: string;
+  round_number: number;
+  start_cash: number;
+  opened_at: string;
+  opened_by: string;
+  closed_at?: string;
+  closed_by?: string;
+  total_sales_cash: number;
+  total_paid_in: number;
+  total_paid_out: number;
+  expected_in_drawer: number;
+  actual_in_drawer?: number;
+  status: string;
+};
+
 function Drawer() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  useEffect(() => {
-    fetch(`${API}/dashboard?period=today`).then((r) => r.json()).then(setData);
-  }, []);
+  const [current, setCurrent] = useState<ShiftType | null>(null);
+  const [history, setHistory] = useState<ShiftType[]>([]);
+  const [tab, setTab] = useState<"shift" | "history">("shift");
+  const [openDlg, setOpenDlg] = useState(false);
+  const [closeDlg, setCloseDlg] = useState(false);
+  const [moveDlg, setMoveDlg] = useState<"paid_in" | "paid_out" | null>(null);
+  const [startCash, setStartCash] = useState("0");
+  const [actualCash, setActualCash] = useState("0");
+  const [moveAmt, setMoveAmt] = useState("");
+  const [moveNote, setMoveNote] = useState("");
+
+  const load = async () => {
+    const [cur, hist] = await Promise.all([
+      fetch(`${API}/shifts/current`).then((r) => r.json()),
+      fetch(`${API}/shifts`).then((r) => r.json()),
+    ]);
+    setCurrent(cur && cur.id ? cur : null);
+    setHistory(hist || []);
+  };
+  useEffect(() => { load(); }, []);
+
+  const openShift = async () => {
+    await fetch(`${API}/shifts/open`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_cash: parseFloat(startCash) || 0, opened_by: "Admin" }),
+    });
+    setOpenDlg(false); setStartCash("0"); load();
+  };
+  const closeShift = async () => {
+    await fetch(`${API}/shifts/close`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actual_in_drawer: parseFloat(actualCash) || 0, closed_by: "Admin" }),
+    });
+    setCloseDlg(false); setActualCash("0"); load();
+  };
+  const addMovement = async () => {
+    if (!moveDlg || !moveAmt) return;
+    await fetch(`${API}/shifts/movement`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: moveDlg, amount: parseFloat(moveAmt), note: moveNote }),
+    });
+    setMoveDlg(null); setMoveAmt(""); setMoveNote(""); load();
+  };
+
+  const expected = current
+    ? current.start_cash + current.total_paid_in - current.total_paid_out
+    : 0;
+
+  const fmtDT = (iso?: string) =>
+    iso ? new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(",", "") : "-";
+
   return (
-    <ScrollView contentContainerStyle={{ padding: 20 }} testID="drawer-section">
-      <Text style={styles.h1}>Cash Drawer</Text>
-      <Text style={styles.helperText}>Today's summary</Text>
-      {!data ? (
-        <ActivityIndicator color="#00B14F" style={{ marginTop: 20 }} />
+    <View style={{ flex: 1 }} testID="drawer-section">
+      <Text style={styles.shiftHeader}>Shift</Text>
+
+      {tab === "shift" ? (
+        <ScrollView contentContainerStyle={{ padding: 16 }}>
+          {!current ? (
+            <View style={styles.shiftCard}>
+              <View style={styles.emptyBox}>
+                <Ionicons name="file-tray-outline" size={40} color="#CBD5E1" />
+                <Text style={styles.emptyText}>No open shift</Text>
+                <TouchableOpacity style={[styles.primaryBtn, { marginTop: 14 }]} onPress={() => setOpenDlg(true)} testID="open-shift">
+                  <Text style={styles.primaryBtnText}>Open Shift</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.shiftCard}>
+                <ShiftRow label="Round" value={String(current.round_number)} strong />
+                <ShiftRow label="Start Cash in Drawer" value={current.start_cash.toFixed(2)} />
+                <ShiftRow label="Shift opened" value={fmtDT(current.opened_at)} />
+                <ShiftRow label="Shift opened by" value={current.opened_by} />
+              </View>
+              <View style={styles.shiftCard}>
+                <ShiftRow label="Total Sales (cash)" value={current.total_sales_cash.toFixed(2)} />
+                <ShiftRow label="Total Paid In" value={current.total_paid_in.toFixed(2)} />
+                <ShiftRow label="Total Paid Out" value={current.total_paid_out.toFixed(2)} />
+                <ShiftRow label="Expected in Drawer" value={expected.toFixed(2)} />
+              </View>
+              <View style={styles.inOutRow}>
+                <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_in")} testID="paid-in">
+                  <Text style={[styles.inOutText, { color: "#00B14F" }]}>Paid In</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_out")} testID="paid-out">
+                  <Text style={[styles.inOutText, { color: "#EF4444" }]}>Paid Out</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={styles.closeShiftBtn} onPress={() => setCloseDlg(true)} testID="close-shift">
+                <Text style={styles.closeShiftText}>CLOSE SHIFT</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
       ) : (
-        <>
-          <View style={styles.kpiRow}>
-            <KPI label="Today Sales" value={THB(data.total_sales)} color="#00B14F" icon="cash-outline" />
-            <KPI label="Transactions" value={String(data.tx_count)} color="#F59E0B" icon="receipt-outline" />
-            <KPI label="Profit" value={THB(data.profit)} color="#3B82F6" icon="trending-up" />
-          </View>
-          <View style={[styles.chartCard, { marginTop: 16 }]}>
-            <Text style={styles.chartTitle}>Drawer Actions</Text>
-            <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
-              <TouchableOpacity style={styles.drawerAction}><Ionicons name="log-in-outline" size={18} color="#00B14F" /><Text style={styles.drawerActionText}>Open Drawer</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.drawerAction}><Ionicons name="log-out-outline" size={18} color="#EF4444" /><Text style={styles.drawerActionText}>Close Drawer</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.drawerAction}><Ionicons name="document-text-outline" size={18} color="#475569" /><Text style={styles.drawerActionText}>Daily Report</Text></TouchableOpacity>
+        <FlatList
+          data={history}
+          keyExtractor={(i) => i.id}
+          contentContainerStyle={{ padding: 16, gap: 10 }}
+          ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>No shift history</Text></View>}
+          renderItem={({ item }) => (
+            <View style={styles.histRow} testID={`shift-hist-${item.id}`}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.histRound}>Round #{item.round_number} · {item.status === "open" ? "OPEN" : "CLOSED"}</Text>
+                <Text style={styles.histTime}>
+                  {fmtDT(item.opened_at)}{item.closed_at ? ` → ${fmtDT(item.closed_at)}` : ""}
+                </Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={styles.histAmt}>{THB(item.total_sales_cash)}</Text>
+                <Text style={styles.histSub}>Cash sales</Text>
+              </View>
+            </View>
+          )}
+        />
+      )}
+
+      <View style={styles.invTabs}>
+        <TouchableOpacity style={[styles.invTab, tab === "shift" && styles.invTabActive]} onPress={() => setTab("shift")} testID="shift-tab">
+          <Ionicons name="file-tray-outline" size={16} color={tab === "shift" ? "#00B14F" : "#475569"} />
+          <Text style={[styles.invTabText, tab === "shift" && { color: "#00B14F" }]}>Shift</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.invTab, tab === "history" && styles.invTabActive]} onPress={() => setTab("history")} testID="history-tab">
+          <Ionicons name="time-outline" size={16} color={tab === "history" ? "#00B14F" : "#475569"} />
+          <Text style={[styles.invTabText, tab === "history" && { color: "#00B14F" }]}>History</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Open Shift dialog */}
+      <Modal visible={openDlg} transparent animationType="fade" onRequestClose={() => setOpenDlg(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setOpenDlg(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Open Shift</Text><View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 14 }}>
+              <Text style={styles.formLabel}>Start Cash in Drawer (THB)</Text>
+              <TextInput style={styles.formInput} value={startCash} onChangeText={setStartCash} keyboardType="decimal-pad" testID="start-cash" />
+              <TouchableOpacity style={styles.primaryBtn} onPress={openShift} testID="confirm-open-shift">
+                <Text style={styles.primaryBtnText}>Open Shift</Text>
+              </TouchableOpacity>
             </View>
           </View>
-        </>
-      )}
-    </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Close Shift dialog */}
+      <Modal visible={closeDlg} transparent animationType="fade" onRequestClose={() => setCloseDlg(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Close Shift</Text><View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 14 }}>
+              <Text style={styles.helperText}>Expected: {THB(expected)}</Text>
+              <Text style={styles.formLabel}>Actual Cash Count (THB)</Text>
+              <TextInput style={styles.formInput} value={actualCash} onChangeText={setActualCash} keyboardType="decimal-pad" testID="actual-cash" />
+              <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: "#EF4444" }]} onPress={closeShift} testID="confirm-close-shift">
+                <Text style={styles.primaryBtnText}>Close Shift</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Paid-In/Out dialog */}
+      <Modal visible={!!moveDlg} transparent animationType="fade" onRequestClose={() => setMoveDlg(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setMoveDlg(null)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text><View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 14 }}>
+              <Text style={styles.formLabel}>Amount (THB)</Text>
+              <TextInput style={styles.formInput} value={moveAmt} onChangeText={setMoveAmt} keyboardType="decimal-pad" testID="move-amt" />
+              <Text style={styles.formLabel}>Note</Text>
+              <TextInput style={styles.formInput} value={moveNote} onChangeText={setMoveNote} placeholder="Reason" testID="move-note" />
+              <TouchableOpacity style={styles.primaryBtn} onPress={addMovement} testID="confirm-movement">
+                <Text style={styles.primaryBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
+
+function ShiftRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <View style={styles.shiftRow}>
+      <Text style={styles.shiftLabel}>{label}</Text>
+      <Text style={[styles.shiftVal, strong && { color: "#3B82F6", fontWeight: "700", fontSize: 20 }]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+// =================== OLD DRAWER (removed below, see new one above) ===================
 
 // =================== SETTINGS ===================
 function SettingsView({ isWide }: { isWide: boolean }) {
@@ -1531,6 +1726,56 @@ const styles = StyleSheet.create({
   sortBtn: { paddingHorizontal: 14, paddingVertical: 6 },
   sortBtnActive: { borderWidth: 1, borderColor: "#00B14F", borderRadius: 5 },
   sortText: { fontSize: 12, color: "#94A3B8", fontWeight: "600" },
+
+  // Warning pill for ฿0 cost
+  warnPill: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#EF4444",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  warnPillText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
+
+  // Shift
+  shiftHeader: {
+    fontSize: 16, fontWeight: "700", color: "#00B14F",
+    padding: 16, backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    textAlign: "center",
+  },
+  shiftCard: {
+    backgroundColor: "#F8FAFC", borderRadius: 10,
+    padding: 16, marginBottom: 14,
+  },
+  shiftRow: {
+    flexDirection: "row", justifyContent: "space-between",
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  shiftLabel: { fontSize: 14, color: "#475569" },
+  shiftVal: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
+  inOutRow: { flexDirection: "row", gap: 14, marginBottom: 14 },
+  inOutBtn: {
+    flex: 1, padding: 16, borderRadius: 10,
+    backgroundColor: "#FFFFFF", borderWidth: 1,
+    borderColor: "#E2E8F0", alignItems: "center",
+  },
+  inOutText: { fontSize: 15, fontWeight: "700" },
+  closeShiftBtn: {
+    backgroundColor: "#00B14F", padding: 18,
+    borderRadius: 10, alignItems: "center",
+  },
+  closeShiftText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700", letterSpacing: 1 },
+  histRow: {
+    flexDirection: "row", padding: 14, gap: 10,
+    backgroundColor: "#FFFFFF", borderRadius: 10,
+    borderWidth: 1, borderColor: "#F1F5F9",
+  },
+  histRound: { fontSize: 13, fontWeight: "700", color: "#0F172A" },
+  histTime: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  histAmt: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
+  histSub: { fontSize: 10, color: "#94A3B8" },
 
   catPick: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,

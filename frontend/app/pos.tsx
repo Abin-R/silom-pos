@@ -1156,6 +1156,8 @@ function DiscountModal({
     }
   };
 
+  const discColors = ["#00B14F", "#8B5CF6", "#3B82F6", "#06B6D4"];
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -1165,7 +1167,10 @@ function DiscountModal({
               <Ionicons name="chevron-back" size={26} color="#EF4444" />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Discount</Text>
-            <View style={{ width: 26 }} />
+            <TouchableOpacity style={styles.scanBarBtn} testID="disc-scan">
+              <Ionicons name="barcode-outline" size={16} color="#475569" />
+              <Text style={styles.scanBarText}>Scan Barcode/QR code</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.toggleRow}>
@@ -1197,17 +1202,17 @@ function DiscountModal({
           </View>
 
           <View style={styles.quickRow}>
-            {quicks.map((q) => (
+            {quicks.map((q, i) => (
               <TouchableOpacity
                 key={q}
-                style={styles.quickPct}
+                style={[styles.quickPct, { borderColor: discColors[i] }]}
                 onPress={() => {
                   setMode("percent");
                   setVal(String(q));
                 }}
                 testID={`disc-quick-${q}`}
               >
-                <Text style={styles.quickPctText}>{q}%</Text>
+                <Text style={[styles.quickPctText, { color: discColors[i] }]}>{q}%</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -2439,6 +2444,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   quickPctText: { fontSize: 16, fontWeight: "700", color: "#00B14F" },
+  scanBarBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "#F1F5F9",
+  },
+  scanBarText: { fontSize: 10, color: "#475569", fontWeight: "600" },
   discPad: {
     flexDirection: "row",
     flexWrap: "wrap",
