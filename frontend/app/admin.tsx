@@ -874,9 +874,9 @@ function Products({ isWide }: { isWide: boolean }) {
       <View style={{ flex: 1 }}>
         <View style={styles.prodHeader}>
           <Text style={styles.sectionHeader}>
-            {q ? `Search` : curCat?.name} ({filtered.length})
+            {q ? `Search` : curCat?.name}({filtered.length})
           </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
             <Text style={{ fontSize: 12, color: "#94A3B8" }}>Sort</Text>
             <View style={styles.sortGroup}>
               <TouchableOpacity
@@ -898,13 +898,11 @@ function Products({ isWide }: { isWide: boolean }) {
                 </Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={styles.addProdBtn}
-              onPress={() => setEdit("new")}
-              testID="add-product"
-            >
-              <Ionicons name="add" size={18} color="#FFFFFF" />
-              <Text style={styles.addProdText}>Add Product</Text>
+            <TouchableOpacity testID="edit-products">
+              <Text style={styles.linkText}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setEdit("new")} testID="add-product">
+              <Text style={styles.linkTextBold}>Add Product</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1726,6 +1724,8 @@ const styles = StyleSheet.create({
   sortBtn: { paddingHorizontal: 14, paddingVertical: 6 },
   sortBtnActive: { borderWidth: 1, borderColor: "#00B14F", borderRadius: 5 },
   sortText: { fontSize: 12, color: "#94A3B8", fontWeight: "600" },
+  linkText: { fontSize: 14, color: "#00B14F", fontWeight: "500" },
+  linkTextBold: { fontSize: 14, color: "#00B14F", fontWeight: "700" },
 
   // Warning pill for ฿0 cost
   warnPill: {

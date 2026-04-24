@@ -545,6 +545,8 @@ export default function POS() {
       <PaymentModal
         visible={showPayment}
         total={total}
+        itemsCount={cart.length}
+        cartCount={cartCount}
         onClose={() => setShowPayment(false)}
         onPay={handlePaySuccess}
       />
@@ -845,11 +847,15 @@ function CartSidebar({
 function PaymentModal({
   visible,
   total,
+  itemsCount,
+  cartCount,
   onClose,
   onPay,
 }: {
   visible: boolean;
   total: number;
+  itemsCount: number;
+  cartCount: number;
   onClose: () => void;
   onPay: (method: string, paid: number) => void;
 }) {
@@ -1041,48 +1047,66 @@ function PaymentModal({
 
             {/* Right column: totals */}
             <View style={styles.quickCol}>
-              <TouchableOpacity
-                style={styles.netBox}
-                onPress={() => setAmount(String(total))}
-                testID="net-total"
-              >
-                <Text style={styles.netLabel}>Net Total</Text>
-                <Text style={styles.netHint}>Tap to equal Total</Text>
-                <Text style={styles.netVal}>{THB(total)}</Text>
-              </TouchableOpacity>
-              {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" &&
-                quicks.map((q) => (
-                  <TouchableOpacity
-                    key={q}
-                    style={styles.quickBtn}
-                    onPress={() =>
-                      setAmount((a) => {
-                        const cur = parseFloat(a || "0");
-                        return String(cur + q);
-                      })
-                    }
-                    testID={`quick-${q}`}
-                  >
-                    <Text style={styles.quickText}>{q.toLocaleString()}</Text>
-                  </TouchableOpacity>
-                ))}
-              {(method === "QR Kbank" || method === "PromptPay") && (
-                <View style={styles.qrInstructBox}>
-                  <Ionicons name="information-circle-outline" size={18} color="#475569" />
-                  <Text style={styles.qrInstructText}>
-                    Ask customer to scan the QR on screen to complete payment.
-                  </Text>
+              <View style={styles.netBoxV2}>
+                <View style={styles.guestRow}>
+                  <Ionicons name="person-outline" size={14} color="#475569" />
+                  <Text style={styles.guestText}>Guest</Text>
                 </View>
-              )}
-              {method === "Custom" && (
-                <View style={styles.summaryBox}>
-                  <Text style={styles.netLabel}>Summary</Text>
-                  <Text style={styles.summaryVal}>{THB(customPick ? total : 0)}</Text>
+                <View style={styles.netRowV2}>
+                  <Text style={styles.netLabelV2}>Net Total</Text>
+                  <Text style={styles.netValV2}>{total.toFixed(2)}</Text>
                 </View>
-              )}
+                <TouchableOpacity onPress={() => setAmount(String(total))} testID="net-total">
+                  <View style={styles.tapEqualRow}>
+                    <Text style={styles.tapEqualLabel}>Tap to equal Total</Text>
+                    <Text style={styles.tapEqualVal}>{total.toFixed(2)}</Text>
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.payConfirmBtn,
+                    !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay) && styles.payBtnDisabled,
+                  ]}
+                  disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay)}
+                  onPress={() => {
+                    const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` : method;
+                    const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom") ? total : paid;
+                    onPay(finalMethod, finalPaid);
+                  }}
+                  testID="confirm-payment-right"
+                >
+                  <Text style={styles.payConfirmText}>Payment Confirm</Text>
+                </TouchableOpacity>
+                <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
+                {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" &&
+                  <View style={styles.quickAmountsInline}>
+                    {quicks.map((q) => (
+                      <TouchableOpacity
+                        key={q}
+                        style={styles.quickBtnSmall}
+                        onPress={() =>
+                          setAmount((a) => {
+                            const cur = parseFloat(a || "0");
+                            return String(cur + q);
+                          })
+                        }
+                        testID={`quick-${q}`}
+                      >
+                        <Text style={styles.quickTextSmall}>{q.toLocaleString()}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                }
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Summary</Text>
+                  <Text style={styles.summaryValue}>{THB(customPick ? total : 0)}</Text>
+                </View>
+              </View>
             </View>
           </View>
 
+          {/* Footer (only shown for non-Custom/non-QR methods; others have Payment Confirm in right panel) */}
+          {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && false && (
           <View style={styles.paymentFooter}>
             <View style={styles.changeBox}>
               <Text style={styles.changeLabel}>
@@ -1111,6 +1135,7 @@ function PaymentModal({
               <Ionicons name="arrow-forward" size={20} color="#fff" />
             </TouchableOpacity>
           </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -1943,31 +1968,32 @@ const styles = StyleSheet.create({
 
   // Left rail
   leftRail: {
-    width: 104,
+    width: 112,
     backgroundColor: "#FFFFFF",
     borderRightWidth: 1,
     borderRightColor: "#E2E8F0",
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   catPill: {
-    margin: 8,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 2,
-    borderColor: "transparent",
+    marginHorizontal: 8,
+    marginVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 14,
+    borderRadius: 10,
+    backgroundColor: "#00B14F",
     alignItems: "center",
-    minHeight: 56,
     justifyContent: "center",
+    minHeight: 64,
   },
   catPillActive: {
-    backgroundColor: "#00B14F",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
     borderColor: "#00B14F",
   },
-  catText: { fontSize: 12, fontWeight: "600", color: "#475569", textAlign: "center" },
-  catTextActive: { color: "#FFFFFF" },
-  catSub: { fontSize: 9, color: "#94A3B8", marginTop: 2, textAlign: "center" },
-  catSubActive: { color: "#E5F7ED" },
+  catText: { fontSize: 11, fontWeight: "700", color: "#FFFFFF", textAlign: "center" },
+  catTextActive: { color: "#00B14F" },
+  catSub: { fontSize: 9, color: "#E5F7ED", marginTop: 2, textAlign: "center" },
+  catSubActive: { color: "#00B14F" },
 
   // Center
   center: { flex: 1 },
@@ -2045,25 +2071,27 @@ const styles = StyleSheet.create({
   custName: { flex: 1, fontSize: 12, fontWeight: "600", color: "#0F172A" },
 
   totalBox: {
-    backgroundColor: "#F8FAFC",
-    padding: 14,
-    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 14,
     marginBottom: 10,
   },
-  totalLabel: { fontSize: 12, color: "#94A3B8" },
-  subTotalVal: { fontSize: 16, color: "#475569", fontWeight: "600", marginTop: 2 },
+  sumTotalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
+  totalLabel: { fontSize: 13, color: "#475569", fontWeight: "500" },
+  subTotalVal: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
   discRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
   discLabel: { fontSize: 11, color: "#EF4444" },
   discVal: { fontSize: 12, color: "#EF4444", fontWeight: "600" },
   totalRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "flex-end",
+    alignItems: "baseline",
+    justifyContent: "space-between",
     marginTop: 8,
-    gap: 6,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
   },
-  thbText: { fontSize: 13, color: "#94A3B8", fontWeight: "600", marginBottom: 4 },
-  totalVal: { fontSize: 32, fontWeight: "700", color: "#0F172A", letterSpacing: -1 },
+  thbText: { fontSize: 14, color: "#94A3B8", fontWeight: "600" },
+  totalVal: { fontSize: 36, fontWeight: "300", color: "#0F172A", letterSpacing: -1 },
   payBtn: {
     backgroundColor: "#00B14F",
     height: 56,
@@ -2336,6 +2364,56 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     marginTop: 4,
   },
+
+  // Payment right panel v2 (matching screenshot)
+  netBoxV2: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 10,
+    padding: 12,
+    gap: 10,
+  },
+  guestRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  guestText: { fontSize: 13, color: "#475569", fontWeight: "600" },
+  netRowV2: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  netLabelV2: { fontSize: 13, color: "#475569" },
+  netValV2: { fontSize: 15, color: "#0F172A", fontWeight: "700" },
+  tapEqualRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  tapEqualLabel: { fontSize: 12, color: "#00B14F", fontWeight: "600" },
+  tapEqualVal: { fontSize: 16, color: "#EF4444", fontWeight: "700" },
+  payConfirmBtn: {
+    backgroundColor: "#00B14F",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 6,
+  },
+  payConfirmText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  itemCountText: { fontSize: 11, color: "#94A3B8", textAlign: "right", marginTop: -4 },
+  quickAmountsInline: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 6,
+  },
+  quickBtnSmall: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+    paddingVertical: 10,
+    flexBasis: "48%",
+    alignItems: "center",
+  },
+  quickTextSmall: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#F1F5F9",
+    marginTop: "auto" as any,
+  },
+  summaryLabel: { fontSize: 13, color: "#475569", fontWeight: "600" },
+  summaryValue: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
 
   // EDC marketing pane
   edcPane: {
