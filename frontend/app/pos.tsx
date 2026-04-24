@@ -750,8 +750,10 @@ function CartSidebar({
       </View>
 
       <View style={styles.totalBox}>
-        <Text style={styles.totalLabel}>Sub Total</Text>
-        <Text style={styles.subTotalVal}>{THB(subtotal)}</Text>
+        <View style={styles.sumTotalRow}>
+          <Text style={styles.totalLabel}>Sub Total</Text>
+          <Text style={styles.subTotalVal}>{subtotal.toFixed(2)}</Text>
+        </View>
         {discountType !== "none" && (
           <View style={styles.discRow}>
             <Text style={styles.discLabel}>
@@ -780,14 +782,17 @@ function CartSidebar({
       <View style={styles.cartListHeader}>
         <Text style={styles.cartListTitle}>Store</Text>
         <Text style={styles.cartListCount}>
-          {cart.length} Item{cart.length !== 1 ? "s" : ""} / {cartCount} pcs.
+          {cart.length === 0
+            ? "No items"
+            : `${cart.length} Item${cart.length !== 1 ? "s" : ""} / ${cartCount} pcs.`}
         </Text>
       </View>
 
       <FlatList
         data={cart}
         keyExtractor={(i) => i.product_id}
-        style={{ maxHeight: embedded ? 240 : undefined }}
+        style={{ flex: 1 }}
+        contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
         ListEmptyComponent={
           <View style={styles.emptyCart}>
             <MaterialCommunityIcons name="cart-outline" size={40} color="#CBD5E1" />
@@ -833,12 +838,20 @@ function CartSidebar({
         )}
       />
 
-      {cart.length > 0 && (
-        <TouchableOpacity style={styles.clearBtn} onPress={onClear} testID="clear-cart">
-          <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
-          <Text style={styles.clearBtnText}>Clear cart</Text>
-        </TouchableOpacity>
-      )}
+      {/* Bottom pinned Store row — matches reference design */}
+      <View style={styles.cartFooterRow}>
+        <View style={styles.storePill}>
+          <Ionicons name="storefront" size={14} color="#FFFFFF" />
+        </View>
+        <Text style={styles.storeFooterText}>Store</Text>
+        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+        <View style={{ flex: 1 }} />
+        {cart.length > 0 && (
+          <TouchableOpacity onPress={onClear} style={styles.footerTrash} testID="clear-cart">
+            <Ionicons name="trash-outline" size={18} color="#EF4444" />
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -2034,19 +2047,20 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderLeftColor: "#E2E8F0",
     padding: 14,
+    flexDirection: "column",
   },
   rightCartEmbedded: {
     width: "100%",
     borderLeftWidth: 0,
   },
-  cartHeader: { gap: 8, marginBottom: 8 },
+  cartHeader: { alignItems: "center", marginBottom: 8 },
   tablePill: {
-    alignSelf: "flex-start",
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 8,
     backgroundColor: "#F1F5F9",
   },
@@ -2109,6 +2123,33 @@ const styles = StyleSheet.create({
   },
   cartListTitle: { fontSize: 13, fontWeight: "700", color: "#0F172A" },
   cartListCount: { fontSize: 11, color: "#94A3B8" },
+  cartFooterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    marginTop: 6,
+  },
+  storePill: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    backgroundColor: "#00B14F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  storeFooterText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  footerTrash: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#FEE2E2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   cartItem: {
     flexDirection: "row",
     alignItems: "center",
