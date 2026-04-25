@@ -113,6 +113,14 @@ export default function Admin() {
         <Ionicons name="log-out-outline" size={18} color="#EF4444" />
         <Text style={styles.logoutSideText}>Log out</Text>
       </TouchableOpacity>
+      <View style={styles.sideFooter}>
+        <Ionicons name="refresh-circle-outline" size={14} color="#94A3B8" />
+        <Text style={styles.sideFooterDate}>
+          {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+          {" "}
+          {new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+        </Text>
+      </View>
       <Text style={styles.versionText}>Version 1.0.0</Text>
     </View>
   );
@@ -537,12 +545,18 @@ function Inventory({ isWide }: { isWide: boolean }) {
                   <Text style={styles.invPrice}>{THB(item.price)}</Text>
                 </View>
                 <View style={styles.stockBox}>
-                  <Text style={[styles.stockNum, item.stock < 0 && { color: "#EF4444" }]}>
-                    {item.stock}
-                  </Text>
-                  <Text style={[styles.stockStatus, item.stock <= 0 && { color: "#EF4444" }]}>
-                    {item.stock <= 0 ? "Out of stock" : "In stock"}
-                  </Text>
+                  {item.product_type === "BOM" ? (
+                    <Text style={styles.nonStockText}>Non-stock product</Text>
+                  ) : (
+                    <>
+                      <Text style={[styles.stockNum, item.stock <= 0 && { color: "#EF4444" }]}>
+                        {item.stock}
+                      </Text>
+                      <Text style={[styles.stockStatus, item.stock <= 0 && { color: "#EF4444" }]}>
+                        {item.stock <= 0 ? "Out of stock" : "In stock"}
+                      </Text>
+                    </>
+                  )}
                 </View>
                 <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
               </TouchableOpacity>
@@ -935,12 +949,17 @@ function Products({ isWide }: { isWide: boolean }) {
                 <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
                 <View style={{ flexDirection: "row", gap: 10, marginTop: 4, alignItems: "center" }}>
                   <Text style={styles.prodPriceLabel}>
-                    <Text style={{ fontWeight: "700", color: item.cost === 0 ? "#EF4444" : "#0F172A" }}>
+                    <Text style={{ fontWeight: "700", color: item.price === 0 ? "#EF4444" : "#0F172A" }}>
                       {THB(item.price)}
                     </Text>
                   </Text>
+                  {item.price === 0 && (
+                    <View style={styles.warnPill}>
+                      <Text style={styles.warnPillText}>!</Text>
+                    </View>
+                  )}
                   <Text style={styles.prodPriceLabel}>Cost {THB(item.cost)}</Text>
-                  {item.cost === 0 && (
+                  {item.cost === 0 && item.price !== 0 && (
                     <View style={styles.warnPill}>
                       <Text style={styles.warnPillText}>!</Text>
                     </View>
@@ -1523,6 +1542,12 @@ const styles = StyleSheet.create({
   logoutSide: { flexDirection: "row", gap: 8, padding: 12, alignItems: "center" },
   logoutSideText: { color: "#EF4444", fontSize: 13, fontWeight: "600" },
   versionText: { fontSize: 10, color: "#CBD5E1", textAlign: "center", marginTop: 4 },
+  sideFooter: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 12, paddingTop: 6, paddingBottom: 2,
+    borderTopWidth: 1, borderTopColor: "#F1F5F9",
+  },
+  sideFooterDate: { fontSize: 10, color: "#94A3B8" },
 
   mobileTop: {
     height: 56, backgroundColor: "#FFFFFF", flexDirection: "row",
@@ -1647,6 +1672,7 @@ const styles = StyleSheet.create({
   stockBox: { alignItems: "flex-end" },
   stockNum: { fontSize: 18, fontWeight: "700", color: "#00B14F" },
   stockStatus: { fontSize: 10, color: "#94A3B8" },
+  nonStockText: { fontSize: 11, color: "#94A3B8", fontWeight: "600" },
   invTabs: {
     flexDirection: "row", borderTopWidth: 1, borderTopColor: "#E2E8F0",
     backgroundColor: "#FFFFFF",
