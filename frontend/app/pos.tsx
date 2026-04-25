@@ -897,7 +897,15 @@ function PaymentModal({
   ];
   const [customPick, setCustomPick] = useState("");
   const [orderRef, setOrderRef] = useState("");
-  useEffect(() => { if (visible) { setCustomPick(""); setOrderRef(""); } }, [visible]);
+  const [cardLast4, setCardLast4] = useState("");
+  const [cardType, setCardType] = useState("");
+  const [bankPick, setBankPick] = useState("");
+  useEffect(() => {
+    if (visible) {
+      setCustomPick(""); setOrderRef("");
+      setCardLast4(""); setCardType(""); setBankPick("");
+    }
+  }, [visible]);
 
   const paid = amount ? parseFloat(amount) : total;
   const change = Math.max(0, paid - total);
@@ -1033,6 +1041,72 @@ function PaymentModal({
                   ))}
                 </View>
               </View>
+            ) : method === "Credit" ? (
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.creditPane} testID="credit-pane">
+                <View style={styles.creditAmtRow}>
+                  <Text style={styles.creditAmtLabel}>THB</Text>
+                  <Text style={styles.creditAmtVal}>{total.toFixed(2)}</Text>
+                </View>
+                <TextInput
+                  placeholder="Card Number (Last 4 digits)"
+                  placeholderTextColor="#94A3B8"
+                  style={styles.creditInput}
+                  value={cardLast4}
+                  onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, "").slice(0, 4))}
+                  maxLength={4}
+                  keyboardType="number-pad"
+                  testID="card-last4"
+                />
+                <Text style={styles.creditDivider}>เลือกประเภทบัตรเครดิต</Text>
+                <View style={styles.creditGrid}>
+                  {[
+                    { k: "VISA", icon: "card" as const, color: "#1A1F71" },
+                    { k: "MASTER CARD", icon: "card" as const, color: "#EB001B" },
+                    { k: "JCB", icon: "card" as const, color: "#0E4C96" },
+                    { k: "Union Pay", icon: "card" as const, color: "#E21836" },
+                  ].map((c) => (
+                    <TouchableOpacity
+                      key={c.k}
+                      style={[styles.creditOption, cardType === c.k && styles.creditOptionActive]}
+                      onPress={() => setCardType(c.k)}
+                      testID={`card-${c.k}`}
+                    >
+                      <View style={[styles.radio, cardType === c.k && styles.radioActive]}>
+                        {cardType === c.k && <View style={styles.radioInner} />}
+                      </View>
+                      <Ionicons name={c.icon} size={18} color={c.color} style={{ marginHorizontal: 6 }} />
+                      <Text style={styles.creditOptionText}>{c.k}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.creditDivider}>หรือ เลือกธนาคาร</Text>
+                <View style={styles.creditGrid}>
+                  {[
+                    { k: "WELFARE", th: "บัตรสวัสดิการแห่งรัฐ", color: "#3B82F6" },
+                    { k: "BAY", th: "กรุงศรีอยุธยา", color: "#F59E0B" },
+                    { k: "BBL", th: "กรุงเทพ", color: "#0EA5E9" },
+                    { k: "KTC", th: "กรุงไทย", color: "#06B6D4" },
+                  ].map((b) => (
+                    <TouchableOpacity
+                      key={b.k}
+                      style={[styles.creditOption, bankPick === b.k && styles.creditOptionActive]}
+                      onPress={() => setBankPick(b.k)}
+                      testID={`bank-${b.k}`}
+                    >
+                      <View style={[styles.radio, bankPick === b.k && styles.radioActive]}>
+                        {bankPick === b.k && <View style={styles.radioInner} />}
+                      </View>
+                      <View style={[styles.bankBadge, { backgroundColor: b.color }]}>
+                        <Text style={styles.bankBadgeText}>{b.k[0]}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.creditOptionText} numberOfLines={1}>{b.th}</Text>
+                        <Text style={styles.bankSubText}>{b.k}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
             ) : (
               <View style={[styles.padCol, isNarrow && { width: "100%", minHeight: 380 }]}>
                 <View style={styles.amountDisplay}>
@@ -1087,12 +1161,13 @@ function PaymentModal({
                 <TouchableOpacity
                   style={[
                     styles.payConfirmBtn,
-                    !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay) && styles.payBtnDisabled,
+                    !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay) && styles.payBtnDisabled,
                   ]}
-                  disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay)}
+                  disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay)}
                   onPress={() => {
-                    const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` : method;
-                    const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom") ? total : paid;
+                    const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` :
+                                        method === "Credit" && (cardType || bankPick) ? `Credit · ${cardType || bankPick}${cardLast4 ? ` ····${cardLast4}` : ""}` : method;
+                    const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom" || method === "Credit") ? total : paid;
                     onPay(finalMethod, finalPaid);
                   }}
                   testID="confirm-payment-right"
@@ -1100,7 +1175,7 @@ function PaymentModal({
                   <Text style={styles.payConfirmText}>Payment Confirm</Text>
                 </TouchableOpacity>
                 <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
-                {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" &&
+                {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && method !== "Credit" &&
                   <View style={styles.quickAmountsInline}>
                     {quicks.map((q) => (
                       <TouchableOpacity
@@ -2410,6 +2485,42 @@ const styles = StyleSheet.create({
     backgroundColor: "#00B14F",
   },
   customOptionText: { flex: 1, fontSize: 12, color: "#0F172A", fontWeight: "500" },
+
+  // Credit pane
+  creditPane: { padding: 16, gap: 14 },
+  creditAmtRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 14,
+    backgroundColor: "#F1F5F9", borderRadius: 12,
+  },
+  creditAmtLabel: { fontSize: 14, color: "#475569", fontWeight: "600" },
+  creditAmtVal: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
+  creditInput: {
+    height: 46, paddingHorizontal: 14,
+    backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E8F0",
+    borderRadius: 10, fontSize: 14, color: "#0F172A",
+  },
+  creditDivider: {
+    fontSize: 12, fontWeight: "600", color: "#475569",
+    textAlign: "center", marginVertical: 4,
+  },
+  creditGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  creditOption: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 12, paddingVertical: 12,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    width: "48%",
+    gap: 4,
+  },
+  creditOptionActive: { borderColor: "#00B14F", backgroundColor: "#F0FDF4" },
+  creditOptionText: { fontSize: 13, color: "#0F172A", fontWeight: "600" },
+  bankBadge: {
+    width: 24, height: 24, borderRadius: 6, marginRight: 6,
+    alignItems: "center", justifyContent: "center",
+  },
+  bankBadgeText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
+  bankSubText: { fontSize: 10, color: "#94A3B8", fontWeight: "600" },
   summaryBox: {
     backgroundColor: "#F8FAFC",
     padding: 12,
