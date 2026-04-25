@@ -1350,11 +1350,22 @@ function ShiftRow({ label, value, strong }: { label: string; value: string; stro
 
 // =================== SETTINGS ===================
 function SettingsView({ isWide }: { isWide: boolean }) {
-  const sections = [
-    "Shop", "Floor plan", "Language", "Receipt", "Payment",
-    "Drawer", "Sales channels", "Printers", "Customer display",
-    "Users", "Advance Settings", "Backup & Restore",
-    "Data synchronization", "CRM System", "Plugins",
+  const sections: { name: string; icon: any; color: string }[] = [
+    { name: "Shop", icon: "home", color: "#EF4444" },
+    { name: "Floor plan", icon: "grid", color: "#3B82F6" },
+    { name: "Language", icon: "language", color: "#8B5CF6" },
+    { name: "Receipt", icon: "receipt", color: "#EF4444" },
+    { name: "Payment", icon: "card", color: "#F59E0B" },
+    { name: "Drawer", icon: "calculator", color: "#06B6D4" },
+    { name: "Sales channels", icon: "link", color: "#EC4899" },
+    { name: "Printers", icon: "print", color: "#10B981" },
+    { name: "Customer display", icon: "tv", color: "#3B82F6" },
+    { name: "Users", icon: "person", color: "#F97316" },
+    { name: "Advance Settings", icon: "settings", color: "#64748B" },
+    { name: "Backup & Restore", icon: "cloud-upload", color: "#A855F7" },
+    { name: "Data synchronization", icon: "sync", color: "#06B6D4" },
+    { name: "CRM System", icon: "star", color: "#EAB308" },
+    { name: "Plugins", icon: "extension-puzzle", color: "#14B8A6" },
   ];
   const [active, setActive] = useState("Shop");
   const [s, setS] = useState<Settings | null>(null);
@@ -1380,15 +1391,16 @@ function SettingsView({ isWide }: { isWide: boolean }) {
       <View style={styles.leftNav}>
         <Text style={styles.sectionHeader}>Settings</Text>
         <ScrollView>
-          {sections.map((name) => (
+          {sections.map((sec) => (
             <TouchableOpacity
-              key={name}
-              style={[styles.settingsRow, active === name && styles.leftNavRowActive]}
-              onPress={() => setActive(name)}
-              testID={`settings-${name}`}
+              key={sec.name}
+              style={[styles.settingsRow, active === sec.name && styles.leftNavRowActive]}
+              onPress={() => setActive(sec.name)}
+              testID={`settings-${sec.name}`}
             >
-              <Text style={[styles.settingsLabel, active === name && { color: "#00B14F", fontWeight: "700" }]}>
-                {name}
+              <Ionicons name={sec.icon} size={18} color={sec.color} style={{ marginRight: 10 }} />
+              <Text style={[styles.settingsLabel, { flex: 1 }, active === sec.name && { color: "#00B14F", fontWeight: "700" }]}>
+                {sec.name}
               </Text>
               <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
             </TouchableOpacity>
@@ -1849,8 +1861,9 @@ const styles = StyleSheet.create({
 
   // Settings
   settingsRow: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    padding: 14, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 12, paddingHorizontal: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
   },
   settingsLabel: { fontSize: 13, color: "#475569" },
   bizBtn: {
