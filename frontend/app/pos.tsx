@@ -968,59 +968,143 @@ function PaymentModal({
             </View>
 
             {/* Dynamic center content per method */}
-            {method === "QR Kbank" || method === "PromptPay" ? (
-              <View style={styles.qrPane} testID="qr-pane">
-                <View style={styles.qrHeader}>
-                  <Text style={styles.qrHeaderText}>
-                    {method === "QR Kbank" ? "Thai QR Payment" : "PromptPay"}
-                  </Text>
+            {method === "Easy Pay" ? (
+              <View style={styles.easyPayPane} testID="easypay-pane">
+                <Text style={styles.easyPayThai}>ชำระเงินครบวงจร</Text>
+                <Text style={styles.easyPayTitle}>Pay Easy</Text>
+                <View style={styles.easyPayBadges}>
+                  {["รองรับบัตรเครดิต/เดบิต", "QR Payment ทุกธนาคาร", "e-Wallet ทุกค่าย"].map((b) => (
+                    <View key={b} style={styles.easyPayBadge}><Text style={styles.easyPayBadgeText}>{b}</Text></View>
+                  ))}
                 </View>
-                <View style={styles.qrBrandRow}>
-                  <Text style={styles.brandPill}>PromptPay</Text>
-                  <Text style={styles.brandPill}>VISA</Text>
-                  <Text style={styles.brandPill}>MC</Text>
-                  <Text style={styles.brandPill}>UnionPay</Text>
+                <View style={styles.easyPayCard}>
+                  <View style={styles.easyPayDevicePlaceholder}>
+                    <Ionicons name="tablet-landscape" size={80} color="#00B14F" />
+                    <Ionicons name="qr-code" size={32} color="#0F172A" style={{ position: "absolute", bottom: 4, right: 4 }} />
+                  </View>
+                  <View style={styles.easyPayBrandGrid}>
+                    {[
+                      { name: "VISA", color: "#1A1F71" },
+                      { name: "MC", color: "#EB001B" },
+                      { name: "UP", color: "#E21836" },
+                      { name: "JCB", color: "#0E4C96" },
+                      { name: "LINE", color: "#06C755" },
+                      { name: "True", color: "#EF4444" },
+                      { name: "Ali", color: "#1677FF" },
+                      { name: "PP", color: "#00457C" },
+                      { name: "Shop", color: "#EE4D2D" },
+                      { name: "KB", color: "#138F2D" },
+                      { name: "SCB", color: "#4E2D80" },
+                      { name: "Laz", color: "#0F146D" },
+                    ].map((b) => (
+                      <View key={b.name} style={[styles.easyPayBrandPill, { backgroundColor: b.color }]}>
+                        <Text style={styles.easyPayBrandText}>{b.name}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
-                <Text style={styles.qrHint}>
+                <TouchableOpacity style={styles.easyPayRegister}>
+                  <Text style={styles.easyPayRegisterText}>สมัคร ใช้บริการ</Text>
+                </TouchableOpacity>
+              </View>
+            ) : method === "PromptPay" ? (
+              <View style={styles.promptPayPane} testID="promptpay-pane">
+                <View style={styles.thaiQrHeader}>
+                  <Ionicons name="grid" size={28} color="#fff" />
+                  <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
+                </View>
+                <View style={styles.promptPayLogoBox}>
+                  <View style={styles.promptPayLogoPill}>
+                    <Text style={styles.promptPayLogoText}>PromptPay</Text>
+                  </View>
+                </View>
+                <Text style={styles.promptPayInvalid}>Invalid PromptPay ID</Text>
+                <Text style={styles.promptPayHint}>
+                  Please enter Mobile No. / Citizen ID / Tax ID in Shop{"\n"}Setting -{">"} Payment
+                </Text>
+                <TouchableOpacity style={styles.printQrBtn}>
+                  <Ionicons name="print-outline" size={16} color="#475569" />
+                  <Text style={styles.printQrText}>Print QR Code</Text>
+                </TouchableOpacity>
+              </View>
+            ) : method === "QR Kbank" ? (
+              <View style={styles.qrKbankPane} testID="qrkbank-pane">
+                <View style={styles.thaiQrHeader}>
+                  <Ionicons name="grid" size={28} color="#fff" />
+                  <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
+                </View>
+                <View style={styles.kbankBrandRow}>
+                  {[
+                    { t: "PromptPay", bg: "#00457C" },
+                    { t: "VISA", bg: "#1A1F71" },
+                    { t: "Mastercard", bg: "#EB001B" },
+                    { t: "UnionPay", bg: "#E21836" },
+                  ].map((p) => (
+                    <View key={p.t} style={[styles.kbankBrandPill, { backgroundColor: p.bg }]}>
+                      <Text style={styles.kbankBrandText}>{p.t}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={styles.kbankSupportText}>
                   Support payment type Thai QR (PromptPay), Credit Card
                 </Text>
-                <Text style={styles.qrBy}>
-                  By {method === "QR Kbank" ? "KBank" : "Bank"}
-                </Text>
-                <View style={styles.qrBox}>
-                  <Ionicons name="qr-code" size={110} color="#0F172A" />
+                <View style={styles.kbankByRow}>
+                  <Text style={styles.kbankByLabel}>By</Text>
+                  <View style={[styles.kbankLogoPill, { backgroundColor: "#138F2D" }]}>
+                    <Text style={styles.kbankLogoText}>KBank</Text>
+                  </View>
                 </View>
-                <Text style={styles.qrAmount}>{THB(total)}</Text>
+                <View style={styles.kbankIllustration}>
+                  <Ionicons name="phone-portrait-outline" size={56} color="#475569" />
+                  <Ionicons name="qr-code" size={32} color="#0F172A" style={{ position: "absolute", bottom: 0, right: 0 }} />
+                </View>
+                <TouchableOpacity style={styles.kbankRegisterBtn}>
+                  <Text style={styles.kbankRegisterText}>Register</Text>
+                </TouchableOpacity>
               </View>
             ) : method === "EDC" ? (
               <View style={styles.edcPane} testID="edc-pane">
-                <View style={styles.edcHero}>
-                  <Ionicons name="tablet-portrait" size={48} color="#00B14F" />
-                  <Ionicons name="swap-horizontal" size={24} color="#94A3B8" />
-                  <Ionicons name="print" size={48} color="#00B14F" />
+                {/* Hero: tablet + phone → arrow "Send data" → EDC device */}
+                <View style={styles.edcHeroRow}>
+                  <View style={styles.edcDeviceGroup}>
+                    <Ionicons name="tablet-landscape" size={64} color="#0F172A" />
+                    <Ionicons name="phone-portrait-outline" size={40} color="#0F172A" />
+                  </View>
+                  <View style={styles.edcArrowWrap}>
+                    <View style={styles.edcArrowLine} />
+                    <Text style={styles.edcArrowLabel}>Send data</Text>
+                  </View>
+                  <Ionicons name="print" size={64} color="#00B14F" />
                 </View>
                 <Text style={styles.edcTitle}>
-                  Connect Silom POS with Electronic Data Capture (EDC) payment terminal
+                  Connect Silom POS with Electronic Data Capture (EDC) payment terminal no need
+                  to manual input data, supporting both credit and debit cards (VISA, MasterCard,
+                  JCB, UnionPay)
                 </Text>
-                <Text style={styles.edcBody}>
-                  Accept card, PromptPay and all Thai QR payments directly through your EDC terminal.
-                  No more manual entry — the total auto-syncs and you get instant reconciliation.
-                </Text>
-                <Text style={styles.edcBy}>โดย KBank</Text>
+                <View style={styles.edcByRow}>
+                  <Text style={styles.edcBy}>โดย</Text>
+                  <View style={[styles.kbankLogoPill, { backgroundColor: "#138F2D" }]}>
+                    <Text style={styles.kbankLogoText}>KBank</Text>
+                  </View>
+                </View>
+                <Ionicons name="phone-portrait-outline" size={32} color="#475569" style={{ marginTop: 4 }} />
                 <TouchableOpacity style={styles.edcRegister} testID="edc-register">
                   <Text style={styles.edcRegisterText}>สมัครใช้บริการ</Text>
                 </TouchableOpacity>
               </View>
             ) : method === "Custom" ? (
               <View style={styles.customPane} testID="custom-pane">
-                <TextInput
-                  placeholder="Order Ref.  (Optional)"
-                  style={styles.customRef}
-                  value={orderRef}
-                  onChangeText={setOrderRef}
-                  placeholderTextColor="#94A3B8"
-                  testID="custom-order-ref"
-                />
+                <View style={styles.customRefRow}>
+                  <Text style={styles.customRefLabel}>Order Ref.</Text>
+                  <TextInput
+                    placeholder="Optional"
+                    style={styles.customRefInput}
+                    value={orderRef}
+                    onChangeText={setOrderRef}
+                    placeholderTextColor="#94A3B8"
+                    testID="custom-order-ref"
+                  />
+                </View>
                 <View style={styles.customAmountRow}>
                   <Text style={styles.customAmountLabel}>Amount</Text>
                   <Text style={styles.customAmountVal}>{total.toFixed(2)}</Text>
@@ -2357,7 +2441,9 @@ const styles = StyleSheet.create({
   },
   padBtn: {
     width: "31.5%",
-    aspectRatio: 1.8,
+    flexGrow: 1,
+    maxWidth: "33.33%",
+    paddingVertical: 14,
     backgroundColor: "#F8FAFC",
     borderRadius: 12,
     alignItems: "center",
@@ -2374,7 +2460,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FEF0D9",
     borderRadius: 12,
-    paddingVertical: 14,
+    paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2382,7 +2468,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FEE2E2",
     borderRadius: 12,
-    paddingVertical: 14,
+    paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3027,4 +3113,269 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   drawerCloseText: { fontSize: 14, fontWeight: "600", color: "#475569" },
+
+  // ---------- Easy Pay pane ----------
+  easyPayPane: {
+    flex: 1,
+    backgroundColor: "#F0FDF4",
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    gap: 10,
+  },
+  easyPayThai: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#0F172A",
+    textAlign: "center",
+  },
+  easyPayTitle: {
+    fontSize: 30,
+    fontWeight: "700",
+    color: "#00B14F",
+    textAlign: "center",
+  },
+  easyPayBadges: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    justifyContent: "center",
+  },
+  easyPayBadge: {
+    backgroundColor: "#00B14F",
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  easyPayBadgeText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  easyPayCard: {
+    flexDirection: "row",
+    gap: 16,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    alignItems: "center",
+    width: "100%",
+  },
+  easyPayDevicePlaceholder: {
+    width: 100,
+    height: 80,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  easyPayBrandGrid: {
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  easyPayBrandPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    minWidth: 36,
+    alignItems: "center",
+  },
+  easyPayBrandText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  easyPayRegister: {
+    backgroundColor: "#00B14F",
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 30,
+    marginTop: 4,
+    width: "70%",
+    alignItems: "center",
+  },
+  easyPayRegisterText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+
+  // ---------- PromptPay pane ----------
+  promptPayPane: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    alignItems: "center",
+    gap: 16,
+    paddingBottom: 20,
+  },
+  thaiQrHeader: {
+    backgroundColor: "#0F2A5E",
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  thaiQrTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 1,
+    textAlign: "center",
+  },
+  promptPayLogoBox: {
+    marginTop: 8,
+    alignItems: "center",
+  },
+  promptPayLogoPill: {
+    borderWidth: 2,
+    borderColor: "#00457C",
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  promptPayLogoText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#00457C",
+    letterSpacing: 0.5,
+  },
+  promptPayInvalid: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#EF4444",
+    textAlign: "center",
+  },
+  promptPayHint: {
+    fontSize: 13,
+    color: "#475569",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  printQrBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    marginTop: "auto" as any,
+  },
+  printQrText: { fontSize: 14, color: "#475569", fontWeight: "600" },
+
+  // ---------- QR Kbank pane ----------
+  qrKbankPane: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    alignItems: "center",
+    gap: 12,
+    paddingBottom: 20,
+  },
+  kbankBrandRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  kbankBrandPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  kbankBrandText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  kbankSupportText: {
+    fontSize: 13,
+    color: "#475569",
+    textAlign: "center",
+    paddingHorizontal: 12,
+    lineHeight: 20,
+  },
+  kbankByRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  kbankByLabel: { fontSize: 13, color: "#475569" },
+  kbankLogoPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  kbankLogoText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  kbankIllustration: {
+    width: 80,
+    height: 80,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  kbankRegisterBtn: {
+    backgroundColor: "#00B14F",
+    width: "90%",
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: "auto" as any,
+  },
+  kbankRegisterText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+
+  // ---------- EDC pane additions ----------
+  edcHeroRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 8,
+    marginBottom: 4,
+  },
+  edcDeviceGroup: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 4,
+  },
+  edcArrowWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    height: 40,
+  },
+  edcArrowLine: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: "#00B14F",
+  },
+  edcArrowLabel: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 6,
+    fontSize: 11,
+    color: "#00B14F",
+    fontWeight: "600",
+  },
+  edcByRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+
+  // ---------- Custom pane additions ----------
+  customRefRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    paddingVertical: 10,
+    paddingHorizontal: 2,
+    gap: 8,
+  },
+  customRefLabel: {
+    fontSize: 14,
+    color: "#64748B",
+    minWidth: 70,
+  },
+  customRefInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#0F172A",
+    textAlign: "right",
+    outlineStyle: "none" as any,
+  },
 });
