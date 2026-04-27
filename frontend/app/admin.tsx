@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -685,6 +685,7 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [sel, setSel] = useState<Customer | null>(null);
   const [stats, setStats] = useState<CustomerStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const statsRequestId = useRef<string | null>(null);
   const [q, setQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [name, setName] = useState("");
@@ -699,19 +700,23 @@ function Customers({ isWide }: { isWide: boolean }) {
   useEffect(() => { load(); }, []);
 
   const loadStats = async (customerId: string) => {
+    // Track which customer this request is for so stale responses are discarded.
+    statsRequestId.current = customerId;
     setStatsLoading(true);
     setStats(null);
     try {
       const r = await fetch(`${API}/customers/${customerId}/stats`);
-      if (r.ok) setStats(await r.json());
+      if (r.ok && statsRequestId.current === customerId) {
+        setStats(await r.json());
+      }
     } finally {
-      setStatsLoading(false);
+      if (statsRequestId.current === customerId) setStatsLoading(false);
     }
   };
 
   useEffect(() => {
     if (sel) loadStats(sel.id);
-    else setStats(null);
+    else { statsRequestId.current = null; setStats(null); }
   }, [sel?.id]);
 
   const filtered = list.filter(
