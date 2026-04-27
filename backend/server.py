@@ -425,11 +425,24 @@ async def dashboard(period: str = "month"):
     total_sales = sum(o["total"] for o in docs)
     tx_count = len(docs)
     avg_bill = (total_sales / tx_count) if tx_count else 0
+
+    # Collect all unique product IDs across every order item, then fetch them
+    # in a single bulk query instead of one round-trip per item.
+    all_product_ids = {
+        item["product_id"]
+        for o in docs
+        for item in o.get("items", [])
+    }
+    product_docs = await db.products.find(
+        {"id": {"$in": list(all_product_ids)}},
+        {"_id": 0, "id": 1, "cost": 1, "category_id": 1},
+    ).to_list(None)
+    product_map = {p["id"]: p for p in product_docs}
+
     cost_total = 0.0
     for o in docs:
         for item in o.get("items", []):
-            # lookup product cost
-            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "cost": 1})
+            prod = product_map.get(item["product_id"])
             if prod:
                 cost_total += (prod.get("cost", 0) or 0) * item.get("qty", 1)
     profit = total_sales - cost_total
@@ -456,12 +469,12 @@ async def dashboard(period: str = "month"):
             prod_totals[key]["qty"] += item["qty"]
     top_products = sorted(prod_totals.values(), key=lambda x: -x["total"])[:5]
 
-    # Top categories
+    # Top categories — reuse the product_map built above (no extra DB queries)
     cat_totals: dict = {}
     cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
     for o in docs:
         for item in o.get("items", []):
-            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "category_id": 1})
+            prod = product_map.get(item["product_id"])
             if prod:
                 cid = prod.get("category_id", "")
                 cname = cats.get(cid, {}).get("name", "Other")
