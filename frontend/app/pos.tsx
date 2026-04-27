@@ -873,20 +873,21 @@ function PaymentModal({
   onPay: (method: string, paid: number) => void;
 }) {
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState("Easy Pay");
+  const [method, setMethod] = useState("Cash");
 
   useEffect(() => {
     if (visible) {
       setAmount("");
-      setMethod("Easy Pay");
+      setMethod("Cash");
     }
   }, [visible]);
 
   const methods = [
+    { key: "Cash", icon: "cash-outline" as const },
     { key: "Easy Pay", icon: "qr-code-outline" as const },
     { key: "Credit", icon: "card-outline" as const },
     { key: "PromptPay", icon: "phone-portrait-outline" as const },
-    { key: "QR Kbank", icon: "scan-outline" as const },
+    { key: "QR Kbank", icon: "qr-code" as const },
     { key: "EDC", icon: "print-outline" as const },
     { key: "Custom", icon: "wallet-outline" as const },
   ];
@@ -923,7 +924,6 @@ function PaymentModal({
   };
 
   const quicks = [1000, 500, 100, 50, 20];
-  const keys = ["7", "8", "9", "4", "5", "6", "1", "2", "3", "0", ".", "back"];
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1115,29 +1115,58 @@ function PaymentModal({
                     {amount || "0"}
                   </Text>
                 </View>
-                <View style={styles.padGrid}>
-                  {keys.map((k) => (
-                    <TouchableOpacity
-                      key={k}
-                      style={styles.padBtn}
-                      onPress={() => onKey(k)}
-                      testID={`pad-${k}`}
-                    >
-                      {k === "back" ? (
+                {/* Numpad + quick amounts side by side */}
+                <View style={styles.padWithQuicks}>
+                  <View style={styles.padGridWrap}>
+                    <View style={styles.padGrid}>
+                      {["7", "8", "9", "4", "5", "6", "1", "2", "3", "0", "."].map((k) => (
+                        <TouchableOpacity
+                          key={k}
+                          style={styles.padBtn}
+                          onPress={() => onKey(k)}
+                          testID={`pad-${k}`}
+                        >
+                          <Text style={styles.padText}>{k}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    {/* Clear + Backspace row */}
+                    <View style={styles.padBottomRow}>
+                      <TouchableOpacity
+                        style={styles.clearPadBtnHalf}
+                        onPress={() => onKey("clear")}
+                        testID="pad-clear"
+                      >
+                        <Text style={styles.clearPadText}>Clear</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.backspacePadBtn}
+                        onPress={() => onKey("back")}
+                        testID="pad-back"
+                      >
                         <Ionicons name="backspace-outline" size={22} color="#EF4444" />
-                      ) : (
-                        <Text style={styles.padText}>{k}</Text>
-                      )}
-                    </TouchableOpacity>
-                  ))}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  {/* Quick amounts column */}
+                  <View style={styles.quickColInline}>
+                    {quicks.map((q) => (
+                      <TouchableOpacity
+                        key={q}
+                        style={styles.quickBtnInline}
+                        onPress={() =>
+                          setAmount((a) => {
+                            const cur = parseFloat(a || "0");
+                            return String(cur + q);
+                          })
+                        }
+                        testID={`quick-${q}`}
+                      >
+                        <Text style={styles.quickTextInline}>{q.toLocaleString()}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
                 </View>
-                <TouchableOpacity
-                  style={styles.clearPadBtn}
-                  onPress={() => onKey("clear")}
-                  testID="pad-clear"
-                >
-                  <Text style={styles.clearPadText}>Clear</Text>
-                </TouchableOpacity>
               </View>
             )}
 
@@ -1175,25 +1204,6 @@ function PaymentModal({
                   <Text style={styles.payConfirmText}>Payment Confirm</Text>
                 </TouchableOpacity>
                 <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
-                {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && method !== "Credit" &&
-                  <View style={styles.quickAmountsInline}>
-                    {quicks.map((q) => (
-                      <TouchableOpacity
-                        key={q}
-                        style={styles.quickBtnSmall}
-                        onPress={() =>
-                          setAmount((a) => {
-                            const cur = parseFloat(a || "0");
-                            return String(cur + q);
-                          })
-                        }
-                        testID={`quick-${q}`}
-                      >
-                        <Text style={styles.quickTextSmall}>{q.toLocaleString()}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                }
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Summary</Text>
                   <Text style={styles.summaryValue}>{THB(customPick ? total : 0)}</Text>
@@ -2329,8 +2339,18 @@ const styles = StyleSheet.create({
   },
   thbSmall: { fontSize: 14, color: "#94A3B8", fontWeight: "600" },
   amountText: { fontSize: 32, fontWeight: "700", color: "#0F172A" },
-  padGrid: {
+
+  // Numpad + quick amounts side-by-side layout
+  padWithQuicks: {
     flex: 1,
+    flexDirection: "row",
+    gap: 8,
+  },
+  padGridWrap: {
+    flex: 1,
+    gap: 8,
+  },
+  padGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
@@ -2344,13 +2364,50 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   padText: { fontSize: 24, fontWeight: "600", color: "#0F172A" },
+
+  // Bottom row: Clear + Backspace side-by-side
+  padBottomRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  clearPadBtnHalf: {
+    flex: 1,
+    backgroundColor: "#FEF0D9",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backspacePadBtn: {
+    flex: 1,
+    backgroundColor: "#FEE2E2",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   clearPadBtn: {
     backgroundColor: "#FEF3C7",
     padding: 12,
     borderRadius: 12,
     alignItems: "center",
   },
-  clearPadText: { fontSize: 14, fontWeight: "700", color: "#D97706" },
+  clearPadText: { fontSize: 16, fontWeight: "700", color: "#D97706" },
+
+  // Quick amounts as a vertical column beside numpad
+  quickColInline: {
+    width: 64,
+    gap: 8,
+    justifyContent: "flex-start",
+  },
+  quickBtnInline: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+  },
+  quickTextInline: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
 
   quickCol: { width: 120, gap: 10 },
   netBox: {
@@ -2560,20 +2617,6 @@ const styles = StyleSheet.create({
   },
   payConfirmText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
   itemCountText: { fontSize: 11, color: "#94A3B8", textAlign: "right", marginTop: -4 },
-  quickAmountsInline: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: 6,
-  },
-  quickBtnSmall: {
-    backgroundColor: "#F8FAFC",
-    borderRadius: 8,
-    paddingVertical: 10,
-    flexBasis: "48%",
-    alignItems: "center",
-  },
-  quickTextSmall: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
   summaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
