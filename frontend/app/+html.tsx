@@ -18,12 +18,21 @@ export default function Root({ children }: PropsWithChildren) {
           set `overflow: auto` on the body style below.
         */}
         <ScrollViewStyleReset />
+        {/* Load Sarabun from Google Fonts for Thai character support */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap"
+          rel="stylesheet"
+        />
         <style
           dangerouslySetInnerHTML={{
             __html: `
               body > div:first-child { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; }
               [role="tablist"] [role="tab"] * { overflow: visible !important; }
               [role="heading"], [role="heading"] * { overflow: visible !important; }
+              /* Apply Sarabun to all DOM text nodes so Thai glyphs render on web */
+              * { font-family: 'Sarabun', sans-serif !important; }
             `,
           }}
         />
