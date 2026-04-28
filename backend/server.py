@@ -427,16 +427,29 @@ async def dashboard(period: str = "month"):
     total_sales = sum(o["total"] for o in docs)
     tx_count = len(docs)
     avg_bill = (total_sales / tx_count) if tx_count else 0
-    cost_total = 0.0
-    for o in docs:
-        for item in o.get("items", []):
-            # lookup product cost
-            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "cost": 1})
-            if prod:
-                cost_total += (prod.get("cost", 0) or 0) * item.get("qty", 1)
-    profit = total_sales - cost_total
 
-    # Sales by day (last 7 buckets for simplicity)
+    # Collect all unique product IDs across every order item, then fetch them
+    # in a single bulk query instead of one round-trip per item.
+    all_product_ids = {
+        item["product_id"]
+        for o in docs
+        for item in o.get("items", [])
+    }
+    product_map: dict = {}
+    if all_product_ids:
+        product_docs = await db.products.find(
+            {"id": {"$in": list(all_product_ids)}},
+            {"_id": 0, "id": 1, "cost": 1, "category_id": 1},
+        ).to_list(10000)
+        product_map = {p["id"]: p for p in product_docs}
+
+    cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
+
+    # Single pass over orders/items: accumulate cost, per-product totals,
+    # per-category totals, and daily sales buckets together.
+    cost_total = 0.0
+    prod_totals: dict = {}
+    cat_totals: dict = {}
     buckets: dict = {}
     for o in docs:
         try:
@@ -444,30 +457,28 @@ async def dashboard(period: str = "month"):
             buckets[d] = buckets.get(d, 0) + o["total"]
         except Exception:
             pass
-    timeline = [{"label": k, "value": v} for k, v in sorted(buckets.items())[-7:]]
-
-    # Top products
-    prod_totals: dict = {}
-    for o in docs:
         for item in o.get("items", []):
-            key = item["product_id"]
-            prod_totals[key] = prod_totals.get(
-                key, {"product_id": key, "name": item["name"], "total": 0, "qty": 0}
-            )
-            prod_totals[key]["total"] += item["price"] * item["qty"]
-            prod_totals[key]["qty"] += item["qty"]
-    top_products = sorted(prod_totals.values(), key=lambda x: -x["total"])[:5]
-
-    # Top categories
-    cat_totals: dict = {}
-    cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
-    for o in docs:
-        for item in o.get("items", []):
-            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "category_id": 1})
+            pid = item["product_id"]
+            qty = item.get("qty", 1)
+            line_total = item["price"] * qty
+            prod = product_map.get(pid)
             if prod:
+                cost_total += (prod.get("cost", 0) or 0) * qty
                 cid = prod.get("category_id", "")
                 cname = cats.get(cid, {}).get("name", "Other")
-                cat_totals[cname] = cat_totals.get(cname, 0) + item["price"] * item["qty"]
+                cat_totals[cname] = cat_totals.get(cname, 0) + line_total
+
+            entry = prod_totals.get(pid)
+            if entry is None:
+                entry = {"product_id": pid, "name": item["name"], "total": 0, "qty": 0}
+                prod_totals[pid] = entry
+            entry["total"] += line_total
+            entry["qty"] += qty
+
+    profit = total_sales - cost_total
+
+    timeline = [{"label": k, "value": v} for k, v in sorted(buckets.items())[-7:]]
+    top_products = sorted(prod_totals.values(), key=lambda x: -x["total"])[:5]
     top_categories = [
         {"name": k, "total": v}
         for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
