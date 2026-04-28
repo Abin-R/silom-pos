@@ -457,6 +457,9 @@ async def update_settings(body: SettingsUpdate):
     # (matches MASK_PREFIX + 4 chars exactly — see _is_masked_api_key)
     if "beam_api_key" in updates and _is_masked_api_key(updates["beam_api_key"]):
         del updates["beam_api_key"]
+    # Don't overwrite beam_api_key with an empty string (UI sends "" when field is unfocused)
+    if "beam_api_key" in updates and updates["beam_api_key"] == "":
+        del updates["beam_api_key"]
     await db.settings.update_one({"id": "shop"}, {"$set": updates}, upsert=True)
     doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
     return _mask_api_key(Settings(**doc))

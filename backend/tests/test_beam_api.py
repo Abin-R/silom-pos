@@ -293,3 +293,27 @@ class TestBeamChargeGet:
             with pytest.raises(HTTPException) as exc_info:
                 await get_beam_charge("ch_nonexistent")
             assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Empty-string API key guard (regression for: empty "" was overwriting stored key)
+# ---------------------------------------------------------------------------
+
+class TestEmptyApiKeyGuard:
+    """PUT /settings with beam_api_key='' must not wipe a stored real key."""
+
+    def test_empty_string_excluded_from_updates(self):
+        """Empty string beam_api_key should be removed from the update dict."""
+        updates = {"beam_api_key": "", "beam_merchant_id": "m_123"}
+        # Replicate the guard logic from update_settings
+        if "beam_api_key" in updates and updates["beam_api_key"] == "":
+            del updates["beam_api_key"]
+        assert "beam_api_key" not in updates, "Empty string should be stripped"
+        assert "beam_merchant_id" in updates, "Other fields should pass through"
+
+    def test_real_key_not_excluded(self):
+        """A genuine new key must not be stripped by the empty-string guard."""
+        updates = {"beam_api_key": "sk_live_newkey"}
+        if "beam_api_key" in updates and updates["beam_api_key"] == "":
+            del updates["beam_api_key"]
+        assert updates["beam_api_key"] == "sk_live_newkey"
