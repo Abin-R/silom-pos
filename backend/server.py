@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -115,6 +116,9 @@ class Settings(BaseModel):
     service_charge_enabled: bool = False
     service_charge_percent: float = 10.0
     logo_url: Optional[str] = None
+    beam_merchant_id: Optional[str] = None
+    beam_api_key: Optional[str] = None
+    beam_sandbox: bool = True  # True = playground, False = production
 
 
 class SettingsUpdate(BaseModel):
@@ -131,6 +135,9 @@ class SettingsUpdate(BaseModel):
     service_charge_enabled: Optional[bool] = None
     service_charge_percent: Optional[float] = None
     logo_url: Optional[str] = None
+    beam_merchant_id: Optional[str] = None
+    beam_api_key: Optional[str] = None
+    beam_sandbox: Optional[bool] = None
 
 
 class Customer(BaseModel):
@@ -168,6 +175,7 @@ class OrderCreate(BaseModel):
     source: str = "table"
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    beam_charge_id: Optional[str] = None  # Beam charge ID for reconciliation
 
 
 class Order(BaseModel):
@@ -186,6 +194,7 @@ class Order(BaseModel):
     source: str = "table"
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    beam_charge_id: Optional[str] = None  # Beam charge ID for reconciliation
     delivery_provider: Optional[str] = None
     delivery_status: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -394,19 +403,148 @@ async def get_settings():
         s = Settings()
         await db.settings.insert_one(s.model_dump())
         return s
-    return Settings(**doc)
+    s = Settings(**doc)
+    # Mask the Beam API key — return only last 4 chars so the secret is not exposed to clients
+    if s.beam_api_key and len(s.beam_api_key) > 4:
+        s.beam_api_key = "••••" + s.beam_api_key[-4:]
+    return s
 
 
 @api_router.put("/settings", response_model=Settings)
 async def update_settings(body: SettingsUpdate):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Don't overwrite beam_api_key if the client sent back the masked placeholder
+    if "beam_api_key" in updates and updates["beam_api_key"].startswith("••••"):
+        del updates["beam_api_key"]
     await db.settings.update_one({"id": "shop"}, {"$set": updates}, upsert=True)
     doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
-    return Settings(**doc)
+    s = Settings(**doc)
+    if s.beam_api_key and len(s.beam_api_key) > 4:
+        s.beam_api_key = "••••" + s.beam_api_key[-4:]
+    return s
+
+
+# ---------- Beam Payment ----------
+class BeamChargeRequest(BaseModel):
+    amount: float          # THB amount (e.g. 350.00)
+    reference_id: str      # order reference / order number
+    description: Optional[str] = None
+
+
+class BeamChargeResponse(BaseModel):
+    charge_id: str
+    status: str            # PENDING, COMPLETED, FAILED, EXPIRED
+    qr_image: Optional[str] = None   # base64 PNG data URI
+    qr_string: Optional[str] = None  # raw QR string for rendering client-side
+    amount: float
+    currency: str = "THB"
+
+
+@api_router.post("/beam/charge", response_model=BeamChargeResponse)
+async def create_beam_charge(body: BeamChargeRequest):
+    """Create a Beam QR PromptPay charge. Returns a QR code image for the customer to scan."""
+    doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
+    settings = Settings(**doc) if doc else Settings()
+
+    if not settings.beam_merchant_id or not settings.beam_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Beam credentials not configured. Go to Settings → Payment to add your Merchant ID and API Key."
+        )
+
+    base_url = "https://playground.api.beamcheckout.com" if settings.beam_sandbox else "https://api.beamcheckout.com"
+
+    payload = {
+        "amount": int(round(body.amount * 100)),  # Beam uses satang (smallest unit, 100 satang = 1 THB)
+        "currency": "THB",
+        "referenceId": body.reference_id,
+        "description": body.description or f"Order {body.reference_id}",
+        "paymentMethod": {
+            "paymentMethodType": "QR_PROMPT_PAY",
+            "qrPromptPay": {}
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{base_url}/api/v1/charges",
+                json=payload,
+                headers={
+                    "Authorization": settings.beam_api_key,
+                    "Content-Type": "application/json",
+                }
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="Beam API timed out. Please try again.")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Beam API: {str(e)}")
+
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="Beam API key is invalid or expired.")
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Beam API error {resp.status_code}: {resp.text[:300]}")
+
+    data = resp.json()
+    charge_id = data.get("id") or data.get("chargeId") or data.get("charge_id", "")
+    status = data.get("status", "PENDING")
+
+    # Beam returns encodedImage when actionRequired == ENCODED_IMAGE
+    qr_image = None
+    qr_string = None
+    if data.get("actionRequired") == "ENCODED_IMAGE":
+        encoded = data.get("encodedImage", {})
+        qr_image = encoded.get("image")   # base64 PNG
+        qr_string = encoded.get("qrString")
+    elif data.get("qrCode"):
+        qr_image = data["qrCode"]
+
+    return BeamChargeResponse(
+        charge_id=charge_id,
+        status=status,
+        qr_image=qr_image,
+        qr_string=qr_string,
+        amount=body.amount,
+    )
+
+
+@api_router.get("/beam/charge/{charge_id}", response_model=BeamChargeResponse)
+async def get_beam_charge(charge_id: str):
+    """Poll the status of a Beam charge."""
+    doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
+    settings = Settings(**doc) if doc else Settings()
+
+    if not settings.beam_merchant_id or not settings.beam_api_key:
+        raise HTTPException(status_code=400, detail="Beam credentials not configured.")
+
+    base_url = "https://playground.api.beamcheckout.com" if settings.beam_sandbox else "https://api.beamcheckout.com"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/api/v1/charges/{charge_id}",
+                headers={"Authorization": settings.beam_api_key}
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="Beam API timed out.")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Beam API: {str(e)}")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Charge not found")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Beam API error {resp.status_code}")
+
+    data = resp.json()
+    return BeamChargeResponse(
+        charge_id=charge_id,
+        status=data.get("status", "PENDING"),
+        amount=float(data.get("amount") or 0) / 100,
+    )
 
 
 # ---------- Dashboard ----------
-@api_router.get("/dashboard")
+
 async def dashboard(period: str = "month"):
     from datetime import timedelta
     now = datetime.now(timezone.utc)
