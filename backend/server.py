@@ -151,6 +151,8 @@ class OrderItem(BaseModel):
     name: str
     price: float
     qty: int
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
 
 
 class OrderCreate(BaseModel):
@@ -564,10 +566,92 @@ async def create_customer(body: CustomerCreate):
     return c
 
 
+@api_router.get("/customers/{customer_id}/stats")
+async def get_customer_stats(customer_id: str):
+    """Return aggregated order stats for a single customer."""
+    customer = await db.customers.find_one({"id": customer_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    orders = await db.orders.find(
+        {"customer_id": customer_id},
+        {"_id": 0},
+    ).to_list(10000)
+
+    completed = [o for o in orders if o.get("status") == "completed"]
+    outstanding = [o for o in orders if o.get("status") not in ("completed", "cancel")]
+
+    success_total = sum(o.get("total", 0) for o in completed)
+    bill_count = len(completed)
+    avg_bill = (success_total / bill_count) if bill_count else 0
+    outstanding_total = sum(o.get("total", 0) for o in outstanding)
+    outstanding_count = len(outstanding)
+
+    # Top products by total revenue across completed orders
+    prod_totals: dict = {}
+    for o in completed:
+        for item in o.get("items", []):
+            key = item["product_id"]
+            prod_totals.setdefault(key, {"product_id": key, "name": item["name"], "total": 0, "qty": 0})
+            prod_totals[key]["total"] += item["price"] * item["qty"]
+            prod_totals[key]["qty"] += item["qty"]
+    top_products = sorted(prod_totals.values(), key=lambda x: -x["total"])[:5]
+
+    # Top categories by total revenue across completed orders.
+    # Use the category_name snapshotted on the item at order creation time when
+    # available; fall back to a live product lookup for older orders that
+    # pre-date the snapshot field.
+    cat_totals: dict = {}
+    cats: Optional[dict] = None  # loaded lazily only when a fallback is needed
+    for o in completed:
+        for item in o.get("items", []):
+            cname = item.get("category_name")
+            if not cname:
+                # Legacy order — resolve category from the live products collection.
+                if cats is None:
+                    cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
+                prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "category_id": 1})
+                if prod:
+                    cid = prod.get("category_id", "")
+                    cname = cats.get(cid, {}).get("name", "Other")
+            if cname:
+                cat_totals[cname] = cat_totals.get(cname, 0) + item["price"] * item["qty"]
+    top_categories = [
+        {"name": k, "total": v}
+        for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
+    ]
+
+    return {
+        "customer_id": customer_id,
+        "success_total": success_total,
+        "bill_count": bill_count,
+        "avg_bill": avg_bill,
+        "outstanding_total": outstanding_total,
+        "outstanding_count": outstanding_count,
+        "top_products": top_products,
+        "top_categories": top_categories,
+    }
+
+
 @api_router.post("/orders", response_model=Order)
 async def create_order(body: OrderCreate):
     order_number = await gen_order_number()
-    o = Order(order_number=order_number, **body.model_dump(), status="completed")
+    # Snapshot category_id and category_name onto each item so stats remain
+    # accurate even if a product is later edited or deleted.
+    cats = {c["id"]: c for c in await db.categories.find({}, {"_id": 0}).to_list(100)}
+    enriched_items = []
+    for item in body.items:
+        item_data = item.model_dump()
+        if not item_data.get("category_id"):
+            prod = await db.products.find_one({"id": item.product_id}, {"_id": 0, "category_id": 1})
+            if prod:
+                cid = prod.get("category_id", "")
+                item_data["category_id"] = cid
+                item_data["category_name"] = cats.get(cid, {}).get("name", "Other")
+        enriched_items.append(OrderItem(**item_data))
+    order_data = body.model_dump()
+    order_data["items"] = [i.model_dump() for i in enriched_items]
+    o = Order(order_number=order_number, **order_data, status="completed")
     await db.orders.insert_one(o.model_dump())
     return o
 

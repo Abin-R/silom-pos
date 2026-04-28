@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -29,6 +29,15 @@ type Product = {
   stock: number; tax_type: string; product_type: string;
 };
 type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
+type CustomerStats = {
+  success_total: number;
+  bill_count: number;
+  avg_bill: number;
+  outstanding_total: number;
+  outstanding_count: number;
+  top_products: { product_id: string; name: string; total: number; qty: number }[];
+  top_categories: { name: string; total: number }[];
+};
 type Order = {
   id: string; order_number: string; items: any[]; total: number;
   status: string; source: string; created_time: string; created_at: string;
@@ -674,6 +683,9 @@ function StockMovementModal({
 function Customers({ isWide }: { isWide: boolean }) {
   const [list, setList] = useState<Customer[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
+  const [stats, setStats] = useState<CustomerStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const statsRequestId = useRef<string | null>(null);
   const [q, setQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [name, setName] = useState("");
@@ -686,6 +698,26 @@ function Customers({ isWide }: { isWide: boolean }) {
     if (d[0] && !sel) setSel(d[0]);
   };
   useEffect(() => { load(); }, []);
+
+  const loadStats = async (customerId: string) => {
+    // Track which customer this request is for so stale responses are discarded.
+    statsRequestId.current = customerId;
+    setStatsLoading(true);
+    setStats(null);
+    try {
+      const r = await fetch(`${API}/customers/${customerId}/stats`);
+      if (r.ok && statsRequestId.current === customerId) {
+        setStats(await r.json());
+      }
+    } finally {
+      if (statsRequestId.current === customerId) setStatsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (sel) loadStats(sel.id);
+    else { statsRequestId.current = null; setStats(null); }
+  }, [sel?.id]);
 
   const filtered = list.filter(
     (c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || c.phone?.includes(q)
@@ -764,27 +796,67 @@ function Customers({ isWide }: { isWide: boolean }) {
             <View style={styles.statsRow}>
               <View style={styles.statCell}>
                 <Text style={{ color: "#00B14F", fontWeight: "600", fontSize: 12 }}>Success</Text>
-                <Text style={{ fontSize: 24, fontWeight: "700" }}>0.00</Text>
-                <Text style={styles.statSub}>0 Bills</Text>
+                {statsLoading ? (
+                  <ActivityIndicator size="small" color="#00B14F" />
+                ) : (
+                  <>
+                    <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.success_total ?? 0)}</Text>
+                    <Text style={styles.statSub}>{stats?.bill_count ?? 0} Bills</Text>
+                  </>
+                )}
               </View>
               <View style={styles.statCell}>
                 <Text style={{ color: "#F59E0B", fontWeight: "600", fontSize: 12 }}>Avg/bill</Text>
-                <Text style={{ fontSize: 24, fontWeight: "700" }}>0</Text>
+                {statsLoading ? (
+                  <ActivityIndicator size="small" color="#F59E0B" />
+                ) : (
+                  <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.avg_bill ?? 0)}</Text>
+                )}
               </View>
               <View style={styles.statCell}>
                 <Text style={{ color: "#EF4444", fontWeight: "600", fontSize: 12 }}>Outstanding</Text>
-                <Text style={{ fontSize: 24, fontWeight: "700" }}>0.00</Text>
-                <Text style={styles.statSub}>0 Bills</Text>
+                {statsLoading ? (
+                  <ActivityIndicator size="small" color="#EF4444" />
+                ) : (
+                  <>
+                    <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.outstanding_total ?? 0)}</Text>
+                    <Text style={styles.statSub}>{stats?.outstanding_count ?? 0} Bills</Text>
+                  </>
+                )}
               </View>
             </View>
             <View style={{ flexDirection: "row", gap: 12, marginTop: 20 }}>
               <View style={styles.topBox}>
                 <Text style={styles.chartTitle}>Top Products</Text>
-                <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+                {statsLoading ? (
+                  <ActivityIndicator size="small" color="#94A3B8" style={{ marginTop: 12 }} />
+                ) : stats?.top_products?.length ? (
+                  stats.top_products.map((p, i) => (
+                    <View key={p.product_id} style={styles.topRow}>
+                      <Text style={styles.topRank}>#{i + 1}</Text>
+                      <Text style={styles.topName} numberOfLines={1}>{p.name}</Text>
+                      <Text style={styles.topValue}>{THB(p.total)}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+                )}
               </View>
               <View style={styles.topBox}>
                 <Text style={styles.chartTitle}>Top Categories</Text>
-                <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+                {statsLoading ? (
+                  <ActivityIndicator size="small" color="#94A3B8" style={{ marginTop: 12 }} />
+                ) : stats?.top_categories?.length ? (
+                  stats.top_categories.map((c, i) => (
+                    <View key={c.name} style={styles.topRow}>
+                      <Text style={styles.topRank}>#{i + 1}</Text>
+                      <Text style={styles.topName} numberOfLines={1}>{c.name}</Text>
+                      <Text style={styles.topValue}>{THB(c.total)}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+                )}
               </View>
             </View>
           </>
@@ -1753,6 +1825,13 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: "#FFFFFF", padding: 14, borderRadius: 12,
     minHeight: 160,
   },
+  topRow: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  topRank: { fontSize: 11, color: "#94A3B8", fontWeight: "600", width: 22 },
+  topName: { flex: 1, fontSize: 12, color: "#0F172A" },
+  topValue: { fontSize: 12, fontWeight: "700", color: "#0F172A" },
 
   // Products Management
   allCatsLabel: {
