@@ -10,6 +10,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import httpx
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -463,13 +464,17 @@ async def create_beam_charge(body: BeamChargeRequest):
         }
     }
 
+    beam_token = base64.b64encode(
+        f"{settings.beam_merchant_id}:{settings.beam_api_key}".encode()
+    ).decode()
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{base_url}/api/v1/charges",
                 json=payload,
                 headers={
-                    "Authorization": settings.beam_api_key,
+                    "Authorization": f"Basic {beam_token}",
                     "Content-Type": "application/json",
                 }
             )
@@ -519,9 +524,12 @@ async def get_beam_charge(charge_id: str):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            beam_token = base64.b64encode(
+                f"{settings.beam_merchant_id}:{settings.beam_api_key}".encode()
+            ).decode()
             resp = await client.get(
                 f"{base_url}/api/v1/charges/{charge_id}",
-                headers={"Authorization": settings.beam_api_key}
+                headers={"Authorization": f"Basic {beam_token}"}
             )
     except httpx.TimeoutException:
         raise HTTPException(status_code=502, detail="Beam API timed out.")
@@ -543,6 +551,7 @@ async def get_beam_charge(charge_id: str):
 
 # ---------- Dashboard ----------
 
+@api_router.get("/dashboard")
 async def dashboard(period: str = "month"):
     from datetime import timedelta
     now = datetime.now(timezone.utc)

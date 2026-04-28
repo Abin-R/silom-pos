@@ -252,6 +252,46 @@ class TestBeamChargeCreate:
             sent_payload = call_kwargs.kwargs.get("json") or call_kwargs.kwargs["json"]
             assert sent_payload["amount"] == 39900
 
+    async def test_beam_uses_basic_auth_header(self):
+        """Verify Authorization header uses Basic base64(merchantId:apiKey) format."""
+        import base64
+        from server import create_beam_charge, BeamChargeRequest
+
+        mock_settings_doc = {
+            "id": "shop", "shop_name": "Test", "business_type": "General",
+            "pos_id": "001", "branch": "B1", "pos_number": "001",
+            "open_time": "09:00", "close_time": "22:00",
+            "tax_percent": 7.0, "tax_mode": "exclusive",
+            "service_charge_enabled": False, "service_charge_percent": 10.0,
+            "beam_merchant_id": "m_test123", "beam_api_key": "sk_test_valid",
+            "beam_sandbox": True,
+        }
+
+        beam_response = {
+            "id": "ch_auth_test", "status": "PENDING", "amount": 9500,
+            "currency": "THB", "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {"image": "abc123", "qrString": "qr_string_here"}
+        }
+
+        mock_response = _make_httpx_response(200, beam_response)
+
+        with patch("server.db") as mock_db, \
+             patch("httpx.AsyncClient") as mock_client_cls:
+            mock_db.settings.find_one = AsyncMock(return_value=mock_settings_doc)
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            req = BeamChargeRequest(amount=95.0, reference_id="TEST-AUTH", description="Auth test")
+            await create_beam_charge(req)
+
+            call_kwargs = mock_client.post.call_args
+            sent_headers = call_kwargs.kwargs.get("headers", {})
+            expected_token = base64.b64encode(b"m_test123:sk_test_valid").decode()
+            assert sent_headers.get("Authorization") == f"Basic {expected_token}"
+
 
 @pytest.mark.asyncio
 class TestBeamChargeGet:
