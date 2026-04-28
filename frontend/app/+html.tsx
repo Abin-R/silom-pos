@@ -31,8 +31,18 @@ export default function Root({ children }: PropsWithChildren) {
               body > div:first-child { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; }
               [role="tablist"] [role="tab"] * { overflow: visible !important; }
               [role="heading"], [role="heading"] * { overflow: visible !important; }
-              /* Apply Sarabun to all DOM text nodes so Thai glyphs render on web */
-              * { font-family: 'Sarabun', sans-serif !important; }
+              /* Apply Sarabun to text elements so Thai glyphs render on web.
+                 Exclude icon font elements (Ionicons uses a web font where
+                 characters map to icons — overriding font-family breaks them). */
+              body, div, span, p, h1, h2, h3, h4, h5, h6,
+              label, input, textarea, button, a, li, td, th {
+                font-family: 'Sarabun', sans-serif;
+              }
+              /* Restore icon fonts — Ionicons uses these class patterns */
+              [class*="Ionicons"], [class*="ionicon"], [class*="ion-"],
+              .ionicons, [data-icon] {
+                font-family: 'Ionicons', 'Material Icons', sans-serif !important;
+              }
             `,
           }}
         />
