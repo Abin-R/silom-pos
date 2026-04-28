@@ -177,7 +177,7 @@ export default function POS() {
     setDiscountValue(0);
   };
 
-  const handlePaySuccess = async (method: string, paid: number) => {
+  const handlePaySuccess = async (method: string, paid: number, beamChargeId?: string) => {
     try {
       const res = await fetch(`${API}/orders`, {
         method: "POST",
@@ -195,6 +195,7 @@ export default function POS() {
           source: "table",
           customer_id: customer?.id,
           customer_name: customer?.name,
+          beam_charge_id: beamChargeId || null,
         }),
       });
       const order = await res.json();
@@ -870,7 +871,7 @@ function PaymentModal({
   itemsCount: number;
   cartCount: number;
   onClose: () => void;
-  onPay: (method: string, paid: number) => void;
+  onPay: (method: string, paid: number, beamChargeId?: string) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -888,6 +889,7 @@ function PaymentModal({
     { key: "Credit", icon: "card-outline" as const },
     { key: "PromptPay", icon: "phone-portrait-outline" as const },
     { key: "QR Kbank", icon: "qr-code" as const },
+    { key: "Beam", icon: "scan-outline" as const },
     { key: "EDC", icon: "print-outline" as const },
     { key: "Custom", icon: "wallet-outline" as const },
   ];
@@ -901,10 +903,16 @@ function PaymentModal({
   const [cardLast4, setCardLast4] = useState("");
   const [cardType, setCardType] = useState("");
   const [bankPick, setBankPick] = useState("");
+  // Beam QR state
+  const [beamChargeId, setBeamChargeId] = useState<string | null>(null);
+  const [beamQrImage, setBeamQrImage] = useState<string | null>(null);
+  const [beamStatus, setBeamStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
+  const [beamError, setBeamError] = useState<string | null>(null);
   useEffect(() => {
     if (visible) {
       setCustomPick(""); setOrderRef("");
       setCardLast4(""); setCardType(""); setBankPick("");
+      setBeamChargeId(null); setBeamQrImage(null); setBeamStatus("idle"); setBeamError(null);
     }
   }, [visible]);
 
@@ -924,6 +932,53 @@ function PaymentModal({
   };
 
   const quicks = [1000, 500, 100, 50, 20];
+
+  // Create a Beam QR charge and start polling for completion
+  const startBeamCharge = async (orderNumber: string) => {
+    setBeamStatus("loading");
+    setBeamError(null);
+    try {
+      const res = await fetch(`${API}/beam/charge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: total, reference_id: orderNumber, description: `Order ${orderNumber}` }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBeamStatus("failed");
+        setBeamError(data.detail || "Failed to create Beam charge");
+        return;
+      }
+      setBeamChargeId(data.charge_id);
+      setBeamQrImage(data.qr_image || null);
+      setBeamStatus(data.status === "COMPLETED" ? "completed" : "pending");
+    } catch {
+      setBeamStatus("failed");
+      setBeamError("Cannot reach payment server");
+    }
+  };
+
+  // Poll Beam charge status every 3 seconds until completed/failed
+  useEffect(() => {
+    if (beamStatus !== "pending" || !beamChargeId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/beam/charge/${beamChargeId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "COMPLETED") {
+          setBeamStatus("completed");
+          clearInterval(interval);
+          onPay("Beam QR", total, beamChargeId ?? undefined);
+        } else if (data.status === "FAILED" || data.status === "EXPIRED") {
+          setBeamStatus("failed");
+          setBeamError("Payment " + data.status.toLowerCase() + ". Please try again.");
+          clearInterval(interval);
+        }
+      } catch { /* ignore transient errors */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [beamStatus, beamChargeId, total, onPay]);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1062,9 +1117,71 @@ function PaymentModal({
                   <Text style={styles.kbankRegisterText}>Register</Text>
                 </TouchableOpacity>
               </View>
+            ) : method === "Beam" ? (
+              <View style={styles.beamPane} testID="beam-pane">
+                {/* Header */}
+                <View style={styles.beamHeader}>
+                  <View style={styles.beamLogoBox}>
+                    <Ionicons name="scan-outline" size={28} color="#00B14F" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.beamTitle}>Beam QR Payment</Text>
+                    <Text style={styles.beamSub}>PromptPay · e-Wallet · All banks</Text>
+                  </View>
+                </View>
+
+                {beamStatus === "idle" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Text style={styles.beamIdleText}>Tap "Payment Confirm" to generate QR</Text>
+                  </View>
+                )}
+
+                {beamStatus === "loading" && (
+                  <View style={styles.beamIdleBox}>
+                    <ActivityIndicator size="large" color="#00B14F" />
+                    <Text style={styles.beamIdleText}>Generating QR code…</Text>
+                  </View>
+                )}
+
+                {(beamStatus === "pending") && beamQrImage && (
+                  <View style={styles.beamQrBox}>
+                    <Image
+                      source={{ uri: beamQrImage.startsWith("data:") ? beamQrImage : `data:image/png;base64,${beamQrImage}` }}
+                      style={styles.beamQrImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.beamWaiting}>
+                      <ActivityIndicator size="small" color="#00B14F" />
+                      <Text style={styles.beamWaitingText}>Waiting for customer to scan…</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.beamCancelBtn}
+                      onPress={() => { setBeamStatus("idle"); setBeamChargeId(null); setBeamQrImage(null); setBeamError(null); }}
+                      testID="beam-cancel"
+                    >
+                      <Text style={styles.beamCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {beamStatus === "failed" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamError || "Payment failed"}</Text>
+                    <TouchableOpacity
+                      style={styles.beamRetryBtn}
+                      onPress={() => { setBeamStatus("idle"); setBeamError(null); setBeamChargeId(null); setBeamQrImage(null); }}
+                    >
+                      <Text style={styles.beamRetryText}>Try Again</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <Text style={styles.beamAmount}>{THB(total)}</Text>
+              </View>
             ) : method === "EDC" ? (
               <View style={styles.edcPane} testID="edc-pane">
-                {/* Hero: tablet + phone → arrow "Send data" → EDC device */}
                 <View style={styles.edcHeroRow}>
                   <View style={styles.edcDeviceGroup}>
                     <Ionicons name="tablet-landscape" size={64} color="#0F172A" />
@@ -1274,10 +1391,26 @@ function PaymentModal({
                 <TouchableOpacity
                   style={[
                     styles.payConfirmBtn,
-                    !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay) && styles.payBtnDisabled,
+                    !(method === "QR Kbank" || method === "PromptPay" || method === "Beam" ||
+                      (method === "Custom" && customPick) ||
+                      (method === "Credit" && (cardType || bankPick)) ||
+                      canPay) && styles.payBtnDisabled,
+                    (method === "Beam" && (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed")) && styles.payBtnDisabled,
                   ]}
-                  disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay)}
+                  disabled={
+                    !(method === "QR Kbank" || method === "PromptPay" || method === "Beam" ||
+                      (method === "Custom" && customPick) ||
+                      (method === "Credit" && (cardType || bankPick)) ||
+                      canPay) ||
+                    (method === "Beam" && (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed"))
+                  }
                   onPress={() => {
+                    if (method === "Beam") {
+                      // Generate QR — use a temp reference ID; actual order is created when polling confirms
+                      const ref = `POS-${Date.now()}`;
+                      startBeamCharge(ref);
+                      return;
+                    }
                     const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` :
                                         method === "Credit" && (cardType || bankPick) ? `Credit · ${cardType || bankPick}${cardLast4 ? ` ····${cardLast4}` : ""}` : method;
                     const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom" || method === "Credit") ? total : paid;
@@ -1285,7 +1418,12 @@ function PaymentModal({
                   }}
                   testID="confirm-payment-right"
                 >
-                  <Text style={styles.payConfirmText}>Payment Confirm</Text>
+                  <Text style={styles.payConfirmText}>
+                    {method === "Beam" && beamStatus === "loading" ? "Generating…" :
+                     method === "Beam" && beamStatus === "pending" ? "Waiting for scan…" :
+                     method === "Beam" && beamStatus === "idle" ? "Generate QR" :
+                     "Payment Confirm"}
+                  </Text>
                 </TouchableOpacity>
                 <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
                 <View style={styles.summaryRow}>
@@ -3378,4 +3516,77 @@ const styles = StyleSheet.create({
     textAlign: "right",
     outlineStyle: "none" as any,
   },
+
+  // ---------- Beam pane ----------
+  beamPane: {
+    flex: 1,
+    padding: 16,
+    gap: 12,
+    alignItems: "stretch",
+  },
+  beamHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  beamLogoBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#E5F7ED",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  beamTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  beamSub: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  beamIdleBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingVertical: 24,
+  },
+  beamIdleText: { fontSize: 13, color: "#94A3B8", textAlign: "center" },
+  beamQrBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  beamQrImage: { width: 200, height: 200 },
+  beamWaiting: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  beamWaitingText: { fontSize: 13, color: "#475569" },
+  beamAmount: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#0F172A",
+    textAlign: "center",
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  beamRetryBtn: {
+    backgroundColor: "#EF4444",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  beamRetryText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  beamCancelBtn: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  beamCancelText: { color: "#64748B", fontSize: 13 },
 });

@@ -47,6 +47,7 @@ type Settings = {
   open_time: string; close_time: string;
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
+  beam_merchant_id?: string; beam_api_key?: string; beam_sandbox?: boolean;
 };
 
 export default function Admin() {
@@ -227,14 +228,14 @@ function Reports({ isWide }: { isWide: boolean }) {
           <View style={styles.kpiRow}>
             <KPI label="Sales" value={THB(data.total_sales)} color="#00B14F" icon="cash-outline" />
             <KPI label="Profit" value={THB(data.profit)} color="#3B82F6" icon="trending-up" />
-            <KPI label="Transactions" value={String(data.tx_count)} color="#F59E0B" icon="receipt-outline" />
+            <KPI label="Transactions" value={String(data.tx_count ?? 0)} color="#F59E0B" icon="receipt-outline" />
             <KPI label="Avg/bill" value={THB(data.avg_bill)} color="#8B5CF6" icon="stats-chart" />
           </View>
 
           <View style={styles.gpRow}>
             <GPStat label="Before GP" value={THB(data.total_sales)} />
             <GPStat label="Cost" value={THB(data.cost)} />
-            <GPStat label="GP %" value={`${data.gp_percent.toFixed(1)}%`} accent />
+            <GPStat label="GP %" value={`${(data.gp_percent ?? 0).toFixed(1)}%`} accent />
             <GPStat label="Profit" value={THB(data.profit)} accent />
           </View>
 
@@ -242,10 +243,10 @@ function Reports({ isWide }: { isWide: boolean }) {
             <View style={styles.chartCard} testID="sales-chart">
               <Text style={styles.chartTitle}>Sales Trend</Text>
               <View style={styles.chart}>
-                {data.timeline.length === 0 ? (
+                {(data.timeline ?? []).length === 0 ? (
                   <Text style={styles.emptyChart}>No data for this period</Text>
                 ) : (
-                  data.timeline.map((t, i) => (
+                  (data.timeline ?? []).map((t, i) => (
                     <View key={i} style={styles.barCol}>
                       <View
                         style={[
@@ -262,10 +263,10 @@ function Reports({ isWide }: { isWide: boolean }) {
 
             <View style={styles.chartCard} testID="top-products">
               <Text style={styles.chartTitle}>Top 5 Products</Text>
-              {data.top_products.length === 0 ? (
+              {(data.top_products ?? []).length === 0 ? (
                 <Text style={styles.emptyChart}>No sales yet</Text>
               ) : (
-                data.top_products.map((p, i) => (
+                (data.top_products ?? []).map((p, i) => (
                   <View key={p.product_id} style={styles.rankRow}>
                     <View style={[styles.rankDot, { backgroundColor: palette[i] }]} />
                     <Text style={styles.rankName} numberOfLines={1}>{p.name}</Text>
@@ -285,10 +286,10 @@ function Reports({ isWide }: { isWide: boolean }) {
 
             <View style={styles.chartCard} testID="top-categories">
               <Text style={styles.chartTitle}>Top 5 Categories</Text>
-              {data.top_categories.length === 0 ? (
+              {(data.top_categories ?? []).length === 0 ? (
                 <Text style={styles.emptyChart}>No sales yet</Text>
               ) : (
-                data.top_categories.map((c, i) => (
+                (data.top_categories ?? []).map((c, i) => (
                   <View key={c.name} style={styles.rankRow}>
                     <View style={[styles.rankDot, { backgroundColor: palette[i] }]} />
                     <Text style={styles.rankName} numberOfLines={1}>{c.name}</Text>
@@ -1497,6 +1498,78 @@ function SettingsView({ isWide }: { isWide: boolean }) {
               onPress={save}
               disabled={saving}
               testID="settings-save"
+            >
+              <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        ) : active === "Payment" && s ? (
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+            <Text style={styles.h2}>Payment</Text>
+
+            {/* ── Beam QR Payment ── */}
+            <View style={{ backgroundColor: "#F8FAFC", borderRadius: 12, padding: 16, gap: 12, borderWidth: 1, borderColor: "#E2E8F0" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: "#00B14F", alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name="qr-code" size={20} color="#FFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 15, fontWeight: "700", color: "#1E293B" }}>Beam QR Payment</Text>
+                  <Text style={{ fontSize: 12, color: "#64748B" }}>PromptPay QR via Beam Checkout</Text>
+                </View>
+              </View>
+
+              <Field label="Merchant ID">
+                <TextInput
+                  style={styles.formInput}
+                  value={s.beam_merchant_id || ""}
+                  onChangeText={(v) => update({ beam_merchant_id: v })}
+                  placeholder="m_xxxxxxxxxxxxxxxx"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  testID="beam-merchant-id"
+                />
+              </Field>
+
+              <Field label="API Key">
+                <TextInput
+                  style={styles.formInput}
+                  value={s.beam_api_key?.startsWith("••••") ? "" : (s.beam_api_key || "")}
+                  onChangeText={(v) => update({ beam_api_key: v })}
+                  placeholder={s.beam_api_key?.startsWith("••••") ? "Key saved — enter new key to replace" : "Enter your Beam API Key"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  testID="beam-api-key"
+                />
+              </Field>
+
+              <Field label="Mode">
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TouchableOpacity
+                    style={[styles.bizBtn, s.beam_sandbox !== false && styles.bizBtnActive]}
+                    onPress={() => update({ beam_sandbox: true })}
+                    testID="beam-sandbox"
+                  >
+                    <Text style={[styles.bizBtnText, s.beam_sandbox !== false && { color: "#FFF" }]}>Test (Playground)</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.bizBtn, s.beam_sandbox === false && styles.bizBtnActive]}
+                    onPress={() => update({ beam_sandbox: false })}
+                    testID="beam-production"
+                  >
+                    <Text style={[styles.bizBtnText, s.beam_sandbox === false && { color: "#FFF" }]}>Production</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
+                  Use Test mode with Beam Playground credentials. Switch to Production when you are ready to accept real payments.
+                </Text>
+              </Field>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, saving && { opacity: 0.5 }]}
+              onPress={save}
+              disabled={saving}
+              testID="settings-save-payment"
             >
               <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
             </TouchableOpacity>
