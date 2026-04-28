@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,12 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+
+// How often we poll the backend for Beam charge status while a QR is on screen.
+const BEAM_POLL_INTERVAL_MS = 3000;
+// Mask prefix used by the backend to redact stored Beam API keys (••••<last4>).
+// Kept in sync with backend/server.py BEAM_API_KEY_MASK_PREFIX.
+const BEAM_API_KEY_MASK_PREFIX = "••••";
 
 // ---- Types ----
 type Category = { id: string; name: string; name_th?: string; color: string; order: number };
@@ -177,7 +183,11 @@ export default function POS() {
     setDiscountValue(0);
   };
 
-  const handlePaySuccess = async (method: string, paid: number, beamChargeId?: string) => {
+  const handlePaySuccess = async (
+    method: string,
+    paid: number,
+    meta?: { beamChargeId?: string }
+  ) => {
     try {
       const res = await fetch(`${API}/orders`, {
         method: "POST",
@@ -195,7 +205,7 @@ export default function POS() {
           source: "table",
           customer_id: customer?.id,
           customer_name: customer?.name,
-          beam_charge_id: beamChargeId || null,
+          beam_charge_id: meta?.beamChargeId || null,
         }),
       });
       const order = await res.json();
@@ -871,7 +881,7 @@ function PaymentModal({
   itemsCount: number;
   cartCount: number;
   onClose: () => void;
-  onPay: (method: string, paid: number, beamChargeId?: string) => void;
+  onPay: (method: string, paid: number, meta?: { beamChargeId?: string }) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -908,16 +918,24 @@ function PaymentModal({
   const [beamQrImage, setBeamQrImage] = useState<string | null>(null);
   const [beamStatus, setBeamStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
   const [beamError, setBeamError] = useState<string | null>(null);
+
+  // Reset Beam state to idle (used by modal-open cleanup, Cancel, and Retry).
+  const resetBeam = useCallback(() => {
+    setBeamStatus("idle");
+    setBeamChargeId(null);
+    setBeamQrImage(null);
+    setBeamError(null);
+  }, []);
+
   useEffect(() => {
     if (visible) {
       setCustomPick(""); setOrderRef("");
       setCardLast4(""); setCardType(""); setBankPick("");
-      setBeamChargeId(null); setBeamQrImage(null); setBeamStatus("idle"); setBeamError(null);
+      resetBeam();
     }
-  }, [visible]);
+  }, [visible, resetBeam]);
 
   const paid = amount ? parseFloat(amount) : total;
-  const change = Math.max(0, paid - total);
   const canPay = paid >= total;
 
   const { width: winW } = useWindowDimensions();
@@ -933,15 +951,17 @@ function PaymentModal({
 
   const quicks = [1000, 500, 100, 50, 20];
 
-  // Create a Beam QR charge and start polling for completion
-  const startBeamCharge = async (orderNumber: string) => {
+  // Create a Beam QR charge and start polling for completion.
+  // `referenceId` is a temporary client-side ref (e.g. POS-<timestamp>) — the real order
+  // is created in handlePaySuccess after the polling effect confirms COMPLETED.
+  const startBeamCharge = async (referenceId: string) => {
     setBeamStatus("loading");
     setBeamError(null);
     try {
       const res = await fetch(`${API}/beam/charge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: total, reference_id: orderNumber, description: `Order ${orderNumber}` }),
+        body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}` }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -958,7 +978,14 @@ function PaymentModal({
     }
   };
 
-  // Poll Beam charge status every 3 seconds until completed/failed
+  // Capture the latest onPay / total in refs so the polling effect's deps stay stable
+  // and the interval doesn't get torn down on every parent re-render.
+  const onPayRef = useRef(onPay);
+  const totalRef = useRef(total);
+  useEffect(() => { onPayRef.current = onPay; }, [onPay]);
+  useEffect(() => { totalRef.current = total; }, [total]);
+
+  // Poll Beam charge status until completed/failed
   useEffect(() => {
     if (beamStatus !== "pending" || !beamChargeId) return;
     const interval = setInterval(async () => {
@@ -969,16 +996,33 @@ function PaymentModal({
         if (data.status === "COMPLETED") {
           setBeamStatus("completed");
           clearInterval(interval);
-          onPay("Beam QR", total, beamChargeId ?? undefined);
+          onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
         } else if (data.status === "FAILED" || data.status === "EXPIRED") {
           setBeamStatus("failed");
           setBeamError("Payment " + data.status.toLowerCase() + ". Please try again.");
           clearInterval(interval);
         }
       } catch { /* ignore transient errors */ }
-    }, 3000);
+    }, BEAM_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [beamStatus, beamChargeId, total, onPay]);
+  }, [beamStatus, beamChargeId]);
+
+  // Derived flags for the right-panel "Payment Confirm" button — extracted so
+  // the JSX below stays readable.
+  const isQrLikeMethod = method === "QR Kbank" || method === "PromptPay" || method === "Beam";
+  const isCustomReady = method === "Custom" && !!customPick;
+  const isCreditReady = method === "Credit" && !!(cardType || bankPick);
+  const isBeamBusy =
+    method === "Beam" &&
+    (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed");
+  const canConfirm = (isQrLikeMethod || isCustomReady || isCreditReady || canPay) && !isBeamBusy;
+
+  const confirmLabel = (() => {
+    if (method !== "Beam") return "Payment Confirm";
+    if (beamStatus === "loading") return "Generating…";
+    if (beamStatus === "pending") return "Waiting for scan…";
+    return "Generate QR";
+  })();
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1133,7 +1177,7 @@ function PaymentModal({
                 {beamStatus === "idle" && (
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
-                    <Text style={styles.beamIdleText}>Tap "Payment Confirm" to generate QR</Text>
+                    <Text style={styles.beamIdleText}>Tap "Generate QR" to create a QR code</Text>
                   </View>
                 )}
 
@@ -1157,7 +1201,7 @@ function PaymentModal({
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
-                      onPress={() => { setBeamStatus("idle"); setBeamChargeId(null); setBeamQrImage(null); setBeamError(null); }}
+                      onPress={resetBeam}
                       testID="beam-cancel"
                     >
                       <Text style={styles.beamCancelText}>Cancel</Text>
@@ -1171,7 +1215,7 @@ function PaymentModal({
                     <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamError || "Payment failed"}</Text>
                     <TouchableOpacity
                       style={styles.beamRetryBtn}
-                      onPress={() => { setBeamStatus("idle"); setBeamError(null); setBeamChargeId(null); setBeamQrImage(null); }}
+                      onPress={resetBeam}
                     >
                       <Text style={styles.beamRetryText}>Try Again</Text>
                     </TouchableOpacity>
@@ -1389,21 +1433,8 @@ function PaymentModal({
                   </View>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[
-                    styles.payConfirmBtn,
-                    !(method === "QR Kbank" || method === "PromptPay" || method === "Beam" ||
-                      (method === "Custom" && customPick) ||
-                      (method === "Credit" && (cardType || bankPick)) ||
-                      canPay) && styles.payBtnDisabled,
-                    (method === "Beam" && (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed")) && styles.payBtnDisabled,
-                  ]}
-                  disabled={
-                    !(method === "QR Kbank" || method === "PromptPay" || method === "Beam" ||
-                      (method === "Custom" && customPick) ||
-                      (method === "Credit" && (cardType || bankPick)) ||
-                      canPay) ||
-                    (method === "Beam" && (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed"))
-                  }
+                  style={[styles.payConfirmBtn, !canConfirm && styles.payBtnDisabled]}
+                  disabled={!canConfirm}
                   onPress={() => {
                     if (method === "Beam") {
                       // Generate QR — use a temp reference ID; actual order is created when polling confirms
@@ -1418,12 +1449,7 @@ function PaymentModal({
                   }}
                   testID="confirm-payment-right"
                 >
-                  <Text style={styles.payConfirmText}>
-                    {method === "Beam" && beamStatus === "loading" ? "Generating…" :
-                     method === "Beam" && beamStatus === "pending" ? "Waiting for scan…" :
-                     method === "Beam" && beamStatus === "idle" ? "Generate QR" :
-                     "Payment Confirm"}
-                  </Text>
+                  <Text style={styles.payConfirmText}>{confirmLabel}</Text>
                 </TouchableOpacity>
                 <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
                 <View style={styles.summaryRow}>
@@ -1433,38 +1459,6 @@ function PaymentModal({
               </View>
             </View>
           </ScrollView>
-
-          {/* Footer (only shown for non-Custom/non-QR methods; others have Payment Confirm in right panel) */}
-          {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && false && (
-          <View style={styles.paymentFooter}>
-            <View style={styles.changeBox}>
-              <Text style={styles.changeLabel}>
-                {method === "Custom" ? "Summary" : method === "QR Kbank" || method === "PromptPay" ? "Awaiting scan" : "Change"}
-              </Text>
-              <Text style={styles.changeVal}>
-                {method === "Custom" || method === "QR Kbank" || method === "PromptPay" ? THB(total) : THB(change)}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.confirmBtn,
-                !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay) && styles.payBtnDisabled,
-              ]}
-              disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay)}
-              onPress={() => {
-                const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` : method;
-                const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom") ? total : paid;
-                onPay(finalMethod, finalPaid);
-              }}
-              testID="confirm-payment"
-            >
-              <Text style={styles.confirmText}>
-                {method === "QR Kbank" || method === "PromptPay" ? "Mark Paid" : method === "Custom" ? "Payment Confirm" : "Confirm Payment"}
-              </Text>
-              <Ionicons name="arrow-forward" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          )}
         </View>
       </View>
     </Modal>

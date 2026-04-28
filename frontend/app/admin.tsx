@@ -20,6 +20,10 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// Mask prefix used by the backend to redact stored Beam API keys (••••<last4>).
+// Kept in sync with backend/server.py BEAM_API_KEY_MASK_PREFIX.
+const BEAM_API_KEY_MASK_PREFIX = "••••";
+
 type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "settings";
 
 type Category = { id: string; name: string; name_th?: string; color: string; source?: string; order: number };
@@ -1575,18 +1579,23 @@ function SettingsView({ isWide }: { isWide: boolean }) {
             </TouchableOpacity>
           </ScrollView>
         ) : active === "Payment" && s ? (
+          (() => {
+            // Normalize Beam-related settings once so the JSX stays clean.
+            const isMaskedKey = s.beam_api_key?.startsWith(BEAM_API_KEY_MASK_PREFIX) ?? false;
+            const sandbox = s.beam_sandbox ?? true;
+            return (
           <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
             <Text style={styles.h2}>Payment</Text>
 
             {/* ── Beam QR Payment ── */}
-            <View style={{ backgroundColor: "#F8FAFC", borderRadius: 12, padding: 16, gap: 12, borderWidth: 1, borderColor: "#E2E8F0" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: "#00B14F", alignItems: "center", justifyContent: "center" }}>
+            <View style={styles.beamSettingsCard}>
+              <View style={styles.beamSettingsHeader}>
+                <View style={styles.beamLogoBox}>
                   <Ionicons name="qr-code" size={20} color="#FFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 15, fontWeight: "700", color: "#1E293B" }}>Beam QR Payment</Text>
-                  <Text style={{ fontSize: 12, color: "#64748B" }}>PromptPay QR via Beam Checkout</Text>
+                  <Text style={styles.beamSettingsTitle}>Beam QR Payment</Text>
+                  <Text style={styles.beamSettingsSub}>PromptPay QR via Beam Checkout</Text>
                 </View>
               </View>
 
@@ -1605,9 +1614,9 @@ function SettingsView({ isWide }: { isWide: boolean }) {
               <Field label="API Key">
                 <TextInput
                   style={styles.formInput}
-                  value={s.beam_api_key?.startsWith("••••") ? "" : (s.beam_api_key || "")}
+                  value={isMaskedKey ? "" : (s.beam_api_key || "")}
                   onChangeText={(v) => update({ beam_api_key: v })}
-                  placeholder={s.beam_api_key?.startsWith("••••") ? "Key saved — enter new key to replace" : "Enter your Beam API Key"}
+                  placeholder={isMaskedKey ? "Key saved — enter new key to replace" : "Enter your Beam API Key"}
                   autoCapitalize="none"
                   autoCorrect={false}
                   testID="beam-api-key"
@@ -1617,21 +1626,21 @@ function SettingsView({ isWide }: { isWide: boolean }) {
               <Field label="Mode">
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   <TouchableOpacity
-                    style={[styles.bizBtn, s.beam_sandbox !== false && styles.bizBtnActive]}
+                    style={[styles.bizBtn, sandbox && styles.bizBtnActive]}
                     onPress={() => update({ beam_sandbox: true })}
                     testID="beam-sandbox"
                   >
-                    <Text style={[styles.bizBtnText, s.beam_sandbox !== false && { color: "#FFF" }]}>Test (Playground)</Text>
+                    <Text style={[styles.bizBtnText, sandbox && { color: "#FFF" }]}>Test (Playground)</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.bizBtn, s.beam_sandbox === false && styles.bizBtnActive]}
+                    style={[styles.bizBtn, !sandbox && styles.bizBtnActive]}
                     onPress={() => update({ beam_sandbox: false })}
                     testID="beam-production"
                   >
-                    <Text style={[styles.bizBtnText, s.beam_sandbox === false && { color: "#FFF" }]}>Production</Text>
+                    <Text style={[styles.bizBtnText, !sandbox && { color: "#FFF" }]}>Production</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
+                <Text style={styles.beamSettingsHint}>
                   Use Test mode with Beam Playground credentials. Switch to Production when you are ready to accept real payments.
                 </Text>
               </Field>
@@ -1646,6 +1655,8 @@ function SettingsView({ isWide }: { isWide: boolean }) {
               <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
             </TouchableOpacity>
           </ScrollView>
+            );
+          })()
         ) : (
           <View style={styles.emptyBox}>
             <Ionicons name="construct-outline" size={40} color="#CBD5E1" />
@@ -2024,6 +2035,22 @@ const styles = StyleSheet.create({
   },
   bizBtnActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
   bizBtnText: { fontSize: 13, fontWeight: "600", color: "#475569" },
+
+  // Beam payment settings card
+  beamSettingsCard: {
+    backgroundColor: "#F8FAFC", borderRadius: 12, padding: 16, gap: 12,
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  beamSettingsHeader: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+  },
+  beamLogoBox: {
+    width: 36, height: 36, borderRadius: 8, backgroundColor: "#00B14F",
+    alignItems: "center", justifyContent: "center",
+  },
+  beamSettingsTitle: { fontSize: 15, fontWeight: "700", color: "#1E293B" },
+  beamSettingsSub: { fontSize: 12, color: "#64748B" },
+  beamSettingsHint: { fontSize: 11, color: "#94A3B8", marginTop: 4 },
   toggleBox: {
     width: 44, height: 24, borderRadius: 12, backgroundColor: "#CBD5E1",
     padding: 2, justifyContent: "center",
