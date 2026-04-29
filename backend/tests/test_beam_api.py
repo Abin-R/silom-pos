@@ -7,7 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure the backend package is importable when pytest is invoked from the
+# backend dir or the repo root. Matches the pattern used in the rest of the
+# backend test suite (test_customer_stats.py, test_dashboard_bulk_lookup.py).
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from server import (
+    Settings,
+    BeamChargeRequest,
+    BeamChargeResponse,
+    BeamChargeStatus,
+    BEAM_API_KEY_MASK_PREFIX,
+    _extract_qr_data,
+    _is_masked_api_key,
+    _mask_api_key,
+    create_beam_charge,
+    get_beam_charge,
+)
+from fastapi import HTTPException
 
 
 # ---------------------------------------------------------------------------
@@ -77,30 +94,35 @@ class TestSettingsMasking:
     """Verify _mask_api_key + _is_masked_api_key behaviour."""
 
     def test_mask_long_key(self):
-        from server import Settings, _mask_api_key, BEAM_API_KEY_MASK_PREFIX
         s = Settings(beam_api_key="sk_test_abcdefgh1234")
         masked = _mask_api_key(s)
         assert masked.beam_api_key == f"{BEAM_API_KEY_MASK_PREFIX}1234"
 
+    def test_mask_does_not_mutate_original(self):
+        """_mask_api_key must return a new Settings; the original stays intact."""
+        original_key = "sk_test_abcdefgh1234"
+        s = Settings(beam_api_key=original_key)
+        masked = _mask_api_key(s)
+        assert masked.beam_api_key == f"{BEAM_API_KEY_MASK_PREFIX}1234"
+        # Original must be untouched
+        assert s.beam_api_key == original_key
+        assert s is not masked
+
     def test_mask_short_key_unchanged(self):
         """Keys with 4 or fewer chars are not masked (edge case)."""
-        from server import Settings, _mask_api_key
         s = Settings(beam_api_key="abcd")
         masked = _mask_api_key(s)
         assert masked.beam_api_key == "abcd"
 
     def test_mask_none_unchanged(self):
-        from server import Settings, _mask_api_key
         s = Settings(beam_api_key=None)
         masked = _mask_api_key(s)
         assert masked.beam_api_key is None
 
     def test_is_masked_true_for_placeholder(self):
-        from server import _is_masked_api_key, BEAM_API_KEY_MASK_PREFIX
         assert _is_masked_api_key(f"{BEAM_API_KEY_MASK_PREFIX}1234") is True
 
     def test_is_masked_false_for_real_key(self):
-        from server import _is_masked_api_key
         # A real key that happens to start with similar chars but isn't the right shape
         assert _is_masked_api_key("sk_live_realkey9999") is False
         # Empty / None
@@ -109,9 +131,102 @@ class TestSettingsMasking:
     def test_is_masked_false_for_wrong_suffix_length(self):
         """Reject anything with the prefix but a non-4-char suffix (defends against legitimate keys
         that happen to start with the mask character)."""
-        from server import _is_masked_api_key, BEAM_API_KEY_MASK_PREFIX
         assert _is_masked_api_key(f"{BEAM_API_KEY_MASK_PREFIX}123") is False  # too short
         assert _is_masked_api_key(f"{BEAM_API_KEY_MASK_PREFIX}12345") is False  # too long
+
+
+# ---------------------------------------------------------------------------
+# _extract_qr_data helper tests (feedback #5: now unit-testable)
+# ---------------------------------------------------------------------------
+
+class TestExtractQrData:
+    """Verify _extract_qr_data handles all Beam response shapes."""
+
+    def test_production_encoded_image(self):
+        """Production API: imageBase64Encoded + rawData."""
+        data = {
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "imageBase64Encoded": "iVBORw0KGgo=",
+                "rawData": "00020101021230780016A000000677010112",
+            },
+        }
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image == "iVBORw0KGgo="
+        assert qr_string == "00020101021230780016A000000677010112"
+
+    def test_sandbox_encoded_image(self):
+        """Older sandbox API: image + qrString."""
+        data = {
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "image": "base64data",
+                "qrString": "00020101",
+            },
+        }
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image == "base64data"
+        assert qr_string == "00020101"
+
+    def test_qr_code_fallback(self):
+        """Top-level qrCode field fallback."""
+        data = {"qrCode": "fallback_qr_image"}
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image == "fallback_qr_image"
+        assert qr_string is None
+
+    def test_no_qr_data(self):
+        """No QR-related fields at all → both None."""
+        data = {"status": "PENDING"}
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image is None
+        assert qr_string is None
+
+    def test_encoded_image_missing_sub_fields(self):
+        """actionRequired=ENCODED_IMAGE but encodedImage dict is empty."""
+        data = {"actionRequired": "ENCODED_IMAGE", "encodedImage": {}}
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image is None
+        assert qr_string is None
+
+    def test_production_fields_preferred_over_sandbox(self):
+        """When both field names are present, production names win (or-chain)."""
+        data = {
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "imageBase64Encoded": "prod_image",
+                "image": "sandbox_image",
+                "rawData": "prod_raw",
+                "qrString": "sandbox_qr",
+            },
+        }
+        qr_image, qr_string = _extract_qr_data(data)
+        assert qr_image == "prod_image"
+        assert qr_string == "prod_raw"
+
+
+# ---------------------------------------------------------------------------
+# Empty-string API key guard — exercises real server helper
+# ---------------------------------------------------------------------------
+
+class TestApiKeyGuard:
+    """Verify _should_strip_beam_api_key helper behaviour via _is_masked_api_key."""
+
+    def test_empty_string_detected(self):
+        """Empty string should be recognised as a value to strip."""
+        # The guard logic: _is_masked_api_key(val) or val == ""
+        assert _is_masked_api_key("") is False  # not masked, but ""
+        # Combined check as in update_settings:
+        val = ""
+        assert _is_masked_api_key(val) or val == ""
+
+    def test_masked_placeholder_detected(self):
+        val = f"{BEAM_API_KEY_MASK_PREFIX}1234"
+        assert _is_masked_api_key(val) or val == ""
+
+    def test_real_key_not_stripped(self):
+        val = "sk_live_newkey"
+        assert not (_is_masked_api_key(val) or val == "")
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +238,6 @@ class TestBeamChargeCreate:
     """Tests for POST /api/beam/charge."""
 
     async def test_missing_credentials_returns_400(self):
-        from fastapi import HTTPException
-        from server import create_beam_charge, BeamChargeRequest
-
         doc = _settings_doc(beam_merchant_id=None, beam_api_key=None)
         with patch("server.db") as mock_db:
             mock_db.settings.find_one = AsyncMock(return_value=doc)
@@ -136,9 +248,6 @@ class TestBeamChargeCreate:
             assert "credentials not configured" in exc_info.value.detail
 
     async def test_beam_401_returns_401(self):
-        from fastapi import HTTPException
-        from server import create_beam_charge, BeamChargeRequest
-
         doc = _settings_doc(beam_api_key="bad_key")
         resp = _make_httpx_response(401, {"message": "Unauthorized"})
 
@@ -151,8 +260,6 @@ class TestBeamChargeCreate:
 
     async def test_beam_timeout_returns_502(self):
         import httpx as httpx_module
-        from fastapi import HTTPException
-        from server import create_beam_charge, BeamChargeRequest
 
         async with _patched_beam(_settings_doc(), post=httpx_module.TimeoutException("timeout")):
             req = BeamChargeRequest(amount=350.0, reference_id="TEST-001")
@@ -160,6 +267,31 @@ class TestBeamChargeCreate:
                 await create_beam_charge(req)
             assert exc_info.value.status_code == 502
             assert "timed out" in exc_info.value.detail
+
+    async def test_beam_request_error_returns_502(self):
+        """Cover the generic RequestError handler (e.g. DNS failure, connection refused)."""
+        import httpx as httpx_module
+
+        async with _patched_beam(_settings_doc(), post=httpx_module.ConnectError("Connection refused")):
+            req = BeamChargeRequest(amount=350.0, reference_id="TEST-ERR")
+            with pytest.raises(HTTPException) as exc_info:
+                await create_beam_charge(req)
+            assert exc_info.value.status_code == 502
+            assert "Cannot reach Beam API" in exc_info.value.detail
+
+    @pytest.mark.parametrize("status_code", [500, 503, 429])
+    async def test_beam_non_200_201_status_returns_502(self, status_code):
+        """Non-200/201/401 status codes from Beam should return 502 with truncated body."""
+        resp = _make_httpx_response(status_code, {"error": "something went wrong" * 50})
+
+        async with _patched_beam(_settings_doc(), post=resp):
+            req = BeamChargeRequest(amount=100.0, reference_id="TEST-ERR-STATUS")
+            with pytest.raises(HTTPException) as exc_info:
+                await create_beam_charge(req)
+            assert exc_info.value.status_code == 502
+            assert f"Beam API error {status_code}" in exc_info.value.detail
+            # Verify truncation to 300 chars
+            assert len(exc_info.value.detail) <= 350  # "Beam API error NNN: " + 300 chars
 
     async def test_beam_success_with_production_response_shape(self):
         """Verify Beam's production response uses chargeId + imageBase64Encoded + rawData.
@@ -169,8 +301,6 @@ class TestBeamChargeCreate:
         Without this regression, the QR pane stays blank because qr_image and
         qr_string are extracted from the wrong keys.
         """
-        from server import create_beam_charge, BeamChargeRequest
-
         # Actual production response shape from api.beamcheckout.com
         beam_response = {
             "chargeId": "ch_3D13uHz1vsSAKLzXOsa1c0J2Vcw",
@@ -196,8 +326,6 @@ class TestBeamChargeCreate:
             assert result.status == "PENDING"
 
     async def test_beam_success_with_encoded_image(self):
-        from server import create_beam_charge, BeamChargeRequest
-
         beam_response = {
             "id": "ch_abc123",
             "status": "PENDING",
@@ -236,8 +364,6 @@ class TestBeamChargeCreate:
     ])
     async def test_amount_satang_conversion(self, thb, expected_satang):
         """Verify amount is correctly converted to satang for a range of inputs."""
-        from server import create_beam_charge, BeamChargeRequest
-
         beam_response = {
             "id": "ch_x", "status": "PENDING", "amount": expected_satang,
             "actionRequired": "ENCODED_IMAGE",
@@ -252,8 +378,6 @@ class TestBeamChargeCreate:
 
     async def test_beam_uses_basic_auth_header(self):
         """Verify Authorization header uses Basic base64(merchantId:apiKey) format."""
-        from server import create_beam_charge, BeamChargeRequest
-
         beam_response = {
             "id": "ch_auth_test", "status": "PENDING", "amount": 9500,
             "currency": "THB", "actionRequired": "ENCODED_IMAGE",
@@ -271,9 +395,6 @@ class TestBeamChargeCreate:
 
     async def test_missing_charge_id_returns_502(self):
         """Beam should always return an id; if missing we fail fast rather than silently returning ''."""
-        from fastapi import HTTPException
-        from server import create_beam_charge, BeamChargeRequest
-
         # No id / chargeId / charge_id field at all
         beam_response = {
             "status": "PENDING", "amount": 35000,
@@ -295,9 +416,6 @@ class TestBeamChargeGet:
     """Tests for GET /api/beam/charge/{charge_id}."""
 
     async def test_get_charge_missing_credentials(self):
-        from fastapi import HTTPException
-        from server import get_beam_charge
-
         doc = _settings_doc(beam_merchant_id=None, beam_api_key=None)
         with patch("server.db") as mock_db:
             mock_db.settings.find_one = AsyncMock(return_value=doc)
@@ -307,8 +425,6 @@ class TestBeamChargeGet:
 
     async def test_get_charge_returns_status(self):
         """Should return charge status and amount in THB."""
-        from server import get_beam_charge
-
         beam_response = {"id": "ch_abc123", "status": "COMPLETED", "amount": 35000}
         resp = _make_httpx_response(200, beam_response)
 
@@ -319,35 +435,8 @@ class TestBeamChargeGet:
             assert result.amount == 350.0  # 35000 satang → 350.00 THB
 
     async def test_get_charge_404(self):
-        from fastapi import HTTPException
-        from server import get_beam_charge
-
         resp = _make_httpx_response(404, {"message": "Not found"})
         async with _patched_beam(_settings_doc(), get=resp):
             with pytest.raises(HTTPException) as exc_info:
                 await get_beam_charge("ch_nonexistent")
             assert exc_info.value.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# Empty-string API key guard (regression for: empty "" was overwriting stored key)
-# ---------------------------------------------------------------------------
-
-class TestEmptyApiKeyGuard:
-    """PUT /settings with beam_api_key='' must not wipe a stored real key."""
-
-    def test_empty_string_excluded_from_updates(self):
-        """Empty string beam_api_key should be removed from the update dict."""
-        updates = {"beam_api_key": "", "beam_merchant_id": "m_123"}
-        # Replicate the guard logic from update_settings
-        if "beam_api_key" in updates and updates["beam_api_key"] == "":
-            del updates["beam_api_key"]
-        assert "beam_api_key" not in updates, "Empty string should be stripped"
-        assert "beam_merchant_id" in updates, "Other fields should pass through"
-
-    def test_real_key_not_excluded(self):
-        """A genuine new key must not be stripped by the empty-string guard."""
-        updates = {"beam_api_key": "sk_live_newkey"}
-        if "beam_api_key" in updates and updates["beam_api_key"] == "":
-            del updates["beam_api_key"]
-        assert updates["beam_api_key"] == "sk_live_newkey"

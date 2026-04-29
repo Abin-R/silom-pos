@@ -405,9 +405,12 @@ BEAM_GET_TIMEOUT_S = 10.0
 
 
 def _mask_api_key(s: Settings) -> Settings:
-    """Mask the Beam API key on outgoing Settings — return only the last 4 chars."""
+    """Return a copy of *s* with the Beam API key masked (last 4 chars only).
+
+    The original ``Settings`` instance is never mutated.
+    """
     if s.beam_api_key and len(s.beam_api_key) > 4:
-        s.beam_api_key = BEAM_API_KEY_MASK_PREFIX + s.beam_api_key[-4:]
+        return s.model_copy(update={"beam_api_key": BEAM_API_KEY_MASK_PREFIX + s.beam_api_key[-4:]})
     return s
 
 
@@ -419,7 +422,7 @@ def _is_masked_api_key(value: str) -> bool:
     return len(suffix) == 4
 
 
-async def _beam_credentials():
+async def _beam_credentials() -> tuple[str, dict[str, str]]:
     """Load Beam credentials from settings or raise 400 if missing.
 
     Returns (base_url, headers) where headers contains the Basic auth header.
@@ -455,12 +458,11 @@ async def get_settings():
 @api_router.put("/settings", response_model=Settings)
 async def update_settings(body: SettingsUpdate):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    # Don't overwrite beam_api_key if the client sent back the masked placeholder
-    # (matches MASK_PREFIX + 4 chars exactly — see _is_masked_api_key)
-    if "beam_api_key" in updates and _is_masked_api_key(updates["beam_api_key"]):
-        del updates["beam_api_key"]
-    # Don't overwrite beam_api_key with an empty string (UI sends "" when field is unfocused)
-    if "beam_api_key" in updates and updates["beam_api_key"] == "":
+    # Don't overwrite beam_api_key with a masked placeholder (echoed back by the
+    # UI) or an empty string (UI sends "" when the field is unfocused).
+    if "beam_api_key" in updates and (
+        _is_masked_api_key(updates["beam_api_key"]) or updates["beam_api_key"] == ""
+    ):
         del updates["beam_api_key"]
     await db.settings.update_one({"id": "shop"}, {"$set": updates}, upsert=True)
     doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
@@ -504,6 +506,27 @@ class BeamChargeStatus(BaseModel):
     currency: str = "THB"
 
 
+def _extract_qr_data(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """Extract QR image and string from a Beam charge response.
+
+    Beam returns ``encodedImage`` when ``actionRequired == "ENCODED_IMAGE"``.
+    Production API uses ``imageBase64Encoded`` + ``rawData``; older sandbox docs
+    reference ``image`` + ``qrString``.  Accept either for forward/backward
+    compatibility.  Falls back to a top-level ``qrCode`` field if present.
+
+    Returns ``(qr_image, qr_string)``.
+    """
+    qr_image: Optional[str] = None
+    qr_string: Optional[str] = None
+    if data.get("actionRequired") == "ENCODED_IMAGE":
+        encoded = data.get("encodedImage", {})
+        qr_image = encoded.get("imageBase64Encoded") or encoded.get("image")
+        qr_string = encoded.get("rawData") or encoded.get("qrString")
+    elif data.get("qrCode"):
+        qr_image = data["qrCode"]
+    return qr_image, qr_string
+
+
 @api_router.post("/beam/charge", response_model=BeamChargeResponse)
 async def create_beam_charge(body: BeamChargeRequest):
     """Create a Beam QR PromptPay charge. Returns a QR code image for the customer to scan."""
@@ -525,7 +548,7 @@ async def create_beam_charge(body: BeamChargeRequest):
             resp = await client.post(
                 f"{base_url}/api/v1/charges",
                 json=payload,
-                headers={**auth_headers, "Content-Type": "application/json"},
+                headers=auth_headers,
             )
     except httpx.TimeoutException:
         raise HTTPException(status_code=502, detail="Beam API timed out. Please try again.")
@@ -548,17 +571,7 @@ async def create_beam_charge(body: BeamChargeRequest):
         )
     status = data.get("status", "PENDING")
 
-    # Beam returns encodedImage when actionRequired == ENCODED_IMAGE.
-    # Production API uses imageBase64Encoded + rawData; older docs reference
-    # image + qrString — accept either for forward/backward compatibility.
-    qr_image = None
-    qr_string = None
-    if data.get("actionRequired") == "ENCODED_IMAGE":
-        encoded = data.get("encodedImage", {})
-        qr_image = encoded.get("imageBase64Encoded") or encoded.get("image")
-        qr_string = encoded.get("rawData") or encoded.get("qrString")
-    elif data.get("qrCode"):
-        qr_image = data["qrCode"]
+    qr_image, qr_string = _extract_qr_data(data)
 
     return BeamChargeResponse(
         charge_id=charge_id,
