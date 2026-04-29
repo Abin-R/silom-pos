@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,9 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+
+// How often we poll the backend for Beam charge status while a QR is on screen.
+const BEAM_POLL_INTERVAL_MS = 3000;
 
 // ---- Types ----
 type Category = { id: string; name: string; name_th?: string; color: string; order: number };
@@ -177,7 +180,11 @@ export default function POS() {
     setDiscountValue(0);
   };
 
-  const handlePaySuccess = async (method: string, paid: number) => {
+  const handlePaySuccess = async (
+    method: string,
+    paid: number,
+    meta?: { beamChargeId?: string }
+  ) => {
     try {
       const res = await fetch(`${API}/orders`, {
         method: "POST",
@@ -195,6 +202,7 @@ export default function POS() {
           source: "table",
           customer_id: customer?.id,
           customer_name: customer?.name,
+          beam_charge_id: meta?.beamChargeId || null,
         }),
       });
       const order = await res.json();
@@ -749,6 +757,7 @@ function CartSidebar({
         )}
       </View>
 
+      {/* TODO: unify toFixed(2) → THB() formatting across cart summary for consistency */}
       <View style={styles.totalBox}>
         <View style={styles.sumTotalRow}>
           <Text style={styles.totalLabel}>Sub Total</Text>
@@ -856,6 +865,18 @@ function CartSidebar({
   );
 }
 
+// ---------- Payment Method Constants ----------
+const PAYMENT_METHODS = {
+  CASH: "Cash",
+  BEAM: "Beam",
+  EASY_PAY: "Easy Pay",
+  CREDIT: "Credit",
+  PROMPTPAY: "PromptPay",
+  QR_KBANK: "QR Kbank",
+  EDC: "EDC",
+  CUSTOM: "Custom",
+} as const;
+
 // ---------- Payment Modal ----------
 function PaymentModal({
   visible,
@@ -870,7 +891,7 @@ function PaymentModal({
   itemsCount: number;
   cartCount: number;
   onClose: () => void;
-  onPay: (method: string, paid: number) => void;
+  onPay: (method: string, paid: number, meta?: { beamChargeId?: string }) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -883,13 +904,14 @@ function PaymentModal({
   }, [visible]);
 
   const methods = [
-    { key: "Cash", icon: "cash-outline" as const },
-    { key: "Easy Pay", icon: "qr-code-outline" as const },
-    { key: "Credit", icon: "card-outline" as const },
-    { key: "PromptPay", icon: "phone-portrait-outline" as const },
-    { key: "QR Kbank", icon: "qr-code" as const },
-    { key: "EDC", icon: "print-outline" as const },
-    { key: "Custom", icon: "wallet-outline" as const },
+    { key: PAYMENT_METHODS.CASH, icon: "cash-outline" as const },
+    { key: PAYMENT_METHODS.BEAM, icon: "scan-outline" as const },
+    { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
+    { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
+    { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
+    { key: PAYMENT_METHODS.QR_KBANK, icon: "qr-code" as const },
+    { key: PAYMENT_METHODS.EDC, icon: "print-outline" as const },
+    { key: PAYMENT_METHODS.CUSTOM, icon: "wallet-outline" as const },
   ];
 
   const customOptions = [
@@ -901,15 +923,29 @@ function PaymentModal({
   const [cardLast4, setCardLast4] = useState("");
   const [cardType, setCardType] = useState("");
   const [bankPick, setBankPick] = useState("");
+  // Beam QR state
+  const [beamChargeId, setBeamChargeId] = useState<string | null>(null);
+  const [beamQrImage, setBeamQrImage] = useState<string | null>(null);
+  const [beamStatus, setBeamStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
+  const [beamError, setBeamError] = useState<string | null>(null);
+
+  // Reset Beam state to idle (used by modal-open cleanup, Cancel, and Retry).
+  const resetBeam = useCallback(() => {
+    setBeamStatus("idle");
+    setBeamChargeId(null);
+    setBeamQrImage(null);
+    setBeamError(null);
+  }, []);
+
   useEffect(() => {
     if (visible) {
       setCustomPick(""); setOrderRef("");
       setCardLast4(""); setCardType(""); setBankPick("");
+      resetBeam();
     }
-  }, [visible]);
+  }, [visible, resetBeam]);
 
   const paid = amount ? parseFloat(amount) : total;
-  const change = Math.max(0, paid - total);
   const canPay = paid >= total;
 
   const { width: winW } = useWindowDimensions();
@@ -924,6 +960,102 @@ function PaymentModal({
   };
 
   const quicks = [1000, 500, 100, 50, 20];
+
+  // Create a Beam QR charge and start polling for completion.
+  // `referenceId` is a temporary client-side ref (e.g. POS-<timestamp>) — the real order
+  // is created in handlePaySuccess after the polling effect confirms COMPLETED.
+  const startBeamCharge = async (referenceId: string) => {
+    setBeamStatus("loading");
+    setBeamError(null);
+    try {
+      const res = await fetch(`${API}/beam/charge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}` }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBeamStatus("failed");
+        setBeamError(data.detail || "Failed to create Beam charge");
+        return;
+      }
+      setBeamChargeId(data.charge_id);
+      setBeamQrImage(data.qr_image || null);
+      setBeamStatus(data.status === "COMPLETED" ? "completed" : "pending");
+    } catch {
+      setBeamStatus("failed");
+      setBeamError("Cannot reach payment server");
+    }
+  };
+
+  // Capture the latest onPay / total in refs so the polling effect's deps stay stable
+  // and the interval doesn't get torn down on every parent re-render.
+  const onPayRef = useRef(onPay);
+  const totalRef = useRef(total);
+  useEffect(() => { onPayRef.current = onPay; }, [onPay]);
+  useEffect(() => { totalRef.current = total; }, [total]);
+
+  // Poll Beam charge status until completed/failed
+  useEffect(() => {
+    if (beamStatus !== "pending" || !beamChargeId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/beam/charge/${beamChargeId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "COMPLETED") {
+          setBeamStatus("completed");
+          clearInterval(interval);
+          onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
+        } else if (data.status === "FAILED" || data.status === "EXPIRED") {
+          setBeamStatus("failed");
+          setBeamError("Payment " + data.status.toLowerCase() + ". Please try again.");
+          clearInterval(interval);
+        }
+      } catch { /* ignore transient errors */ }
+    }, BEAM_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [beamStatus, beamChargeId]);
+
+  // Derived flags for the right-panel "Payment Confirm" button — extracted so
+  // the JSX below stays readable.
+  const isQrLikeMethod = method === PAYMENT_METHODS.QR_KBANK || method === PAYMENT_METHODS.PROMPTPAY || method === PAYMENT_METHODS.BEAM;
+  const isCustomReady = method === PAYMENT_METHODS.CUSTOM && !!customPick;
+  const isCreditReady = method === PAYMENT_METHODS.CREDIT && !!(cardType || bankPick);
+  const isBeamBusy =
+    method === PAYMENT_METHODS.BEAM &&
+    (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed");
+  const canConfirm = (isQrLikeMethod || isCustomReady || isCreditReady || canPay) && !isBeamBusy;
+
+  const confirmLabel = (() => {
+    if (method !== PAYMENT_METHODS.BEAM) return "Payment Confirm";
+    if (beamStatus === "loading") return "Generating…";
+    if (beamStatus === "pending") return "Waiting for scan…";
+    return "Generate QR";
+  })();
+
+  const handleConfirmPayment = () => {
+    if (method === PAYMENT_METHODS.BEAM) {
+      // Generate QR — use a temp reference ID; actual order is created when polling confirms
+      const ref = `POS-${Date.now()}`;
+      startBeamCharge(ref);
+      return;
+    }
+    const finalMethod =
+      method === PAYMENT_METHODS.CUSTOM && customPick
+        ? `${PAYMENT_METHODS.CUSTOM} · ${customPick}`
+        : method === PAYMENT_METHODS.CREDIT && (cardType || bankPick)
+          ? `${PAYMENT_METHODS.CREDIT} · ${cardType || bankPick}${cardLast4 ? ` ····${cardLast4}` : ""}`
+          : method;
+    const finalPaid =
+      method === PAYMENT_METHODS.QR_KBANK ||
+      method === PAYMENT_METHODS.PROMPTPAY ||
+      method === PAYMENT_METHODS.CUSTOM ||
+      method === PAYMENT_METHODS.CREDIT
+        ? total
+        : paid;
+    onPay(finalMethod, finalPaid);
+  };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -968,7 +1100,7 @@ function PaymentModal({
             </View>
 
             {/* Dynamic center content per method */}
-            {method === "Easy Pay" ? (
+            {method === PAYMENT_METHODS.EASY_PAY ? (
               <View style={styles.easyPayPane} testID="easypay-pane">
                 <Text style={styles.easyPayThai}>ชำระเงินครบวงจร</Text>
                 <Text style={styles.easyPayTitle}>Pay Easy</Text>
@@ -1007,7 +1139,7 @@ function PaymentModal({
                   <Text style={styles.easyPayRegisterText}>สมัคร ใช้บริการ</Text>
                 </TouchableOpacity>
               </View>
-            ) : method === "PromptPay" ? (
+            ) : method === PAYMENT_METHODS.PROMPTPAY ? (
               <View style={styles.promptPayPane} testID="promptpay-pane">
                 <View style={styles.thaiQrHeader}>
                   <Ionicons name="grid" size={28} color="#fff" />
@@ -1027,7 +1159,7 @@ function PaymentModal({
                   <Text style={styles.printQrText}>Print QR Code</Text>
                 </TouchableOpacity>
               </View>
-            ) : method === "QR Kbank" ? (
+            ) : method === PAYMENT_METHODS.QR_KBANK ? (
               <View style={styles.qrKbankPane} testID="qrkbank-pane">
                 <View style={styles.thaiQrHeader}>
                   <Ionicons name="grid" size={28} color="#fff" />
@@ -1062,9 +1194,71 @@ function PaymentModal({
                   <Text style={styles.kbankRegisterText}>Register</Text>
                 </TouchableOpacity>
               </View>
-            ) : method === "EDC" ? (
+            ) : method === PAYMENT_METHODS.BEAM ? (
+              <View style={styles.beamPane} testID="beam-pane">
+                {/* Header */}
+                <View style={styles.beamHeader}>
+                  <View style={styles.beamLogoBox}>
+                    <Ionicons name="scan-outline" size={28} color="#00B14F" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.beamTitle}>Beam QR Payment</Text>
+                    <Text style={styles.beamSub}>PromptPay · e-Wallet · All banks</Text>
+                  </View>
+                </View>
+
+                {beamStatus === "idle" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Text style={styles.beamIdleText}>{'Tap "Generate QR" to create a QR code'}</Text>
+                  </View>
+                )}
+
+                {beamStatus === "loading" && (
+                  <View style={styles.beamIdleBox}>
+                    <ActivityIndicator size="large" color="#00B14F" />
+                    <Text style={styles.beamIdleText}>Generating QR code…</Text>
+                  </View>
+                )}
+
+                {(beamStatus === "pending") && beamQrImage && (
+                  <View style={styles.beamQrBox}>
+                    <Image
+                      source={{ uri: beamQrImage.startsWith("data:") ? beamQrImage : `data:image/png;base64,${beamQrImage}` }}
+                      style={styles.beamQrImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.beamWaiting}>
+                      <ActivityIndicator size="small" color="#00B14F" />
+                      <Text style={styles.beamWaitingText}>Waiting for customer to scan…</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.beamCancelBtn}
+                      onPress={resetBeam}
+                      testID="beam-cancel"
+                    >
+                      <Text style={styles.beamCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {beamStatus === "failed" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamError || "Payment failed"}</Text>
+                    <TouchableOpacity
+                      style={styles.beamRetryBtn}
+                      onPress={resetBeam}
+                    >
+                      <Text style={styles.beamRetryText}>Try Again</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <Text style={styles.beamAmount}>{THB(total)}</Text>
+              </View>
+            ) : method === PAYMENT_METHODS.EDC ? (
               <View style={styles.edcPane} testID="edc-pane">
-                {/* Hero: tablet + phone → arrow "Send data" → EDC device */}
                 <View style={styles.edcHeroRow}>
                   <View style={styles.edcDeviceGroup}>
                     <Ionicons name="tablet-landscape" size={64} color="#0F172A" />
@@ -1092,7 +1286,7 @@ function PaymentModal({
                   <Text style={styles.edcRegisterText}>สมัครใช้บริการ</Text>
                 </TouchableOpacity>
               </View>
-            ) : method === "Custom" ? (
+            ) : method === PAYMENT_METHODS.CUSTOM ? (
               <View style={styles.customPane} testID="custom-pane">
                 <View style={styles.customRefRow}>
                   <Text style={styles.customRefLabel}>Order Ref.</Text>
@@ -1107,7 +1301,7 @@ function PaymentModal({
                 </View>
                 <View style={styles.customAmountRow}>
                   <Text style={styles.customAmountLabel}>Amount</Text>
-                  <Text style={styles.customAmountVal}>{total.toFixed(2)}</Text>
+                  <Text style={styles.customAmountVal}>{THB(total)}</Text>
                 </View>
                 <View style={styles.customGrid}>
                   {customOptions.map((opt) => (
@@ -1125,8 +1319,9 @@ function PaymentModal({
                   ))}
                 </View>
               </View>
-            ) : method === "Credit" ? (
+            ) : method === PAYMENT_METHODS.CREDIT ? (
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.creditPane} testID="credit-pane">
+                {/* TODO: consider using THB(total) here for consistency; currently "THB" is a separate label */}
                 <View style={styles.creditAmtRow}>
                   <Text style={styles.creditAmtLabel}>THB</Text>
                   <Text style={styles.creditAmtVal}>{total.toFixed(2)}</Text>
@@ -1257,76 +1452,44 @@ function PaymentModal({
             {/* Right column: totals */}
             <View style={[styles.quickCol, isNarrow && { width: "100%" }]}>
               <View style={styles.netBoxV2}>
-                <View style={styles.guestRow}>
-                  <Ionicons name="person-outline" size={14} color="#475569" />
-                  <Text style={styles.guestText}>Guest</Text>
-                </View>
-                <View style={styles.netRowV2}>
-                  <Text style={styles.netLabelV2}>Net Total</Text>
-                  <Text style={styles.netValV2}>{total.toFixed(2)}</Text>
-                </View>
-                <TouchableOpacity onPress={() => setAmount(String(total))} testID="net-total">
-                  <View style={styles.tapEqualRow}>
-                    <Text style={styles.tapEqualLabel}>Tap to equal Total</Text>
-                    <Text style={styles.tapEqualVal}>{total.toFixed(2)}</Text>
+                <View style={styles.rightPanelTop}>
+                  <View style={styles.guestRow}>
+                    <Ionicons name="person-outline" size={14} color="#475569" />
+                    <Text style={styles.guestText}>Guest</Text>
                   </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.payConfirmBtn,
-                    !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay) && styles.payBtnDisabled,
-                  ]}
-                  disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || (method === "Credit" && (cardType || bankPick)) || canPay)}
-                  onPress={() => {
-                    const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` :
-                                        method === "Credit" && (cardType || bankPick) ? `Credit · ${cardType || bankPick}${cardLast4 ? ` ····${cardLast4}` : ""}` : method;
-                    const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom" || method === "Credit") ? total : paid;
-                    onPay(finalMethod, finalPaid);
-                  }}
-                  testID="confirm-payment-right"
-                >
-                  <Text style={styles.payConfirmText}>Payment Confirm</Text>
-                </TouchableOpacity>
-                <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
-                <View style={styles.summaryRow}>
+                  <View style={styles.netRowV2}>
+                    <Text style={styles.netLabelV2}>Net Total</Text>
+                    <Text style={styles.netValV2}>{THB(total)}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setAmount(String(total))} testID="net-total">
+                    <View style={styles.tapEqualRow}>
+                      <Text style={styles.tapEqualLabel}>Tap to equal Total</Text>
+                      <Text style={styles.tapEqualVal}>{THB(total)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.rightPanelMiddle}>
+                  <TouchableOpacity
+                    style={[styles.payConfirmBtn, !canConfirm && styles.payBtnDisabled]}
+                    disabled={!canConfirm}
+                    onPress={handleConfirmPayment}
+                    testID="confirm-payment-right"
+                  >
+                    <Text style={styles.payConfirmText}>{confirmLabel}</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
+                </View>
+
+                {/* Sticky footer recap — intentionally repeats total for at-a-glance confirmation
+                   when the panel is tall and "Net Total" scrolls out of view */}
+                <View style={styles.summaryCard}>
                   <Text style={styles.summaryLabel}>Summary</Text>
-                  <Text style={styles.summaryValue}>{THB(customPick ? total : 0)}</Text>
+                  <Text style={styles.summaryValue}>{THB(total)}</Text>
                 </View>
               </View>
             </View>
           </ScrollView>
-
-          {/* Footer (only shown for non-Custom/non-QR methods; others have Payment Confirm in right panel) */}
-          {method !== "QR Kbank" && method !== "PromptPay" && method !== "Custom" && method !== "EDC" && false && (
-          <View style={styles.paymentFooter}>
-            <View style={styles.changeBox}>
-              <Text style={styles.changeLabel}>
-                {method === "Custom" ? "Summary" : method === "QR Kbank" || method === "PromptPay" ? "Awaiting scan" : "Change"}
-              </Text>
-              <Text style={styles.changeVal}>
-                {method === "Custom" || method === "QR Kbank" || method === "PromptPay" ? THB(total) : THB(change)}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.confirmBtn,
-                !(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay) && styles.payBtnDisabled,
-              ]}
-              disabled={!(method === "QR Kbank" || method === "PromptPay" || (method === "Custom" && customPick) || canPay)}
-              onPress={() => {
-                const finalMethod = method === "Custom" && customPick ? `Custom · ${customPick}` : method;
-                const finalPaid = (method === "QR Kbank" || method === "PromptPay" || method === "Custom") ? total : paid;
-                onPay(finalMethod, finalPaid);
-              }}
-              testID="confirm-payment"
-            >
-              <Text style={styles.confirmText}>
-                {method === "QR Kbank" || method === "PromptPay" ? "Mark Paid" : method === "Custom" ? "Payment Confirm" : "Confirm Payment"}
-              </Text>
-              <Ionicons name="arrow-forward" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          )}
         </View>
       </View>
     </Modal>
@@ -1629,7 +1792,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
     if (visible) load(tab);
   }, [visible, tab]);
 
-  const cols: Array<{ key: string; label: string; icon: any; color: string }> = [
+  const cols: { key: string; label: string; icon: any; color: string }[] = [
     { key: "new", label: "New Order", icon: "list-outline", color: "#F59E0B" },
     { key: "preparing", label: "Preparing", icon: "restaurant-outline", color: "#3B82F6" },
     { key: "completed", label: "Completed", icon: "checkmark-circle-outline", color: "#00B14F" },
@@ -1931,7 +2094,7 @@ function DrawerModal({ visible, onClose }: { visible: boolean; onClose: () => vo
       <TouchableOpacity style={styles.drawerOverlay} onPress={onClose} activeOpacity={1}>
         <TouchableOpacity activeOpacity={1} style={styles.drawerPanel} testID="drawer-panel">
           <Text style={styles.drawerTitle}>Cash Drawer</Text>
-          <Text style={styles.drawerSub}>Today's quick view</Text>
+          <Text style={styles.drawerSub}>{"Today's quick view"}</Text>
 
           <View style={styles.drawerStats}>
             <StatCard label="Sales" value="฿12,480.00" icon="trending-up" color="#00B14F" />
@@ -1970,6 +2133,10 @@ function StatCard({
 }
 
 // ============ STYLES ============
+
+/** Workaround for React Native Web typing gap — `marginTop: "auto"` is valid CSS but not typed. */
+const MARGIN_TOP_AUTO = { marginTop: "auto" as any };
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#F1F5F9" },
 
@@ -2495,7 +2662,7 @@ const styles = StyleSheet.create({
   },
   quickTextInline: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
 
-  quickCol: { width: 120, gap: 10 },
+  quickCol: { width: 168, minWidth: 168, gap: 12 },
   netBox: {
     backgroundColor: "#F1F5F9",
     borderRadius: 12,
@@ -2682,37 +2849,69 @@ const styles = StyleSheet.create({
   netBoxV2: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    padding: 12,
-    gap: 10,
+    borderRadius: 16,
+    padding: 14,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
-  guestRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  rightPanelTop: {
+    flex: 1,
+    gap: 12,
+  },
+  rightPanelMiddle: {
+    gap: 8,
+  },
+  guestRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
   guestText: { fontSize: 13, color: "#475569", fontWeight: "600" },
   netRowV2: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  netLabelV2: { fontSize: 13, color: "#475569" },
-  netValV2: { fontSize: 15, color: "#0F172A", fontWeight: "700" },
-  tapEqualRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  netLabelV2: { fontSize: 13, color: "#475569", fontWeight: "600" },
+  netValV2: { fontSize: 18, color: "#0F172A", fontWeight: "700" },
+  tapEqualRow: {
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 2,
+    backgroundColor: "#F0FDF4",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+  },
   tapEqualLabel: { fontSize: 12, color: "#00B14F", fontWeight: "600" },
-  tapEqualVal: { fontSize: 16, color: "#EF4444", fontWeight: "700" },
+  tapEqualVal: { fontSize: 18, color: "#EF4444", fontWeight: "700" },
   payConfirmBtn: {
     backgroundColor: "#00B14F",
-    padding: 14,
-    borderRadius: 10,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
+    borderRadius: 12,
     alignItems: "center",
-    marginTop: 6,
+    justifyContent: "center",
+    minHeight: 52,
   },
   payConfirmText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
-  itemCountText: { fontSize: 11, color: "#94A3B8", textAlign: "right", marginTop: -4 },
-  summaryRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingTop: 10,
+  itemCountText: {
+    fontSize: 11,
+    color: "#64748B",
+    textAlign: "center",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  summaryCard: {
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: "#F1F5F9",
-    marginTop: "auto" as any,
+    gap: 4,
   },
-  summaryLabel: { fontSize: 13, color: "#475569", fontWeight: "600" },
-  summaryValue: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
+  summaryLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
+  summaryValue: { fontSize: 20, color: "#0F172A", fontWeight: "700" },
 
   // EDC marketing pane
   edcPane: {
@@ -3106,7 +3305,7 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 18, color: "#0F172A", fontWeight: "700" },
   drawerNote: { fontSize: 12, color: "#94A3B8", marginTop: 24, fontStyle: "italic" },
   drawerClose: {
-    marginTop: "auto" as any,
+    ...MARGIN_TOP_AUTO,
     padding: 14,
     backgroundColor: "#F1F5F9",
     borderRadius: 12,
@@ -3253,7 +3452,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 20,
-    marginTop: "auto" as any,
+    ...MARGIN_TOP_AUTO,
   },
   printQrText: { fontSize: 14, color: "#475569", fontWeight: "600" },
 
@@ -3311,7 +3510,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
-    marginTop: "auto" as any,
+    ...MARGIN_TOP_AUTO,
   },
   kbankRegisterText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
@@ -3378,4 +3577,77 @@ const styles = StyleSheet.create({
     textAlign: "right",
     outlineStyle: "none" as any,
   },
+
+  // ---------- Beam pane ----------
+  beamPane: {
+    flex: 1,
+    padding: 16,
+    gap: 12,
+    alignItems: "stretch",
+  },
+  beamHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  beamLogoBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#E5F7ED",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  beamTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  beamSub: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  beamIdleBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingVertical: 24,
+  },
+  beamIdleText: { fontSize: 13, color: "#94A3B8", textAlign: "center" },
+  beamQrBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  beamQrImage: { width: 200, height: 200 },
+  beamWaiting: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  beamWaitingText: { fontSize: 13, color: "#475569" },
+  beamAmount: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#0F172A",
+    textAlign: "center",
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  beamRetryBtn: {
+    backgroundColor: "#EF4444",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  beamRetryText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  beamCancelBtn: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  beamCancelText: { color: "#64748B", fontSize: 13 },
 });

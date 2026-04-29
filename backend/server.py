@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+import httpx
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -115,6 +117,9 @@ class Settings(BaseModel):
     service_charge_enabled: bool = False
     service_charge_percent: float = 10.0
     logo_url: Optional[str] = None
+    beam_merchant_id: Optional[str] = None
+    beam_api_key: Optional[str] = None
+    beam_sandbox: bool = True  # True = playground, False = production
 
 
 class SettingsUpdate(BaseModel):
@@ -131,6 +136,9 @@ class SettingsUpdate(BaseModel):
     service_charge_enabled: Optional[bool] = None
     service_charge_percent: Optional[float] = None
     logo_url: Optional[str] = None
+    beam_merchant_id: Optional[str] = None
+    beam_api_key: Optional[str] = None
+    beam_sandbox: Optional[bool] = None
 
 
 class Customer(BaseModel):
@@ -168,6 +176,7 @@ class OrderCreate(BaseModel):
     source: str = "table"
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    beam_charge_id: Optional[str] = None  # Beam charge ID for reconciliation
 
 
 class Order(BaseModel):
@@ -186,6 +195,7 @@ class Order(BaseModel):
     source: str = "table"
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    beam_charge_id: Optional[str] = None  # Beam charge ID for reconciliation
     delivery_provider: Optional[str] = None
     delivery_status: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -385,6 +395,54 @@ async def create_stock_movement(body: StockMovementCreate):
     await db.stock_movements.insert_one(mv.model_dump())
     return mv
 
+# ---------- Beam constants ----------
+BEAM_PLAYGROUND_URL = "https://playground.api.beamcheckout.com"
+BEAM_PRODUCTION_URL = "https://api.beamcheckout.com"
+BEAM_API_KEY_MASK_PREFIX = "••••"
+SATANG_PER_THB = 100
+BEAM_POST_TIMEOUT_S = 15.0
+BEAM_GET_TIMEOUT_S = 10.0
+
+
+def _mask_api_key(s: Settings) -> Settings:
+    """Return a copy of *s* with the Beam API key masked (last 4 chars only).
+
+    The original ``Settings`` instance is never mutated.
+    """
+    if s.beam_api_key and len(s.beam_api_key) > 4:
+        return s.model_copy(update={"beam_api_key": BEAM_API_KEY_MASK_PREFIX + s.beam_api_key[-4:]})
+    return s
+
+
+def _is_masked_api_key(value: str) -> bool:
+    """True if value looks like a masked placeholder previously emitted by _mask_api_key."""
+    if not value or not value.startswith(BEAM_API_KEY_MASK_PREFIX):
+        return False
+    suffix = value[len(BEAM_API_KEY_MASK_PREFIX):]
+    return len(suffix) == 4
+
+
+async def _beam_credentials() -> tuple[str, dict[str, str]]:
+    """Load Beam credentials from settings or raise 400 if missing.
+
+    Returns (base_url, headers) where headers contains the Basic auth header.
+    """
+    doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
+    settings = Settings(**doc) if doc else Settings()
+
+    if not settings.beam_merchant_id or not settings.beam_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Beam credentials not configured. Go to Settings → Payment to add your Merchant ID and API Key.",
+        )
+
+    base_url = BEAM_PLAYGROUND_URL if settings.beam_sandbox else BEAM_PRODUCTION_URL
+    beam_token = base64.b64encode(
+        f"{settings.beam_merchant_id}:{settings.beam_api_key}".encode()
+    ).decode()
+    headers = {"Authorization": f"Basic {beam_token}"}
+    return base_url, headers
+
 
 # ---------- Settings ----------
 @api_router.get("/settings", response_model=Settings)
@@ -394,18 +452,167 @@ async def get_settings():
         s = Settings()
         await db.settings.insert_one(s.model_dump())
         return s
-    return Settings(**doc)
+    return _mask_api_key(Settings(**doc))
 
 
 @api_router.put("/settings", response_model=Settings)
 async def update_settings(body: SettingsUpdate):
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Don't overwrite beam_api_key with a masked placeholder (echoed back by the
+    # UI) or an empty string (UI sends "" when the field is unfocused).
+    if "beam_api_key" in updates and (
+        _is_masked_api_key(updates["beam_api_key"]) or updates["beam_api_key"] == ""
+    ):
+        del updates["beam_api_key"]
     await db.settings.update_one({"id": "shop"}, {"$set": updates}, upsert=True)
     doc = await db.settings.find_one({"id": "shop"}, {"_id": 0})
-    return Settings(**doc)
+    return _mask_api_key(Settings(**doc))
+
+
+# ---------- Beam Payment ----------
+class BeamChargeRequest(BaseModel):
+    amount: float          # THB amount (e.g. 350.00)
+    reference_id: str      # order reference / order number
+    description: Optional[str] = None
+
+
+class BeamChargeResponse(BaseModel):
+    """Response when creating a Beam charge.
+
+    Beam upstream contract for QR_PROMPT_PAY (see https://docs.beamcheckout.com):
+      - chargeId / id:            charge identifier (production uses chargeId)
+      - status:                   PENDING | COMPLETED | FAILED | EXPIRED
+      - actionRequired:           "ENCODED_IMAGE" for QR PromptPay
+      - encodedImage.imageBase64Encoded / encodedImage.image:
+            base64-encoded PNG (rendered as data URI on client). Production API
+            uses imageBase64Encoded; older sandbox docs reference image.
+      - encodedImage.rawData / encodedImage.qrString:
+            raw QR payload (fallback for client-side rendering). Production API
+            uses rawData; older sandbox docs reference qrString.
+    """
+    charge_id: str
+    status: str
+    qr_image: Optional[str] = None   # base64 PNG data
+    qr_string: Optional[str] = None  # raw QR string for rendering client-side
+    amount: float
+    currency: str = "THB"
+
+
+class BeamChargeStatus(BaseModel):
+    """Narrower response used for polling — never includes QR data."""
+    charge_id: str
+    status: str
+    amount: float
+    currency: str = "THB"
+
+
+def _extract_qr_data(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """Extract QR image and string from a Beam charge response.
+
+    Beam returns ``encodedImage`` when ``actionRequired == "ENCODED_IMAGE"``.
+    Production API uses ``imageBase64Encoded`` + ``rawData``; older sandbox docs
+    reference ``image`` + ``qrString``.  Accept either for forward/backward
+    compatibility.  Falls back to a top-level ``qrCode`` field if present.
+
+    Returns ``(qr_image, qr_string)``.
+    """
+    qr_image: Optional[str] = None
+    qr_string: Optional[str] = None
+    if data.get("actionRequired") == "ENCODED_IMAGE":
+        encoded = data.get("encodedImage", {})
+        qr_image = encoded.get("imageBase64Encoded") or encoded.get("image")
+        qr_string = encoded.get("rawData") or encoded.get("qrString")
+    elif data.get("qrCode"):
+        qr_image = data["qrCode"]
+    return qr_image, qr_string
+
+
+@api_router.post("/beam/charge", response_model=BeamChargeResponse)
+async def create_beam_charge(body: BeamChargeRequest):
+    """Create a Beam QR PromptPay charge. Returns a QR code image for the customer to scan."""
+    base_url, auth_headers = await _beam_credentials()
+
+    payload = {
+        "amount": int(round(body.amount * SATANG_PER_THB)),  # Beam uses satang (100 satang = 1 THB)
+        "currency": "THB",
+        "referenceId": body.reference_id,
+        "description": body.description or f"Order {body.reference_id}",
+        "paymentMethod": {
+            "paymentMethodType": "QR_PROMPT_PAY",
+            "qrPromptPay": {}
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=BEAM_POST_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{base_url}/api/v1/charges",
+                json=payload,
+                headers=auth_headers,
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="Beam API timed out. Please try again.")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Beam API: {str(e)}")
+
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="Beam API key is invalid or expired.")
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"Beam API error {resp.status_code}: {resp.text[:300]}")
+
+    data = resp.json()
+    # Beam production uses "chargeId"; older sandbox docs reference "id".
+    # Accept both for compatibility.
+    charge_id = data.get("chargeId") or data.get("id") or data.get("charge_id") or ""
+    if not charge_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Beam response did not include a charge id; cannot poll status.",
+        )
+    status = data.get("status", "PENDING")
+
+    qr_image, qr_string = _extract_qr_data(data)
+
+    return BeamChargeResponse(
+        charge_id=charge_id,
+        status=status,
+        qr_image=qr_image,
+        qr_string=qr_string,
+        amount=body.amount,
+    )
+
+
+@api_router.get("/beam/charge/{charge_id}", response_model=BeamChargeStatus)
+async def get_beam_charge(charge_id: str):
+    """Poll the status of a Beam charge."""
+    base_url, auth_headers = await _beam_credentials()
+
+    try:
+        async with httpx.AsyncClient(timeout=BEAM_GET_TIMEOUT_S) as client:
+            resp = await client.get(
+                f"{base_url}/api/v1/charges/{charge_id}",
+                headers=auth_headers,
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="Beam API timed out.")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Beam API: {str(e)}")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Charge not found")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Beam API error {resp.status_code}")
+
+    data = resp.json()
+    return BeamChargeStatus(
+        charge_id=charge_id,
+        status=data.get("status", "PENDING"),
+        amount=float(data.get("amount") or 0) / SATANG_PER_THB,
+    )
 
 
 # ---------- Dashboard ----------
+
 @api_router.get("/dashboard")
 async def dashboard(period: str = "month"):
     from datetime import timedelta
