@@ -501,7 +501,7 @@ export default function POS() {
         onRequestClose={() => setShowCart(false)}
       >
         <View style={styles.cartSheetOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowCart(false)} />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowCart(false)} />
           <View style={styles.cartSheet}>
             <View style={styles.cartSheetHandle} />
             <View style={styles.cartSheetHeader}>
@@ -1073,7 +1073,7 @@ function PaymentModal({
             style={{ flex: 1 }}
             contentContainerStyle={[
               styles.paymentBody,
-              isNarrow && { flexDirection: "column", gap: 12, padding: 12 },
+              isNarrow && { flex: 0, flexDirection: "column", gap: 12, padding: 12 },
             ]}
           >
             {/* Methods */}
@@ -1781,6 +1781,29 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
   const [orders, setOrders] = useState<Order[]>([]);
   const [tab, setTab] = useState("all");
   const [deliveryOn, setDeliveryOn] = useState(true);
+  const { width: winW } = useWindowDimensions();
+  const isNarrow = winW < 720;
+
+  const deliveryCtrl = (
+    <View style={styles.deliveryCtrl}>
+      <TouchableOpacity
+        style={styles.delToggle}
+        onPress={() => setDeliveryOn((v) => !v)}
+        testID="delivery-toggle"
+      >
+        <View
+          style={[
+            styles.delDot,
+            { backgroundColor: deliveryOn ? "#00B14F" : "#CBD5E1" },
+          ]}
+        />
+        <Text style={styles.delText}>Delivery ON/OFF</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.delMenu}>
+        <Text style={styles.delMenuText}>Delivery Menu</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   const load = async (source: string) => {
     const url = source === "all" ? `${API}/orders` : `${API}/orders?source=${source}`;
@@ -1819,25 +1842,11 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
               <Ionicons name="close" size={26} color="#475569" />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>All Orders</Text>
-            <View style={styles.deliveryCtrl}>
-              <TouchableOpacity
-                style={styles.delToggle}
-                onPress={() => setDeliveryOn((v) => !v)}
-                testID="delivery-toggle"
-              >
-                <View
-                  style={[
-                    styles.delDot,
-                    { backgroundColor: deliveryOn ? "#00B14F" : "#CBD5E1" },
-                  ]}
-                />
-                <Text style={styles.delText}>Delivery ON/OFF</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.delMenu}>
-                <Text style={styles.delMenuText}>Delivery Menu</Text>
-              </TouchableOpacity>
-            </View>
+            {isNarrow ? <View style={{ width: 26 }} /> : deliveryCtrl}
           </View>
+          {isNarrow && (
+            <View style={styles.deliveryCtrlNarrow}>{deliveryCtrl}</View>
+          )}
 
           <View style={styles.hubTabs}>
             {["all", "table", "delivery", "kiosk", "other"].map((t) => (
@@ -1861,11 +1870,20 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
             <Text style={styles.hubSearchText}>Search by order number</Text>
           </View>
 
-          <View style={styles.kanban}>
+          <ScrollView
+            style={{ flex: 1 }}
+            horizontal={isNarrow}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.kanban}
+          >
             {cols.map((c) => {
               const items = grouped(c.key);
               return (
-                <View key={c.key} style={styles.kanCol} testID={`kan-col-${c.key}`}>
+                <View
+                  key={c.key}
+                  style={[styles.kanCol, isNarrow && styles.kanColNarrow]}
+                  testID={`kan-col-${c.key}`}
+                >
                   <View style={styles.kanHead}>
                     <Ionicons name={c.icon} size={18} color={c.color} />
                     <Text style={styles.kanTitle}>{c.label}</Text>
@@ -1946,7 +1964,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                 </View>
               );
             })}
-          </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -2285,6 +2303,7 @@ const styles = StyleSheet.create({
   // Mobile cart bottom sheet
   cartSheetOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "flex-end" },
   cartSheet: {
+    flex: 1,
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -2395,6 +2414,7 @@ const styles = StyleSheet.create({
     flexDirection: "column",
   },
   rightCartEmbedded: {
+    flex: 1,
     width: "100%",
     borderLeftWidth: 0,
   },
@@ -3054,7 +3074,7 @@ const styles = StyleSheet.create({
 
   // Customer modal
   customerModal: {
-    width: "60%",
+    width: "92%",
     maxWidth: 560,
     height: "80%",
     backgroundColor: "#FFFFFF",
@@ -3110,7 +3130,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     overflow: "hidden",
   },
-  deliveryCtrl: { flexDirection: "row", alignItems: "center", gap: 10 },
+  deliveryCtrl: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  deliveryCtrlNarrow: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    paddingBottom: 10,
+  },
   delToggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -3155,6 +3182,7 @@ const styles = StyleSheet.create({
   hubSearchText: { fontSize: 13, color: "#94A3B8" },
   kanban: { flex: 1, flexDirection: "row", paddingHorizontal: 12, paddingBottom: 16, gap: 10 },
   kanCol: { flex: 1, backgroundColor: "#F8FAFC", borderRadius: 12, padding: 10 },
+  kanColNarrow: { flex: 0, width: 240 },
   kanHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
   kanTitle: { flex: 1, fontSize: 13, fontWeight: "700", color: "#0F172A" },
   kanCount: {
