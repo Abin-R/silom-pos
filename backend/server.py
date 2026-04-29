@@ -478,11 +478,15 @@ class BeamChargeResponse(BaseModel):
     """Response when creating a Beam charge.
 
     Beam upstream contract for QR_PROMPT_PAY (see https://docs.beamcheckout.com):
-      - id:            charge identifier
-      - status:        PENDING | COMPLETED | FAILED | EXPIRED
-      - actionRequired: "ENCODED_IMAGE" for QR PromptPay
-      - encodedImage.image:    base64-encoded PNG (rendered as data URI on client)
-      - encodedImage.qrString: raw QR payload (fallback for client-side rendering)
+      - chargeId / id:            charge identifier (production uses chargeId)
+      - status:                   PENDING | COMPLETED | FAILED | EXPIRED
+      - actionRequired:           "ENCODED_IMAGE" for QR PromptPay
+      - encodedImage.imageBase64Encoded / encodedImage.image:
+            base64-encoded PNG (rendered as data URI on client). Production API
+            uses imageBase64Encoded; older sandbox docs reference image.
+      - encodedImage.rawData / encodedImage.qrString:
+            raw QR payload (fallback for client-side rendering). Production API
+            uses rawData; older sandbox docs reference qrString.
     """
     charge_id: str
     status: str
@@ -534,9 +538,9 @@ async def create_beam_charge(body: BeamChargeRequest):
         raise HTTPException(status_code=502, detail=f"Beam API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
-    # Beam's documented field is "id"; the fallbacks defend against a
-    # potential future rename and are intentional.
-    charge_id = data.get("id") or data.get("chargeId") or data.get("charge_id") or ""
+    # Beam production uses "chargeId"; older sandbox docs reference "id".
+    # Accept both for compatibility.
+    charge_id = data.get("chargeId") or data.get("id") or data.get("charge_id") or ""
     if not charge_id:
         raise HTTPException(
             status_code=502,
@@ -544,13 +548,15 @@ async def create_beam_charge(body: BeamChargeRequest):
         )
     status = data.get("status", "PENDING")
 
-    # Beam returns encodedImage when actionRequired == ENCODED_IMAGE
+    # Beam returns encodedImage when actionRequired == ENCODED_IMAGE.
+    # Production API uses imageBase64Encoded + rawData; older docs reference
+    # image + qrString — accept either for forward/backward compatibility.
     qr_image = None
     qr_string = None
     if data.get("actionRequired") == "ENCODED_IMAGE":
         encoded = data.get("encodedImage", {})
-        qr_image = encoded.get("image")   # base64 PNG
-        qr_string = encoded.get("qrString")
+        qr_image = encoded.get("imageBase64Encoded") or encoded.get("image")
+        qr_string = encoded.get("rawData") or encoded.get("qrString")
     elif data.get("qrCode"):
         qr_image = data["qrCode"]
 

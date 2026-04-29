@@ -161,6 +161,40 @@ class TestBeamChargeCreate:
             assert exc_info.value.status_code == 502
             assert "timed out" in exc_info.value.detail
 
+    async def test_beam_success_with_production_response_shape(self):
+        """Verify Beam's production response uses chargeId + imageBase64Encoded + rawData.
+
+        Captured from a real charge against api.beamcheckout.com — the production
+        API uses different field names than the older sandbox docs reference.
+        Without this regression, the QR pane stays blank because qr_image and
+        qr_string are extracted from the wrong keys.
+        """
+        from server import create_beam_charge, BeamChargeRequest
+
+        # Actual production response shape from api.beamcheckout.com
+        beam_response = {
+            "chargeId": "ch_3D13uHz1vsSAKLzXOsa1c0J2Vcw",
+            "paymentMethodType": "QR_PROMPT_PAY",
+            "actionRequired": "ENCODED_IMAGE",
+            "redirect": None,
+            "encodedImage": {
+                "imageBase64Encoded": "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEAAQMAAA==",
+                "rawData": "00020101021230780016A000000677010112",
+                "expiry": "2026-04-29T11:42:49.651591332+07:00",
+            },
+        }
+        resp = _make_httpx_response(200, beam_response)
+
+        async with _patched_beam(_settings_doc(), post=resp):
+            req = BeamChargeRequest(amount=1.00, reference_id="PROD-001")
+            result = await create_beam_charge(req)
+
+            assert result.charge_id == "ch_3D13uHz1vsSAKLzXOsa1c0J2Vcw"
+            assert result.qr_image == "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEAAQMAAA=="
+            assert result.qr_string == "00020101021230780016A000000677010112"
+            # Status defaults to PENDING when not provided in the response
+            assert result.status == "PENDING"
+
     async def test_beam_success_with_encoded_image(self):
         from server import create_beam_charge, BeamChargeRequest
 
