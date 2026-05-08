@@ -321,6 +321,51 @@ def dispatch(image: Image.Image, *, transport: str, address: Optional[str]) -> N
             p.close()
         return
 
+    if transport == "windows":
+        if not address:
+            raise PrinterError("Windows printer requires address (the exact installed printer name).")
+        from escpos.printer import Win32Raw
+        p = Win32Raw(address)
+        try:
+            p.image(image, impl="bitImageRaster")
+            p.cut()
+        finally:
+            p.close()
+        return
+
+    if transport == "windows_driver":
+        # Print via the Windows print spooler + installed driver (GDI), not raw ESC/POS.
+        # Works regardless of the printer's STARPRNT/ESC/POS emulation mode.
+        if not address:
+            raise PrinterError("windows_driver requires address (the exact installed printer name).")
+        try:
+            import win32ui
+            import win32print
+            from PIL import ImageWin
+        except ImportError as e:
+            raise PrinterError(f"pywin32 not installed: {e}")
+        hDC = win32ui.CreateDC()
+        hDC.CreatePrinterDC(address)
+        hDC.StartDoc("Receipt")
+        hDC.StartPage()
+        try:
+            printable_w = hDC.GetDeviceCaps(8)   # HORZRES
+            printable_h = hDC.GetDeviceCaps(10)  # VERTRES
+            img_w, img_h = image.size
+            # Scale to printable width while preserving aspect ratio.
+            scale = printable_w / img_w if img_w else 1.0
+            out_w = int(img_w * scale)
+            out_h = int(img_h * scale)
+            if out_h > printable_h and printable_h > 0:
+                out_h = printable_h
+            dib = ImageWin.Dib(image.convert("RGB"))
+            dib.draw(hDC.GetHandleOutput(), (0, 0, out_w, out_h))
+        finally:
+            hDC.EndPage()
+            hDC.EndDoc()
+            hDC.DeleteDC()
+        return
+
     raise PrinterError(f"Unknown printer transport: {transport!r}")
 
 
