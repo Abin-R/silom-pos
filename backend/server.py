@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime, timezone
 import httpx
 import base64
+import asyncio
+import printer as printer_module
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -120,6 +122,12 @@ class Settings(BaseModel):
     beam_merchant_id: Optional[str] = None
     beam_api_key: Optional[str] = None
     beam_sandbox: bool = True  # True = playground, False = production
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    printer_enabled: bool = False
+    printer_transport: str = "disabled"  # "disabled" | "file" | "network"
+    printer_address: Optional[str] = None  # /dev/usb/lp0 or host:9100
+    printer_paper_width: int = 80  # 80 or 58 (mm)
 
 
 class SettingsUpdate(BaseModel):
@@ -139,6 +147,12 @@ class SettingsUpdate(BaseModel):
     beam_merchant_id: Optional[str] = None
     beam_api_key: Optional[str] = None
     beam_sandbox: Optional[bool] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    printer_enabled: Optional[bool] = None
+    printer_transport: Optional[str] = None
+    printer_address: Optional[str] = None
+    printer_paper_width: Optional[int] = None
 
 
 class Customer(BaseModel):
@@ -871,7 +885,79 @@ async def create_order(body: OrderCreate):
     order_data["items"] = [i.model_dump() for i in enriched_items]
     o = Order(order_number=order_number, **order_data, status="completed")
     await db.orders.insert_one(o.model_dump())
+    asyncio.create_task(_print_order_safe(o.id))
     return o
+
+
+async def _print_order_safe(order_id: str) -> None:
+    """Best-effort print. Never raises — printer failure must not fail the order."""
+    try:
+        order_doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+        settings_doc = await db.settings.find_one({"id": "shop"}, {"_id": 0}) or {}
+        if not order_doc or not settings_doc.get("printer_enabled"):
+            return
+        # Local time string for the receipt
+        try:
+            ts = datetime.fromisoformat(str(order_doc.get("created_at", ""))).astimezone()
+            order_doc["created_at_local"] = ts.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            pass
+        await asyncio.to_thread(printer_module.print_receipt, order_doc, settings_doc)
+    except Exception as e:
+        logger.warning("Print failed for order %s: %s", order_id, e)
+
+
+@api_router.post("/print-receipt/{order_id}")
+async def reprint_receipt(order_id: str):
+    """Manually re-print a previously created order."""
+    order_doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order_doc:
+        raise HTTPException(status_code=404, detail="Order not found")
+    settings_doc = await db.settings.find_one({"id": "shop"}, {"_id": 0}) or {}
+    if not settings_doc.get("printer_enabled"):
+        raise HTTPException(status_code=400, detail="Printer is disabled. Enable it in Settings.")
+    try:
+        ts = datetime.fromisoformat(str(order_doc.get("created_at", ""))).astimezone()
+        order_doc["created_at_local"] = ts.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        pass
+    try:
+        await asyncio.to_thread(printer_module.print_receipt, order_doc, settings_doc)
+    except printer_module.PrinterError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True}
+
+
+@api_router.post("/print-test")
+async def print_test():
+    """Test print using current shop settings — useful for verifying wiring."""
+    settings_doc = await db.settings.find_one({"id": "shop"}, {"_id": 0}) or {}
+    transport = settings_doc.get("printer_transport", "disabled")
+    if transport == "disabled":
+        raise HTTPException(
+            status_code=400,
+            detail="Set printer_transport to 'file' or 'network' in Settings first.",
+        )
+    fake_order = {
+        "order_number": "PS999000001",
+        "items": [
+            {"name": "Test Item — ทดสอบ", "qty": 1, "price": 100.0},
+        ],
+        "subtotal": 100.0,
+        "total": 100.0,
+        "payment_method": "Test",
+        "paid_amount": 100.0,
+        "change": 0,
+        "created_at_local": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "staff": "TEST",
+    }
+    # Force-enable for the test even if global flag is off, since transport is set.
+    settings_for_test = {**settings_doc, "printer_enabled": True}
+    try:
+        await asyncio.to_thread(printer_module.print_receipt, fake_order, settings_for_test)
+    except printer_module.PrinterError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True}
 
 
 @api_router.get("/orders", response_model=List[Order])

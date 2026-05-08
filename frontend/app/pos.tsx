@@ -279,16 +279,20 @@ export default function POS() {
           testId="toolbar-order-hub"
           compact={!isWide}
         />
-        {isMid && (
-          <ToolbarIcon
-            icon="pricetag-outline"
-            label="Discount"
-            onPress={() => setShowDiscount(true)}
-            testId="toolbar-discount"
-            disabled={cart.length === 0}
-            compact={!isWide}
-          />
-        )}
+        <ToolbarIcon
+          icon="albums-outline"
+          label="Drawer"
+          onPress={() => setShowDrawer(true)}
+          testId="toolbar-drawer"
+          compact={!isWide}
+        />
+        <ToolbarIcon
+          icon="pricetag-outline"
+          label="Discount"
+          onPress={() => setShowDiscount(true)}
+          testId="toolbar-discount"
+          compact={!isWide}
+        />
         <ToolbarIcon
           icon="bookmark-outline"
           label="Save"
@@ -1781,6 +1785,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
   const [orders, setOrders] = useState<Order[]>([]);
   const [tab, setTab] = useState("all");
   const [deliveryOn, setDeliveryOn] = useState(true);
+  const [expandedCol, setExpandedCol] = useState<string | null>("new");
   const { width: winW } = useWindowDimensions();
   const isNarrow = winW < 720;
 
@@ -1872,26 +1877,40 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
 
           <ScrollView
             style={{ flex: 1 }}
-            horizontal={isNarrow}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.kanban}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[styles.kanban, isNarrow && styles.kanbanNarrow]}
           >
             {cols.map((c) => {
               const items = grouped(c.key);
+              const ListContainer: any = isNarrow ? View : ScrollView;
+              const listProps = isNarrow ? {} : { style: { flex: 1 } };
+              const isExpanded = !isNarrow || expandedCol === c.key;
+              const HeadContainer: any = isNarrow ? TouchableOpacity : View;
+              const headProps = isNarrow
+                ? { onPress: () => setExpandedCol((cur) => (cur === c.key ? null : c.key)), activeOpacity: 0.7 }
+                : {};
               return (
                 <View
                   key={c.key}
                   style={[styles.kanCol, isNarrow && styles.kanColNarrow]}
                   testID={`kan-col-${c.key}`}
                 >
-                  <View style={styles.kanHead}>
+                  <HeadContainer style={styles.kanHead} {...headProps}>
                     <Ionicons name={c.icon} size={18} color={c.color} />
                     <Text style={styles.kanTitle}>{c.label}</Text>
                     <View style={[styles.kanCount, { backgroundColor: c.color }]}>
                       <Text style={styles.kanCountText}>{items.length}</Text>
                     </View>
-                  </View>
-                  <ScrollView style={{ flex: 1 }}>
+                    {isNarrow && (
+                      <Ionicons
+                        name={isExpanded ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color="#94A3B8"
+                      />
+                    )}
+                  </HeadContainer>
+                  {isExpanded && (
+                  <ListContainer {...listProps}>
                     {items.map((o) => (
                       <TouchableOpacity
                         key={o.id}
@@ -1960,7 +1979,8 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                         </View>
                       </TouchableOpacity>
                     ))}
-                  </ScrollView>
+                  </ListContainer>
+                  )}
                 </View>
               );
             })}
@@ -2998,7 +3018,7 @@ const styles = StyleSheet.create({
 
   // Discount modal
   discountModal: {
-    width: "60%",
+    width: "92%",
     maxWidth: 520,
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
@@ -3181,8 +3201,9 @@ const styles = StyleSheet.create({
   },
   hubSearchText: { fontSize: 13, color: "#94A3B8" },
   kanban: { flex: 1, flexDirection: "row", paddingHorizontal: 12, paddingBottom: 16, gap: 10 },
+  kanbanNarrow: { flex: 0, flexDirection: "column" },
   kanCol: { flex: 1, backgroundColor: "#F8FAFC", borderRadius: 12, padding: 10 },
-  kanColNarrow: { flex: 0, width: 240 },
+  kanColNarrow: { flex: 0, width: "100%" },
   kanHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
   kanTitle: { flex: 1, fontSize: 13, fontWeight: "700", color: "#0F172A" },
   kanCount: {
@@ -3225,7 +3246,7 @@ const styles = StyleSheet.create({
 
   // Parked
   parkedModal: {
-    width: "60%",
+    width: "92%",
     maxWidth: 560,
     height: "70%",
     backgroundColor: "#FFFFFF",

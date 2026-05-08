@@ -20,6 +20,10 @@ expo-env.d.ts
 
 # Metro
 .metro-health-check*
+.metro-cache/
+
+# local env (contains LAN/tunnel URLs that vary per machine)
+.env
 
 # debug
 npm-debug.*
