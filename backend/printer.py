@@ -232,7 +232,7 @@ def render_receipt(order: dict, settings: dict, paper_width_mm: int = 80) -> Ima
     line("THANK YOU FOR YOUR SHOPPING", font_bold, align="center")
     if phone:
         line(f"Tel. {phone}", font_small, align="center")
-    line("Powered by Silom POS", font_small, align="center")
+    line("Powered by Brave POS", font_small, align="center")
 
     y += pad
 

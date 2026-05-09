@@ -1,18 +1,20 @@
 {
   "expo": {
-    "name": "BakePOS",
-    "slug": "frontend",
+    "name": "Brave POS",
+    "slug": "brave-pos",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "bravepos",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "requireFullScreen": true
+      "requireFullScreen": true,
+      "bundleIdentifier": "com.bravebrand.pos"
     },
     "android": {
+      "package": "com.bravebrand.pos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
@@ -34,10 +36,17 @@
           "resizeMode": "contain",
           "backgroundColor": "#FFFFFF"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "2a3cd2b5-54ec-49b1-9476-af6497db4529"
+      }
     }
   }
 }

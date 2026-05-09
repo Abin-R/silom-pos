@@ -1,0 +1,37 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}  # also allow manual runs from the Actions tab
+
+jobs:
+  build:
+    name: EAS Android build (preview)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install deps
+        run: yarn install --frozen-lockfile
+
+      - name: Trigger EAS build
+        # --non-interactive avoids prompts.
+        # --no-wait returns immediately; the build runs on EAS servers.
+        # Watch progress + download the APK at https://expo.dev/accounts/<you>/projects/brave-pos/builds
+        run: eas build --platform android --profile preview --non-interactive --no-wait

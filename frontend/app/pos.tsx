@@ -1275,7 +1275,7 @@ function PaymentModal({
                   <Ionicons name="print" size={64} color="#00B14F" />
                 </View>
                 <Text style={styles.edcTitle}>
-                  Connect Silom POS with Electronic Data Capture (EDC) payment terminal no need
+                  Connect Brave POS with Electronic Data Capture (EDC) payment terminal no need
                   to manual input data, supporting both credit and debit cards (VISA, MasterCard,
                   JCB, UnionPay)
                 </Text>

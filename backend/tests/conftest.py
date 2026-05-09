@@ -1,5 +1,5 @@
 """
-conftest.py — test environment bootstrap for the silom-pos backend test suite.
+conftest.py — test environment bootstrap for the brave-pos backend test suite.
 
 server.py reads MONGO_URL and DB_NAME from os.environ at *import time* and
 immediately creates an AsyncIOMotorClient.  Tests that do ``import server``
