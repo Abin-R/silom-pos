@@ -72,7 +72,7 @@ export default function PinLogin() {
           <View style={[styles.logoCircle, !isWide && styles.logoCircleNarrow]}>
             <Ionicons name="storefront" size={isWide ? 48 : 36} color="#00B14F" />
           </View>
-          <Text style={[styles.brand, !isWide && styles.brandNarrow]}>BakePOS</Text>
+          <Text style={[styles.brand, !isWide && styles.brandNarrow]}>Brave POS</Text>
           <Text style={styles.brandSub}>Point of Sale</Text>
         </View>
         {isWide && (
