@@ -1,0 +1,771 @@
+"""Brave POS HTTP views.
+
+Each endpoint pairs 1:1 with a route from the legacy FastAPI backend
+(``../backend/server.py``) so the frontend doesn't change.  Routes still
+TODO return 501 so we always have a clear "not ported yet" signal during
+the migration.
+"""
+from __future__ import annotations
+
+import base64
+import logging
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import httpx
+from django.conf import settings as django_settings
+from django.db import transaction
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.utils import timezone as djtz
+from rest_framework import status, viewsets
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+from .models import (
+    Category, Customer, Order, OrderItem, ParkedOrder, Product, Settings,
+    Shift, ShiftMovement, StockMovement,
+)
+from .serializers import (
+    CategorySerializer, CustomerSerializer, OrderSerializer,
+    ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
+    ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
+)
+
+logger = logging.getLogger("bravepos")
+
+
+# ─── Healthcheck ─────────────────────────────────────────────────────────────
+@api_view(['GET'])
+def api_root(_request):
+    return Response({'service': 'bravepos', 'status': 'ok'})
+
+
+# ─── Auth (PIN-based, matches the FastAPI endpoint) ──────────────────────────
+@api_view(['POST'])
+def verify_pin(request):
+    pin = (request.data or {}).get('pin', '')
+    if pin == '1234':
+        return Response({'role': 'admin', 'name': 'Admin'})
+    if pin == '0000':
+        return Response({'role': 'cashier', 'name': 'Cashier'})
+    return Response({'detail': 'Invalid PIN'}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+# ─── ViewSets — basic CRUD ───────────────────────────────────────────────────
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        category_id = self.request.query_params.get('category_id')
+        active = self.request.query_params.get('active')
+        if category_id:
+            qs = qs.filter(category_id=category_id)
+        if active in ('true', 'false'):
+            qs = qs.filter(active=(active == 'true'))
+        return qs
+
+
+class CustomerViewSet(viewsets.ModelViewSet):
+    queryset = Customer.objects.all()
+    serializer_class = CustomerSerializer
+
+
+# ─── Settings — singleton, GET + PUT only ────────────────────────────────────
+BEAM_API_KEY_MASK_PREFIX = '••••'
+
+
+def _get_or_create_settings() -> Settings:
+    obj, _ = Settings.objects.get_or_create(id='shop')
+    return obj
+
+
+def _mask_api_key(data: dict) -> dict:
+    """Mirror the FastAPI mask: replace the Beam key with ••••<last4>."""
+    key = data.get('beam_api_key') or ''
+    if key and not key.startswith(BEAM_API_KEY_MASK_PREFIX) and len(key) > 4:
+        data['beam_api_key'] = BEAM_API_KEY_MASK_PREFIX + key[-4:]
+    return data
+
+
+@api_view(['GET', 'PUT'])
+def settings_view(request):
+    obj = _get_or_create_settings()
+    if request.method == 'GET':
+        return Response(_mask_api_key(dict(SettingsSerializer(obj).data)))
+
+    # PUT — update, but never overwrite the API key with a mask placeholder
+    # echoed back from the UI (matches FastAPI semantics).
+    payload = dict(request.data)
+    if 'beam_api_key' in payload:
+        val = payload['beam_api_key']
+        if not val or (isinstance(val, str) and val.startswith(BEAM_API_KEY_MASK_PREFIX)):
+            payload.pop('beam_api_key')
+
+    ser = SettingsSerializer(obj, data=payload, partial=True)
+    ser.is_valid(raise_exception=True)
+    ser.save()
+    return Response(_mask_api_key(dict(SettingsSerializer(obj).data)))
+
+
+# ─── Order numbering ─────────────────────────────────────────────────────────
+def _next_order_number() -> str:
+    """``PS`` + 9-digit running number, matching the FastAPI format."""
+    last = (
+        Order.objects
+        .order_by('-order_number')
+        .values_list('order_number', flat=True)
+        .first()
+    )
+    n = 1
+    if last and last.startswith('PS') and last[2:].isdigit():
+        n = int(last[2:]) + 1
+    return f'PS{n:09d}'
+
+
+# ─── Orders ──────────────────────────────────────────────────────────────────
+@api_view(['GET', 'POST'])
+def orders_list_create(request):
+    if request.method == 'GET':
+        qs = Order.objects.all()
+        source = request.query_params.get('source')
+        status_ = request.query_params.get('status')
+        if source and source != 'all':
+            qs = qs.filter(source=source)
+        if status_:
+            qs = qs.filter(status=status_)
+        return Response(OrderSerializer(qs[:500], many=True).data)
+
+    # POST
+    payload = dict(request.data)
+    items_data = payload.pop('items', []) or []
+
+    # Snapshot category info from products for items missing it (parity with FastAPI).
+    product_ids = [it.get('product_id') for it in items_data if it.get('product_id')]
+    cats_by_pid: dict[str, tuple[str | None, str]] = {}
+    if product_ids:
+        for p in Product.objects.filter(id__in=product_ids).select_related('category'):
+            cats_by_pid[str(p.id)] = (
+                str(p.category_id) if p.category_id else None,
+                p.category.name if p.category else 'Other',
+            )
+
+    with transaction.atomic():
+        order = Order.objects.create(
+            order_number=_next_order_number(),
+            subtotal=Decimal(str(payload.get('subtotal', 0))),
+            discount_type=payload.get('discount_type', 'none'),
+            discount_value=Decimal(str(payload.get('discount_value', 0))),
+            discount_amount=Decimal(str(payload.get('discount_amount', 0))),
+            total=Decimal(str(payload.get('total', 0))),
+            payment_method=payload.get('payment_method', '') or '',
+            paid_amount=Decimal(str(payload.get('paid_amount', 0))),
+            change=Decimal(str(payload.get('change', 0))),
+            status='completed',
+            source=payload.get('source', 'table'),
+            customer_id=payload.get('customer_id'),
+            customer_name=payload.get('customer_name', '') or '',
+            beam_charge_id=payload.get('beam_charge_id', '') or '',
+            delivery_provider=payload.get('delivery_provider', '') or '',
+            delivery_status=payload.get('delivery_status', '') or '',
+            created_time=datetime.now().strftime('%H:%M'),
+            staff=payload.get('staff', '') or '',
+        )
+        for it in items_data:
+            cat_id, cat_name = cats_by_pid.get(
+                str(it.get('product_id')) if it.get('product_id') else '',
+                (it.get('category_id'), it.get('category_name', '')),
+            )
+            OrderItem.objects.create(
+                order=order,
+                product_id=it.get('product_id'),
+                name=it.get('name', ''),
+                price=Decimal(str(it.get('price', 0))),
+                qty=int(it.get('qty', 1)),
+                category_id=cat_id,
+                category_name=cat_name or '',
+            )
+    return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PUT'])
+def order_update_status(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+    new_status = (request.data or {}).get('status')
+    if new_status not in dict(Order.STATUS_CHOICES):
+        return Response({'detail': 'Invalid status'}, status=400)
+    order.status = new_status
+    order.save(update_fields=['status'])
+    return Response(OrderSerializer(order).data)
+
+
+# ─── Parked orders ───────────────────────────────────────────────────────────
+@api_view(['GET', 'POST'])
+def parked_orders_list_create(request):
+    if request.method == 'GET':
+        return Response(ParkedOrderSerializer(ParkedOrder.objects.all(), many=True).data)
+    ser = ParkedOrderSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    ser.save()
+    return Response(ser.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+def parked_orders_delete(_request, pid):
+    deleted, _ = ParkedOrder.objects.filter(id=pid).delete()
+    if not deleted:
+        return Response({'detail': 'Not found'}, status=404)
+    return Response(status=204)
+
+
+# ─── Stock movements ─────────────────────────────────────────────────────────
+@api_view(['GET', 'POST'])
+def stock_movements(request):
+    if request.method == 'GET':
+        qs = StockMovement.objects.all()
+        pid = request.query_params.get('product_id')
+        if pid:
+            qs = qs.filter(product_id=pid)
+        return Response(StockMovementSerializer(qs[:500], many=True).data)
+
+    # POST — update product stock and snapshot the movement.
+    payload = dict(request.data)
+    product_id = payload.get('product_id')
+    type_ = payload.get('type')
+    qty = int(payload.get('qty', 0))
+    note = payload.get('note', '') or ''
+    if type_ not in ('in', 'out', 'adjust', 'check'):
+        return Response({'detail': 'Invalid type'}, status=400)
+    try:
+        product = Product.objects.get(id=product_id)
+    except Product.DoesNotExist:
+        return Response({'detail': 'Product not found'}, status=404)
+
+    if type_ == 'in':
+        product.stock = (product.stock or 0) + qty
+    elif type_ == 'out':
+        product.stock = (product.stock or 0) - qty
+    elif type_ == 'adjust':
+        product.stock = qty
+    # type_ == 'check' is a non-mutating audit entry
+    product.save(update_fields=['stock'])
+
+    doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
+    mv = StockMovement.objects.create(
+        product=product,
+        product_name=product.name,
+        type=type_,
+        qty=qty,
+        note=note,
+        document_no=doc_no,
+    )
+    return Response(StockMovementSerializer(mv).data, status=201)
+
+
+# ─── Shifts ──────────────────────────────────────────────────────────────────
+@api_view(['GET'])
+def shift_current(_request):
+    s = Shift.objects.filter(status='open').order_by('-opened_at').first()
+    if not s:
+        return Response(None)
+    return Response(ShiftSerializer(s).data)
+
+
+@api_view(['POST'])
+def shift_open(request):
+    if Shift.objects.filter(status='open').exists():
+        return Response({'detail': 'Shift already open'}, status=400)
+    count = Shift.objects.count()
+    s = Shift.objects.create(
+        round_number=count + 1,
+        start_cash=Decimal(str(request.data.get('start_cash', 0) or 0)),
+        opened_by=request.data.get('opened_by', 'Admin') or 'Admin',
+    )
+    return Response(ShiftSerializer(s).data, status=201)
+
+
+@api_view(['POST'])
+def shift_movement(request):
+    s = Shift.objects.filter(status='open').first()
+    if not s:
+        return Response({'detail': 'No open shift'}, status=400)
+    type_ = request.data.get('type')
+    amount = Decimal(str(request.data.get('amount', 0) or 0))
+    if type_ not in ('paid_in', 'paid_out'):
+        return Response({'detail': 'Invalid type'}, status=400)
+    mv = ShiftMovement.objects.create(
+        shift=s, type=type_, amount=amount,
+        note=request.data.get('note', '') or '',
+    )
+    if type_ == 'paid_in':
+        s.total_paid_in = (s.total_paid_in or 0) + amount
+    else:
+        s.total_paid_out = (s.total_paid_out or 0) + amount
+    s.save(update_fields=['total_paid_in', 'total_paid_out'])
+    return Response(ShiftMovementSerializer(mv).data, status=201)
+
+
+@api_view(['PUT'])
+def shift_close(request):
+    s = Shift.objects.filter(status='open').first()
+    if not s:
+        return Response({'detail': 'No open shift'}, status=400)
+    cash_total = (
+        Order.objects
+        .filter(created_at__gte=s.opened_at, payment_method__in=['Easy Pay', 'Cash'])
+        .aggregate_sum() if False else None
+    )
+    # Manual sum (aggregate_sum isn't a stdlib helper); keep this explicit.
+    from django.db.models import Sum
+    cash_total = (
+        Order.objects
+        .filter(created_at__gte=s.opened_at, payment_method__in=['Easy Pay', 'Cash'])
+        .aggregate(t=Sum('total'))['t'] or Decimal('0')
+    )
+    expected = (s.start_cash or 0) + cash_total + (s.total_paid_in or 0) - (s.total_paid_out or 0)
+    s.status = 'closed'
+    s.closed_at = djtz.now()
+    s.closed_by = request.data.get('closed_by', 'Admin') or 'Admin'
+    s.actual_in_drawer = Decimal(str(request.data.get('actual_in_drawer', 0) or 0))
+    s.total_sales_cash = cash_total
+    s.expected_in_drawer = expected
+    s.save()
+    return Response(ShiftSerializer(s).data)
+
+
+@api_view(['GET'])
+def shifts_list(_request):
+    return Response(ShiftSerializer(Shift.objects.all()[:100], many=True).data)
+
+
+# ─── Customer stats ──────────────────────────────────────────────────────────
+@api_view(['GET'])
+def customer_stats(_request, customer_id):
+    try:
+        Customer.objects.get(id=customer_id)
+    except Customer.DoesNotExist:
+        return Response({'detail': 'Customer not found'}, status=404)
+
+    orders = list(
+        Order.objects
+        .filter(customer_id=customer_id)
+        .prefetch_related('items')
+    )
+    completed = [o for o in orders if o.status == 'completed']
+    outstanding = [o for o in orders if o.status not in ('completed', 'cancel')]
+
+    success_total = sum((o.total or 0) for o in completed)
+    bill_count = len(completed)
+    avg_bill = (success_total / bill_count) if bill_count else 0
+    outstanding_total = sum((o.total or 0) for o in outstanding)
+
+    prod_totals: dict = {}
+    cat_totals: dict = {}
+    for o in completed:
+        for item in o.items.all():
+            key = str(item.product_id) if item.product_id else item.name
+            entry = prod_totals.setdefault(
+                key,
+                {'product_id': str(item.product_id) if item.product_id else None,
+                 'name': item.name, 'total': 0, 'qty': 0},
+            )
+            line_total = float(item.price) * item.qty
+            entry['total'] += line_total
+            entry['qty'] += item.qty
+            cname = item.category_name or 'Other'
+            cat_totals[cname] = cat_totals.get(cname, 0) + line_total
+
+    top_products = sorted(prod_totals.values(), key=lambda x: -x['total'])[:5]
+    top_categories = [
+        {'name': k, 'total': v}
+        for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
+    ]
+    return Response({
+        'customer_id': str(customer_id),
+        'success_total': float(success_total),
+        'bill_count': bill_count,
+        'avg_bill': float(avg_bill),
+        'outstanding_total': float(outstanding_total),
+        'outstanding_count': len(outstanding),
+        'top_products': top_products,
+        'top_categories': top_categories,
+    })
+
+
+# ─── Dashboard ───────────────────────────────────────────────────────────────
+@api_view(['GET'])
+def dashboard(request):
+    period = request.query_params.get('period', 'month')
+    now = djtz.now()
+    if period == 'today':
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == 'week':
+        start = now - timedelta(days=7)
+    elif period == 'year':
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start = now - timedelta(days=30)
+
+    orders = list(
+        Order.objects
+        .filter(created_at__gte=start)
+        .exclude(status='cancel')
+        .prefetch_related('items')
+    )
+
+    total_sales = sum(float(o.total or 0) for o in orders)
+    tx_count = len(orders)
+    avg_bill = (total_sales / tx_count) if tx_count else 0
+
+    product_ids = {item.product_id for o in orders for item in o.items.all() if item.product_id}
+    products = {
+        str(p.id): p for p in
+        Product.objects.filter(id__in=product_ids).only('id', 'cost', 'category_id')
+    }
+
+    cost_total = 0.0
+    prod_totals: dict = {}
+    cat_totals: dict = {}
+    buckets: dict = {}
+    for o in orders:
+        bucket_key = o.created_at.date().isoformat()
+        buckets[bucket_key] = buckets.get(bucket_key, 0) + float(o.total or 0)
+        for item in o.items.all():
+            line_total = float(item.price) * item.qty
+            p = products.get(str(item.product_id)) if item.product_id else None
+            if p:
+                cost_total += float(p.cost or 0) * item.qty
+            entry = prod_totals.setdefault(
+                str(item.product_id) if item.product_id else item.name,
+                {'product_id': str(item.product_id) if item.product_id else None,
+                 'name': item.name, 'total': 0, 'qty': 0},
+            )
+            entry['total'] += line_total
+            entry['qty'] += item.qty
+            cname = item.category_name or 'Other'
+            cat_totals[cname] = cat_totals.get(cname, 0) + line_total
+
+    profit = total_sales - cost_total
+    timeline = [{'label': k, 'value': v} for k, v in sorted(buckets.items())[-7:]]
+    top_products = sorted(prod_totals.values(), key=lambda x: -x['total'])[:5]
+    top_categories = [
+        {'name': k, 'total': v}
+        for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
+    ]
+    return Response({
+        'period': period,
+        'total_sales': total_sales,
+        'cost': cost_total,
+        'profit': profit,
+        'gp_percent': (profit / total_sales * 100) if total_sales else 0,
+        'tx_count': tx_count,
+        'avg_bill': avg_bill,
+        'timeline': timeline,
+        'top_products': top_products,
+        'top_categories': top_categories,
+    })
+
+
+# ─── Beam Payment ────────────────────────────────────────────────────────────
+SATANG_PER_THB = 100
+BEAM_POST_TIMEOUT_S = 15.0
+BEAM_GET_TIMEOUT_S = 10.0
+
+
+def _beam_credentials() -> tuple[str, dict]:
+    """Returns (base_url, headers) or raises a tuple-error suitable for Response."""
+    s = _get_or_create_settings()
+    if not s.beam_merchant_id or not s.beam_api_key:
+        raise ValueError(
+            'Beam credentials not configured. Go to Settings → Payment to add '
+            'your Merchant ID and API Key.'
+        )
+    base = (
+        django_settings.BRAVEPOS['BEAM_PLAYGROUND_URL']
+        if s.beam_sandbox
+        else django_settings.BRAVEPOS['BEAM_PRODUCTION_URL']
+    )
+    token = base64.b64encode(f"{s.beam_merchant_id}:{s.beam_api_key}".encode()).decode()
+    return base, {'Authorization': f'Basic {token}'}
+
+
+def _extract_qr_data(data: dict) -> tuple[str | None, str | None]:
+    qr_image, qr_string = None, None
+    if data.get('actionRequired') == 'ENCODED_IMAGE':
+        e = data.get('encodedImage', {})
+        qr_image = e.get('imageBase64Encoded') or e.get('image')
+        qr_string = e.get('rawData') or e.get('qrString')
+    elif data.get('qrCode'):
+        qr_image = data['qrCode']
+    return qr_image, qr_string
+
+
+@api_view(['POST'])
+def beam_charge_create(request):
+    try:
+        base, headers = _beam_credentials()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+
+    amount = float(request.data.get('amount', 0) or 0)
+    reference_id = request.data.get('reference_id') or request.data.get('reference', '')
+    description = request.data.get('description') or f"Order {reference_id}"
+
+    payload = {
+        'amount': int(round(amount * SATANG_PER_THB)),
+        'currency': 'THB',
+        'referenceId': reference_id,
+        'description': description,
+        'paymentMethod': {'paymentMethodType': 'QR_PROMPT_PAY', 'qrPromptPay': {}},
+    }
+    try:
+        with httpx.Client(timeout=BEAM_POST_TIMEOUT_S) as client:
+            resp = client.post(f"{base}/api/v1/charges", json=payload, headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Beam API timed out. Please try again.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
+
+    if resp.status_code == 401:
+        return Response({'detail': 'Beam API key is invalid or expired.'}, status=401)
+    if resp.status_code not in (200, 201):
+        return Response(
+            {'detail': f'Beam API error {resp.status_code}: {resp.text[:300]}'},
+            status=502,
+        )
+
+    data = resp.json()
+    charge_id = data.get('chargeId') or data.get('id') or data.get('charge_id') or ''
+    if not charge_id:
+        return Response(
+            {'detail': 'Beam response did not include a charge id; cannot poll status.'},
+            status=502,
+        )
+    qr_image, qr_string = _extract_qr_data(data)
+    return Response({
+        'charge_id': charge_id,
+        'status': data.get('status', 'PENDING'),
+        'qr_image': qr_image,
+        'qr_string': qr_string,
+        'amount': amount,
+        'currency': 'THB',
+    })
+
+
+@api_view(['GET'])
+def beam_charge_status(_request, charge_id):
+    try:
+        base, headers = _beam_credentials()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+    try:
+        with httpx.Client(timeout=BEAM_GET_TIMEOUT_S) as client:
+            resp = client.get(f"{base}/api/v1/charges/{charge_id}", headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Beam API timed out.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
+    if resp.status_code != 200:
+        return Response({'detail': f'Beam API error {resp.status_code}'}, status=502)
+    data = resp.json()
+    return Response({
+        'charge_id': data.get('chargeId') or data.get('id') or charge_id,
+        'status': data.get('status', 'PENDING'),
+        'amount': (data.get('amount') or 0) / SATANG_PER_THB,
+        'currency': data.get('currency', 'THB'),
+    })
+
+
+# ─── Seed (demo data, idempotent) ────────────────────────────────────────────
+@api_view(['POST'])
+def seed_data(_request):
+    """Wipe + reseed the bravepos_* tables only.  Never touches other apps."""
+    # Order matters because of FKs — children first.
+    OrderItem.objects.all().delete()
+    Order.objects.all().delete()
+    ParkedOrder.objects.all().delete()
+    StockMovement.objects.all().delete()
+    Product.objects.all().delete()
+    Customer.objects.all().delete()
+    Category.objects.all().delete()
+
+    cats_data = [
+        ("Favorite", "รายการโปรด", "#00B14F", 0, ""),
+        ("Valentine's Collection", "วาเลนไทน์", "#EC4899", 1, "Grabfood"),
+        ("Hot Promotion!", "โปรโมชั่น", "#F59E0B", 2, "Grabfood"),
+        ("Christmas Collection", "คริสต์มาส", "#EF4444", 3, "Grabfood"),
+        ("Cake Slices", "เค้กชิ้น", "#94A3B8", 4, "Grabfood"),
+        ("Choco Gems", "ช็อกโกเจม", "#00B14F", 5, "Grabfood"),
+        ("Small Cookies", "คุกกี้เล็ก", "#00B14F", 6, ""),
+        ("Cookie Cake", "คุกกี้เค้ก", "#00B14F", 7, "Grabfood"),
+        ("Brownie Bites", "บราวนี่", "#7C2D12", 10, ""),
+        ("Dubai Chocolate", "ดูไบช็อกโกแลต", "#92400E", 12, "Grabfood"),
+    ]
+    cats = {
+        name: Category.objects.create(
+            name=name, name_th=name_th, color=color, order=order, source=source,
+        )
+        for (name, name_th, color, order, source) in cats_data
+    }
+
+    IMG_GEMS = "https://images.pexels.com/photos/9419469/pexels-photo-9419469.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+    IMG_COOKIE = "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+    IMG_BROWNIE = "https://images.pexels.com/photos/45202/brownie-dessert-cake-sweet-45202.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+    IMG_CAKE = "https://images.unsplash.com/photo-1694588915262-30d22a36b379?crop=entropy&cs=srgb&fm=jpg&w=600"
+
+    products = [
+        ("Chocogems pop Baby edition", "ช็อกโกเจมป๊อปเบบี้", 350, 180, "Choco Gems", IMG_GEMS, True, 24),
+        ("Choco Gems Pop", "ช็อกโกเจมป๊อป", 299, 150, "Choco Gems", IMG_GEMS, True, 32),
+        ("Mayongchid Choco Gems Pop", "มะยงชิดช็อกโกเจม", 350, 180, "Choco Gems", IMG_GEMS, True, 18),
+        ("Mama OG Dark Chocolate Walnut Cookie", "คุกกี้ดาร์ก", 95, 40, "Small Cookies", IMG_COOKIE, False, 0),
+        ("The Marching Ladies Cookie", "มาร์ชิ่งเลดี้ส์", 95, 40, "Small Cookies", IMG_COOKIE, False, -59),
+        ("Sexy Back Cookie", "เซ็กซี่แบ็กคุกกี้", 95, 40, "Small Cookies", IMG_COOKIE, True, -32),
+        ("Pink Birthday Cookie Cake (1lb)", "พิงค์ เบิร์ธเดย์", 590, 280, "Cookie Cake", IMG_CAKE, True, 6),
+        ("Mini Strawberry Shortcake", "มินิสตรอเบอร์รี่", 690, 320, "Cookie Cake", IMG_CAKE, False, 3),
+        ("Red Velvet Cookie Cake Slice", "เรดเวลเว็ทชิ้น", 160, 70, "Cake Slices", IMG_CAKE, False, 12),
+        ("Classic Brownie Bite", "บราวนี่คลาสสิก", 45, 18, "Brownie Bites", IMG_BROWNIE, False, 50),
+        ("Salted Caramel Brownie", "ซอลเทดคาราเมล", 55, 22, "Brownie Bites", IMG_BROWNIE, False, 36),
+        ("Box of 9pcs Bae Brownie", "แบบราวนี่ 9 ชิ้น", 380, 180, "Hot Promotion!", IMG_BROWNIE, False, 10),
+        ("Strawberry Love Cake", "เค้กความรัก", 590, 280, "Valentine's Collection", IMG_CAKE, False, 6),
+        ("Dubai Chewy Cookies", "ดูไบชิววี่", 299, 149, "Dubai Chocolate", IMG_COOKIE, False, 22),
+        ("Crystal Velvet Tanghulu Cookie", "คริสตัลเวลเว็ท", 160, 70, "Christmas Collection", IMG_COOKIE, False, 18),
+    ]
+    for (name, name_th, price, cost, cat_name, img, fav, stock) in products:
+        Product.objects.create(
+            name=name, name_th=name_th,
+            price=Decimal(price), cost=Decimal(cost),
+            category=cats.get(cat_name),
+            image_url=img, is_favorite=fav, stock=stock,
+        )
+
+    return Response({
+        'ok': True,
+        'categories': Category.objects.count(),
+        'products': Product.objects.count(),
+    })
+
+
+# ─── Printer (stubs — receipt rendering is ported in a follow-up step) ───────
+@api_view(['GET'])
+def printer_detect(_request):
+    """Detect attached usblp printers on the host."""
+    import glob, os
+    paths = sorted(glob.glob('/dev/usb/lp*'))
+    return Response({
+        'candidates': [{'path': p, 'writable': os.access(p, os.W_OK)} for p in paths],
+    })
+
+
+@api_view(['GET'])
+def printer_status(_request):
+    """Mirror of the FastAPI endpoint."""
+    s = _get_or_create_settings()
+    base = {
+        'enabled': s.printer_enabled,
+        'transport': s.printer_transport,
+        'address': s.printer_address,
+        'paper_width': s.printer_paper_width,
+    }
+    if s.printer_transport == 'disabled' or not s.printer_enabled:
+        return Response({**base, 'connected': False, 'status': 'disabled'})
+
+    if s.printer_transport == 'file':
+        import os
+        path = s.printer_address or '/dev/usb/lp0'
+        if not os.path.exists(path):
+            return Response({**base, 'connected': False, 'status': 'offline',
+                             'error': f'Device {path} not found'})
+        if not os.access(path, os.W_OK):
+            return Response({**base, 'connected': False, 'status': 'offline',
+                             'error': f'Device {path} not writable (permission?)'})
+        return Response({**base, 'connected': True, 'status': 'connected'})
+
+    if s.printer_transport == 'network':
+        if not s.printer_address:
+            return Response({**base, 'connected': False, 'status': 'offline',
+                             'error': 'No address configured'})
+        host, _, port_s = s.printer_address.partition(':')
+        port = int(port_s) if port_s else 9100
+        import socket
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                pass
+            return Response({**base, 'connected': True, 'status': 'connected'})
+        except Exception as e:
+            return Response({**base, 'connected': False, 'status': 'offline',
+                             'error': f'{type(e).__name__}: {e}'})
+
+    return Response({**base, 'connected': False, 'status': 'offline',
+                     'error': f'Unknown transport: {s.printer_transport}'})
+
+
+@api_view(['POST'])
+def print_test(_request):
+    """Renders a sample receipt and dispatches.  Uses the FastAPI printer.py
+    module unchanged — it's transport-agnostic Python."""
+    s = _get_or_create_settings()
+    if s.printer_transport == 'disabled':
+        return Response(
+            {'detail': "Set printer_transport to 'file' or 'network' in Settings first."},
+            status=400,
+        )
+    try:
+        from backend import printer as printer_mod  # noqa: WPS433  legacy module
+    except Exception:
+        # Fall back to the in-repo printer.py shipped with FastAPI.
+        import importlib.util
+        from pathlib import Path
+        p = Path(django_settings.BASE_DIR).parent / 'backend' / 'printer.py'
+        spec = importlib.util.spec_from_file_location('printer_mod', p)
+        printer_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(printer_mod)
+    fake_order = {
+        'order_number': 'PS999000001',
+        'items': [{'name': 'Test Item — ทดสอบ', 'qty': 1, 'price': 100.0}],
+        'subtotal': 100.0, 'total': 100.0,
+        'payment_method': 'Test', 'paid_amount': 100.0, 'change': 0,
+        'created_at_local': datetime.now().strftime('%d/%m/%Y %H:%M'),
+        'staff': 'TEST',
+    }
+    settings_dict = SettingsSerializer(s).data
+    settings_dict['printer_enabled'] = True   # force-enable for the test
+    try:
+        printer_mod.print_receipt(fake_order, dict(settings_dict))
+    except printer_mod.PrinterError as e:
+        return Response({'detail': str(e)}, status=502)
+    return Response({'ok': True})
+
+
+@api_view(['POST'])
+def print_receipt(_request, order_id):
+    """Manually re-print a previously saved order."""
+    try:
+        order = Order.objects.prefetch_related('items').get(id=order_id)
+    except Order.DoesNotExist:
+        return Response({'detail': 'Order not found'}, status=404)
+    s = _get_or_create_settings()
+    if not s.printer_enabled:
+        return Response(
+            {'detail': 'Printer is disabled. Enable it in Settings.'},
+            status=400,
+        )
+    import importlib.util
+    from pathlib import Path
+    p = Path(django_settings.BASE_DIR).parent / 'backend' / 'printer.py'
+    spec = importlib.util.spec_from_file_location('printer_mod', p)
+    printer_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(printer_mod)
+    order_dict = OrderSerializer(order).data
+    order_dict['created_at_local'] = order.created_at.astimezone().strftime('%d/%m/%Y %H:%M')
+    try:
+        printer_mod.print_receipt(dict(order_dict), dict(SettingsSerializer(s).data))
+    except printer_mod.PrinterError as e:
+        return Response({'detail': str(e)}, status=502)
+    return Response({'ok': True})

@@ -61,6 +61,19 @@ type Settings = {
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
   beam_merchant_id?: string; beam_api_key?: string; beam_sandbox?: boolean;
+  printer_enabled?: boolean;
+  printer_transport?: "disabled" | "file" | "network";
+  printer_address?: string | null;
+  printer_paper_width?: number;
+};
+type PrinterStatus = {
+  connected: boolean;
+  status: "connected" | "offline" | "disabled";
+  enabled: boolean;
+  transport: string;
+  address?: string | null;
+  paper_width: number;
+  error?: string;
 };
 
 export default function Admin() {
@@ -1657,6 +1670,8 @@ function SettingsView({ isWide }: { isWide: boolean }) {
           </ScrollView>
             );
           })()
+        ) : active === "Printers" && s ? (
+          <PrintersSection s={s} update={update} save={save} saving={saving} />
         ) : (
           <View style={styles.emptyBox}>
             <Ionicons name="construct-outline" size={40} color="#CBD5E1" />
@@ -1675,6 +1690,277 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
       <Text style={styles.formLabel}>{label}</Text>
       {children}
     </View>
+  );
+}
+
+function PrintersSection({
+  s,
+  update,
+  save,
+  saving,
+}: {
+  s: Settings;
+  update: (patch: Partial<Settings>) => void;
+  save: () => Promise<void>;
+  saving: boolean;
+}) {
+  const [status, setStatus] = useState<PrinterStatus | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string>("");
+  const [editing, setEditing] = useState(false);
+  const [detected, setDetected] = useState<{ path: string; writable: boolean }[]>([]);
+  const [detecting, setDetecting] = useState(false);
+
+  const transport = (s.printer_transport ?? "disabled") as "disabled" | "file" | "network";
+  const enabled = s.printer_enabled ?? false;
+  const address = s.printer_address ?? "";
+  const configured = transport !== "disabled";
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/printers/status`);
+      if (r.ok) setStatus(await r.json());
+    } catch {
+      // network blip — keep last status
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  // Re-poll right after settings save so the indicator updates immediately.
+  useEffect(() => {
+    if (!saving) refresh();
+  }, [saving, refresh]);
+
+  const detect = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const r = await fetch(`${API}/printers/detect`);
+      if (r.ok) {
+        const body = await r.json();
+        setDetected(body.candidates || []);
+      }
+    } catch {
+      setDetected([]);
+    } finally {
+      setDetecting(false);
+    }
+  }, []);
+
+  // Auto-detect when entering edit mode with USB selected.
+  useEffect(() => {
+    if (editing && transport === "file") detect();
+  }, [editing, transport, detect]);
+
+  // When entering edit mode for the first time (transport unset), default to USB.
+  useEffect(() => {
+    if (editing && transport === "disabled") update({ printer_transport: "file" });
+    // intentionally only depend on `editing` so we don't override user choices later
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult("");
+    try {
+      const r = await fetch(`${API}/print-test`, { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) setTestResult("Sent. Check the printer.");
+      else setTestResult(body?.detail || `Failed (HTTP ${r.status})`);
+    } catch (e: any) {
+      setTestResult(`Network error: ${e?.message || e}`);
+    } finally {
+      setTesting(false);
+      refresh();
+    }
+  };
+
+  const dotColor =
+    !status || status.status === "disabled"
+      ? "#94A3B8"
+      : status.connected
+      ? "#10B981"
+      : "#EF4444";
+  const statusLabel = !status
+    ? "Checking…"
+    : status.status === "disabled"
+    ? "Disabled"
+    : status.connected
+    ? "Connected"
+    : "Offline";
+
+  // ── List view (default) ── matches the Silom POS reference: just a row + add link.
+  if (!editing) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+        <Text style={styles.h2}>Printers</Text>
+
+        {configured && (
+          <TouchableOpacity
+            style={styles.printerListRow}
+            onPress={() => setEditing(true)}
+            testID="printer-row"
+          >
+            <Text style={styles.printerListName}>
+              Receipt Printer{" "}
+              <Text style={styles.printerListMeta}>
+                ({transport.toUpperCase()} · {address || "—"})
+              </Text>
+            </Text>
+            <View style={styles.printerStatusPill}>
+              <View style={[styles.printerDot, { backgroundColor: dotColor }]} />
+              <Text style={styles.printerStatusText}>{statusLabel}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={styles.addPrinterBtn}
+          onPress={() => setEditing(true)}
+          testID="add-printer"
+        >
+          <Ionicons name="add" size={18} color="#00B14F" />
+          <Text style={styles.addPrinterText}>
+            {configured ? "Edit Printer" : "Add Printer"}
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+    );
+  }
+
+  // ── Edit view ── shown when the user taps the row.
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <TouchableOpacity onPress={() => setEditing(false)} testID="printer-back">
+          <Ionicons name="chevron-back" size={22} color="#0F172A" />
+        </TouchableOpacity>
+        <Text style={styles.h2}>Receipt Printer</Text>
+      </View>
+
+      {/* ── Enable toggle ── */}
+      <Field label="Auto-print receipt on every order">
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <TouchableOpacity
+            style={[styles.toggleBox, enabled && styles.toggleBoxOn]}
+            onPress={() => update({ printer_enabled: !enabled })}
+            testID="printer-enabled-toggle"
+          >
+            <View style={[styles.toggleKnob, enabled && styles.toggleKnobOn]} />
+          </TouchableOpacity>
+          <Text>{enabled ? "Enabled" : "Disabled"}</Text>
+        </View>
+      </Field>
+
+      {/* ── Transport ── */}
+      <Field label="Connection type">
+        <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+          {[
+            { k: "file", label: "USB" },
+            { k: "network", label: "Network (TCP)" },
+          ].map((t) => (
+            <TouchableOpacity
+              key={t.k}
+              style={[styles.bizBtn, transport === t.k && styles.bizBtnActive]}
+              onPress={() => update({ printer_transport: t.k as any })}
+              testID={`printer-transport-${t.k}`}
+            >
+              <Text style={[styles.bizBtnText, transport === t.k && { color: "#FFF" }]}>
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Field>
+
+      {/* ── USB: detected devices only (no manual path input) ── */}
+      {transport === "file" && (
+        <Field label="Detected printers">
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {detected.length === 0 ? (
+              <Text style={styles.printerListMeta}>
+                {detecting ? "Scanning…" : "No USB printers detected — plug one in"}
+              </Text>
+            ) : (
+              detected.map((d) => (
+                <TouchableOpacity
+                  key={d.path}
+                  style={[
+                    styles.detectChip,
+                    address === d.path && styles.detectChipActive,
+                  ]}
+                  onPress={() => update({ printer_address: d.path })}
+                  testID={`detect-${d.path}`}
+                >
+                  <Text
+                    style={[
+                      styles.detectChipText,
+                      address === d.path && { color: "#FFF" },
+                    ]}
+                  >
+                    {d.path}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity
+              onPress={detect}
+              disabled={detecting}
+              style={styles.detectRefresh}
+              testID="detect-refresh"
+            >
+              <Ionicons name="refresh" size={14} color="#475569" />
+              <Text style={styles.printerListMeta}>{detecting ? "…" : "Rescan"}</Text>
+            </TouchableOpacity>
+          </View>
+        </Field>
+      )}
+
+      {/* ── Network: address still needed (can't auto-detect) ── */}
+      {transport === "network" && (
+        <Field label="Host:port (e.g. 192.168.1.50:9100)">
+          <TextInput
+            style={styles.formInput}
+            value={address}
+            onChangeText={(v) => update({ printer_address: v })}
+            placeholder="192.168.1.50:9100"
+            autoCapitalize="none"
+            autoCorrect={false}
+            testID="printer-address"
+          />
+        </Field>
+      )}
+
+      {/* ── Actions ── */}
+      <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+        <TouchableOpacity
+          style={[styles.primaryBtn, saving && { opacity: 0.5 }]}
+          onPress={async () => {
+            await save();
+            setEditing(false);
+          }}
+          disabled={saving}
+          testID="printer-save"
+        >
+          <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Printer Settings"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.secondaryBtn, (testing || transport === "disabled") && { opacity: 0.5 }]}
+          onPress={runTest}
+          disabled={testing || transport === "disabled"}
+          testID="printer-test"
+        >
+          <Ionicons name="document-text-outline" size={16} color="#0F172A" />
+          <Text style={styles.secondaryBtnText}>{testing ? "Sending…" : "Test Print"}</Text>
+        </TouchableOpacity>
+      </View>
+      {testResult ? <Text style={styles.printerError}>{testResult}</Text> : null}
+    </ScrollView>
   );
 }
 
@@ -2073,6 +2359,57 @@ const styles = StyleSheet.create({
     alignItems: "center", marginTop: 6,
   },
   primaryBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  secondaryBtn: {
+    flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center",
+    paddingVertical: 14, paddingHorizontal: 16,
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  secondaryBtnText: { color: "#0F172A", fontSize: 14, fontWeight: "600" },
+
+  // Printers
+  printerCard: {
+    backgroundColor: "#FFFFFF", borderRadius: 12,
+    borderWidth: 1, borderColor: "#E2E8F0", padding: 14, gap: 8,
+  },
+  printerHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  printerName: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  printerSub: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  printerStatusPill: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 999, backgroundColor: "#F1F5F9",
+  },
+  printerDot: { width: 8, height: 8, borderRadius: 4 },
+  printerStatusText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  printerError: { fontSize: 12, color: "#EF4444", marginTop: 4 },
+  printerListRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingVertical: 14, paddingHorizontal: 14,
+    backgroundColor: "#FFFFFF", borderRadius: 10,
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  printerListName: { flex: 1, fontSize: 14, fontWeight: "600", color: "#0F172A" },
+  printerListMeta: { fontSize: 12, fontWeight: "400", color: "#64748B" },
+  addPrinterBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 6, paddingVertical: 12,
+  },
+  addPrinterText: { color: "#00B14F", fontSize: 14, fontWeight: "600" },
+  detectChip: {
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  detectChipActive: {
+    backgroundColor: "#00B14F", borderColor: "#00B14F",
+  },
+  detectChipText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  detectRefresh: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 8, paddingVertical: 6,
+  },
   dangerBtn: {
     flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center",
     padding: 12, borderWidth: 1, borderColor: "#EF4444", borderRadius: 10,

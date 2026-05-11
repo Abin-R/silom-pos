@@ -3286,7 +3286,7 @@ const styles = StyleSheet.create({
 
   // Success
   successModal: {
-    width: "50%",
+    width: "92%",
     maxWidth: 440,
     backgroundColor: "#FFFFFF",
     borderRadius: 24,
@@ -3320,7 +3320,7 @@ const styles = StyleSheet.create({
   successBtn: {
     backgroundColor: "#00B14F",
     paddingVertical: 14,
-    paddingHorizontal: 40,
+    paddingHorizontal: 20,
     borderRadius: 12,
     marginTop: 20,
     width: "100%",

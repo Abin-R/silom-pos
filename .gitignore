@@ -52,6 +52,10 @@ __pycache__/
 venv/
 .venv/
 
+# Django local dev DB (Postgres is used in prod)
+*.sqlite3
+*.sqlite3-journal
+
 # Development tools
 chainlit.md
 .chainlit

@@ -928,6 +928,71 @@ async def reprint_receipt(order_id: str):
     return {"ok": True}
 
 
+@api_router.get("/printers/detect")
+async def printer_detect():
+    """Detect connected USB printers on the host.
+
+    Returns a list of /dev/usb/lp* device paths the kernel has registered.
+    Each entry includes whether the current process can write to it.
+    Falls back to an empty list on non-Linux hosts (Windows uses 'windows_driver').
+    """
+    import glob
+    paths = sorted(glob.glob("/dev/usb/lp*"))
+    items = [
+        {"path": p, "writable": os.access(p, os.W_OK)}
+        for p in paths
+    ]
+    return {"candidates": items}
+
+
+@api_router.get("/printers/status")
+async def printer_status():
+    """Live connectivity check for the configured printer.
+
+    Returns one of:
+      - {connected: false, status: "disabled", ...}
+      - {connected: true|false, status: "connected"|"offline", transport, address, paper_width, error?}
+    """
+    settings_doc = await db.settings.find_one({"id": "shop"}, {"_id": 0}) or {}
+    transport = settings_doc.get("printer_transport", "disabled")
+    address = settings_doc.get("printer_address")
+    paper_width = settings_doc.get("printer_paper_width", 80)
+    enabled = bool(settings_doc.get("printer_enabled"))
+
+    base = {
+        "enabled": enabled,
+        "transport": transport,
+        "address": address,
+        "paper_width": paper_width,
+    }
+
+    if transport == "disabled" or not enabled:
+        return {**base, "connected": False, "status": "disabled"}
+
+    if transport == "file":
+        path = address or "/dev/usb/lp0"
+        if not os.path.exists(path):
+            return {**base, "connected": False, "status": "offline", "error": f"Device {path} not found"}
+        if not os.access(path, os.W_OK):
+            return {**base, "connected": False, "status": "offline", "error": f"Device {path} not writable (permission?)"}
+        return {**base, "connected": True, "status": "connected"}
+
+    if transport == "network":
+        if not address:
+            return {**base, "connected": False, "status": "offline", "error": "No address configured"}
+        host, _, port_s = address.partition(":")
+        port = int(port_s) if port_s else 9100
+        import socket
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                pass
+            return {**base, "connected": True, "status": "connected"}
+        except Exception as e:
+            return {**base, "connected": False, "status": "offline", "error": f"{type(e).__name__}: {e}"}
+
+    return {**base, "connected": False, "status": "offline", "error": f"Unknown transport: {transport}"}
+
+
 @api_router.post("/print-test")
 async def print_test():
     """Test print using current shop settings — useful for verifying wiring."""
