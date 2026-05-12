@@ -5,13 +5,19 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  FlatList,
+  Modal,
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+const BRANCH_KEY = "bravepos:selected-branch:v1";
+
+type Branch = { id: string; name: string; code?: string; active: boolean };
 
 export default function PinLogin() {
   const router = useRouter();
@@ -21,6 +27,30 @@ export default function PinLogin() {
   const [pin, setPin] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branch, setBranch] = useState<Branch | null>(null);
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
+
+  // Load active branches once + restore previously selected branch from storage.
+  useEffect(() => {
+    (async () => {
+      try {
+        const [r, savedRaw] = await Promise.all([
+          fetch(`${API}/branches?active=true`),
+          AsyncStorage.getItem(BRANCH_KEY),
+        ]);
+        const list: Branch[] = r.ok ? await r.json() : [];
+        setBranches(list);
+        const saved = savedRaw ? (JSON.parse(savedRaw) as Branch) : null;
+        const initial =
+          (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
+        setBranch(initial);
+      } catch {
+        // offline / unreachable — leave branches empty; PIN entry still works
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (pin.length === 4) {
@@ -39,9 +69,22 @@ export default function PinLogin() {
       });
       if (res.ok) {
         const data = await res.json();
-        // Admin (1234) goes to back-office; Cashier (0000) to POS
-        const destination = data.staff_name === "Admin" ? "/admin" : "/pos";
-        router.replace({ pathname: destination, params: { staff: data.staff_name } });
+        // Remember the selected branch for the rest of the session
+        if (branch) {
+          await AsyncStorage.setItem(BRANCH_KEY, JSON.stringify(branch));
+        }
+        const staff = data.name || data.staff_name || "";
+        const role = data.role || (staff === "Admin" ? "admin" : "cashier");
+        const destination = role === "admin" ? "/admin" : "/pos";
+        router.replace({
+          pathname: destination,
+          params: {
+            staff,
+            role,
+            branch_id: branch?.id || "",
+            branch_name: branch?.name || "",
+          },
+        });
       } else {
         setError("Invalid PIN. Try 1234 or 0000.");
         setPin("");
@@ -88,6 +131,22 @@ export default function PinLogin() {
         <Text style={styles.title}>Enter your PIN</Text>
         <Text style={styles.subtitle}>Staff login required</Text>
 
+        {/* Branch picker — defaults to first available, persists across logins */}
+        <TouchableOpacity
+          style={styles.branchBtn}
+          onPress={() => setShowBranchPicker(true)}
+          disabled={branches.length <= 1}
+          testID="branch-picker-btn"
+        >
+          <Ionicons name="storefront-outline" size={16} color="#0F172A" />
+          <Text style={styles.branchLabel}>
+            {branch?.name || (branches.length === 0 ? "Loading branches…" : "Select branch")}
+          </Text>
+          {branches.length > 1 && (
+            <Ionicons name="chevron-down" size={14} color="#94A3B8" />
+          )}
+        </TouchableOpacity>
+
         <View style={styles.dots}>
           {[0, 1, 2, 3].map((i) => (
             <View
@@ -130,6 +189,47 @@ export default function PinLogin() {
           </View>
         )}
       </View>
+
+      {/* Branch picker modal */}
+      <Modal
+        visible={showBranchPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowBranchPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.branchModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowBranchPicker(false)}
+        >
+          <View style={styles.branchModalSheet}>
+            <Text style={styles.branchModalTitle}>Choose Branch</Text>
+            <FlatList
+              data={branches}
+              keyExtractor={(b) => b.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.branchRow,
+                    branch?.id === item.id && styles.branchRowActive,
+                  ]}
+                  onPress={() => {
+                    setBranch(item);
+                    setShowBranchPicker(false);
+                  }}
+                  testID={`branch-pick-${item.id}`}
+                >
+                  <Ionicons name="storefront-outline" size={18} color="#0F172A" />
+                  <Text style={styles.branchRowName}>{item.name}</Text>
+                  {branch?.id === item.id && (
+                    <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                  )}
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -235,4 +335,53 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   hintTextMobile: { fontSize: 12, color: "#475569", fontFamily: "monospace" },
+
+  // Branch picker on the PIN screen
+  branchBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  branchLabel: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+
+  // Branch picker modal
+  branchModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.45)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  branchModalSheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    maxHeight: "70%",
+    overflow: "hidden",
+  },
+  branchModalTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  branchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F8FAFC",
+  },
+  branchRowActive: { backgroundColor: "#F0FDF4" },
+  branchRowName: { flex: 1, fontSize: 14, color: "#0F172A", fontWeight: "500" },
 });

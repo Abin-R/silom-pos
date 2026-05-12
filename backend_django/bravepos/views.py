@@ -23,10 +23,11 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import (
-    Category, Customer, Order, OrderItem, ParkedOrder, Product, Settings,
+    Branch, Category, Customer, Order, OrderItem, ParkedOrder, Product, Settings,
     Shift, ShiftMovement, StockMovement,
 )
 from .serializers import (
+    BranchSerializer,
     CategorySerializer, CustomerSerializer, OrderSerializer,
     ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
@@ -76,6 +77,18 @@ class ProductViewSet(viewsets.ModelViewSet):
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
+
+
+class BranchViewSet(viewsets.ModelViewSet):
+    """Branches (physical shop locations)."""
+    queryset = Branch.objects.all()
+    serializer_class = BranchSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.query_params.get('active') == 'true':
+            qs = qs.filter(active=True)
+        return qs
 
 
 # ─── Settings — singleton, GET + PUT only ────────────────────────────────────
@@ -157,6 +170,32 @@ def orders_list_create(request):
                 p.category.name if p.category else 'Other',
             )
 
+    # Look up products once so we can both snapshot categories AND decrement
+    # stock.  We lock only the Product rows (`of=('self',)`) because joining
+    # the nullable Category for the same lock breaks on Postgres ("FOR UPDATE
+    # cannot be applied to the nullable side of an outer join").  Categories
+    # are looked up separately right after.
+    products_by_id: dict[str, Product] = {}
+    if product_ids:
+        with transaction.atomic():
+            for p in (
+                Product.objects
+                .select_for_update(of=('self',))
+                .filter(id__in=product_ids)
+            ):
+                products_by_id[str(p.id)] = p
+        # Lookup category names in one cheap query (no lock needed).
+        cat_ids = {p.category_id for p in products_by_id.values() if p.category_id}
+        cat_name_by_id = (
+            {str(c.id): c.name for c in Category.objects.filter(id__in=cat_ids)}
+            if cat_ids else {}
+        )
+        for pid_str, p in products_by_id.items():
+            cats_by_pid[pid_str] = (
+                str(p.category_id) if p.category_id else None,
+                cat_name_by_id.get(str(p.category_id) or '', 'Other'),
+            )
+
     with transaction.atomic():
         order = Order.objects.create(
             order_number=_next_order_number(),
@@ -179,19 +218,38 @@ def orders_list_create(request):
             staff=payload.get('staff', '') or '',
         )
         for it in items_data:
+            pid = str(it.get('product_id')) if it.get('product_id') else ''
             cat_id, cat_name = cats_by_pid.get(
-                str(it.get('product_id')) if it.get('product_id') else '',
+                pid,
                 (it.get('category_id'), it.get('category_name', '')),
             )
+            qty = int(it.get('qty', 1))
             OrderItem.objects.create(
                 order=order,
                 product_id=it.get('product_id'),
                 name=it.get('name', ''),
                 price=Decimal(str(it.get('price', 0))),
-                qty=int(it.get('qty', 1)),
+                qty=qty,
                 category_id=cat_id,
                 category_name=cat_name or '',
             )
+
+            # Decrement product stock + log a StockMovement for the audit
+            # trail.  Stock can go negative — matches the existing demo data
+            # (Sexy Back Cookie shipped with stock=-32) and avoids blocking
+            # the order if the cashier wants to oversell.
+            prod = products_by_id.get(pid)
+            if prod:
+                prod.stock = (prod.stock or 0) - qty
+                prod.save(update_fields=['stock'])
+                StockMovement.objects.create(
+                    product=prod,
+                    product_name=prod.name,
+                    type='out',
+                    qty=qty,
+                    note=f'Order {order.order_number}',
+                    document_no=order.order_number,
+                )
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -595,6 +653,18 @@ def seed_data(_request):
     Product.objects.all().delete()
     Customer.objects.all().delete()
     Category.objects.all().delete()
+    Branch.objects.all().delete()
+
+    # Seed default branch
+    Branch.objects.create(
+        name="EmQuartier",
+        code="EMQ",
+        address="EmQuartier, Sukhumvit 39, Bangkok",
+        phone="0644184887",
+        tax_id="0105563083534",
+        pos_id="E020140003A0087",
+        active=True,
+    )
 
     cats_data = [
         ("Favorite", "รายการโปรด", "#00B14F", 0, ""),

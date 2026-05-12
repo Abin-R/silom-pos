@@ -14,6 +14,7 @@ def _register(r):
     r.register(r'categories', views.CategoryViewSet, basename='category')
     r.register(r'products', views.ProductViewSet, basename='product')
     r.register(r'customers', views.CustomerViewSet, basename='customer')
+    r.register(r'branches', views.BranchViewSet, basename='branch')
 
 router = DefaultRouter()          # /api/categories/
 router_no_slash = DefaultRouter(trailing_slash='')  # /api/categories

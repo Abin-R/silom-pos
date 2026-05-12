@@ -16,6 +16,19 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+import PhoneInput from "../components/PhoneInput";
+import {
+  discoverPrinters as starDiscover,
+  testPrint as starTestPrint,
+  type DiscoveredPrinter,
+  type PrinterConfig,
+} from "../lib/starPrinter";
+import {
+  loadLocalPrinterConfig,
+  saveLocalPrinterConfig,
+} from "../lib/localPrinterConfig";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -24,12 +37,12 @@ const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFract
 // Kept in sync with backend/server.py BEAM_API_KEY_MASK_PREFIX.
 const BEAM_API_KEY_MASK_PREFIX = "••••";
 
-type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "settings";
+type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "branches" | "settings";
 
 type Category = { id: string; name: string; name_th?: string; color: string; source?: string; order: number };
 type Product = {
   id: string; name: string; name_th?: string; price: number; cost: number;
-  category_id: string; image_url: string; is_favorite: boolean;
+  category_id: string; image_url: string; image_base64?: string; is_favorite: boolean;
   stock: number; tax_type: string; product_type: string;
 };
 type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
@@ -80,7 +93,7 @@ export default function Admin() {
   const router = useRouter();
   const { staff } = useLocalSearchParams<{ staff?: string }>();
   const { width } = useWindowDimensions();
-  const isWide = width >= 900;
+  const isWide = width >= 720;
   const [section, setSection] = useState<Section>("reports");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -92,6 +105,7 @@ export default function Admin() {
     { key: "customers", label: "Customers", icon: "people-outline" },
     { key: "products", label: "Products", icon: "gift-outline" },
     { key: "drawer", label: "Drawer", icon: "calculator-outline" },
+    { key: "branches", label: "Branches", icon: "storefront-outline" },
     { key: "settings", label: "Settings", icon: "settings-outline" },
   ];
 
@@ -193,6 +207,7 @@ export default function Admin() {
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} />}
           {section === "drawer" && <Drawer />}
+          {section === "branches" && <Branches />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
@@ -566,7 +581,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
                 onPress={() => setStockModal(item)}
                 testID={`inv-prod-${item.id}`}
               >
-                <Image source={{ uri: item.image_url }} style={styles.invImg} />
+                <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
                   <Text style={styles.invPrice}>{THB(item.price)}</Text>
@@ -708,6 +723,7 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [addOpen, setAddOpen] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneValid, setPhoneValid] = useState(true);
 
   const load = async () => {
     const r = await fetch(`${API}/customers`);
@@ -893,8 +909,19 @@ function Customers({ isWide }: { isWide: boolean }) {
             </View>
             <View style={{ padding: 20, gap: 14 }}>
               <TextInput placeholder="Name" style={styles.formInput} value={name} onChangeText={setName} testID="admin-cust-name" />
-              <TextInput placeholder="Phone (optional)" style={styles.formInput} value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="admin-cust-phone" />
-              <TouchableOpacity style={styles.primaryBtn} onPress={save} testID="admin-cust-save">
+              <PhoneInput
+                value={phone}
+                onChange={(e164, valid) => { setPhone(e164); setPhoneValid(valid); }}
+                placeholder="Phone (optional)"
+                defaultCountryCode="TH"
+                testID="admin-cust-phone"
+              />
+              <TouchableOpacity
+                style={[styles.primaryBtn, (!name.trim() || !phoneValid) && { opacity: 0.4 }]}
+                onPress={save}
+                disabled={!name.trim() || !phoneValid}
+                testID="admin-cust-save"
+              >
                 <Text style={styles.primaryBtnText}>Save</Text>
               </TouchableOpacity>
             </View>
@@ -902,6 +929,180 @@ function Customers({ isWide }: { isWide: boolean }) {
         </View>
       </Modal>
     </View>
+  );
+}
+
+// =================== BRANCHES ===================
+type Branch = {
+  id: string;
+  name: string;
+  code?: string;
+  address?: string;
+  phone?: string;
+  tax_id?: string;
+  pos_id?: string;
+  active: boolean;
+};
+
+function Branches() {
+  const [list, setList] = useState<Branch[]>([]);
+  const [editing, setEditing] = useState<Branch | "new" | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    const r = await fetch(`${API}/branches`);
+    if (r.ok) setList(await r.json());
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async (b: Partial<Branch>) => {
+    setSaving(true);
+    try {
+      const isNew = editing === "new";
+      const url = isNew ? `${API}/branches` : `${API}/branches/${(editing as Branch).id}`;
+      const method = isNew ? "POST" : "PUT";
+      await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: true, ...b }),
+      });
+      setEditing(null);
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (b: Branch) => {
+    // Soft delete: just flip active=false so existing orders keep their FK.
+    await fetch(`${API}/branches/${b.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...b, active: false }),
+    });
+    await load();
+  };
+
+  return (
+    <View style={{ flex: 1 }} testID="branches-section">
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16 }}>
+        <Text style={styles.h2}>Branches</Text>
+        <TouchableOpacity
+          style={styles.primaryBtn}
+          onPress={() => setEditing("new")}
+          testID="branch-add"
+        >
+          <Text style={styles.primaryBtnText}>+ Add Branch</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={list}
+        keyExtractor={(b) => b.id}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16, gap: 10 }}
+        ListEmptyComponent={
+          <View style={styles.emptyBox}>
+            <Ionicons name="storefront-outline" size={40} color="#CBD5E1" />
+            <Text style={styles.emptyText}>No branches yet</Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <View style={styles.branchCard} testID={`branch-row-${item.id}`}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.branchName}>
+                {item.name}
+                {!item.active && <Text style={styles.branchInactive}>  (inactive)</Text>}
+              </Text>
+              {item.code ? <Text style={styles.branchMeta}>Code: {item.code}</Text> : null}
+              {item.address ? <Text style={styles.branchMeta} numberOfLines={2}>{item.address}</Text> : null}
+              {item.phone ? <Text style={styles.branchMeta}>📞 {item.phone}</Text> : null}
+            </View>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              <TouchableOpacity onPress={() => setEditing(item)} testID={`branch-edit-${item.id}`}>
+                <Ionicons name="pencil" size={18} color="#475569" />
+              </TouchableOpacity>
+              {item.active && (
+                <TouchableOpacity onPress={() => remove(item)} testID={`branch-del-${item.id}`}>
+                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+      />
+
+      {editing && (
+        <BranchEditModal
+          initial={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSave={save}
+          saving={saving}
+        />
+      )}
+    </View>
+  );
+}
+
+function BranchEditModal({
+  initial,
+  onClose,
+  onSave,
+  saving,
+}: {
+  initial: Branch | null;
+  onClose: () => void;
+  onSave: (b: Partial<Branch>) => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState(initial?.name || "");
+  const [code, setCode] = useState(initial?.code || "");
+  const [address, setAddress] = useState(initial?.address || "");
+  const [phone, setPhone] = useState(initial?.phone || "");
+  const [taxId, setTaxId] = useState(initial?.tax_id || "");
+  const [posId, setPosId] = useState(initial?.pos_id || "");
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.editModal} testID="branch-edit-modal">
+          <View style={styles.modalHead}>
+            <TouchableOpacity onPress={onClose}>
+              <Ionicons name="close" size={24} color="#475569" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>{initial ? "Edit Branch" : "New Branch"}</Text>
+            <View style={{ width: 24 }} />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+            <Text style={styles.formLabel}>Name *</Text>
+            <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder="e.g. EmQuartier" testID="branch-name" />
+            <Text style={styles.formLabel}>Short code</Text>
+            <TextInput style={styles.formInput} value={code} onChangeText={setCode} placeholder="EMQ" autoCapitalize="characters" testID="branch-code" />
+            <Text style={styles.formLabel}>Address</Text>
+            <TextInput style={[styles.formInput, { height: 80 }]} value={address} onChangeText={setAddress} multiline testID="branch-address" />
+            <View style={{ flexDirection: "row", gap: 12 }}>
+              <View style={{ flex: 1, gap: 6 }}>
+                <Text style={styles.formLabel}>Phone</Text>
+                <TextInput style={styles.formInput} value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="branch-phone" />
+              </View>
+              <View style={{ flex: 1, gap: 6 }}>
+                <Text style={styles.formLabel}>Tax ID</Text>
+                <TextInput style={styles.formInput} value={taxId} onChangeText={setTaxId} testID="branch-tax-id" />
+              </View>
+            </View>
+            <Text style={styles.formLabel}>POS ID</Text>
+            <TextInput style={styles.formInput} value={posId} onChangeText={setPosId} testID="branch-pos-id" />
+            <TouchableOpacity
+              style={[styles.primaryBtn, (saving || !name.trim()) && { opacity: 0.4 }]}
+              onPress={() => onSave({ name: name.trim(), code, address, phone, tax_id: taxId, pos_id: posId })}
+              disabled={saving || !name.trim()}
+              testID="branch-save"
+            >
+              <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Branch"}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1034,7 +1235,7 @@ function Products({ isWide }: { isWide: boolean }) {
           contentContainerStyle={{ padding: 14 }}
           renderItem={({ item }) => (
             <View style={styles.prodMgmtRow} testID={`prod-${item.id}`}>
-              <Image source={{ uri: item.image_url }} style={styles.invImg} />
+              <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
                 <View style={{ flexDirection: "row", gap: 10, marginTop: 4, alignItems: "center" }}>
@@ -1103,6 +1304,8 @@ function ProductEditModal({
   const [stock, setStock] = useState("");
   const [catId, setCatId] = useState("");
   const [img, setImg] = useState("");
+  const [imgBase64, setImgBase64] = useState<string>("");   // data URI if picked from device
+  const [pickingImage, setPickingImage] = useState(false);
   const [fav, setFav] = useState(false);
   const isNew = product === "new";
 
@@ -1110,21 +1313,72 @@ function ProductEditModal({
     if (product && product !== "new") {
       setName(product.name); setPrice(String(product.price));
       setCost(String(product.cost)); setStock(String(product.stock));
-      setCatId(product.category_id); setImg(product.image_url); setFav(product.is_favorite);
+      setCatId(product.category_id); setImg(product.image_url);
+      setImgBase64(product.image_base64 || "");
+      setFav(product.is_favorite);
     } else if (product === "new") {
       setName(""); setPrice(""); setCost("0"); setStock("0");
-      setCatId(defaultCat); setImg(""); setFav(false);
+      setCatId(defaultCat); setImg(""); setImgBase64(""); setFav(false);
     }
   }, [product, defaultCat]);
 
+  // Pick from device → resize to 800px max → JPEG 70% → base64.
+  // The resize cap keeps the row under ~80 KB so the Postgres TEXT column
+  // doesn't bloat with multi-MB photos.
+  const pickImage = async () => {
+    setPickingImage(true);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setPickingImage(false);
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 1,
+      });
+      if (result.canceled || !result.assets?.[0]) {
+        setPickingImage(false);
+        return;
+      }
+      const original = result.assets[0];
+      const manipulated = await ImageManipulator.manipulateAsync(
+        original.uri,
+        [{ resize: { width: 800 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      if (manipulated.base64) {
+        setImgBase64(`data:image/jpeg;base64,${manipulated.base64}`);
+        setImg(""); // clear the URL field so the new image wins
+      }
+    } catch (e) {
+      console.warn("Image pick failed", e);
+    } finally {
+      setPickingImage(false);
+    }
+  };
+
+  const clearImage = () => {
+    setImg("");
+    setImgBase64("");
+  };
+
   const save = async () => {
     if (!name.trim() || !price || !catId) return;
-    const body = {
+    const body: Record<string, any> = {
       name, price: parseFloat(price), cost: parseFloat(cost || "0"),
       stock: parseInt(stock || "0"), category_id: catId,
-      image_url: img || "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?w=400",
+      image_url: img || "",
+      image_base64: imgBase64 || "",
       is_favorite: fav, tax_type: "V", product_type: "P",
     };
+    // If neither image source is set, fall back to the default placeholder so
+    // the product list grid still shows *something* instead of a broken icon.
+    if (!body.image_url && !body.image_base64) {
+      body.image_url = "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?w=400";
+    }
     if (isNew) {
       await fetch(`${API}/products`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -1168,8 +1422,34 @@ function ProductEditModal({
               </View>
               <Text style={styles.formLabel}>Stock</Text>
               <TextInput style={styles.formInput} value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" testID="prod-stock" />
-              <Text style={styles.formLabel}>Image URL</Text>
-              <TextInput style={styles.formInput} value={img} onChangeText={setImg} placeholder="https://..." testID="prod-img" />
+              <Text style={styles.formLabel}>Image</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <View style={styles.imgThumb}>
+                  {imgBase64 || img ? (
+                    <Image source={{ uri: imgBase64 || img }} style={styles.imgThumbImage} />
+                  ) : (
+                    <Ionicons name="image-outline" size={36} color="#94A3B8" />
+                  )}
+                </View>
+                <View style={{ flex: 1, gap: 8 }}>
+                  <TouchableOpacity
+                    style={styles.imgPickBtn}
+                    onPress={pickImage}
+                    disabled={pickingImage}
+                    testID="prod-img-pick"
+                  >
+                    <Ionicons name="camera-outline" size={18} color="#0F172A" />
+                    <Text style={styles.imgPickBtnText}>
+                      {pickingImage ? "Loading…" : (imgBase64 || img ? "Change Image" : "Choose Image")}
+                    </Text>
+                  </TouchableOpacity>
+                  {(imgBase64 || img) && (
+                    <TouchableOpacity onPress={clearImage} testID="prod-img-clear">
+                      <Text style={styles.imgClearText}>Remove image</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
               <Text style={styles.formLabel}>Category</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                 {categories.map((c) => (
@@ -1711,6 +1991,69 @@ function PrintersSection({
   const [detected, setDetected] = useState<{ path: string; writable: boolean }[]>([]);
   const [detecting, setDetecting] = useState(false);
 
+  // ── Local (this-tablet) printer state — uses the Star SDK to talk to a USB
+  //    printer attached to the tablet itself.  Stored in AsyncStorage.
+  const [localCfg, setLocalCfg] = useState<PrinterConfig | null>(null);
+  const [localScanning, setLocalScanning] = useState(false);
+  const [localFound, setLocalFound] = useState<DiscoveredPrinter[]>([]);
+  const [localTesting, setLocalTesting] = useState(false);
+  const [localResult, setLocalResult] = useState<string>("");
+
+  useEffect(() => { loadLocalPrinterConfig().then(setLocalCfg); }, []);
+
+  const scanLocal = useCallback(async () => {
+    setLocalScanning(true);
+    setLocalResult("");
+    try {
+      const found = await starDiscover(["Usb"], 4000);
+      setLocalFound(found);
+      if (found.length === 0) {
+        setLocalResult(
+          "No USB printers found. Connect the printer with a USB-C cable and allow access when Android asks.",
+        );
+      }
+    } catch (e: any) {
+      setLocalResult(`Scan failed: ${e?.message || e}`);
+    } finally {
+      setLocalScanning(false);
+    }
+  }, []);
+
+  const selectLocal = useCallback(async (d: DiscoveredPrinter) => {
+    const next: PrinterConfig = {
+      enabled: true,
+      interface: d.interfaceType,
+      identifier: d.identifier,
+      paperWidth: localCfg?.paperWidth ?? 80,
+    };
+    setLocalCfg(next);
+    await saveLocalPrinterConfig(next);
+    setLocalResult(`Saved. Will print to ${d.identifier}`);
+  }, [localCfg?.paperWidth]);
+
+  const toggleLocalEnabled = useCallback(async () => {
+    if (!localCfg) return;
+    const next = { ...localCfg, enabled: !localCfg.enabled };
+    setLocalCfg(next);
+    await saveLocalPrinterConfig(next);
+  }, [localCfg]);
+
+  const runLocalTest = useCallback(async () => {
+    if (!localCfg) return;
+    setLocalTesting(true);
+    setLocalResult("");
+    try {
+      const shopRes = await fetch(`${API}/settings`);
+      const shop = shopRes.ok ? await shopRes.json() : {};
+      const r = await starTestPrint(localCfg, shop);
+      setLocalResult(r.ok ? "Sent. Check the printer." : `Test failed: ${(r as any).error}`);
+    } catch (e: any) {
+      setLocalResult(`Test failed: ${e?.message || e}`);
+    } finally {
+      setLocalTesting(false);
+    }
+  }, [localCfg]);
+
   const transport = (s.printer_transport ?? "disabled") as "disabled" | "file" | "network";
   const enabled = s.printer_enabled ?? false;
   const address = s.printer_address ?? "";
@@ -1829,6 +2172,108 @@ function PrintersSection({
             {configured ? "Edit Printer" : "Add Printer"}
           </Text>
         </TouchableOpacity>
+
+        {/* ─── LOCAL TABLET PRINTER (Star SDK) ─────────────────────────────── */}
+        <Text style={[styles.h2, { marginTop: 18 }]}>Local Printer (this tablet)</Text>
+        <Text style={styles.printerListMeta}>
+          Connect a Star printer to this tablet&#39;s USB-C port and Brave POS will
+          print receipts directly. Network printers use the section above.
+        </Text>
+
+        <View style={styles.printerCard}>
+          <View style={styles.printerHeader}>
+            <Ionicons name="phone-portrait-outline" size={22} color="#10B981" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.printerName}>
+                {localCfg?.identifier ? "USB Star Printer" : "Not configured"}
+              </Text>
+              <Text style={styles.printerSub} numberOfLines={1}>
+                {localCfg?.identifier ? localCfg.identifier : "Tap Scan to find printer"}
+              </Text>
+            </View>
+            <View style={styles.printerStatusPill}>
+              <View style={[styles.printerDot, {
+                backgroundColor: localCfg?.enabled && localCfg.identifier
+                  ? "#10B981" : "#94A3B8",
+              }]} />
+              <Text style={styles.printerStatusText}>
+                {!localCfg?.identifier ? "Off" : localCfg.enabled ? "Enabled" : "Disabled"}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+          <TouchableOpacity
+            style={[styles.secondaryBtn, localScanning && { opacity: 0.5 }]}
+            onPress={scanLocal}
+            disabled={localScanning}
+            testID="local-printer-scan"
+          >
+            <Ionicons name="search" size={16} color="#0F172A" />
+            <Text style={styles.secondaryBtnText}>
+              {localScanning ? "Scanning…" : "Scan USB"}
+            </Text>
+          </TouchableOpacity>
+          {localCfg?.identifier && (
+            <>
+              <TouchableOpacity
+                style={[styles.secondaryBtn, localTesting && { opacity: 0.5 }]}
+                onPress={runLocalTest}
+                disabled={localTesting}
+                testID="local-printer-test"
+              >
+                <Ionicons name="document-text-outline" size={16} color="#0F172A" />
+                <Text style={styles.secondaryBtnText}>
+                  {localTesting ? "Sending…" : "Test Print"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                onPress={toggleLocalEnabled}
+                testID="local-printer-toggle"
+              >
+                <Text style={styles.secondaryBtnText}>
+                  {localCfg.enabled ? "Disable" : "Enable"}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {localFound.length > 0 && (
+          <View style={{ gap: 6, marginTop: 8 }}>
+            <Text style={styles.formLabel}>Found {localFound.length} printer(s):</Text>
+            {localFound.map((d) => (
+              <TouchableOpacity
+                key={d.identifier}
+                style={[
+                  styles.printerListRow,
+                  localCfg?.identifier === d.identifier && {
+                    borderColor: "#10B981",
+                    backgroundColor: "#F0FDF4",
+                  },
+                ]}
+                onPress={() => selectLocal(d)}
+                testID={`local-printer-${d.identifier}`}
+              >
+                <Text style={styles.printerListName}>
+                  {d.model || "Star Printer"}{" "}
+                  <Text style={styles.printerListMeta}>
+                    ({d.interfaceType} · {d.identifier})
+                  </Text>
+                </Text>
+                {localCfg?.identifier === d.identifier && (
+                  <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {localResult ? (
+          <Text style={styles.printerError}>{localResult}</Text>
+        ) : null}
       </ScrollView>
     );
   }
@@ -2303,6 +2748,33 @@ const styles = StyleSheet.create({
   },
   catPickActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
   catPickText: { fontSize: 11, color: "#475569", fontWeight: "600" },
+
+  // Product image picker
+  imgThumb: {
+    width: 88, height: 88, borderRadius: 12,
+    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#F8FAFC",
+    alignItems: "center", justifyContent: "center", overflow: "hidden",
+  },
+  imgThumbImage: { width: "100%", height: "100%" },
+  imgPickBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 12, paddingHorizontal: 14,
+    borderRadius: 10, borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  imgPickBtnText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  imgClearText: { fontSize: 12, color: "#EF4444", textAlign: "center" },
+
+  // Branches
+  branchCard: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    padding: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF",
+  },
+  branchName: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  branchInactive: { fontSize: 12, color: "#EF4444", fontWeight: "500" },
+  branchMeta: { fontSize: 12, color: "#64748B", marginTop: 2 },
+
   favToggle: {
     flexDirection: "row", alignItems: "center", gap: 8,
     padding: 12, backgroundColor: "#F8FAFC", borderRadius: 8,

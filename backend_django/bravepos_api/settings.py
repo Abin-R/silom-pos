@@ -98,6 +98,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
     ],
+    # Return Decimal fields as JSON numbers instead of strings.  The frontend
+    # uses .toFixed(2) and arithmetic on price/stock/totals — getting strings
+    # back crashes the React Native app (Drawer screen most visibly).  Numbers
+    # are also what the legacy FastAPI backend returned.
+    'COERCE_DECIMAL_TO_STRING': False,
 }
 
 

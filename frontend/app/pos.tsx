@@ -16,6 +16,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import PhoneInput from "../components/PhoneInput";
+import { printReceipt } from "../lib/starPrinter";
+import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 
@@ -31,6 +34,7 @@ type Product = {
   price: number;
   category_id: string;
   image_url: string;
+  image_base64?: string;
   is_favorite: boolean;
 };
 type CartItem = { product_id: string; name: string; price: number; qty: number };
@@ -61,7 +65,7 @@ export default function POS() {
   const router = useRouter();
   const { staff } = useLocalSearchParams<{ staff?: string }>();
   const { width } = useWindowDimensions();
-  const isWide = width >= 900;
+  const isWide = width >= 720;
   const isMid = width >= 600;
   const gridCols = isWide ? 4 : isMid ? 3 : 2;
 
@@ -215,6 +219,34 @@ export default function POS() {
         method,
       });
       refreshBadges();
+
+      // Fire-and-forget local print: if THIS tablet has a configured local
+      // printer (USB/BT/LAN via Star SDK), print straight from the device.
+      // Backend's own auto-print path is independent — they don't conflict.
+      (async () => {
+        try {
+          const cfg = await loadLocalPrinterConfig();
+          if (!cfg.enabled) return;
+          const shopRes = await fetch(`${API}/settings`);
+          const shop = shopRes.ok ? await shopRes.json() : {};
+          await printReceipt(
+            cfg,
+            {
+              order_number: order.order_number,
+              items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
+              total,
+              payment_method: method,
+              paid_amount: paid,
+              change: Math.max(0, paid - total),
+              created_at_local: new Date().toLocaleString("en-GB"),
+              staff: staff || "",
+            },
+            shop,
+          );
+        } catch (printErr) {
+          console.warn("local print failed", printErr);
+        }
+      })();
     } catch (e) {
       console.error("checkout fail", e);
     }
@@ -250,7 +282,7 @@ export default function POS() {
       <View style={styles.topBar} testID="top-bar">
         <TouchableOpacity
           style={styles.menuBtn}
-          onPress={() => setShowDrawer(true)}
+          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin" } })}
           testID="menu-btn"
         >
           <Ionicons name="menu" size={24} color="#0F172A" />
@@ -314,14 +346,6 @@ export default function POS() {
             <Text style={styles.staffText}>{staff || "Admin"}</Text>
           </View>
         )}
-        <TouchableOpacity
-          style={styles.adminBtn}
-          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin" } })}
-          testID="goto-admin"
-        >
-          <Ionicons name="grid-outline" size={18} color="#00B14F" />
-          {isWide && <Text style={styles.adminBtnText}>Admin</Text>}
-        </TouchableOpacity>
         <TouchableOpacity
           style={styles.logoutBtn}
           onPress={() => router.replace("/")}
@@ -435,7 +459,7 @@ export default function POS() {
                 activeOpacity={0.85}
                 testID={`product-${item.id}`}
               >
-                <Image source={{ uri: item.image_url }} style={styles.productImg} />
+                <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.productImg} />
                 <View style={styles.productInfo}>
                   <Text style={styles.productName} numberOfLines={2}>
                     {item.name}
@@ -1641,6 +1665,7 @@ function CustomerModal({
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneValid, setPhoneValid] = useState(true);  // true when empty or well-formed
 
   useEffect(() => {
     if (visible) {
@@ -1664,7 +1689,7 @@ function CustomerModal({
   );
 
   const addCustomer = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !phoneValid) return;
     const res = await fetch(`${API}/customers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1708,18 +1733,17 @@ function CustomerModal({
                 onChangeText={setName}
                 testID="new-cust-name"
               />
-              <TextInput
-                placeholder="Phone (optional)"
-                placeholderTextColor="#94A3B8"
-                style={styles.textInput}
+              <PhoneInput
                 value={phone}
-                onChangeText={setPhone}
-                keyboardType="phone-pad"
+                onChange={(e164, valid) => { setPhone(e164); setPhoneValid(valid); }}
+                placeholder="Phone (optional)"
+                defaultCountryCode="TH"
                 testID="new-cust-phone"
               />
               <TouchableOpacity
-                style={styles.saveCustBtn}
+                style={[styles.saveCustBtn, (!name.trim() || !phoneValid) && { opacity: 0.4 }]}
                 onPress={addCustomer}
+                disabled={!name.trim() || !phoneValid}
                 testID="save-customer"
               >
                 <Text style={styles.saveCustText}>Save & Select</Text>

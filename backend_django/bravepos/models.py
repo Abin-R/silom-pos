@@ -13,6 +13,29 @@ import uuid
 from django.db import models
 
 
+# ─── Branches ───────────────────────────────────────────────────────────────
+class Branch(models.Model):
+    """A physical shop location.  Each tablet/POS terminal is assigned to one
+    branch at login time.  Sales, shifts, etc. will eventually carry a branch
+    FK; we keep the model nullable in those relations during the rollout so
+    existing data isn't broken."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120, unique=True)
+    code = models.CharField(max_length=16, blank=True, default="")  # optional short code
+    address = models.TextField(blank=True, default="")
+    phone = models.CharField(max_length=32, blank=True, default="")
+    tax_id = models.CharField(max_length=64, blank=True, default="")
+    pos_id = models.CharField(max_length=64, blank=True, default="")
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 # ─── Shop directory ──────────────────────────────────────────────────────────
 class Category(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -3,9 +3,18 @@ existing frontend already sends and expects."""
 from rest_framework import serializers
 
 from .models import (
-    Category, Product, StockMovement, Customer,
+    Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
 )
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(read_only=False, required=False)
+
+    class Meta:
+        model = Branch
+        fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id', 'active', 'created_at']
+        read_only_fields = ['created_at']
 
 
 class CategorySerializer(serializers.ModelSerializer):
