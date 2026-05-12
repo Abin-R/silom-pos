@@ -29,8 +29,19 @@ import {
   loadLocalPrinterConfig,
   saveLocalPrinterConfig,
 } from "../lib/localPrinterConfig";
+import { apiFetch, clearAuthToken } from "../lib/api";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+const AUTH_KEY = "bravepos:auth:v1";
+
+async function doLogout(): Promise<void> {
+  try {
+    await apiFetch("/auth/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch {}
+  clearAuthToken();
+  try { await AsyncStorage.removeItem(AUTH_KEY); } catch {}
+}
 const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // Mask prefix used by the backend to redact stored Beam API keys (••••<last4>).
@@ -91,13 +102,14 @@ type PrinterStatus = {
 
 export default function Admin() {
   const router = useRouter();
-  const { staff } = useLocalSearchParams<{ staff?: string }>();
+  const { staff, role } = useLocalSearchParams<{ staff?: string; role?: string }>();
+  const isAdmin = role === "admin";
   const { width } = useWindowDimensions();
   const isWide = width >= 720;
   const [section, setSection] = useState<Section>("reports");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const items: { key: Section | "shop"; label: string; icon: any }[] = [
+  const allItems: { key: Section | "shop"; label: string; icon: any; adminOnly?: boolean }[] = [
     { key: "shop", label: "Shop", icon: "home-outline" },
     { key: "transactions", label: "Transactions", icon: "swap-horizontal-outline" },
     { key: "reports", label: "Reports", icon: "pie-chart-outline" },
@@ -105,15 +117,17 @@ export default function Admin() {
     { key: "customers", label: "Customers", icon: "people-outline" },
     { key: "products", label: "Products", icon: "gift-outline" },
     { key: "drawer", label: "Drawer", icon: "calculator-outline" },
-    { key: "branches", label: "Branches", icon: "storefront-outline" },
+    { key: "branches", label: "Branches", icon: "storefront-outline", adminOnly: true },
     { key: "settings", label: "Settings", icon: "settings-outline" },
   ];
+  const items = allItems.filter((it) => !it.adminOnly || isAdmin);
 
   const navigate = (k: Section | "shop") => {
     setSidebarOpen(false);
     if (k === "shop") {
-      router.replace({ pathname: "/pos", params: { staff: staff || "Admin" } });
+      router.replace({ pathname: "/pos", params: { staff: staff || "Admin", role: role || "" } });
     } else {
+      if (k === "branches" && !isAdmin) return;
       setSection(k);
     }
   };
@@ -148,7 +162,7 @@ export default function Admin() {
       <View style={{ flex: 1 }} />
       <TouchableOpacity
         style={styles.logoutSide}
-        onPress={() => router.replace("/")}
+        onPress={async () => { await doLogout(); router.replace("/"); }}
         testID="admin-logout"
       >
         <Ionicons name="log-out-outline" size={18} color="#EF4444" />
@@ -180,7 +194,7 @@ export default function Admin() {
               <Text style={styles.mobileTitle}>
                 {items.find((i) => i.key === section)?.label}
               </Text>
-              <TouchableOpacity onPress={() => router.replace("/")}>
+              <TouchableOpacity onPress={async () => { await doLogout(); router.replace("/"); }}>
                 <Ionicons name="log-out-outline" size={22} color="#EF4444" />
               </TouchableOpacity>
             </View>
@@ -207,7 +221,7 @@ export default function Admin() {
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} />}
           {section === "drawer" && <Drawer />}
-          {section === "branches" && <Branches />}
+          {section === "branches" && isAdmin && <Branches />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
@@ -224,7 +238,7 @@ function Reports({ isWide }: { isWide: boolean }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/dashboard?period=${period}`);
+      const res = await apiFetch(`${API}/dashboard?period=${period}`);
       setData(await res.json());
     } catch {}
     setLoading(false);
@@ -384,7 +398,7 @@ function Transactions({ isWide }: { isWide: boolean }) {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch(`${API}/orders`);
+      const res = await apiFetch(`${API}/orders`);
       const o: Order[] = await res.json();
       setOrders(o);
       if (o[0] && isWide) setSelected(o[0]);
@@ -505,8 +519,8 @@ function Inventory({ isWide }: { isWide: boolean }) {
 
   const load = async () => {
     const [c, p] = await Promise.all([
-      fetch(`${API}/categories`).then((r) => r.json()),
-      fetch(`${API}/products`).then((r) => r.json()),
+      apiFetch(`${API}/categories`).then((r) => r.json()),
+      apiFetch(`${API}/products`).then((r) => r.json()),
     ]);
     setCategories(c);
     setProducts(p);
@@ -524,7 +538,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
 
   const doMovement = async (type: "in" | "out" | "adjust", qty: number) => {
     if (!stockModal) return;
-    await fetch(`${API}/stock-movements`, {
+    await apiFetch(`${API}/stock-movements`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ product_id: stockModal.id, type, qty, note: `Admin ${type}` }),
@@ -726,7 +740,7 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [phoneValid, setPhoneValid] = useState(true);
 
   const load = async () => {
-    const r = await fetch(`${API}/customers`);
+    const r = await apiFetch(`${API}/customers`);
     const d: Customer[] = await r.json();
     setList(d);
     if (d[0] && !sel) setSel(d[0]);
@@ -739,7 +753,7 @@ function Customers({ isWide }: { isWide: boolean }) {
     setStatsLoading(true);
     setStats(null);
     try {
-      const r = await fetch(`${API}/customers/${customerId}/stats`);
+      const r = await apiFetch(`${API}/customers/${customerId}/stats`);
       if (r.ok && statsRequestId.current === customerId) {
         setStats(await r.json());
       }
@@ -759,7 +773,7 @@ function Customers({ isWide }: { isWide: boolean }) {
 
   const save = async () => {
     if (!name.trim()) return;
-    const r = await fetch(`${API}/customers`, {
+    const r = await apiFetch(`${API}/customers`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, phone: phone || null }),
     });
@@ -950,7 +964,7 @@ function Branches() {
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
-    const r = await fetch(`${API}/branches`);
+    const r = await apiFetch(`${API}/branches`);
     if (r.ok) setList(await r.json());
   };
   useEffect(() => { load(); }, []);
@@ -975,7 +989,7 @@ function Branches() {
 
   const remove = async (b: Branch) => {
     // Soft delete: just flip active=false so existing orders keep their FK.
-    await fetch(`${API}/branches/${b.id}`, {
+    await apiFetch(`${API}/branches/${b.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...b, active: false }),
@@ -1117,8 +1131,8 @@ function Products({ isWide }: { isWide: boolean }) {
 
   const load = async () => {
     const [c, p] = await Promise.all([
-      fetch(`${API}/categories`).then((r) => r.json()),
-      fetch(`${API}/products`).then((r) => r.json()),
+      apiFetch(`${API}/categories`).then((r) => r.json()),
+      apiFetch(`${API}/products`).then((r) => r.json()),
     ]);
     setCats(c); setProds(p);
     if (!activeCat && c.length) setActiveCat(c[0].id);
@@ -1142,7 +1156,7 @@ function Products({ isWide }: { isWide: boolean }) {
   const curCat = cats.find((c) => c.id === activeCat);
 
   const toggleFav = async (p: Product) => {
-    await fetch(`${API}/products/${p.id}`, {
+    await apiFetch(`${API}/products/${p.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_favorite: !p.is_favorite }),
@@ -1380,11 +1394,11 @@ function ProductEditModal({
       body.image_url = "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?w=400";
     }
     if (isNew) {
-      await fetch(`${API}/products`, {
+      await apiFetch(`${API}/products`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
     } else if (product) {
-      await fetch(`${API}/products/${(product as Product).id}`, {
+      await apiFetch(`${API}/products/${(product as Product).id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
     }
@@ -1393,7 +1407,7 @@ function ProductEditModal({
 
   const del = async () => {
     if (!product || product === "new") return;
-    await fetch(`${API}/products/${(product as Product).id}`, { method: "DELETE" });
+    await apiFetch(`${API}/products/${(product as Product).id}`, { method: "DELETE" });
     onSaved();
   };
 
@@ -1526,8 +1540,8 @@ function Drawer() {
 
   const load = async () => {
     const [cur, hist] = await Promise.all([
-      fetch(`${API}/shifts/current`).then((r) => r.json()),
-      fetch(`${API}/shifts`).then((r) => r.json()),
+      apiFetch(`${API}/shifts/current`).then((r) => r.json()),
+      apiFetch(`${API}/shifts`).then((r) => r.json()),
     ]);
     setCurrent(cur && cur.id ? cur : null);
     setHistory(hist || []);
@@ -1535,14 +1549,14 @@ function Drawer() {
   useEffect(() => { load(); }, []);
 
   const openShift = async () => {
-    await fetch(`${API}/shifts/open`, {
+    await apiFetch(`${API}/shifts/open`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ start_cash: parseFloat(startCash) || 0, opened_by: "Admin" }),
     });
     setOpenDlg(false); setStartCash("0"); load();
   };
   const closeShift = async () => {
-    await fetch(`${API}/shifts/close`, {
+    await apiFetch(`${API}/shifts/close`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actual_in_drawer: parseFloat(actualCash) || 0, closed_by: "Admin" }),
     });
@@ -1550,7 +1564,7 @@ function Drawer() {
   };
   const addMovement = async () => {
     if (!moveDlg || !moveAmt) return;
-    await fetch(`${API}/shifts/movement`, {
+    await apiFetch(`${API}/shifts/movement`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: moveDlg, amount: parseFloat(moveAmt), note: moveNote }),
     });
@@ -1742,7 +1756,7 @@ function SettingsView({ isWide }: { isWide: boolean }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch(`${API}/settings`).then((r) => r.json()).then(setS);
+    apiFetch(`${API}/settings`).then((r) => r.json()).then(setS);
   }, []);
 
   const update = (patch: Partial<Settings>) => setS((c) => (c ? { ...c, ...patch } : c));
@@ -1750,7 +1764,7 @@ function SettingsView({ isWide }: { isWide: boolean }) {
   const save = async () => {
     if (!s) return;
     setSaving(true);
-    await fetch(`${API}/settings`, {
+    await apiFetch(`${API}/settings`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(s),
     });
     setSaving(false);
@@ -2043,7 +2057,7 @@ function PrintersSection({
     setLocalTesting(true);
     setLocalResult("");
     try {
-      const shopRes = await fetch(`${API}/settings`);
+      const shopRes = await apiFetch(`${API}/settings`);
       const shop = shopRes.ok ? await shopRes.json() : {};
       const r = await starTestPrint(localCfg, shop);
       setLocalResult(r.ok ? "Sent. Check the printer." : `Test failed: ${(r as any).error}`);
@@ -2061,7 +2075,7 @@ function PrintersSection({
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/printers/status`);
+      const r = await apiFetch(`${API}/printers/status`);
       if (r.ok) setStatus(await r.json());
     } catch {
       // network blip — keep last status
@@ -2082,7 +2096,7 @@ function PrintersSection({
   const detect = useCallback(async () => {
     setDetecting(true);
     try {
-      const r = await fetch(`${API}/printers/detect`);
+      const r = await apiFetch(`${API}/printers/detect`);
       if (r.ok) {
         const body = await r.json();
         setDetected(body.candidates || []);
@@ -2110,7 +2124,7 @@ function PrintersSection({
     setTesting(true);
     setTestResult("");
     try {
-      const r = await fetch(`${API}/print-test`, { method: "POST" });
+      const r = await apiFetch(`${API}/print-test`, { method: "POST" });
       const body = await r.json().catch(() => ({}));
       if (r.ok) setTestResult("Sent. Check the printer.");
       else setTestResult(body?.detail || `Failed (HTTP ${r.status})`);

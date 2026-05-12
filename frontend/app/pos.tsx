@@ -19,8 +19,19 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { printReceipt } from "../lib/starPrinter";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
+import { apiFetch, clearAuthToken } from "../lib/api";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+const AUTH_KEY = "bravepos:auth:v1";
+
+async function doLogout(): Promise<void> {
+  try {
+    await apiFetch("/auth/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch {}
+  clearAuthToken();
+  try { await AsyncStorage.removeItem(AUTH_KEY); } catch {}
+}
 
 // How often we poll the backend for Beam charge status while a QR is on screen.
 const BEAM_POLL_INTERVAL_MS = 3000;
@@ -63,7 +74,7 @@ const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigi
 
 export default function POS() {
   const router = useRouter();
-  const { staff } = useLocalSearchParams<{ staff?: string }>();
+  const { staff, role } = useLocalSearchParams<{ staff?: string; role?: string }>();
   const { width } = useWindowDimensions();
   const isWide = width >= 720;
   const isMid = width >= 600;
@@ -102,8 +113,8 @@ export default function POS() {
     (async () => {
       try {
         const [catsRes, prodsRes] = await Promise.all([
-          fetch(`${API}/categories`),
-          fetch(`${API}/products`),
+          apiFetch(`${API}/categories`),
+          apiFetch(`${API}/products`),
         ]);
         const cats: Category[] = await catsRes.json();
         const prods: Product[] = await prodsRes.json();
@@ -121,8 +132,8 @@ export default function POS() {
   const refreshBadges = async () => {
     try {
       const [po, oh] = await Promise.all([
-        fetch(`${API}/parked-orders`).then((r) => r.json()),
-        fetch(`${API}/orders?source=delivery`).then((r) => r.json()),
+        apiFetch(`${API}/parked-orders`).then((r) => r.json()),
+        apiFetch(`${API}/orders?source=delivery`).then((r) => r.json()),
       ]);
       setParkedCount(po.length);
       // count active (non-delivered) delivery orders
@@ -190,7 +201,7 @@ export default function POS() {
     meta?: { beamChargeId?: string }
   ) => {
     try {
-      const res = await fetch(`${API}/orders`, {
+      const res = await apiFetch(`${API}/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -227,7 +238,7 @@ export default function POS() {
         try {
           const cfg = await loadLocalPrinterConfig();
           if (!cfg.enabled) return;
-          const shopRes = await fetch(`${API}/settings`);
+          const shopRes = await apiFetch(`${API}/settings`);
           const shop = shopRes.ok ? await shopRes.json() : {};
           await printReceipt(
             cfg,
@@ -254,7 +265,7 @@ export default function POS() {
 
   const parkCurrentOrder = async () => {
     if (cart.length === 0) return;
-    await fetch(`${API}/parked-orders`, {
+    await apiFetch(`${API}/parked-orders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -282,7 +293,7 @@ export default function POS() {
       <View style={styles.topBar} testID="top-bar">
         <TouchableOpacity
           style={styles.menuBtn}
-          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin" } })}
+          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin", role: role || "" } })}
           testID="menu-btn"
         >
           <Ionicons name="menu" size={24} color="#0F172A" />
@@ -348,7 +359,7 @@ export default function POS() {
         )}
         <TouchableOpacity
           style={styles.logoutBtn}
-          onPress={() => router.replace("/")}
+          onPress={async () => { await doLogout(); router.replace("/"); }}
           testID="logout-btn"
         >
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
@@ -996,7 +1007,7 @@ function PaymentModal({
     setBeamStatus("loading");
     setBeamError(null);
     try {
-      const res = await fetch(`${API}/beam/charge`, {
+      const res = await apiFetch(`${API}/beam/charge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}` }),
@@ -1028,7 +1039,7 @@ function PaymentModal({
     if (beamStatus !== "pending" || !beamChargeId) return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API}/beam/charge/${beamChargeId}`);
+        const res = await apiFetch(`${API}/beam/charge/${beamChargeId}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.status === "COMPLETED") {
@@ -1671,7 +1682,7 @@ function CustomerModal({
     if (visible) {
       setShowAdd(false);
       setQ("");
-      fetch(`${API}/customers`)
+      apiFetch(`${API}/customers`)
         .then((r) => r.json())
         .then(setCustomers);
     }
@@ -1690,7 +1701,7 @@ function CustomerModal({
 
   const addCustomer = async () => {
     if (!name.trim() || !phoneValid) return;
-    const res = await fetch(`${API}/customers`, {
+    const res = await apiFetch(`${API}/customers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim(), phone: phone.trim() || null }),
@@ -1854,7 +1865,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
   const grouped = (col: string) => orders.filter((o) => o.status === col);
 
   const updateStatus = async (id: string, status: string) => {
-    await fetch(`${API}/orders/${id}/status`, {
+    await apiFetch(`${API}/orders/${id}/status`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
@@ -2032,7 +2043,7 @@ function ParkedOrdersModal({
   const [parked, setParked] = useState<ParkedOrder[]>([]);
 
   const load = async () => {
-    const res = await fetch(`${API}/parked-orders`);
+    const res = await apiFetch(`${API}/parked-orders`);
     setParked(await res.json());
   };
   useEffect(() => {
@@ -2040,7 +2051,7 @@ function ParkedOrdersModal({
   }, [visible]);
 
   const del = async (id: string) => {
-    await fetch(`${API}/parked-orders/${id}`, { method: "DELETE" });
+    await apiFetch(`${API}/parked-orders/${id}`, { method: "DELETE" });
     load();
   };
 

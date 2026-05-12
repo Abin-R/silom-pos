@@ -26,7 +26,11 @@ urlpatterns = [
     # Healthcheck
     path('', views.api_root),
 
-    # Auth
+    # Auth — new email/password flow with branch-scoped sessions
+    path('auth/login', views.auth_login),
+    path('auth/logout', views.auth_logout),
+    path('auth/me', views.auth_me),
+    # Legacy PIN endpoint — keep for backwards compat until everyone migrates.
     path('auth/verify-pin', views.verify_pin),
 
     # Settings — single document, GET + PUT.

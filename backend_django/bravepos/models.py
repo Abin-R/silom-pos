@@ -9,8 +9,76 @@ we swap the backend.
 """
 from __future__ import annotations
 
+import secrets
 import uuid
+
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
+from django.utils import timezone
+
+
+# ─── Staff (email/password auth) ────────────────────────────────────────────
+class Staff(models.Model):
+    """A POS user who logs in with email + password.
+
+    NOT using Django's built-in ``auth_user`` — we share that table with
+    other apps in the same Postgres, and our role/branch model is custom.
+    All Brave POS auth lives in this ``bravepos_staff`` table.
+    """
+    ROLE_CHOICES = [
+        ("admin", "Admin"),
+        ("cashier", "Cashier"),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField(unique=True)
+    password_hash = models.CharField(max_length=256)
+    name = models.CharField(max_length=120)
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES, default="cashier")
+    branches = models.ManyToManyField(
+        "Branch", related_name="staff", blank=True,
+    )
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return f"{self.name} <{self.email}>"
+
+    # ── Password helpers ──
+    def set_password(self, plain: str) -> None:
+        self.password_hash = make_password(plain)
+
+    def check_password(self, plain: str) -> bool:
+        return check_password(plain, self.password_hash)
+
+
+class BranchSession(models.Model):
+    """The single active login for a branch.
+
+    Enforced as 1-row-per-branch by the unique constraint on ``branch``.
+    Logging in to a branch that's already taken DELETEs the old row then
+    INSERTs a new one — the kicked-out user's token stops authenticating.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.OneToOneField(
+        "Branch", on_delete=models.CASCADE, related_name="current_session",
+    )
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name="sessions",
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    opened_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-opened_at"]
+
+    @staticmethod
+    def new_token() -> str:
+        # 64 hex chars (256 bits) — opaque, secret, generated server-side.
+        return secrets.token_hex(32)
 
 
 # ─── Branches ───────────────────────────────────────────────────────────────
@@ -39,6 +107,10 @@ class Branch(models.Model):
 # ─── Shop directory ──────────────────────────────────────────────────────────
 class Category(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="categories",
+        null=True, blank=True,  # nullable for migration backfill; enforced at app level
+    )
     name = models.CharField(max_length=120)
     name_th = models.CharField(max_length=120, blank=True, default="")
     color = models.CharField(max_length=16, default="#00B14F")
@@ -48,6 +120,7 @@ class Category(models.Model):
 
     class Meta:
         ordering = ["order", "name"]
+        indexes = [models.Index(fields=["branch"])]
 
     def __str__(self) -> str:
         return self.name
@@ -55,6 +128,10 @@ class Category(models.Model):
 
 class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="products",
+        null=True, blank=True,
+    )
     name = models.CharField(max_length=200)
     name_th = models.CharField(max_length=200, blank=True, default="")
     category = models.ForeignKey(
@@ -76,7 +153,10 @@ class Product(models.Model):
 
     class Meta:
         ordering = ["sort_order", "name"]
-        indexes = [models.Index(fields=["category"])]
+        indexes = [
+            models.Index(fields=["category"]),
+            models.Index(fields=["branch"]),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -90,6 +170,10 @@ class StockMovement(models.Model):
         ("check", "Check"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="stock_movements",
+        null=True, blank=True,
+    )
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="movements",
     )
@@ -107,6 +191,10 @@ class StockMovement(models.Model):
 # ─── Customers ───────────────────────────────────────────────────────────────
 class Customer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="customers",
+        null=True, blank=True,
+    )
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=32, blank=True, default="")
     last_visit = models.CharField(max_length=32, blank=True, default="")
@@ -114,6 +202,7 @@ class Customer(models.Model):
 
     class Meta:
         ordering = ["name"]
+        indexes = [models.Index(fields=["branch"])]
 
 
 # ─── Settings (single-row config) ────────────────────────────────────────────
@@ -172,6 +261,10 @@ class Order(models.Model):
         ("other", "Other"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="orders",
+        null=True, blank=True,
+    )
     order_number = models.CharField(max_length=32, unique=True, db_index=True)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_type = models.CharField(max_length=16, default="none")  # none|amount|percent
@@ -200,6 +293,7 @@ class Order(models.Model):
         indexes = [
             models.Index(fields=["source"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["branch"]),
         ]
 
 
@@ -224,6 +318,10 @@ class ParkedOrder(models.Model):
     """A held cart that hasn't been paid yet.  Items are stored as JSON because
     they're rarely queried and the shape is identical to the in-memory cart."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="parked_orders",
+        null=True, blank=True,
+    )
     name = models.CharField(max_length=200)
     items = models.JSONField(default=list)
     customer_id = models.UUIDField(null=True, blank=True)
@@ -232,12 +330,17 @@ class ParkedOrder(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [models.Index(fields=["branch"])]
 
 
 # ─── Shifts ──────────────────────────────────────────────────────────────────
 class Shift(models.Model):
     STATUS_CHOICES = [("open", "Open"), ("closed", "Closed")]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="shifts",
+        null=True, blank=True,
+    )
     round_number = models.IntegerField(default=1)
     start_cash = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     opened_at = models.DateTimeField(auto_now_add=True)
@@ -255,6 +358,7 @@ class Shift(models.Model):
 
     class Meta:
         ordering = ["-opened_at"]
+        indexes = [models.Index(fields=["branch"])]
 
 
 class ShiftMovement(models.Model):

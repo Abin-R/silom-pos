@@ -23,8 +23,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import (
-    Branch, Category, Customer, Order, OrderItem, ParkedOrder, Product, Settings,
-    Shift, ShiftMovement, StockMovement,
+    Branch, BranchSession, Category, Customer, Order, OrderItem, ParkedOrder,
+    Product, Settings, Shift, ShiftMovement, Staff, StockMovement,
 )
 from .serializers import (
     BranchSerializer,
@@ -36,13 +36,209 @@ from .serializers import (
 logger = logging.getLogger("bravepos")
 
 
+# ─── Session / branch context ────────────────────────────────────────────────
+def get_session(request):
+    """Look up the BranchSession for the caller's bearer token.
+
+    Returns the session (with branch + staff prefetched) or ``None`` if the
+    request has no token, an invalid token, or a token that has been replaced
+    by a newer login on the same branch.  Touches ``last_seen_at`` on hit.
+    """
+    auth = request.headers.get('Authorization', '')
+    if not auth.lower().startswith('bearer '):
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    try:
+        sess = BranchSession.objects.select_related('staff', 'branch').get(token=token)
+    except BranchSession.DoesNotExist:
+        return None
+    sess.save(update_fields=['last_seen_at'])
+    return sess
+
+
+def require_session(view):
+    """Decorator: 401s if the caller has no valid BranchSession.
+
+    On success, exposes the session as ``request.session_obj`` so the view can
+    pull ``request.session_obj.branch`` / ``.staff`` without re-querying.
+    """
+    from functools import wraps
+
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        sess = get_session(request)
+        if sess is None:
+            return Response(
+                {'detail': 'Session expired or replaced by another login.'},
+                status=401,
+            )
+        request.session_obj = sess
+        return view(request, *args, **kwargs)
+    return wrapped
+
+
+def require_admin(view):
+    """Decorator: 401 if no session, 403 if session isn't an admin."""
+    from functools import wraps
+
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        sess = get_session(request)
+        if sess is None:
+            return Response({'detail': 'Session expired.'}, status=401)
+        if sess.staff.role != 'admin':
+            return Response({'detail': 'Admin role required.'}, status=403)
+        request.session_obj = sess
+        return view(request, *args, **kwargs)
+    return wrapped
+
+
+class _Unauthenticated(Exception):
+    """Raised by BranchScopedMixin.initial when no valid session exists.
+    Mapped to a 401 by the ViewSet's ``handle_exception`` override below."""
+
+
+class BranchScopedMixin:
+    """ViewSet mixin: scopes the queryset to the caller's branch and stamps
+    ``branch`` on every create/update.  Returns 401 if there is no valid session.
+    """
+    branch_field = 'branch'
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        sess = get_session(request)
+        if sess is None:
+            raise _Unauthenticated()
+        request.session_obj = sess
+
+    def handle_exception(self, exc):
+        if isinstance(exc, _Unauthenticated):
+            return Response(
+                {'detail': 'Session expired or replaced by another login.'},
+                status=401,
+            )
+        return super().handle_exception(exc)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        sess = getattr(self.request, 'session_obj', None)
+        if sess is None:
+            return qs.none()
+        return qs.filter(**{self.branch_field: sess.branch})
+
+    def perform_create(self, serializer):
+        sess = self.request.session_obj
+        serializer.save(**{self.branch_field: sess.branch})
+
+
 # ─── Healthcheck ─────────────────────────────────────────────────────────────
 @api_view(['GET'])
 def api_root(_request):
     return Response({'service': 'bravepos', 'status': 'ok'})
 
 
-# ─── Auth (PIN-based, matches the FastAPI endpoint) ──────────────────────────
+# ─── Auth (email + password, branch-scoped session) ──────────────────────────
+@api_view(['POST'])
+def auth_login(request):
+    """Body: { email, password, branch_id }.
+
+    Branch-scoped login.  If the requested branch already has an active
+    session, that one is replaced (the previous user's token stops working).
+    Returns: { token, staff: { id, name, role, email } }
+    """
+    email = (request.data or {}).get('email', '').strip().lower()
+    password = (request.data or {}).get('password', '')
+    branch_id = (request.data or {}).get('branch_id')
+
+    if not email or not password:
+        return Response({'detail': 'Email and password are required.'}, status=400)
+    if not branch_id:
+        return Response({'detail': 'Branch is required.'}, status=400)
+
+    try:
+        staff = Staff.objects.get(email=email, active=True)
+    except Staff.DoesNotExist:
+        return Response({'detail': 'Invalid credentials.'}, status=401)
+
+    if not staff.check_password(password):
+        return Response({'detail': 'Invalid credentials.'}, status=401)
+
+    try:
+        branch = Branch.objects.get(id=branch_id, active=True)
+    except Branch.DoesNotExist:
+        return Response({'detail': 'Branch not found.'}, status=404)
+
+    # Cashiers must be explicitly assigned to the branch; admins can log into
+    # any branch (so they don't get locked out of branch management).
+    if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
+        return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
+
+    # Single-session-per-branch: drop the existing session for this branch
+    # before creating the new one.  Old token immediately stops working.
+    BranchSession.objects.filter(branch=branch).delete()
+    sess = BranchSession.objects.create(
+        branch=branch,
+        staff=staff,
+        token=BranchSession.new_token(),
+    )
+
+    return Response({
+        'token': sess.token,
+        'staff': {
+            'id': str(staff.id),
+            'email': staff.email,
+            'name': staff.name,
+            'role': staff.role,
+        },
+        'branch': {
+            'id': str(branch.id),
+            'name': branch.name,
+        },
+        # legacy shape so older frontend code keeps working
+        'role': staff.role,
+        'name': staff.name,
+    })
+
+
+@api_view(['POST'])
+def auth_logout(request):
+    """Body: { token }.  Deletes the session.  Idempotent."""
+    token = (request.data or {}).get('token')
+    if token:
+        BranchSession.objects.filter(token=token).delete()
+    return Response({'ok': True})
+
+
+@api_view(['GET'])
+def auth_me(request):
+    """Returns the current authenticated staff (validates the bearer token)."""
+    auth = request.headers.get('Authorization', '')
+    token = auth[7:] if auth.lower().startswith('bearer ') else ''
+    if not token:
+        return Response({'detail': 'Not authenticated.'}, status=401)
+    try:
+        sess = BranchSession.objects.select_related('staff', 'branch').get(token=token)
+    except BranchSession.DoesNotExist:
+        return Response({'detail': 'Session expired or replaced by another login.'}, status=401)
+    sess.save(update_fields=['last_seen_at'])
+    return Response({
+        'staff': {
+            'id': str(sess.staff.id),
+            'email': sess.staff.email,
+            'name': sess.staff.name,
+            'role': sess.staff.role,
+        },
+        'branch': {
+            'id': str(sess.branch.id),
+            'name': sess.branch.name,
+        },
+    })
+
+
+# Legacy PIN endpoint — kept so existing installed APKs keep working until
+# the new login UI is deployed.  Will be removed once everyone migrated.
 @api_view(['POST'])
 def verify_pin(request):
     pin = (request.data or {}).get('pin', '')
@@ -54,12 +250,12 @@ def verify_pin(request):
 
 
 # ─── ViewSets — basic CRUD ───────────────────────────────────────────────────
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
 
@@ -74,13 +270,17 @@ class ProductViewSet(viewsets.ModelViewSet):
         return qs
 
 
-class CustomerViewSet(viewsets.ModelViewSet):
+class CustomerViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
 
 
 class BranchViewSet(viewsets.ModelViewSet):
-    """Branches (physical shop locations)."""
+    """Branches (physical shop locations).
+
+    Reads are unauthenticated so the login screen can populate the branch
+    dropdown.  Mutations require an admin session.
+    """
     queryset = Branch.objects.all()
     serializer_class = BranchSerializer
 
@@ -89,6 +289,31 @@ class BranchViewSet(viewsets.ModelViewSet):
         if self.request.query_params.get('active') == 'true':
             qs = qs.filter(active=True)
         return qs
+
+    def _require_admin(self):
+        sess = get_session(self.request)
+        if sess is None:
+            from rest_framework.exceptions import NotAuthenticated
+            raise NotAuthenticated('Session required.')
+        if sess.staff.role != 'admin':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin role required to edit branches.')
+
+    def create(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().destroy(request, *args, **kwargs)
 
 
 # ─── Settings — singleton, GET + PUT only ────────────────────────────────────
@@ -109,6 +334,7 @@ def _mask_api_key(data: dict) -> dict:
 
 
 @api_view(['GET', 'PUT'])
+@require_session
 def settings_view(request):
     obj = _get_or_create_settings()
     if request.method == 'GET':
@@ -145,9 +371,11 @@ def _next_order_number() -> str:
 
 # ─── Orders ──────────────────────────────────────────────────────────────────
 @api_view(['GET', 'POST'])
+@require_session
 def orders_list_create(request):
+    branch = request.session_obj.branch
     if request.method == 'GET':
-        qs = Order.objects.all()
+        qs = Order.objects.filter(branch=branch)
         source = request.query_params.get('source')
         status_ = request.query_params.get('status')
         if source and source != 'all':
@@ -161,10 +389,12 @@ def orders_list_create(request):
     items_data = payload.pop('items', []) or []
 
     # Snapshot category info from products for items missing it (parity with FastAPI).
+    # All lookups are scoped to the caller's branch so an order can only reference
+    # products that live at that branch.
     product_ids = [it.get('product_id') for it in items_data if it.get('product_id')]
     cats_by_pid: dict[str, tuple[str | None, str]] = {}
     if product_ids:
-        for p in Product.objects.filter(id__in=product_ids).select_related('category'):
+        for p in Product.objects.filter(id__in=product_ids, branch=branch).select_related('category'):
             cats_by_pid[str(p.id)] = (
                 str(p.category_id) if p.category_id else None,
                 p.category.name if p.category else 'Other',
@@ -181,7 +411,7 @@ def orders_list_create(request):
             for p in (
                 Product.objects
                 .select_for_update(of=('self',))
-                .filter(id__in=product_ids)
+                .filter(id__in=product_ids, branch=branch)
             ):
                 products_by_id[str(p.id)] = p
         # Lookup category names in one cheap query (no lock needed).
@@ -198,6 +428,7 @@ def orders_list_create(request):
 
     with transaction.atomic():
         order = Order.objects.create(
+            branch=branch,
             order_number=_next_order_number(),
             subtotal=Decimal(str(payload.get('subtotal', 0))),
             discount_type=payload.get('discount_type', 'none'),
@@ -243,6 +474,7 @@ def orders_list_create(request):
                 prod.stock = (prod.stock or 0) - qty
                 prod.save(update_fields=['stock'])
                 StockMovement.objects.create(
+                    branch=branch,
                     product=prod,
                     product_name=prod.name,
                     type='out',
@@ -254,8 +486,9 @@ def orders_list_create(request):
 
 
 @api_view(['PUT'])
+@require_session
 def order_update_status(request, order_id):
-    order = get_object_or_404(Order, id=order_id)
+    order = get_object_or_404(Order, id=order_id, branch=request.session_obj.branch)
     new_status = (request.data or {}).get('status')
     if new_status not in dict(Order.STATUS_CHOICES):
         return Response({'detail': 'Invalid status'}, status=400)
@@ -266,18 +499,25 @@ def order_update_status(request, order_id):
 
 # ─── Parked orders ───────────────────────────────────────────────────────────
 @api_view(['GET', 'POST'])
+@require_session
 def parked_orders_list_create(request):
+    branch = request.session_obj.branch
     if request.method == 'GET':
-        return Response(ParkedOrderSerializer(ParkedOrder.objects.all(), many=True).data)
+        return Response(ParkedOrderSerializer(
+            ParkedOrder.objects.filter(branch=branch), many=True,
+        ).data)
     ser = ParkedOrderSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    ser.save()
+    ser.save(branch=branch)
     return Response(ser.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['DELETE'])
-def parked_orders_delete(_request, pid):
-    deleted, _ = ParkedOrder.objects.filter(id=pid).delete()
+@require_session
+def parked_orders_delete(request, pid):
+    deleted, _ = ParkedOrder.objects.filter(
+        id=pid, branch=request.session_obj.branch,
+    ).delete()
     if not deleted:
         return Response({'detail': 'Not found'}, status=404)
     return Response(status=204)
@@ -285,9 +525,11 @@ def parked_orders_delete(_request, pid):
 
 # ─── Stock movements ─────────────────────────────────────────────────────────
 @api_view(['GET', 'POST'])
+@require_session
 def stock_movements(request):
+    branch = request.session_obj.branch
     if request.method == 'GET':
-        qs = StockMovement.objects.all()
+        qs = StockMovement.objects.filter(branch=branch)
         pid = request.query_params.get('product_id')
         if pid:
             qs = qs.filter(product_id=pid)
@@ -302,7 +544,7 @@ def stock_movements(request):
     if type_ not in ('in', 'out', 'adjust', 'check'):
         return Response({'detail': 'Invalid type'}, status=400)
     try:
-        product = Product.objects.get(id=product_id)
+        product = Product.objects.get(id=product_id, branch=branch)
     except Product.DoesNotExist:
         return Response({'detail': 'Product not found'}, status=404)
 
@@ -317,6 +559,7 @@ def stock_movements(request):
 
     doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
     mv = StockMovement.objects.create(
+        branch=branch,
         product=product,
         product_name=product.name,
         type=type_,
@@ -329,19 +572,24 @@ def stock_movements(request):
 
 # ─── Shifts ──────────────────────────────────────────────────────────────────
 @api_view(['GET'])
-def shift_current(_request):
-    s = Shift.objects.filter(status='open').order_by('-opened_at').first()
+@require_session
+def shift_current(request):
+    branch = request.session_obj.branch
+    s = Shift.objects.filter(branch=branch, status='open').order_by('-opened_at').first()
     if not s:
         return Response(None)
     return Response(ShiftSerializer(s).data)
 
 
 @api_view(['POST'])
+@require_session
 def shift_open(request):
-    if Shift.objects.filter(status='open').exists():
+    branch = request.session_obj.branch
+    if Shift.objects.filter(branch=branch, status='open').exists():
         return Response({'detail': 'Shift already open'}, status=400)
-    count = Shift.objects.count()
+    count = Shift.objects.filter(branch=branch).count()
     s = Shift.objects.create(
+        branch=branch,
         round_number=count + 1,
         start_cash=Decimal(str(request.data.get('start_cash', 0) or 0)),
         opened_by=request.data.get('opened_by', 'Admin') or 'Admin',
@@ -350,8 +598,10 @@ def shift_open(request):
 
 
 @api_view(['POST'])
+@require_session
 def shift_movement(request):
-    s = Shift.objects.filter(status='open').first()
+    branch = request.session_obj.branch
+    s = Shift.objects.filter(branch=branch, status='open').first()
     if not s:
         return Response({'detail': 'No open shift'}, status=400)
     type_ = request.data.get('type')
@@ -371,20 +621,17 @@ def shift_movement(request):
 
 
 @api_view(['PUT'])
+@require_session
 def shift_close(request):
-    s = Shift.objects.filter(status='open').first()
+    branch = request.session_obj.branch
+    s = Shift.objects.filter(branch=branch, status='open').first()
     if not s:
         return Response({'detail': 'No open shift'}, status=400)
-    cash_total = (
-        Order.objects
-        .filter(created_at__gte=s.opened_at, payment_method__in=['Easy Pay', 'Cash'])
-        .aggregate_sum() if False else None
-    )
-    # Manual sum (aggregate_sum isn't a stdlib helper); keep this explicit.
     from django.db.models import Sum
     cash_total = (
         Order.objects
-        .filter(created_at__gte=s.opened_at, payment_method__in=['Easy Pay', 'Cash'])
+        .filter(branch=branch, created_at__gte=s.opened_at,
+                payment_method__in=['Easy Pay', 'Cash'])
         .aggregate(t=Sum('total'))['t'] or Decimal('0')
     )
     expected = (s.start_cash or 0) + cash_total + (s.total_paid_in or 0) - (s.total_paid_out or 0)
@@ -399,21 +646,27 @@ def shift_close(request):
 
 
 @api_view(['GET'])
-def shifts_list(_request):
-    return Response(ShiftSerializer(Shift.objects.all()[:100], many=True).data)
+@require_session
+def shifts_list(request):
+    return Response(ShiftSerializer(
+        Shift.objects.filter(branch=request.session_obj.branch)[:100],
+        many=True,
+    ).data)
 
 
 # ─── Customer stats ──────────────────────────────────────────────────────────
 @api_view(['GET'])
-def customer_stats(_request, customer_id):
+@require_session
+def customer_stats(request, customer_id):
+    branch = request.session_obj.branch
     try:
-        Customer.objects.get(id=customer_id)
+        Customer.objects.get(id=customer_id, branch=branch)
     except Customer.DoesNotExist:
         return Response({'detail': 'Customer not found'}, status=404)
 
     orders = list(
         Order.objects
-        .filter(customer_id=customer_id)
+        .filter(branch=branch, customer_id=customer_id)
         .prefetch_related('items')
     )
     completed = [o for o in orders if o.status == 'completed']
@@ -459,7 +712,9 @@ def customer_stats(_request, customer_id):
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
 @api_view(['GET'])
+@require_session
 def dashboard(request):
+    branch = request.session_obj.branch
     period = request.query_params.get('period', 'month')
     now = djtz.now()
     if period == 'today':
@@ -473,7 +728,7 @@ def dashboard(request):
 
     orders = list(
         Order.objects
-        .filter(created_at__gte=start)
+        .filter(branch=branch, created_at__gte=start)
         .exclude(status='cancel')
         .prefetch_related('items')
     )
@@ -485,7 +740,7 @@ def dashboard(request):
     product_ids = {item.product_id for o in orders for item in o.items.all() if item.product_id}
     products = {
         str(p.id): p for p in
-        Product.objects.filter(id__in=product_ids).only('id', 'cost', 'category_id')
+        Product.objects.filter(id__in=product_ids, branch=branch).only('id', 'cost', 'category_id')
     }
 
     cost_total = 0.0
@@ -566,6 +821,7 @@ def _extract_qr_data(data: dict) -> tuple[str | None, str | None]:
 
 
 @api_view(['POST'])
+@require_session
 def beam_charge_create(request):
     try:
         base, headers = _beam_credentials()
@@ -618,7 +874,8 @@ def beam_charge_create(request):
 
 
 @api_view(['GET'])
-def beam_charge_status(_request, charge_id):
+@require_session
+def beam_charge_status(request, charge_id):
     try:
         base, headers = _beam_credentials()
     except ValueError as e:
@@ -650,13 +907,17 @@ def seed_data(_request):
     Order.objects.all().delete()
     ParkedOrder.objects.all().delete()
     StockMovement.objects.all().delete()
+    ShiftMovement.objects.all().delete()
+    Shift.objects.all().delete()
     Product.objects.all().delete()
     Customer.objects.all().delete()
     Category.objects.all().delete()
+    BranchSession.objects.all().delete()
+    Staff.objects.all().delete()
     Branch.objects.all().delete()
 
     # Seed default branch
-    Branch.objects.create(
+    emq = Branch.objects.create(
         name="EmQuartier",
         code="EMQ",
         address="EmQuartier, Sukhumvit 39, Bangkok",
@@ -665,6 +926,16 @@ def seed_data(_request):
         pos_id="E020140003A0087",
         active=True,
     )
+
+    # Seed demo staff — admin can log into any branch, cashier only to EmQuartier
+    admin = Staff(email="admin@rollingpinn.com", name="Admin", role="admin")
+    admin.set_password("admin1234")
+    admin.save()
+
+    cashier = Staff(email="cashier@rollingpinn.com", name="Cashier", role="cashier")
+    cashier.set_password("cashier1234")
+    cashier.save()
+    cashier.branches.add(emq)
 
     cats_data = [
         ("Favorite", "รายการโปรด", "#00B14F", 0, ""),
@@ -680,6 +951,7 @@ def seed_data(_request):
     ]
     cats = {
         name: Category.objects.create(
+            branch=emq,
             name=name, name_th=name_th, color=color, order=order, source=source,
         )
         for (name, name_th, color, order, source) in cats_data
@@ -709,6 +981,7 @@ def seed_data(_request):
     ]
     for (name, name_th, price, cost, cat_name, img, fav, stock) in products:
         Product.objects.create(
+            branch=emq,
             name=name, name_th=name_th,
             price=Decimal(price), cost=Decimal(cost),
             category=cats.get(cat_name),
@@ -814,10 +1087,15 @@ def print_test(_request):
 
 
 @api_view(['POST'])
-def print_receipt(_request, order_id):
+@require_session
+def print_receipt(request, order_id):
     """Manually re-print a previously saved order."""
     try:
-        order = Order.objects.prefetch_related('items').get(id=order_id)
+        order = (
+            Order.objects
+            .prefetch_related('items')
+            .get(id=order_id, branch=request.session_obj.branch)
+        )
     except Order.DoesNotExist:
         return Response({'detail': 'Order not found'}, status=404)
     s = _get_or_create_settings()
