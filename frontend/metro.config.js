@@ -1,4 +1,14 @@
 // metro.config.js
+
+// metro-config@0.83+ uses Array.prototype.toReversed (requires Node 20).
+// Polyfill so this repo keeps building on Node 18 without a system upgrade.
+if (!Array.prototype.toReversed) {
+  Object.defineProperty(Array.prototype, 'toReversed', {
+    value: function () { return Array.from(this).reverse(); },
+    configurable: true, writable: true,
+  });
+}
+
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require('path');
 const { FileStore } = require('metro-cache');

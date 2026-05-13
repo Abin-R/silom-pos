@@ -10,11 +10,21 @@ from .models import (
 
 class BranchSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=False, required=False)
+    # Surface the first cashier's email so the edit screen can display + update
+    # it without an extra round trip.  One-cashier-per-branch is the assumption
+    # baked into the create flow; if admin manually assigns multiple, we just
+    # show the first.
+    cashier_email = serializers.SerializerMethodField()
 
     class Meta:
         model = Branch
-        fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id', 'active', 'created_at']
-        read_only_fields = ['created_at']
+        fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id',
+                  'active', 'created_at', 'cashier_email']
+        read_only_fields = ['created_at', 'cashier_email']
+
+    def get_cashier_email(self, obj):
+        s = obj.staff.filter(role='cashier').order_by('created_at').first()
+        return s.email if s else ''
 
 
 class CategorySerializer(serializers.ModelSerializer):

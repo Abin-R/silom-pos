@@ -38,7 +38,16 @@
           "backgroundColor": "#FFFFFF"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "./plugins/withStarPrinterFix",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 29
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

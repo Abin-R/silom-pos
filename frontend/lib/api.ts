@@ -45,8 +45,10 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const url = path.startsWith("http") ? path : `${ROOT}${path.startsWith("/") ? path : `/${path}`}`;
   const res = await fetch(url, { ...init, headers });
   if (res.status === 401) {
-    // Token rejected (replaced by another login, or never valid).  Drop the
-    // cached copy so the next mount of / starts fresh.
+    // Token rejected (only happens with a stale/forged token — the "block on
+    // second login" flow means valid sessions don't get yanked out from under
+    // an active user).  Drop the cached copy so the next mount of / starts
+    // fresh; screens that handle a 401 response will fall back to empty data.
     cachedToken = null;
     try {
       await AsyncStorage.removeItem(AUTH_KEY);

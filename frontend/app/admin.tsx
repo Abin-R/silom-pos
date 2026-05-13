@@ -14,7 +14,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -102,8 +102,35 @@ type PrinterStatus = {
 
 export default function Admin() {
   const router = useRouter();
-  const { staff, role } = useLocalSearchParams<{ staff?: string; role?: string }>();
+  // Auth state comes from AsyncStorage (the session), not URL params — those
+  // would otherwise let a manual URL edit show a stale or wrong role/branch.
+  const [staff, setStaff] = useState<string>("");
+  const [role, setRole] = useState<string>("");
+  const [activeBranchId, setActiveBranchId] = useState<string>("");
+  const [activeBranchName, setActiveBranchName] = useState<string>("");
+  const [authLoaded, setAuthLoaded] = useState(false);
   const isAdmin = role === "admin";
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(AUTH_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (!parsed?.token) {
+          router.replace("/");
+          return;
+        }
+        setStaff(parsed.staff?.name || "");
+        setRole(parsed.staff?.role || "");
+        setActiveBranchId(parsed.branch?.id || "");
+        setActiveBranchName(parsed.branch?.name || "");
+        setAuthLoaded(true);
+      } catch {
+        router.replace("/");
+      }
+    })();
+  }, [router]);
+
   const { width } = useWindowDimensions();
   const isWide = width >= 720;
   const [section, setSection] = useState<Section>("reports");
@@ -125,7 +152,7 @@ export default function Admin() {
   const navigate = (k: Section | "shop") => {
     setSidebarOpen(false);
     if (k === "shop") {
-      router.replace({ pathname: "/pos", params: { staff: staff || "Admin", role: role || "" } });
+      router.replace({ pathname: "/pos", params: { staff: staff || "Admin", role: role || "", branch_id: activeBranchId, branch_name: activeBranchName } });
     } else {
       if (k === "branches" && !isAdmin) return;
       setSection(k);
@@ -139,6 +166,12 @@ export default function Admin() {
           <Ionicons name="person" size={32} color="#475569" />
         </View>
         <Text style={styles.avatarText}>{staff || "Admin"}</Text>
+        {!!activeBranchName && (
+          <View style={styles.sideBranchChip} testID="admin-branch-chip">
+            <Ionicons name="storefront-outline" size={12} color="#00B14F" />
+            <Text style={styles.sideBranchChipText} numberOfLines={1}>{activeBranchName}</Text>
+          </View>
+        )}
       </View>
       {items.map((it) => (
         <TouchableOpacity
@@ -179,6 +212,16 @@ export default function Admin() {
       <Text style={styles.versionText}>Version 1.0.0</Text>
     </View>
   );
+
+  if (!authLoaded) {
+    return (
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color="#00B14F" />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -956,6 +999,7 @@ type Branch = {
   tax_id?: string;
   pos_id?: string;
   active: boolean;
+  cashier_email?: string;
 };
 
 function Branches() {
@@ -969,17 +1013,23 @@ function Branches() {
   };
   useEffect(() => { load(); }, []);
 
-  const save = async (b: Partial<Branch>) => {
+  const save = async (b: Partial<Branch> & { cashier_email?: string; cashier_password?: string }) => {
     setSaving(true);
     try {
       const isNew = editing === "new";
       const url = isNew ? `${API}/branches` : `${API}/branches/${(editing as Branch).id}`;
       const method = isNew ? "POST" : "PUT";
-      await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: true, ...b }),
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({} as any));
+        // Native `alert` is available on web + RN — fine as a transient toast.
+        alert(body?.detail || `Save failed (${res.status})`);
+        return;
+      }
       setEditing(null);
       await load();
     } finally {
@@ -1065,15 +1115,32 @@ function BranchEditModal({
 }: {
   initial: Branch | null;
   onClose: () => void;
-  onSave: (b: Partial<Branch>) => void;
+  onSave: (b: Partial<Branch> & { cashier_email?: string; cashier_password?: string }) => void;
   saving: boolean;
 }) {
+  const isNew = !initial;
   const [name, setName] = useState(initial?.name || "");
   const [code, setCode] = useState(initial?.code || "");
   const [address, setAddress] = useState(initial?.address || "");
   const [phone, setPhone] = useState(initial?.phone || "");
   const [taxId, setTaxId] = useState(initial?.tax_id || "");
   const [posId, setPosId] = useState(initial?.pos_id || "");
+  // Cashier creds.  On create: backend creates a Staff row in the same txn.
+  // On edit: backend updates the existing cashier (or creates one if missing).
+  const [cashierEmail, setCashierEmail] = useState(initial?.cashier_email || "");
+  const [cashierPassword, setCashierPassword] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+
+  const initialEmail = initial?.cashier_email || "";
+  const emailChanged = cashierEmail.trim() !== initialEmail;
+  const passwordEntered = cashierPassword.length > 0;
+  // On create both must be filled together (or neither).  On edit, either can
+  // change independently — except: a brand-new cashier on a branch that has
+  // none needs both.
+  const cashierIncomplete = isNew
+    ? (!!(cashierEmail.trim() || passwordEntered) && !(cashierEmail.trim() && passwordEntered))
+    : (!initialEmail && (emailChanged || passwordEntered) && !(cashierEmail.trim() && passwordEntered));
+  const canSave = !!name.trim() && !cashierIncomplete && !saving;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
@@ -1105,10 +1172,87 @@ function BranchEditModal({
             </View>
             <Text style={styles.formLabel}>POS ID</Text>
             <TextInput style={styles.formInput} value={posId} onChangeText={setPosId} testID="branch-pos-id" />
+
+            <View style={{ marginTop: 8, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#F1F5F9" }}>
+              <Text style={[styles.formLabel, { fontSize: 13, color: "#0F172A", fontWeight: "700" }]}>
+                Cashier login {isNew ? "(optional)" : ""}
+              </Text>
+              <Text style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
+                {isNew
+                  ? "Creates a cashier account that can sign in only at this branch."
+                  : initialEmail
+                    ? "Change email or set a new password. Leave password blank to keep current."
+                    : "No cashier yet. Provide email + password to add one."}
+              </Text>
+            </View>
+            <Text style={styles.formLabel}>Cashier email</Text>
+            <TextInput
+              style={styles.formInput}
+              value={cashierEmail}
+              onChangeText={setCashierEmail}
+              placeholder="cashier+siam@rollingpinn.com"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              testID="branch-cashier-email"
+            />
+            <Text style={styles.formLabel}>
+              {isNew || !initialEmail ? "Cashier password" : "New password (optional)"}
+            </Text>
+            <View style={[styles.formInput, { flexDirection: "row", alignItems: "center", paddingVertical: 0 }]}>
+              <TextInput
+                style={{ flex: 1, paddingVertical: 10, color: "#0F172A" }}
+                value={cashierPassword}
+                onChangeText={setCashierPassword}
+                placeholder={isNew || !initialEmail ? "Min 4 characters" : "Leave blank to keep current password"}
+                secureTextEntry={!showPwd}
+                autoCapitalize="none"
+                testID="branch-cashier-password"
+              />
+              <TouchableOpacity onPress={() => setShowPwd((s) => !s)}>
+                <Ionicons
+                  name={showPwd ? "eye-off-outline" : "eye-outline"}
+                  size={18}
+                  color="#94A3B8"
+                />
+              </TouchableOpacity>
+            </View>
+            {cashierIncomplete && (
+              <Text style={{ color: "#EF4444", fontSize: 12 }}>
+                Fill both email and password to add a cashier.
+              </Text>
+            )}
+
             <TouchableOpacity
-              style={[styles.primaryBtn, (saving || !name.trim()) && { opacity: 0.4 }]}
-              onPress={() => onSave({ name: name.trim(), code, address, phone, tax_id: taxId, pos_id: posId })}
-              disabled={saving || !name.trim()}
+              style={[styles.primaryBtn, !canSave && { opacity: 0.4 }]}
+              onPress={() => {
+                const payload: any = {
+                  name: name.trim(),
+                  code, address, phone, tax_id: taxId, pos_id: posId,
+                };
+                // Only send cashier fields when the admin actually wants to
+                // create/change them — keeps PUT semantics clean.
+                if (isNew) {
+                  if (cashierEmail.trim() && cashierPassword) {
+                    payload.cashier_email = cashierEmail.trim();
+                    payload.cashier_password = cashierPassword;
+                  }
+                } else {
+                  if (cashierEmail.trim() && cashierEmail.trim() !== initialEmail) {
+                    payload.cashier_email = cashierEmail.trim();
+                  }
+                  if (cashierPassword) {
+                    payload.cashier_password = cashierPassword;
+                  }
+                  // Cover the "no cashier yet, add one now" case from edit mode.
+                  if (!initialEmail && cashierEmail.trim() && cashierPassword) {
+                    payload.cashier_email = cashierEmail.trim();
+                    payload.cashier_password = cashierPassword;
+                  }
+                }
+                onSave(payload);
+              }}
+              disabled={!canSave}
               testID="branch-save"
             >
               <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Branch"}</Text>
@@ -2445,6 +2589,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#F1F5F9",
   },
   avatarText: { fontSize: 14, color: "#475569", marginTop: 6, fontWeight: "600" },
+  sideBranchChip: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    marginTop: 6, paddingHorizontal: 8, paddingVertical: 4,
+    backgroundColor: "#E5F7ED", borderRadius: 999, maxWidth: 160,
+  },
+  sideBranchChipText: { fontSize: 11, color: "#00B14F", fontWeight: "600" },
   sideItem: {
     flexDirection: "row", alignItems: "center", gap: 12,
     padding: 12, borderRadius: 10, marginBottom: 4,

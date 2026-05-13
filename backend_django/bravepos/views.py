@@ -175,8 +175,28 @@ def auth_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
-    # Single-session-per-branch: drop the existing session for this branch
-    # before creating the new one.  Old token immediately stops working.
+    # Block concurrent logins with the same account.  If this staff is already
+    # signed in anywhere (any branch, any browser), reject — the human can
+    # still switch branches via /auth/switch-branch, but two browsers can't
+    # both hold the same identity at once.
+    existing_user_session = (
+        BranchSession.objects
+        .select_related('branch')
+        .filter(staff=staff)
+        .first()
+    )
+    if existing_user_session:
+        return Response({
+            'detail': (
+                f'This account is already signed in at '
+                f'{existing_user_session.branch.name}. Sign out there first.'
+            ),
+            'code': 'user_already_signed_in',
+            'occupied_branch': existing_user_session.branch.name,
+        }, status=409)
+
+    # Single-session-per-branch: drop any other session on this branch
+    # (different staff) before creating the new one.
     BranchSession.objects.filter(branch=branch).delete()
     sess = BranchSession.objects.create(
         branch=branch,
@@ -199,6 +219,55 @@ def auth_login(request):
         # legacy shape so older frontend code keeps working
         'role': staff.role,
         'name': staff.name,
+    })
+
+
+@api_view(['POST'])
+def auth_switch_branch(request):
+    """Body: { branch_id }.  Admin-only: swap the caller's session to a
+    different branch without re-entering email/password.
+
+    Returns the same shape as ``auth_login`` so the frontend can persist it
+    identically (token + staff + branch).
+    """
+    sess = get_session(request)
+    if sess is None:
+        return Response({'detail': 'Session expired.'}, status=401)
+    if sess.staff.role != 'admin':
+        return Response({'detail': 'Admin role required to switch branches.'}, status=403)
+
+    branch_id = (request.data or {}).get('branch_id')
+    if not branch_id:
+        return Response({'detail': 'Branch is required.'}, status=400)
+    try:
+        branch = Branch.objects.get(id=branch_id, active=True)
+    except Branch.DoesNotExist:
+        return Response({'detail': 'Branch not found.'}, status=404)
+
+    if str(branch.id) == str(sess.branch.id):
+        # No-op: already on this branch.  Return current session so the client
+        # doesn't have to special-case it.
+        return Response({
+            'token': sess.token,
+            'staff': {'id': str(sess.staff.id), 'email': sess.staff.email,
+                      'name': sess.staff.name, 'role': sess.staff.role},
+            'branch': {'id': str(branch.id), 'name': branch.name},
+        })
+
+    staff = sess.staff
+    # Drop any existing session on the target branch (same behavior as a fresh
+    # login), drop our current session, then create a new one bound to the
+    # target branch.
+    BranchSession.objects.filter(branch=branch).delete()
+    sess.delete()
+    new_sess = BranchSession.objects.create(
+        branch=branch, staff=staff, token=BranchSession.new_token(),
+    )
+    return Response({
+        'token': new_sess.token,
+        'staff': {'id': str(staff.id), 'email': staff.email,
+                  'name': staff.name, 'role': staff.role},
+        'branch': {'id': str(branch.id), 'name': branch.name},
     })
 
 
@@ -300,16 +369,119 @@ class BranchViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('Admin role required to edit branches.')
 
     def create(self, request, *args, **kwargs):
+        """Admin-only branch create.
+
+        Accepts two optional fields, ``cashier_email`` + ``cashier_password``.
+        When both are present, a Staff(role=cashier) is created in the same
+        transaction and attached to the new branch.  Either both must be
+        provided or both omitted.
+        """
         self._require_admin()
-        return super().create(request, *args, **kwargs)
+        data = request.data or {}
+        cashier_email = (data.get('cashier_email') or '').strip().lower()
+        cashier_password = data.get('cashier_password') or ''
+
+        if bool(cashier_email) != bool(cashier_password):
+            return Response(
+                {'detail': 'Cashier email and password must both be provided, or both omitted.'},
+                status=400,
+            )
+
+        if cashier_email and Staff.objects.filter(email=cashier_email).exists():
+            return Response(
+                {'detail': f'A staff account with email "{cashier_email}" already exists.'},
+                status=400,
+            )
+
+        # Strip the cashier fields from the payload before DRF serializes the
+        # Branch — the BranchSerializer doesn't know about them and DRF will
+        # 400 on unknown fields in strict mode.
+        clean = {k: v for k, v in data.items() if k not in ('cashier_email', 'cashier_password')}
+        serializer = self.get_serializer(data=clean)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            self.perform_create(serializer)
+            branch = serializer.instance
+            if cashier_email:
+                staff = Staff(
+                    email=cashier_email,
+                    name=f'{branch.name} Cashier',
+                    role='cashier',
+                )
+                staff.set_password(cashier_password)
+                staff.save()
+                staff.branches.add(branch)
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
         self._require_admin()
-        return super().update(request, *args, **kwargs)
+        return self._update_with_cashier(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
         self._require_admin()
-        return super().partial_update(request, *args, **kwargs)
+        return self._update_with_cashier(request, *args, partial=True, **kwargs)
+
+    def _update_with_cashier(self, request, *args, **kwargs):
+        """Branch update + optional cashier email/password change.
+
+        - ``cashier_email`` (string): rename the branch's primary cashier.
+        - ``cashier_password`` (string): reset that cashier's password.
+        - If no cashier exists yet, both fields together create one.
+        - Duplicate-email guard mirrors the create path.
+        """
+        partial = kwargs.pop('partial', False)
+        data = dict(request.data or {})
+        new_email = (data.pop('cashier_email', None) or '').strip().lower() or None
+        new_password = data.pop('cashier_password', None) or None
+
+        instance = self.get_object()
+
+        # Validate the branch fields first (matches default DRF flow).
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        cashier = instance.staff.filter(role='cashier').order_by('created_at').first()
+
+        # Email-change collision check
+        if new_email and (not cashier or cashier.email != new_email):
+            if Staff.objects.filter(email=new_email).exclude(id=getattr(cashier, 'id', None)).exists():
+                return Response(
+                    {'detail': f'A staff account with email "{new_email}" already exists.'},
+                    status=400,
+                )
+
+        with transaction.atomic():
+            self.perform_update(serializer)
+
+            if cashier:
+                changed = False
+                if new_email and new_email != cashier.email:
+                    cashier.email = new_email
+                    changed = True
+                if new_password:
+                    cashier.set_password(new_password)
+                    changed = True
+                if changed:
+                    cashier.save()
+            elif new_email or new_password:
+                # No existing cashier — need both to create one.
+                if not (new_email and new_password):
+                    return Response(
+                        {'detail': 'To add a cashier, provide both email and password.'},
+                        status=400,
+                    )
+                staff = Staff(email=new_email, name=f'{instance.name} Cashier', role='cashier')
+                staff.set_password(new_password)
+                staff.save()
+                staff.branches.add(instance)
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+
+        return Response(self.get_serializer(instance).data)
 
     def destroy(self, request, *args, **kwargs):
         self._require_admin()
@@ -426,6 +598,14 @@ def orders_list_create(request):
                 cat_name_by_id.get(str(p.category_id) or '', 'Other'),
             )
 
+    # Silom-style workflow: after payment, the order lands in the "New Order"
+    # kanban column so kitchen staff can pick it up and progress it through
+    # Preparing → Completed manually.  Callers can still send an explicit
+    # status (e.g. "completed" for an over-the-counter walk-in) to skip the
+    # queue.
+    requested_status = payload.get('status')
+    initial_status = requested_status if requested_status in dict(Order.STATUS_CHOICES) else 'new'
+
     with transaction.atomic():
         order = Order.objects.create(
             branch=branch,
@@ -438,7 +618,7 @@ def orders_list_create(request):
             payment_method=payload.get('payment_method', '') or '',
             paid_amount=Decimal(str(payload.get('paid_amount', 0))),
             change=Decimal(str(payload.get('change', 0))),
-            status='completed',
+            status=initial_status,
             source=payload.get('source', 'table'),
             customer_id=payload.get('customer_id'),
             customer_name=payload.get('customer_name', '') or '',
@@ -577,7 +757,11 @@ def shift_current(request):
     branch = request.session_obj.branch
     s = Shift.objects.filter(branch=branch, status='open').order_by('-opened_at').first()
     if not s:
-        return Response(None)
+        # DRF's JSONRenderer turns `Response(None)` into an empty body, which
+        # makes the frontend's `r.json()` blow up.  Use Django's JsonResponse
+        # so the wire shape is the JSON literal `null`.
+        from django.http import JsonResponse
+        return JsonResponse(None, safe=False)
     return Response(ShiftSerializer(s).data)
 
 
