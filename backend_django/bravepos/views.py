@@ -273,8 +273,15 @@ def auth_switch_branch(request):
 
 @api_view(['POST'])
 def auth_logout(request):
-    """Body: { token }.  Deletes the session.  Idempotent."""
-    token = (request.data or {}).get('token')
+    """Deletes the caller's session.  Idempotent.
+
+    Token is read from the ``Authorization: Bearer <token>`` header (preferred)
+    or, for legacy callers, from the JSON body's ``token`` field.
+    """
+    auth = request.headers.get('Authorization', '')
+    token = auth[7:].strip() if auth.lower().startswith('bearer ') else ''
+    if not token:
+        token = (request.data or {}).get('token', '') or ''
     if token:
         BranchSession.objects.filter(token=token).delete()
     return Response({'ok': True})
