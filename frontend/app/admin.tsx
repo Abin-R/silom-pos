@@ -1898,6 +1898,12 @@ function SettingsView({ isWide }: { isWide: boolean }) {
   const [active, setActive] = useState("Shop");
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
+  // Narrow phones can't show the list + the detail side by side (leftNav is
+  // 280px wide, leaving ~95px for the detail pane).  Use a master-detail
+  // pattern: list first, then drill into a section.
+  const [drilled, setDrilled] = useState(false);
+  const showDetail = isWide || drilled;
+  const showList = isWide || !drilled;
 
   useEffect(() => {
     apiFetch(`${API}/settings`).then((r) => r.json()).then(setS);
@@ -1915,27 +1921,40 @@ function SettingsView({ isWide }: { isWide: boolean }) {
   };
 
   return (
-    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="settings-section">
-      <View style={styles.leftNav}>
-        <Text style={styles.sectionHeader}>Settings</Text>
-        <ScrollView>
-          {sections.map((sec) => (
-            <TouchableOpacity
-              key={sec.name}
-              style={[styles.settingsRow, active === sec.name && styles.leftNavRowActive]}
-              onPress={() => setActive(sec.name)}
-              testID={`settings-${sec.name}`}
-            >
-              <Ionicons name={sec.icon} size={18} color={sec.color} style={{ marginRight: 10 }} />
-              <Text style={[styles.settingsLabel, { flex: 1 }, active === sec.name && { color: "#00B14F", fontWeight: "700" }]}>
-                {sec.name}
-              </Text>
-              <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
+    <View style={styles.twoCol} testID="settings-section">
+      {showList && (
+        <View style={[styles.leftNav, !isWide && styles.fullCol]}>
+          <Text style={styles.sectionHeader}>Settings</Text>
+          <ScrollView>
+            {sections.map((sec) => (
+              <TouchableOpacity
+                key={sec.name}
+                style={[styles.settingsRow, isWide && active === sec.name && styles.leftNavRowActive]}
+                onPress={() => { setActive(sec.name); setDrilled(true); }}
+                testID={`settings-${sec.name}`}
+              >
+                <Ionicons name={sec.icon} size={18} color={sec.color} style={{ marginRight: 10 }} />
+                <Text style={[styles.settingsLabel, { flex: 1 }, isWide && active === sec.name && { color: "#00B14F", fontWeight: "700" }]}>
+                  {sec.name}
+                </Text>
+                <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+      {showDetail && (
       <View style={{ flex: 1 }}>
+        {!isWide && (
+          <TouchableOpacity
+            style={styles.backRow}
+            onPress={() => setDrilled(false)}
+            testID="settings-back"
+          >
+            <Ionicons name="chevron-back" size={18} color="#00B14F" />
+            <Text style={styles.backText}>Settings</Text>
+          </TouchableOpacity>
+        )}
         {active === "Shop" && s ? (
           <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
             <Text style={styles.h2}>Shop</Text>
@@ -2118,6 +2137,7 @@ function SettingsView({ isWide }: { isWide: boolean }) {
           </View>
         )}
       </View>
+      )}
     </View>
   );
 }

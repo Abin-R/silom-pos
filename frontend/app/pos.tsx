@@ -440,7 +440,9 @@ export default function POS() {
           testId="toolbar-customer"
           compact={!isWide}
         />
-        {!!activeBranchName && (
+        {/* Branch chip lives in the top bar only on tablet/desktop; on phone
+            it moves into the mobile search row to avoid overflowing the bar. */}
+        {isMid && !!activeBranchName && (
           <TouchableOpacity
             style={[styles.branchChip, !isAdmin && { opacity: 1 }]}
             onPress={() => isAdmin && openBranchSwitcher()}
@@ -467,18 +469,32 @@ export default function POS() {
         </TouchableOpacity>
       </View>
 
-      {/* Mobile search bar (below top bar on narrow) */}
+      {/* Mobile search bar (below top bar on narrow) + branch chip */}
       {!isMid && (
-        <View style={styles.mobileSearchWrap}>
-          <Ionicons name="search" size={18} color="#94A3B8" />
-          <TextInput
-            placeholder="Search Products"
-            placeholderTextColor="#94A3B8"
-            style={styles.searchInput}
-            value={search}
-            onChangeText={setSearch}
-            testID="product-search-mobile"
-          />
+        <View style={styles.mobileTopRow}>
+          <View style={[styles.mobileSearchWrap, { flex: 1, marginRight: 0 }]}>
+            <Ionicons name="search" size={18} color="#94A3B8" />
+            <TextInput
+              placeholder="Search Products"
+              placeholderTextColor="#94A3B8"
+              style={styles.searchInput}
+              value={search}
+              onChangeText={setSearch}
+              testID="product-search-mobile"
+            />
+          </View>
+          {!!activeBranchName && (
+            <TouchableOpacity
+              style={styles.branchChipMobile}
+              onPress={() => isAdmin && openBranchSwitcher()}
+              disabled={!isAdmin}
+              testID="branch-chip"
+            >
+              <Ionicons name="storefront-outline" size={14} color="#00B14F" />
+              <Text style={styles.branchChipMobileText} numberOfLines={1}>{activeBranchName}</Text>
+              {isAdmin && <Ionicons name="swap-horizontal" size={12} color="#64748B" />}
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -2423,6 +2439,26 @@ const styles = StyleSheet.create({
     maxWidth: 200,
   },
   branchChipText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
+  mobileTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  branchChipMobile: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    maxWidth: 130,
+  },
+  branchChipMobileText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
   branchModalOverlay: {
     flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
     justifyContent: "center", padding: 24,

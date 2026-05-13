@@ -48,30 +48,81 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [branch, setBranch] = useState<Branch | null>(null);
-  const [showBranchPicker, setShowBranchPicker] = useState(false);
+  // While true, render a spinner — we're checking whether the user already
+  // has a valid session saved from a previous launch.  This is what makes
+  // "close + reopen" land on POS/Admin directly instead of forcing the user
+  // to re-authenticate (which would then fail with "already signed in").
+  const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [r, savedBranchRaw] = await Promise.all([
-          fetch(`${API}/branches?active=true`),
-          AsyncStorage.getItem(BRANCH_KEY),
-        ]);
-        const list: Branch[] = r.ok ? await r.json() : [];
-        setBranches(list);
-        const saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
-        const initial =
-          (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
-        setBranch(initial);
+        const raw = await AsyncStorage.getItem(AUTH_KEY);
+        const saved = raw ? JSON.parse(raw) : null;
+        if (saved?.token) {
+          // Validate against /auth/me so we don't navigate into a screen
+          // whose API calls would all 401 with a stale/invalidated token.
+          const res = await fetch(`${API}/auth/me`, {
+            headers: { Authorization: `Bearer ${saved.token}` },
+          });
+          if (res.ok) {
+            const me = await res.json();
+            const role = me.staff?.role || "cashier";
+            const destination = role === "admin" ? "/admin" : "/pos";
+            setAuthToken(saved.token);
+            router.replace({
+              pathname: destination,
+              params: {
+                staff: me.staff?.name || "",
+                role,
+                branch_id: me.branch?.id || "",
+                branch_name: me.branch?.name || "",
+              },
+            });
+            return;
+          }
+          // Stale token — drop it so the user re-authenticates cleanly.
+          await AsyncStorage.removeItem(AUTH_KEY);
+        }
       } catch {
-        // backend unreachable — login form still appears so the user gets
-        // a clearer "Network error" when they actually submit
+        // Backend unreachable / corrupt JSON — fall through to show the form.
       }
+      setCheckingSession(false);
     })();
-  }, []);
+  }, [router]);
+
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branch, setBranch] = useState<Branch | null>(null);
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
+  const [branchLoadError, setBranchLoadError] = useState<string>("");
+  const [branchLoading, setBranchLoading] = useState(true);
+
+  const loadBranches = async () => {
+    setBranchLoading(true);
+    setBranchLoadError("");
+    try {
+      const savedBranchRaw = await AsyncStorage.getItem(BRANCH_KEY);
+      const r = await fetch(`${API}/branches?active=true`);
+      if (!r.ok) {
+        setBranchLoadError(`Server responded ${r.status}. URL: ${API}`);
+        return;
+      }
+      const list: Branch[] = await r.json();
+      setBranches(list);
+      const saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
+      const initial = (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
+      setBranch(initial);
+    } catch (e: any) {
+      // Surface the actual error so a stuck "Loading branches..." can be
+      // diagnosed without a debug build.  Common causes: DNS, captive WiFi,
+      // self-signed cert, wrong baked-in URL.
+      setBranchLoadError(`${e?.message || String(e)}\nURL: ${API}`);
+    } finally {
+      setBranchLoading(false);
+    }
+  };
+
+  useEffect(() => { loadBranches(); }, []);
 
   const submit = async () => {
     if (loading) return;
@@ -135,6 +186,18 @@ export default function Login() {
     }
   };
 
+  if (checkingSession) {
+    // Don't flash the login form before we know whether the saved token is
+    // valid — if it is, we'll redirect to admin/pos in the effect above.
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color="#00B14F" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView
       style={[styles.container, !isWide && styles.containerNarrow]}
@@ -172,12 +235,27 @@ export default function Login() {
         >
           <Ionicons name="storefront-outline" size={16} color="#0F172A" />
           <Text style={styles.branchLabel}>
-            {branch?.name || (branches.length === 0 ? "Loading branches…" : "Select branch")}
+            {branch?.name
+              || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
           </Text>
           {branches.length > 1 && (
             <Ionicons name="chevron-down" size={14} color="#94A3B8" />
           )}
         </TouchableOpacity>
+        {!!branchLoadError && (
+          <View style={{ width: "100%", maxWidth: 360, marginBottom: 12, alignItems: "center" }}>
+            <Text style={{ color: "#EF4444", fontSize: 11, textAlign: "center", marginBottom: 6 }}>
+              {branchLoadError}
+            </Text>
+            <TouchableOpacity
+              onPress={loadBranches}
+              style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: "#EF4444" }}
+              testID="branch-retry"
+            >
+              <Text style={{ color: "#EF4444", fontSize: 12, fontWeight: "600" }}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.field}>
           <Ionicons name="mail-outline" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
