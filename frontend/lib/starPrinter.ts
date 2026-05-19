@@ -233,14 +233,18 @@ export async function printReceipt(
   if (!config.identifier)
     return { ok: false, error: 'No printer identifier configured' };
 
-  const [vendorId, productId] = config.identifier.split(':');
-  if (!vendorId || !productId) {
+  const [vendorIdStr, productIdStr] = config.identifier.split(':');
+  if (!vendorIdStr || !productIdStr) {
     return { ok: false, error: `Invalid identifier (expected vid:pid): ${config.identifier}` };
   }
+  // Native Android binding expects Integer for vid/pid even though the
+  // library's TypeScript .d.ts declares string parameters.  Pass numbers.
+  const vendorId = Number(vendorIdStr);
+  const productId = Number(productIdStr);
 
   try {
     await USBPrinter.init();
-    await USBPrinter.connectPrinter(vendorId, productId);
+    await USBPrinter.connectPrinter(vendorId as any, productId as any);
     const data = buildReceipt(order, shop);
     USBPrinter.printRaw(data);
     return { ok: true };
