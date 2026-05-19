@@ -173,26 +173,30 @@ export default function Admin() {
           </View>
         )}
       </View>
-      {items.map((it) => (
-        <TouchableOpacity
-          key={it.key}
-          style={[styles.sideItem, section === it.key && styles.sideItemActive]}
-          onPress={() => navigate(it.key)}
-          testID={`side-${it.key}`}
-        >
-          <Ionicons
-            name={it.icon}
-            size={20}
-            color={section === it.key ? "#00B14F" : "#475569"}
-          />
-          <Text
-            style={[styles.sideLabel, section === it.key && styles.sideLabelActive]}
+      {/* Scrollable so the lower items (Settings / Branches) and the logout
+          footer never get clipped when the sidebar is taller than the screen
+          (landscape, short devices, etc.). */}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
+        {items.map((it) => (
+          <TouchableOpacity
+            key={it.key}
+            style={[styles.sideItem, section === it.key && styles.sideItemActive]}
+            onPress={() => navigate(it.key)}
+            testID={`side-${it.key}`}
           >
-            {it.label}
-          </Text>
-        </TouchableOpacity>
-      ))}
-      <View style={{ flex: 1 }} />
+            <Ionicons
+              name={it.icon}
+              size={20}
+              color={section === it.key ? "#00B14F" : "#475569"}
+            />
+            <Text
+              style={[styles.sideLabel, section === it.key && styles.sideLabelActive]}
+            >
+              {it.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
       <TouchableOpacity
         style={styles.logoutSide}
         onPress={async () => { await doLogout(); router.replace("/"); }}
@@ -209,7 +213,9 @@ export default function Admin() {
           {new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
         </Text>
       </View>
-      <Text style={styles.versionText}>Version 1.0.0</Text>
+      <Text style={styles.versionText}>
+        Version {require("expo-constants").default.expoConfig?.version || "?"}
+      </Text>
     </View>
   );
 
@@ -593,22 +599,46 @@ function Inventory({ isWide }: { isWide: boolean }) {
   return (
     <View style={{ flex: 1 }} testID="inventory-section">
       <View style={[styles.twoCol, !isWide && styles.stackedCol, { flex: 1 }]}>
-        <View style={styles.leftNav}>
-          <Text style={styles.sectionHeader}>Stock Movement</Text>
-          <ScrollView>
-            {categories.filter((c) => c.name !== "Favorite").map((c) => (
-              <TouchableOpacity
-                key={c.id}
-                style={[styles.leftNavRow, activeCat === c.id && styles.leftNavRowActive]}
-                onPress={() => setActiveCat(c.id)}
-                testID={`inv-cat-${c.id}`}
-              >
-                <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
-                <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+        {isWide ? (
+          <View style={styles.leftNav}>
+            <Text style={styles.sectionHeader}>Stock Movement</Text>
+            <ScrollView>
+              {categories.filter((c) => c.name !== "Favorite").map((c) => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.leftNavRow, activeCat === c.id && styles.leftNavRowActive]}
+                  onPress={() => setActiveCat(c.id)}
+                  testID={`inv-cat-${c.id}`}
+                >
+                  <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
+                  <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        ) : (
+          <View style={styles.narrowCatBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
+            >
+              {categories.filter((c) => c.name !== "Favorite").map((c) => {
+                const active = activeCat === c.id;
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                    onPress={() => setActiveCat(c.id)}
+                    testID={`inv-cat-${c.id}`}
+                  >
+                    <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={styles.sectionHeader}>
             {curCat?.name} ({filtered.length})
@@ -827,7 +857,7 @@ function Customers({ isWide }: { isWide: boolean }) {
 
   return (
     <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="customers-section">
-      <View style={styles.leftNav}>
+      <View style={[styles.leftNav, !isWide && styles.leftNavStacked]}>
         <View style={styles.custHeader}>
           <Text style={styles.sectionHeader}>Customers</Text>
           <TouchableOpacity onPress={() => setAddOpen(true)} testID="add-customer-admin">
@@ -1310,48 +1340,86 @@ function Products({ isWide }: { isWide: boolean }) {
 
   return (
     <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="products-section">
-      <View style={styles.leftNav}>
-        <View style={styles.custHeader}>
-          <Text style={styles.sectionHeader}>Products</Text>
+      {/* On narrow, swap the vertical category rail for a compact horizontal
+          chip strip + search above the products grid.  Otherwise the rail's
+          ~600px height would push the FlatList off-screen entirely. */}
+      {isWide ? (
+        <View style={styles.leftNav}>
+          <View style={styles.custHeader}>
+            <Text style={styles.sectionHeader}>Products</Text>
+          </View>
+          <View style={styles.searchBoxRow}>
+            <Ionicons name="search" size={16} color="#94A3B8" />
+            <TextInput
+              placeholder="Search Products"
+              style={styles.searchBoxInput}
+              value={q}
+              onChangeText={setQ}
+              placeholderTextColor="#94A3B8"
+              testID="admin-prod-search"
+            />
+          </View>
+          <ScrollView>
+            <Text style={styles.allCatsLabel}>All Categories</Text>
+            {cats.map((c) => {
+              const active = activeCat === c.id;
+              const hasItems = prods.some((p) => c.name === "Favorite" ? p.is_favorite : p.category_id === c.id);
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.catMgmtRow, active && styles.leftNavRowActive]}
+                  onPress={() => { setActiveCat(c.id); setQ(""); }}
+                  testID={`admin-cat-${c.id}`}
+                >
+                  <Ionicons
+                    name={hasItems ? "checkmark-circle" : "ellipse-outline"}
+                    size={18}
+                    color={hasItems ? c.color : "#CBD5E1"}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.catMgmtName}>{c.name}</Text>
+                    {c.source && <Text style={styles.catMgmtSource}>Source: {c.source}</Text>}
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
-        <View style={styles.searchBoxRow}>
-          <Ionicons name="search" size={16} color="#94A3B8" />
-          <TextInput
-            placeholder="Search Products"
-            style={styles.searchBoxInput}
-            value={q}
-            onChangeText={setQ}
-            placeholderTextColor="#94A3B8"
-            testID="admin-prod-search"
-          />
+      ) : (
+        <View style={styles.narrowCatBar}>
+          <View style={styles.searchBoxRow}>
+            <Ionicons name="search" size={16} color="#94A3B8" />
+            <TextInput
+              placeholder="Search Products"
+              style={styles.searchBoxInput}
+              value={q}
+              onChangeText={setQ}
+              placeholderTextColor="#94A3B8"
+              testID="admin-prod-search"
+            />
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
+          >
+            {cats.map((c) => {
+              const active = activeCat === c.id;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                  onPress={() => { setActiveCat(c.id); setQ(""); }}
+                  testID={`admin-cat-${c.id}`}
+                >
+                  <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
-        <ScrollView>
-          <Text style={styles.allCatsLabel}>All Categories</Text>
-          {cats.map((c) => {
-            const active = activeCat === c.id;
-            const hasItems = prods.some((p) => c.name === "Favorite" ? p.is_favorite : p.category_id === c.id);
-            return (
-              <TouchableOpacity
-                key={c.id}
-                style={[styles.catMgmtRow, active && styles.leftNavRowActive]}
-                onPress={() => { setActiveCat(c.id); setQ(""); }}
-                testID={`admin-cat-${c.id}`}
-              >
-                <Ionicons
-                  name={hasItems ? "checkmark-circle" : "ellipse-outline"}
-                  size={18}
-                  color={hasItems ? c.color : "#CBD5E1"}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.catMgmtName}>{c.name}</Text>
-                  {c.source && <Text style={styles.catMgmtSource}>Source: {c.source}</Text>}
-                </View>
-                <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      )}
       <View style={{ flex: 1 }}>
         <View style={styles.prodHeader}>
           <Text style={styles.sectionHeader}>
@@ -2656,6 +2724,37 @@ const styles = StyleSheet.create({
   twoCol: { flex: 1, flexDirection: "row" },
   stackedCol: { flexDirection: "column" },
   fullCol: { width: "100%", maxHeight: "100%", flex: 1, borderRightWidth: 0 },
+  // leftNav variant used when the layout is column-stacked on narrow screens.
+  // Replaces the fixed 280px width (which leaves wasted whitespace on the
+  // right) with full width.  No height cap — the inner ScrollView would
+  // otherwise hide categories beyond the first one, and users don't realise
+  // they need to scroll inside a panel that visually looks complete.
+  leftNavStacked: {
+    width: "100%",
+    height: "auto",
+    flexShrink: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  // Compact horizontal category strip used on narrow screens for Products /
+  // Inventory.  Replaces the ~600px-tall vertical rail so the FlatList of
+  // products below has enough vertical space to render.
+  narrowCatBar: {
+    width: "100%",
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  catChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+  },
+  catChipText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
   backRow: {
     flexDirection: "row",
     alignItems: "center",

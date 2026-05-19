@@ -1588,39 +1588,60 @@ function PaymentModal({
                 </View>
               </ScrollView>
             ) : (
-              <View style={[styles.padCol, isNarrow && { width: "100%", minHeight: 380 }]}>
-                <View style={styles.amountDisplay}>
+              <View style={[styles.padCol, isNarrow && { width: "100%", minHeight: 0 }]}>
+                <View style={[styles.amountDisplay, isNarrow && { padding: 12 }]}>
                   <Text style={styles.thbSmall}>THB</Text>
-                  <Text style={styles.amountText} testID="amount-display">
+                  <Text style={[styles.amountText, isNarrow && { fontSize: 26 }]} testID="amount-display">
                     {amount || "0"}
                   </Text>
                 </View>
-                {/* Numpad + quick amounts side by side */}
+                {/* On phone the quicks row above the keypad gives each pad
+                    button the full width instead of squeezing it into ~70%. */}
+                {isNarrow && (
+                  <View style={styles.quickRowMobile}>
+                    {quicks.map((q) => (
+                      <TouchableOpacity
+                        key={q}
+                        style={styles.quickChipMobile}
+                        onPress={() =>
+                          setAmount((a) => {
+                            const cur = parseFloat(a || "0");
+                            return String(cur + q);
+                          })
+                        }
+                        testID={`quick-${q}`}
+                      >
+                        <Text style={styles.quickChipMobileText}>+{q}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                {/* Numpad + (on tablet/desktop only) quick amounts side by side */}
                 <View style={styles.padWithQuicks}>
                   <View style={styles.padGridWrap}>
                     <View style={styles.padGrid}>
                       {["7", "8", "9", "4", "5", "6", "1", "2", "3", "0", "."].map((k) => (
                         <TouchableOpacity
                           key={k}
-                          style={styles.padBtn}
+                          style={[styles.padBtn, isNarrow && { paddingVertical: 12 }]}
                           onPress={() => onKey(k)}
                           testID={`pad-${k}`}
                         >
-                          <Text style={styles.padText}>{k}</Text>
+                          <Text style={[styles.padText, isNarrow && { fontSize: 22 }]}>{k}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
                     {/* Clear + Backspace row */}
                     <View style={styles.padBottomRow}>
                       <TouchableOpacity
-                        style={styles.clearPadBtnHalf}
+                        style={[styles.clearPadBtnHalf, isNarrow && { paddingVertical: 8 }]}
                         onPress={() => onKey("clear")}
                         testID="pad-clear"
                       >
                         <Text style={styles.clearPadText}>Clear</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={styles.backspacePadBtn}
+                        style={[styles.backspacePadBtn, isNarrow && { paddingVertical: 8 }]}
                         onPress={() => onKey("back")}
                         testID="pad-back"
                       >
@@ -1628,7 +1649,8 @@ function PaymentModal({
                       </TouchableOpacity>
                     </View>
                   </View>
-                  {/* Quick amounts column */}
+                  {/* Quick amounts column — only on tablet/desktop */}
+                  {!isNarrow && (
                   <View style={styles.quickColInline}>
                     {quicks.map((q) => (
                       <TouchableOpacity
@@ -1646,6 +1668,7 @@ function PaymentModal({
                       </TouchableOpacity>
                     ))}
                   </View>
+                  )}
                 </View>
               </View>
             )}
@@ -1726,6 +1749,8 @@ function DiscountModal({
 
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "back"];
   const quicks = [5, 10, 15, 20];
+  const { width: winW } = useWindowDimensions();
+  const isNarrow = winW < 600;
 
   const apply = () => {
     const n = parseFloat(val) || 0;
@@ -1753,9 +1778,9 @@ function DiscountModal({
             </TouchableOpacity>
           </View>
 
-          <View style={styles.toggleRow}>
+          <View style={[styles.toggleRow, isNarrow && { margin: 12 }]}>
             <TouchableOpacity
-              style={[styles.toggleBtn, mode === "amount" && styles.toggleBtnActive]}
+              style={[styles.toggleBtn, mode === "amount" && styles.toggleBtnActive, isNarrow && { paddingVertical: 8 }]}
               onPress={() => setMode("amount")}
               testID="disc-amount"
             >
@@ -1764,7 +1789,7 @@ function DiscountModal({
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.toggleBtn, mode === "percent" && styles.toggleBtnActive]}
+              style={[styles.toggleBtn, mode === "percent" && styles.toggleBtnActive, isNarrow && { paddingVertical: 8 }]}
               onPress={() => setMode("percent")}
               testID="disc-percent"
             >
@@ -1774,47 +1799,60 @@ function DiscountModal({
             </TouchableOpacity>
           </View>
 
-          <View style={styles.discountInput}>
-            <Text style={styles.discountInputText}>
+          <View style={[styles.discountInput, isNarrow && { padding: 12, marginHorizontal: 12 }]}>
+            <Text style={[styles.discountInputText, isNarrow && { fontSize: 24 }]}>
               {val || "0"}
               {mode === "percent" && val ? "%" : ""}
             </Text>
           </View>
 
-          <View style={styles.quickRow}>
+          <View style={[styles.quickRow, isNarrow && { marginVertical: 8, paddingHorizontal: 12 }]}>
             {quicks.map((q, i) => (
               <TouchableOpacity
                 key={q}
-                style={[styles.quickPct, { borderColor: discColors[i] }]}
+                style={[
+                  styles.quickPct,
+                  { borderColor: discColors[i] },
+                  isNarrow && { width: 48, height: 48, borderRadius: 24 },
+                ]}
                 onPress={() => {
                   setMode("percent");
                   setVal(String(q));
                 }}
                 testID={`disc-quick-${q}`}
               >
-                <Text style={[styles.quickPctText, { color: discColors[i] }]}>{q}%</Text>
+                <Text style={[styles.quickPctText, { color: discColors[i] }, isNarrow && { fontSize: 13 }]}>
+                  {q}%
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <View style={styles.discPad}>
+          <View style={[styles.discPad, isNarrow && { paddingHorizontal: 12 }]}>
             {keys.map((k) => (
               <TouchableOpacity
                 key={k}
-                style={styles.discKey}
+                // Square-ish buttons on phone — without overriding aspectRatio
+                // each key would be ~115×230px and the keypad alone would
+                // dominate the screen.
+                style={[styles.discKey, isNarrow && { aspectRatio: 1.4, paddingVertical: 6 }]}
                 onPress={() => onKey(k)}
                 testID={`disc-pad-${k}`}
               >
                 {k === "back" ? (
                   <Ionicons name="backspace-outline" size={22} color="#00B14F" />
                 ) : (
-                  <Text style={styles.discKeyText}>{k}</Text>
+                  <Text style={[styles.discKeyText, isNarrow && { fontSize: 22 }]}>{k}</Text>
                 )}
               </TouchableOpacity>
             ))}
           </View>
 
-          <TouchableOpacity style={styles.doneBtn} onPress={apply} testID="disc-done">
+          <TouchableOpacity
+            style={[styles.doneBtn, isNarrow && { margin: 12, padding: 14 }]}
+            onPress={apply}
+            testID="disc-done"
+          >
             <Text style={styles.doneBtnText}>Done</Text>
           </TouchableOpacity>
         </View>
@@ -2952,6 +2990,20 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   quickTextInline: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
+  // Quick-amount chips shown horizontally above the keypad on phone, so the
+  // numpad gets the full width instead of fighting with a side column.
+  quickRowMobile: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  quickChipMobile: {
+    backgroundColor: "#E5F7ED",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  quickChipMobileText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
 
   quickCol: { width: 168, minWidth: 168, gap: 12 },
   netBox: {

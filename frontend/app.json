@@ -2,7 +2,7 @@
   "expo": {
     "name": "Brave POS",
     "slug": "brave-pos",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "bravepos",
@@ -39,7 +39,7 @@
         }
       ],
       "expo-web-browser",
-      "./plugins/withStarPrinterFix",
+      "./plugins/withThermalPrinterFix",
       [
         "expo-build-properties",
         {
@@ -55,14 +55,15 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "2a3cd2b5-54ec-49b1-9476-af6497db4529"
+        "projectId": "651113c4-3bab-4220-a652-6ce53921fe29"
       }
     },
     "runtimeVersion": {
       "policy": "appVersion"
     },
+    "owner": "shopsterabin123",
     "updates": {
-      "url": "https://u.expo.dev/2a3cd2b5-54ec-49b1-9476-af6497db4529"
+      "url": "https://u.expo.dev/651113c4-3bab-4220-a652-6ce53921fe29"
     }
   }
 }
