@@ -33,6 +33,7 @@ import {
   loadLocalPrinterConfig,
   saveLocalPrinterConfig,
 } from "../lib/localPrinterConfig";
+import * as printerQueue from "../lib/printerQueue";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -2396,7 +2397,34 @@ function PrintersSection({
   // red=offline, grey=not yet known / no config).
   const livePrinter = usePrinterStatus(localCfg?.identifier);
 
+  // List of receipts that failed to print and are sitting in the
+  // AsyncStorage queue waiting for the printer to come back online.
+  // useStarPrinter's drainer retries them every 30s, but the cashier
+  // needs visibility into what's pending — and a way to drop a job
+  // they no longer want (e.g. they reprinted manually via order hub).
+  const [queuedJobs, setQueuedJobs] = useState<printerQueue.PrintJob[]>([]);
+
   useEffect(() => { loadLocalPrinterConfig().then(setLocalCfg); }, []);
+
+  // Poll the queue every 5s while settings is open so the list reflects
+  // drainer progress (jobs disappear as they print, attempts tick up).
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const jobs = await printerQueue.listJobs();
+        if (!stopped) setQueuedJobs(jobs);
+      } catch { /* AsyncStorage hiccups don't matter — try again next tick */ }
+    };
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => { stopped = true; clearInterval(id); };
+  }, []);
+
+  const removeQueuedJob = useCallback(async (id: string) => {
+    await printerQueue.removeJob(id);
+    setQueuedJobs((jobs) => jobs.filter((j) => j.id !== id));
+  }, []);
 
   const scanLocal = useCallback(async () => {
     setLocalScanning(true);
@@ -2719,6 +2747,49 @@ function PrintersSection({
         {localResult ? (
           <Text style={styles.printerError}>{localResult}</Text>
         ) : null}
+
+        {/* ─── Queued receipts ────────────────────────────────────────────
+            Receipts that hit the printer while it was offline get queued
+            to AsyncStorage and retried every 30s by useStarPrinter.  This
+            block shows the cashier exactly what's pending so they know
+            nothing has been lost — and lets them drop a job if they
+            already handed the customer a manual reprint. */}
+        <Text style={[styles.h2, { marginTop: 8 }]}>Queued receipts</Text>
+        {queuedJobs.length === 0 ? (
+          <Text style={styles.printerListMeta}>
+            No receipts waiting to print. New orders print immediately when the printer is online.
+          </Text>
+        ) : (
+          <View style={{ gap: 8 }}>
+            <Text style={styles.printerListMeta}>
+              {queuedJobs.length} receipt{queuedJobs.length === 1 ? "" : "s"} waiting — will print automatically when the printer is back online.
+            </Text>
+            {queuedJobs.map((j) => {
+              const ageMin = Math.max(0, Math.round((Date.now() - j.createdAt) / 60000));
+              return (
+                <View key={j.id} style={styles.queuedRow} testID={`queued-job-${j.order.order_number}`}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.queuedOrder}>{j.order.order_number}</Text>
+                    <Text style={styles.queuedMeta}>
+                      {THB(j.order.total)} · {ageMin < 1 ? "just now" : `${ageMin} min ago`} · {j.attempts} attempt{j.attempts === 1 ? "" : "s"}
+                    </Text>
+                    {j.lastError ? (
+                      <Text style={styles.queuedError} numberOfLines={1}>{j.lastError}</Text>
+                    ) : null}
+                  </View>
+                  <TouchableOpacity
+                    style={styles.queuedRemoveBtn}
+                    onPress={() => removeQueuedJob(j.id)}
+                    testID={`queued-remove-${j.order.order_number}`}
+                  >
+                    <Ionicons name="close" size={16} color="#EF4444" />
+                    <Text style={styles.queuedRemoveText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
     );
   }
@@ -3368,6 +3439,26 @@ const styles = StyleSheet.create({
   },
   printerListName: { flex: 1, fontSize: 14, fontWeight: "600", color: "#0F172A" },
   printerListMeta: { fontSize: 12, fontWeight: "400", color: "#64748B" },
+
+  // Queued-receipts list (offline-print queue) — shown inside the
+  // Local Printer settings page so cashiers can see what's pending.
+  queuedRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: "#FFFBEB", borderRadius: 10,
+    borderWidth: 1, borderColor: "#FCD34D",
+  },
+  queuedOrder: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
+  queuedMeta: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  queuedError: { fontSize: 11, color: "#B45309", marginTop: 2 },
+  queuedRemoveBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1, borderColor: "#FCA5A5",
+    backgroundColor: "#FFFFFF",
+  },
+  queuedRemoveText: { fontSize: 12, color: "#EF4444", fontWeight: "600" },
+
   addPrinterBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
     gap: 6, paddingVertical: 12,

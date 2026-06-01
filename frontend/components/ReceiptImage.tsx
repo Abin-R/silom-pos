@@ -174,13 +174,13 @@ const s = StyleSheet.create({
     width: RECEIPT_WIDTH,
     backgroundColor: "#FFFFFF",
     paddingVertical: 24,
-    // Asymmetric horizontal padding: extra right gutter so right-aligned
-    // amounts stay inside the printer's effective printable area (the
-    // TSP143IIIU clips the last ~30-50 dots in practice even with a 576-
-    // dot image).  Without this, prices and the right portion of long
-    // Thai VAT labels get cut off.
+    // Asymmetric horizontal padding.  This printer's effective right
+    // print boundary lands around dot ~460 of the 576-dot image — the
+    // last ~115 dots get physically clipped (observed: "ชื่อพนักงาน:"
+    // truncates to "ชื่อพ" with paddingRight:44).  130px keeps all
+    // right-aligned content well inside the safe zone.
     paddingLeft: 20,
-    paddingRight: 44,
+    paddingRight: 130,
   },
   queue: {
     fontFamily: BOLD,
@@ -238,9 +238,10 @@ const s = StyleSheet.create({
   },
   // Right-aligned numeric column.  Fixed minWidth keeps prices in a
   // tidy vertical strip; textAlign: right anchors them to the right
-  // gutter so the printer can never wrap or clip a price.
+  // gutter so the printer can never wrap or clip a price.  Width tuned
+  // down to 90 so amounts don't push the column past the safe zone.
   amount: {
-    minWidth: 110,
+    minWidth: 90,
     textAlign: "right",
     marginLeft: 8,
   },
