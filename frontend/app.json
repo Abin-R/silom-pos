@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Brave POS",
-    "slug": "brave-pos",
+    "slug": "bravepos",
     "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
@@ -17,7 +17,7 @@
       "package": "com.bravebrand.pos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
+        "backgroundColor": "#FFACEF"
       },
       "edgeToEdgeEnabled": true,
       "usesCleartextTraffic": true
@@ -39,7 +39,7 @@
         }
       ],
       "expo-web-browser",
-      "./plugins/withThermalPrinterFix",
+      "./plugins/withBravePosPrinter",
       [
         "expo-build-properties",
         {
@@ -55,15 +55,15 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "651113c4-3bab-4220-a652-6ce53921fe29"
+        "projectId": "92b2c7d7-717a-4f60-9d80-c8c81b64eef6"
       }
     },
     "runtimeVersion": {
       "policy": "appVersion"
     },
-    "owner": "shopsterabin123",
+    "owner": "shopsterabin1234s-organization",
     "updates": {
-      "url": "https://u.expo.dev/651113c4-3bab-4220-a652-6ce53921fe29"
+      "url": "https://u.expo.dev/92b2c7d7-717a-4f60-9d80-c8c81b64eef6"
     }
   }
 }

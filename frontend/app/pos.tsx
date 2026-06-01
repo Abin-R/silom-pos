@@ -17,8 +17,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
-import { printReceipt } from "../lib/starPrinter";
+import { useStarPrinter } from "../lib/useStarPrinter";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
+import { SidebarDrawer } from "../components/SidebarDrawer";
 import { apiFetch, clearAuthToken, setAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -74,6 +75,10 @@ const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigi
 
 export default function POS() {
   const router = useRouter();
+  // Receipt-printing hook.  printReceipt renders ReceiptImage to a PNG
+  // and ships it via the native module's printImage().  ReceiptOverlay
+  // is the off-screen component that gets captured — must be in JSX.
+  const { printReceipt, ReceiptOverlay } = useStarPrinter();
   // The URL is just a display hint.  Real auth state lives in AsyncStorage and
   // gets loaded on mount, so manual URL edits can't desync role / branch from
   // the actual session token.
@@ -137,7 +142,18 @@ export default function POS() {
     change: number;
     method: string;
   }>(null);
+  // Surfaces the local-print outcome inside SuccessModal so the cashier
+  // knows whether the receipt actually came out of the printer — or got
+  // queued because the printer is offline / unreachable.  `null` = not
+  // attempted (no local printer configured) so we render nothing.
+  const [printStatus, setPrintStatus] = useState<
+    | null
+    | { state: "printing" }
+    | { state: "printed" }
+    | { state: "queued"; error?: string }
+  >(null);
   const [showDrawer, setShowDrawer] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Load initial data
   const reloadPosData = useCallback(async () => {
@@ -311,13 +327,16 @@ export default function POS() {
       // Fire-and-forget local print: if THIS tablet has a configured local
       // printer (USB/BT/LAN via Star SDK), print straight from the device.
       // Backend's own auto-print path is independent — they don't conflict.
+      // The outcome is surfaced via printStatus → SuccessModal so the
+      // cashier sees whether the receipt printed or got queued for retry.
       (async () => {
         try {
           const cfg = await loadLocalPrinterConfig();
-          if (!cfg.enabled) return;
+          if (!cfg.enabled) return;     // no local printer → nothing to show
+          setPrintStatus({ state: "printing" });
           const shopRes = await apiFetch(`${API}/settings`);
           const shop = shopRes.ok ? await shopRes.json() : {};
-          await printReceipt(
+          const r = await printReceipt(
             cfg,
             {
               order_number: order.order_number,
@@ -331,8 +350,12 @@ export default function POS() {
             },
             shop,
           );
-        } catch (printErr) {
+          // useStarPrinter enqueues the job on failure, so "not ok" means
+          // queued-for-retry, not dropped.
+          setPrintStatus(r.ok ? { state: "printed" } : { state: "queued", error: r.error });
+        } catch (printErr: any) {
           console.warn("local print failed", printErr);
+          setPrintStatus({ state: "queued", error: printErr?.message || String(printErr) });
         }
       })();
     } catch (e) {
@@ -382,7 +405,7 @@ export default function POS() {
       <View style={styles.topBar} testID="top-bar">
         <TouchableOpacity
           style={styles.menuBtn}
-          onPress={() => router.replace({ pathname: "/admin", params: { staff: staff || "Admin", role: role || "", branch_id: activeBranchId, branch_name: activeBranchName } })}
+          onPress={() => setSidebarOpen(true)}
           testID="menu-btn"
         >
           <Ionicons name="menu" size={24} color="#0F172A" />
@@ -750,12 +773,48 @@ export default function POS() {
       />
       <SuccessModal
         data={showSuccess}
+        printStatus={printStatus}
         onClose={() => {
           setShowSuccess(null);
+          setPrintStatus(null);
           clearCart();
         }}
       />
       <DrawerModal visible={showDrawer} onClose={() => setShowDrawer(false)} />
+      {/* Shared sidebar drawer — opens via the top-bar hamburger.  Picking
+          "Shop" just closes it (we're already here); other sections push
+          to /admin with that section's key so admin lands directly on the
+          chosen page without an intermediate Reports flash. */}
+      <SidebarDrawer
+        visible={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        staff={staff || "Admin"}
+        role={role || ""}
+        branchName={activeBranchName || undefined}
+        activeKey="shop"
+        onNavigate={(key) => {
+          setSidebarOpen(false);
+          if (key === "shop") return; // already here
+          router.push({
+            pathname: "/admin",
+            params: {
+              staff: staff || "Admin",
+              role: role || "",
+              branch_id: activeBranchId,
+              branch_name: activeBranchName,
+              section: key,
+            },
+          });
+        }}
+        onLogout={async () => {
+          setSidebarOpen(false);
+          await clearAuthToken();
+          router.replace("/");
+        }}
+      />
+      {/* Off-screen receipt rendering target for view-shot capture.
+          Only mounts when a print is in flight; invisible to the user. */}
+      <ReceiptOverlay />
 
       {/* Admin-only: pick a different branch to place orders against */}
       <Modal
@@ -1104,15 +1163,19 @@ function PaymentModal({
     }
   }, [visible]);
 
+  // For now, only Cash and Beam are exposed.  Other methods are still
+  // implemented (EasyPay, Credit, PromptPay, QR Kbank, EDC, Custom) —
+  // we just hide their tiles from the payment modal.  Re-enable by
+  // un-commenting any of the lines below.
   const methods = [
     { key: PAYMENT_METHODS.CASH, icon: "cash-outline" as const },
     { key: PAYMENT_METHODS.BEAM, icon: "scan-outline" as const },
-    { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
-    { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
-    { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
-    { key: PAYMENT_METHODS.QR_KBANK, icon: "qr-code" as const },
-    { key: PAYMENT_METHODS.EDC, icon: "print-outline" as const },
-    { key: PAYMENT_METHODS.CUSTOM, icon: "wallet-outline" as const },
+    // { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
+    // { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
+    // { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
+    // { key: PAYMENT_METHODS.QR_KBANK, icon: "qr-code" as const },
+    // { key: PAYMENT_METHODS.EDC, icon: "print-outline" as const },
+    // { key: PAYMENT_METHODS.CUSTOM, icon: "wallet-outline" as const },
   ];
 
   const customOptions = [
@@ -2316,11 +2379,19 @@ function ParkedOrdersModal({
 }
 
 // ---------- Success Modal ----------
+type PrintStatus =
+  | null
+  | { state: "printing" }
+  | { state: "printed" }
+  | { state: "queued"; error?: string };
+
 function SuccessModal({
   data,
+  printStatus,
   onClose,
 }: {
   data: null | { order_number: string; total: number; paid: number; change: number; method: string };
+  printStatus: PrintStatus;
   onClose: () => void;
 }) {
   return (
@@ -2351,6 +2422,8 @@ function SuccessModal({
               <Text style={styles.changeRowVal}>{THB(data.change)}</Text>
             </View>
 
+            <PrintStatusPill status={printStatus} />
+
             <TouchableOpacity style={styles.successBtn} onPress={onClose} testID="success-done">
               <Text style={styles.successBtnText}>Done · New Order</Text>
             </TouchableOpacity>
@@ -2358,6 +2431,42 @@ function SuccessModal({
         )}
       </View>
     </Modal>
+  );
+}
+
+function PrintStatusPill({ status }: { status: PrintStatus }) {
+  if (!status) return null;
+
+  if (status.state === "printing") {
+    return (
+      <View style={[styles.printPill, styles.printPillNeutral]} testID="print-status-printing">
+        <ActivityIndicator size="small" color="#475569" />
+        <Text style={styles.printPillText}>Printing receipt…</Text>
+      </View>
+    );
+  }
+
+  if (status.state === "printed") {
+    return (
+      <View style={[styles.printPill, styles.printPillOk]} testID="print-status-printed">
+        <Ionicons name="checkmark-circle" size={16} color="#00B14F" />
+        <Text style={[styles.printPillText, { color: "#00875A" }]}>Receipt printed</Text>
+      </View>
+    );
+  }
+
+  // queued — printer unreachable; useStarPrinter has saved the job and
+  // will retry every 30s until the printer comes back online.
+  return (
+    <View style={[styles.printPill, styles.printPillWarn]} testID="print-status-queued">
+      <Ionicons name="time-outline" size={16} color="#B45309" />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.printPillText, { color: "#92400E", fontWeight: "700" }]}>
+          Printer offline — receipt queued
+        </Text>
+        <Text style={styles.printPillSub}>Will print automatically when the printer is back online.</Text>
+      </View>
+    </View>
   );
 }
 
@@ -3630,6 +3739,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   successBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+
+  // Print status pill shown inside SuccessModal — tells the cashier
+  // whether the local printer actually printed the receipt or whether
+  // it got queued for retry because the printer was offline.
+  printPill: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    borderWidth: 1,
+  },
+  printPillNeutral: { backgroundColor: "#F1F5F9", borderColor: "#E2E8F0" },
+  printPillOk: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
+  printPillWarn: { backgroundColor: "#FEF3C7", borderColor: "#FCD34D" },
+  printPillText: { fontSize: 13, color: "#475569", fontWeight: "600" },
+  printPillSub: { fontSize: 11, color: "#92400E", marginTop: 2 },
 
   // Drawer
   drawerOverlay: {

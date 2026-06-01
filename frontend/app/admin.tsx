@@ -13,8 +13,8 @@ import {
   useWindowDimensions,
   Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -24,7 +24,11 @@ import {
   testPrint as starTestPrint,
   type DiscoveredPrinter,
   type PrinterConfig,
+  type ReceiptOrder,
 } from "../lib/starPrinter";
+import { useStarPrinter } from "../lib/useStarPrinter";
+import { usePrinterStatus } from "../lib/usePrinterStatus";
+import { SidebarDrawer } from "../components/SidebarDrawer";
 import {
   loadLocalPrinterConfig,
   saveLocalPrinterConfig,
@@ -133,8 +137,36 @@ export default function Admin() {
 
   const { width } = useWindowDimensions();
   const isWide = width >= 720;
-  const [section, setSection] = useState<Section>("reports");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // When the Shop screen's hamburger pushes us here, it passes
+  // `sidebar=open` so the user sees the full menu immediately instead of
+  // landing on Reports.  Only meaningful on narrow screens (the wide
+  // layout shows the sidebar permanently on the left).
+  const navParams = useLocalSearchParams<{ sidebar?: string; section?: string }>();
+  // Initial section comes from the ?section= query param (set by the
+  // Shop sidebar when a user picks Reports/Inventory/Settings/etc.).
+  // Whitelisted to known Section keys so a malformed URL can't put us
+  // in an unrenderable state — default Reports if not specified.
+  const VALID_SECTIONS: Section[] = [
+    "transactions", "reports", "inventory", "customers",
+    "products", "drawer", "branches", "settings",
+  ];
+  const initialSection = (VALID_SECTIONS.includes(navParams.section as Section)
+    ? (navParams.section as Section)
+    : "reports") as Section;
+  const [section, setSection] = useState<Section>(initialSection);
+  // Sidebar=open is now unused (Shop opens its own drawer instead of
+  // navigating with the flag) but we keep the param handling for any
+  // links that still pass it.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    navParams.sidebar === "open" && width < 720,
+  );
+
+  // Receipt-printing context for the Admin screen.  The same hook also
+  // runs on /pos — both instances share the on-disk print queue, so a
+  // failed print from POS gets auto-retried even if the cashier is
+  // sitting on Admin/Transactions when the printer comes back online.
+  // reprint() is exposed to Transactions for the per-row Reprint button.
+  const { reprint: reprintReceipt, ReceiptOverlay: PrinterOverlay } = useStarPrinter();
 
   const allItems: { key: Section | "shop"; label: string; icon: any; adminOnly?: boolean }[] = [
     { key: "shop", label: "Shop", icon: "home-outline" },
@@ -152,15 +184,37 @@ export default function Admin() {
   const navigate = (k: Section | "shop") => {
     setSidebarOpen(false);
     if (k === "shop") {
-      router.replace({ pathname: "/pos", params: { staff: staff || "Admin", role: role || "", branch_id: activeBranchId, branch_name: activeBranchName } });
+      // Prefer going back through the nav stack so we restore the Shop
+      // screen the user came from (preserves any state).  Only fall back
+      // to replace if there's no stack to pop (e.g. admin was opened via
+      // deep link or as the initial route after login).
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace({
+          pathname: "/pos",
+          params: {
+            staff: staff || "Admin",
+            role: role || "",
+            branch_id: activeBranchId,
+            branch_name: activeBranchName,
+          },
+        });
+      }
     } else {
       if (k === "branches" && !isAdmin) return;
       setSection(k);
     }
   };
 
-  const Sidebar = (
-    <View style={styles.sidebar} testID="admin-sidebar">
+  const insets = useSafeAreaInsets();
+
+  // Render-function version of the sidebar so we can pass `extraStyle`
+  // (inset padding) when it's rendered inside the modal on narrow screens.
+  // Sharing the same JSX between desktop + modal previously required a
+  // SafeAreaView wrapper that broke height inheritance and hid the items.
+  const renderSidebar = (extraStyle?: any) => (
+    <View style={[styles.sidebar, extraStyle]} testID="admin-sidebar">
       <View style={styles.avatarBox}>
         <View style={styles.avatarCircle}>
           <Ionicons name="person" size={32} color="#475569" />
@@ -219,6 +273,9 @@ export default function Admin() {
     </View>
   );
 
+  // Backwards-compat alias so JSX below can stay readable.
+  const Sidebar = renderSidebar();
+
   if (!authLoaded) {
     return (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -247,14 +304,39 @@ export default function Admin() {
                 <Ionicons name="log-out-outline" size={22} color="#EF4444" />
               </TouchableOpacity>
             </View>
-            <Modal
+            {/* Use the SHARED SidebarDrawer so the menu looks and behaves
+                identically to the one Shop opens.  Replaces the previous
+                inline Modal that wrapped renderSidebar. */}
+            <SidebarDrawer
               visible={sidebarOpen}
+              onClose={() => setSidebarOpen(false)}
+              staff={staff || "Admin"}
+              role={role || ""}
+              branchName={activeBranchName || undefined}
+              activeKey={section}
+              onNavigate={(key) => {
+                setSidebarOpen(false);
+                navigate(key as Section | "shop");
+              }}
+              onLogout={async () => {
+                setSidebarOpen(false);
+                await doLogout();
+                router.replace("/");
+              }}
+            />
+            {/* Old inline modal (replaced by SidebarDrawer above) — kept
+                below as a no-op to preserve the rest of the JSX structure. */}
+            <Modal
+              visible={false}
               animationType="slide"
               transparent
               onRequestClose={() => setSidebarOpen(false)}
             >
               <View style={styles.mobileSidebarOverlay}>
-                {Sidebar}
+                {renderSidebar({
+                  paddingTop: 20 + insets.top,
+                  paddingBottom: 20 + insets.bottom,
+                })}
                 <TouchableOpacity
                   style={{ flex: 1 }}
                   onPress={() => setSidebarOpen(false)}
@@ -265,7 +347,7 @@ export default function Admin() {
         )}
         <View style={styles.content}>
           {section === "reports" && <Reports isWide={isWide} />}
-          {section === "transactions" && <Transactions isWide={isWide} />}
+          {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} />}
           {section === "inventory" && <Inventory isWide={isWide} />}
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} />}
@@ -274,6 +356,8 @@ export default function Admin() {
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
+      {/* Off-screen receipt render target — view-shot captures this. */}
+      <PrinterOverlay />
     </SafeAreaView>
   );
 }
@@ -439,7 +523,12 @@ function GPStat({ label, value, accent }: { label: string; value: string; accent
 }
 
 // =================== TRANSACTIONS ===================
-function Transactions({ isWide }: { isWide: boolean }) {
+type ReprintFn = (
+  order: ReceiptOrder,
+  shop: any,
+) => Promise<{ ok: true } | { ok: false; error: string }>;
+
+function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -466,7 +555,7 @@ function Transactions({ isWide }: { isWide: boolean }) {
           <Text style={styles.backText}>Back to transactions</Text>
         </TouchableOpacity>
         <ScrollView contentContainerStyle={{ padding: 16 }}>
-          <TransactionDetail order={selected} />
+          <TransactionDetail order={selected} reprint={reprint} />
         </ScrollView>
       </View>
     );
@@ -508,7 +597,7 @@ function Transactions({ isWide }: { isWide: boolean }) {
             </View>
           ) : (
             <ScrollView contentContainerStyle={{ padding: 20 }}>
-              <TransactionDetail order={selected} />
+              <TransactionDetail order={selected} reprint={reprint} />
             </ScrollView>
           )}
         </View>
@@ -517,7 +606,39 @@ function Transactions({ isWide }: { isWide: boolean }) {
   );
 }
 
-function TransactionDetail({ order }: { order: Order }) {
+function TransactionDetail({ order, reprint }: { order: Order; reprint: ReprintFn }) {
+  const [reprintBusy, setReprintBusy] = useState(false);
+  const [reprintMsg, setReprintMsg] = useState("");
+
+  const onReprint = async () => {
+    setReprintBusy(true);
+    setReprintMsg("");
+    try {
+      const shopRes = await apiFetch(`${API}/settings`);
+      const shop = shopRes.ok ? await shopRes.json() : {};
+      const receiptOrder: ReceiptOrder = {
+        order_number: order.order_number,
+        items: order.items.map((it: any) => ({
+          name: it.name,
+          qty: it.qty,
+          price: it.price,
+        })),
+        total: order.total,
+        payment_method: order.payment_method || undefined,
+        paid_amount: order.total,
+        change: 0,
+        created_at_local: new Date(order.created_at).toLocaleString("en-GB"),
+        staff: (order as any).staff || "",
+      };
+      const r = await reprint(receiptOrder, shop);
+      setReprintMsg(r.ok ? "Reprint sent ✓" : `Failed: ${r.error}`);
+    } catch (e: any) {
+      setReprintMsg(`Failed: ${e?.message || e}`);
+    } finally {
+      setReprintBusy(false);
+    }
+  };
+
   return (
     <View style={styles.receipt}>
       <Text style={styles.receiptTitle}>{order.order_number}</Text>
@@ -553,6 +674,31 @@ function TransactionDetail({ order }: { order: Order }) {
         <Text style={styles.receiptTotal}>Total</Text>
         <Text style={styles.receiptTotal}>{THB(order.total)}</Text>
       </View>
+
+      {/* Reprint button — re-sends this order to the configured local
+          printer.  Useful when the original print failed (power outage,
+          paper jam) or the customer wants a duplicate. */}
+      <TouchableOpacity
+        style={[styles.reprintBtn, reprintBusy && { opacity: 0.5 }]}
+        onPress={onReprint}
+        disabled={reprintBusy}
+        testID={`reprint-${order.order_number}`}
+      >
+        <Ionicons name="print-outline" size={18} color="#0F172A" />
+        <Text style={styles.reprintBtnText}>
+          {reprintBusy ? "Sending…" : "Reprint Receipt"}
+        </Text>
+      </TouchableOpacity>
+      {!!reprintMsg && (
+        <Text
+          style={[
+            styles.reprintMsg,
+            reprintMsg.startsWith("Failed") && { color: "#DC2626" },
+          ]}
+        >
+          {reprintMsg}
+        </Text>
+      )}
     </View>
   );
 }
@@ -2244,6 +2390,11 @@ function PrintersSection({
   const [localFound, setLocalFound] = useState<DiscoveredPrinter[]>([]);
   const [localTesting, setLocalTesting] = useState(false);
   const [localResult, setLocalResult] = useState<string>("");
+  const [manualIp, setManualIp] = useState<string>("");
+  // Live printer reachability: ping every 30s while this screen is open.
+  // Drives the status pill colour/label in real time (green=online,
+  // red=offline, grey=not yet known / no config).
+  const livePrinter = usePrinterStatus(localCfg?.identifier);
 
   useEffect(() => { loadLocalPrinterConfig().then(setLocalCfg); }, []);
 
@@ -2251,11 +2402,11 @@ function PrintersSection({
     setLocalScanning(true);
     setLocalResult("");
     try {
-      const found = await starDiscover(["Usb"], 4000);
+      const found = await starDiscover(["Lan", "Usb"], 6000);
       setLocalFound(found);
       if (found.length === 0) {
         setLocalResult(
-          "No USB printers found. Connect the printer with a USB-C cable and allow access when Android asks.",
+          "No printers found. Make sure the Epson TM-T82X is powered on and either connected to the same Wi-Fi/router as this tablet, or plugged in via USB-C.",
         );
       }
     } catch (e: any) {
@@ -2270,12 +2421,40 @@ function PrintersSection({
       enabled: true,
       interface: d.interfaceType,
       identifier: d.identifier,
+      // Persist the model name from discovery so the printer card can
+      // show "TM-T82X" instead of a hardcoded "USB Star Printer".
+      model: d.model,
       paperWidth: localCfg?.paperWidth ?? 80,
     };
     setLocalCfg(next);
     await saveLocalPrinterConfig(next);
     setLocalResult(`Saved. Will print to ${d.identifier}`);
   }, [localCfg?.paperWidth]);
+
+  // Manual-IP fallback when network discovery doesn't surface the printer
+  // (router blocks multicast, different VLAN, etc.).  We construct the
+  // Epson SDK target string directly from the user-entered IP.
+  const addByIp = useCallback(async () => {
+    const ip = manualIp.trim();
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (!ipv4.test(ip)) {
+      setLocalResult("Please enter a valid IPv4 address like 192.168.1.100");
+      return;
+    }
+    const identifier = `TCP:${ip}`;
+    const next: PrinterConfig = {
+      enabled: true,
+      interface: "Lan",
+      identifier,
+      // No discovery happened — default model name for the card label.
+      model: "Epson TM-T82X",
+      paperWidth: localCfg?.paperWidth ?? 80,
+    };
+    setLocalCfg(next);
+    await saveLocalPrinterConfig(next);
+    setManualIp("");
+    setLocalResult(`Saved. Will print to ${identifier}`);
+  }, [manualIp, localCfg?.paperWidth]);
 
   const toggleLocalEnabled = useCallback(async () => {
     if (!localCfg) return;
@@ -2382,48 +2561,20 @@ function PrintersSection({
     ? "Connected"
     : "Offline";
 
-  // ── List view (default) ── matches the Silom POS reference: just a row + add link.
+  // ── List view (default) ──
+  // The legacy "Printers / Receipt Printer (FILE · —) / Edit Printer"
+  // section that talked to backend/printer.py was removed — we now use
+  // the on-device Epson SDK printer exclusively (the Local Printer card
+  // below).  The Edit form at the bottom of this file is dead code now
+  // but kept in case the backend-printing path returns.
   if (!editing) {
     return (
       <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-        <Text style={styles.h2}>Printers</Text>
-
-        {configured && (
-          <TouchableOpacity
-            style={styles.printerListRow}
-            onPress={() => setEditing(true)}
-            testID="printer-row"
-          >
-            <Text style={styles.printerListName}>
-              Receipt Printer{" "}
-              <Text style={styles.printerListMeta}>
-                ({transport.toUpperCase()} · {address || "—"})
-              </Text>
-            </Text>
-            <View style={styles.printerStatusPill}>
-              <View style={[styles.printerDot, { backgroundColor: dotColor }]} />
-              <Text style={styles.printerStatusText}>{statusLabel}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity
-          style={styles.addPrinterBtn}
-          onPress={() => setEditing(true)}
-          testID="add-printer"
-        >
-          <Ionicons name="add" size={18} color="#00B14F" />
-          <Text style={styles.addPrinterText}>
-            {configured ? "Edit Printer" : "Add Printer"}
-          </Text>
-        </TouchableOpacity>
-
-        {/* ─── LOCAL TABLET PRINTER (Star SDK) ─────────────────────────────── */}
-        <Text style={[styles.h2, { marginTop: 18 }]}>Local Printer (this tablet)</Text>
+        {/* ─── LOCAL TABLET PRINTER (Epson ePOS SDK) ─────────────────────────── */}
+        <Text style={styles.h2}>Local Printer (this tablet)</Text>
         <Text style={styles.printerListMeta}>
-          Connect a Star printer to this tablet&#39;s USB-C port and Brave POS will
-          print receipts directly. Network printers use the section above.
+          Connect an Epson TM-T82X to the same Wi-Fi/router as this tablet, then tap
+          Scan. (USB-C is also supported if the printer is plugged in directly.)
         </Text>
 
         <View style={styles.printerCard}>
@@ -2431,21 +2582,44 @@ function PrintersSection({
             <Ionicons name="phone-portrait-outline" size={22} color="#10B981" />
             <View style={{ flex: 1 }}>
               <Text style={styles.printerName}>
-                {localCfg?.identifier ? "USB Star Printer" : "Not configured"}
+                {localCfg?.identifier
+                  ? (localCfg.model || "Epson TM-T82X")
+                  : "Not configured"}
               </Text>
               <Text style={styles.printerSub} numberOfLines={1}>
                 {localCfg?.identifier ? localCfg.identifier : "Tap Scan to find printer"}
               </Text>
             </View>
-            <View style={styles.printerStatusPill}>
-              <View style={[styles.printerDot, {
-                backgroundColor: localCfg?.enabled && localCfg.identifier
-                  ? "#10B981" : "#94A3B8",
-              }]} />
-              <Text style={styles.printerStatusText}>
-                {!localCfg?.identifier ? "Off" : localCfg.enabled ? "Enabled" : "Disabled"}
-              </Text>
-            </View>
+            {/* Status pill reflects three things in order of priority:
+                1. No config       → grey "Off"
+                2. Config disabled → grey "Disabled"
+                3. Live ping (online/offline checked every 30s):
+                     online      → green "Online"
+                     offline     → red   "Offline"
+                     unknown yet → amber "Checking…" */}
+            {(() => {
+              const noConfig = !localCfg?.identifier;
+              const disabled = !!localCfg && !localCfg.enabled;
+              let dotColor = "#94A3B8";
+              let label: string = "Off";
+              if (noConfig) {
+                dotColor = "#94A3B8"; label = "Off";
+              } else if (disabled) {
+                dotColor = "#94A3B8"; label = "Disabled";
+              } else if (livePrinter.online === true) {
+                dotColor = "#10B981"; label = "Online";
+              } else if (livePrinter.online === false) {
+                dotColor = "#EF4444"; label = "Offline";
+              } else {
+                dotColor = "#F59E0B"; label = "Checking…";
+              }
+              return (
+                <View style={styles.printerStatusPill}>
+                  <View style={[styles.printerDot, { backgroundColor: dotColor }]} />
+                  <Text style={styles.printerStatusText}>{label}</Text>
+                </View>
+              );
+            })()}
           </View>
         </View>
 
@@ -2458,7 +2632,7 @@ function PrintersSection({
           >
             <Ionicons name="search" size={16} color="#0F172A" />
             <Text style={styles.secondaryBtnText}>
-              {localScanning ? "Scanning…" : "Scan USB"}
+              {localScanning ? "Scanning…" : "Scan"}
             </Text>
           </TouchableOpacity>
           {localCfg?.identifier && (
@@ -2485,6 +2659,31 @@ function PrintersSection({
               </TouchableOpacity>
             </>
           )}
+        </View>
+
+        {/* Manual IP entry — use when Scan doesn't surface the network printer
+            (router blocks multicast, separate VLAN, etc.).  Find the IP from
+            your router's "Connected Devices" page or the printer self-test. */}
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginTop: 10 }}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            placeholder="Or enter IP, e.g. 192.168.1.100"
+            value={manualIp}
+            onChangeText={setManualIp}
+            keyboardType="numeric"
+            autoCapitalize="none"
+            autoCorrect={false}
+            testID="local-printer-manual-ip"
+          />
+          <TouchableOpacity
+            style={[styles.secondaryBtn, !manualIp && { opacity: 0.5 }]}
+            onPress={addByIp}
+            disabled={!manualIp}
+            testID="local-printer-add-by-ip"
+          >
+            <Ionicons name="add" size={16} color="#0F172A" />
+            <Text style={styles.secondaryBtnText}>Add by IP</Text>
+          </TouchableOpacity>
         </View>
 
         {localFound.length > 0 && (
@@ -2660,7 +2859,9 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#F1F5F9" },
   rootRow: { flex: 1, flexDirection: "row" },
 
-  // Sidebar
+  // Sidebar — direct child of a flexDirection: "row" container in both
+  // desktop and modal layouts.  width:220 sets the fixed column width;
+  // cross-axis stretch gives it the full row height (no flex needed).
   sidebar: {
     width: 220,
     backgroundColor: "#FFFFFF",
@@ -2839,6 +3040,27 @@ const styles = StyleSheet.create({
   receiptLabel: { fontSize: 12, color: "#94A3B8" },
   receiptVal: { fontSize: 13, color: "#0F172A", fontWeight: "500" },
   receiptTotal: { fontSize: 15, color: "#0F172A", fontWeight: "700" },
+  reprintBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: 14, padding: 12,
+    backgroundColor: "#F1F5F9", borderRadius: 10,
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  reprintBtnText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
+  reprintMsg: { marginTop: 8, fontSize: 12, color: "#10B981", textAlign: "center" },
+  // Generic text input used by the "Add by IP" field in Local Printer.
+  // Standard 40px height + rounded corners + slate border to match the
+  // rest of the admin form fields.
+  input: {
+    height: 40,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: "#0F172A",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+  },
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 6 },
   emptyText: { color: "#94A3B8", fontSize: 14 },
 
