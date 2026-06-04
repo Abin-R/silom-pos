@@ -79,28 +79,18 @@ WSGI_APPLICATION = 'bravepos_api.wsgi.application'
 # Shared Azure Postgres `instamator3`, also used by `home` and `instamator_app`.
 # All Brave POS tables are prefixed `bravepos_*` via the app label, so
 # migrations only ever touch our own tables — never the other servers'.
-# Env var names (DATABASE_USER/PASSWORD/HOST) match what the other two App
-# Services already have configured.
-if os.environ.get('DATABASE_HOST'):
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'instamator3',
-            'USER': os.environ['DATABASE_USER'],
-            'PASSWORD': os.environ['DATABASE_PASSWORD'],
-            'HOST': os.environ['DATABASE_HOST'],
-            'PORT': '5432',
-            'CONN_MAX_AGE': 60,
-            'OPTIONS': {'sslmode': 'require'},
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'instamator3',
+        'USER': os.environ['DATABASE_USER'],
+        'PASSWORD': os.environ['DATABASE_PASSWORD'],
+        'HOST': os.environ['DATABASE_HOST'],
+        'PORT': '5432',
+        'CONN_MAX_AGE': 60,
+        'OPTIONS': {'sslmode': 'require'},
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+}
 
 
 # ── DRF ─────────────────────────────────────────────────────────────────────
