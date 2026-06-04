@@ -1,0 +1,166 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+
+{% block title %}Products — Brave POS{% endblock %}
+
+{% block extra_head %}
+<style>
+  .product-card { transition: box-shadow 0.15s; cursor: pointer; }
+  .product-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  .product-card .img-box {
+    aspect-ratio: 1;
+    background: #f5f7fa;
+    display: flex; align-items: center; justify-content: center;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+    overflow: hidden;
+  }
+  .product-card .img-box img { width: 100%; height: 100%; object-fit: cover; }
+  .product-card .img-box .placeholder { color: #cdd5dc; font-size: 2rem; }
+  .product-card .meta { padding: 0.6rem 0.75rem; }
+  .product-card .meta .name { font-weight: 600; font-size: 0.9rem; }
+  .product-card .meta .cat { color: #7f8c8d; font-size: 0.75rem; }
+  .product-card .meta .price { color: #00B14F; font-weight: 700; }
+  .pill-tag { font-size: 0.65rem; background: rgba(0,177,79,0.12); color: #00B14F; padding: 1px 6px; border-radius: 4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card mb-3">
+  <div class="card-body">
+
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h4 class="mb-1">Product</h4>
+        <div class="alert alert-info mb-0 small py-2 px-3">
+          <i class="bi bi-info-circle me-1"></i>
+          Manage all products in your store — add, edit, and organise.
+        </div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-success btn-sm" href="{% url 'backoffice:product_new' %}?{{ qs }}">
+          <i class="bi bi-plus-lg"></i> Add Product
+        </a>
+        <div class="dropdown">
+          <button class="btn btn-info text-white btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+            <i class="bi bi-list-ul"></i> More Manage Product
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{% url 'backoffice:product_bulk_add' %}?{{ qs }}">
+              <i class="bi bi-plus-square text-info"></i> Quick Add Multiple Products
+            </a></li>
+            <li><a class="dropdown-item" href="{% url 'backoffice:product_bulk_edit' %}?{{ qs }}">
+              <i class="bi bi-pencil-square text-warning"></i> Quick Edit Multiple Products
+            </a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    {# Filter row #}
+    <form method="get" class="row g-2 align-items-center mb-3">
+      <input type="hidden" name="branch" value="{{ branch.id }}">
+      <input type="hidden" name="from" value="{{ date_from }}">
+      <input type="hidden" name="to" value="{{ date_to }}">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="view" value="{{ view }}">
+      <div class="col-md-3">
+        <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">All Product</option>
+          {% for c in categories %}
+            <option value="{{ c.id }}" {% if selected_category == c.id|stringformat:'s' %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-7"></div>
+      <div class="col-md-2 d-flex justify-content-end">
+        <div class="btn-group btn-group-sm" role="group">
+          <a class="btn {% if view == 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+             href="?{{ qs }}{% if qs %}&{% endif %}view=list"><i class="bi bi-list"></i></a>
+          <a class="btn {% if view != 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+             href="?{{ qs }}{% if qs %}&{% endif %}view=grid"><i class="bi bi-grid-3x3-gap-fill"></i></a>
+        </div>
+      </div>
+    </form>
+
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div><strong>Product {{ paginator.count }} Items</strong></div>
+    </div>
+
+    {# Sort tabs #}
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+      <span class="text-muted small align-self-center me-2">Sort By</span>
+      <a class="btn btn-sm {% if sort == 'name' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+         href="?{{ qs }}{% if qs %}&{% endif %}sort=name">Name</a>
+      <a class="btn btn-sm {% if sort == 'newest' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+         href="?{{ qs }}{% if qs %}&{% endif %}sort=newest">Newest</a>
+      <a class="btn btn-sm {% if sort == 'category' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+         href="?{{ qs }}{% if qs %}&{% endif %}sort=category">Category</a>
+      <a class="btn btn-sm {% if sort == 'price' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+         href="?{{ qs }}{% if qs %}&{% endif %}sort=price">Product price</a>
+    </div>
+
+    {% if view == 'list' %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+          <thead class="table-light">
+            <tr>
+              <th></th>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Barcode</th>
+              <th class="text-end">Price</th>
+              <th class="text-end">Stock</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in products %}
+            <tr style="cursor:pointer;" onclick="location.href='{% url 'backoffice:product_detail' product_id=p.id %}?{{ qs }}'">
+              <td style="width:40px;">
+                {% if p.image_url %}<img src="{{ p.image_url }}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;">
+                {% else %}<div style="width:32px;height:32px;background:#f5f7fa;border-radius:4px;"></div>{% endif %}
+              </td>
+              <td>{{ p.name }}</td>
+              <td class="text-muted">{{ p.category.name|default:"-" }}</td>
+              <td>{{ p.barcode|default:"-" }}</td>
+              <td class="text-end currency">฿{{ p.price|floatformat:2|intcomma }}</td>
+              <td class="text-end">{{ p.stock|intcomma }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">No products.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="row g-3">
+        {% for p in products %}
+        <div class="col-6 col-md-3 col-lg-2">
+          <a class="card product-card text-decoration-none text-reset h-100"
+             href="{% url 'backoffice:product_detail' product_id=p.id %}?{{ qs }}">
+            <div class="img-box">
+              {% if p.image_url %}<img src="{{ p.image_url }}" alt="{{ p.name }}">
+              {% else %}<span class="placeholder"><i class="bi bi-image"></i></span>{% endif %}
+            </div>
+            <div class="meta">
+              <div class="d-flex align-items-start justify-content-between gap-1">
+                <div class="name flex-grow-1">{{ p.name|truncatechars:32 }}</div>
+                {% if p.product_type == 'P' %}<span class="pill-tag">P</span>{% endif %}
+              </div>
+              <div class="cat">{{ p.category.name|default:"-" }}</div>
+              <div class="d-flex justify-content-between align-items-center mt-1">
+                <div class="price currency">฿ {{ p.price|floatformat:2|intcomma }}</div>
+                {% if p.tax_type == 'V' %}<span class="badge bg-warning text-dark">VAT</span>{% endif %}
+              </div>
+            </div>
+          </a>
+        </div>
+        {% empty %}
+        <div class="col-12 text-center text-muted py-4">No products.</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% include "backoffice/_pagination.html" %}
+  </div>
+</div>
+{% endblock %}

@@ -1,29 +1,21 @@
 /**
- * Login screen — email + password, with branch picker.
- *
- * Auth flow:
+ * Login screen — PIN-pad style:
  *   1. Fetch active branches; user picks one (default: first / last-used).
- *   2. User enters email + password.
- *   3. POST /api/auth/login → backend deletes any existing BranchSession
- *      for this branch and creates a fresh one.  Returns a token + role.
- *   4. We save { token, role, staff_name, branch_id, branch_name } to
- *      AsyncStorage and route to /admin or /pos based on role.
- *
- * "One login per branch" is enforced server-side: the previous user's
- * token simply stops working on the next request.
+ *   2. Fetch the staff list for that branch (admin + the branch's cashier).
+ *   3. Tap a user, enter a 4-digit PIN on the keypad → auto-submits.
+ *   4. POST /api/auth/pin-login → backend replaces any existing
+ *      BranchSession on this branch and returns a token + role.
+ *   5. Both roles land on /pos; admin reaches admin screens via the sidebar.
  */
 import { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   ActivityIndicator,
   FlatList,
   Modal,
-  KeyboardAvoidingView,
-  Platform,
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -35,43 +27,53 @@ import { setAuthToken } from "../lib/api";
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const BRANCH_KEY = "bravepos:selected-branch:v1";
 const AUTH_KEY = "bravepos:auth:v1";
+const PIN_LENGTH = 4;
 
 type Branch = { id: string; name: string; code?: string; active: boolean };
+type BranchUser = { id: string; name: string; role: "admin" | "cashier" };
+
+const THAI_MONTHS = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
+const THAI_DAYS = [
+  "วันอาทิตย์", "วันจันทร์", "วันอังคาร", "วันพุธ",
+  "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์",
+];
+
+function formatThaiDate(d: Date): string {
+  // Buddhist-era year (CE + 543), matching the SilomPOS reference UI.
+  return `${THAI_DAYS[d.getDay()]}ที่ ${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
+
+function formatClock(d: Date): string {
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
 
 export default function Login() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isWide = width >= 700;
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  // While true, render a spinner — we're checking whether the user already
-  // has a valid session saved from a previous launch.  This is what makes
-  // "close + reopen" land on POS/Admin directly instead of forcing the user
-  // to re-authenticate (which would then fail with "already signed in").
+  // ── Session restore ────────────────────────────────────────────────────
   const [checkingSession, setCheckingSession] = useState(true);
-
   useEffect(() => {
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(AUTH_KEY);
         const saved = raw ? JSON.parse(raw) : null;
         if (saved?.token) {
-          // Validate against /auth/me so we don't navigate into a screen
-          // whose API calls would all 401 with a stale/invalidated token.
           const res = await fetch(`${API}/auth/me`, {
             headers: { Authorization: `Bearer ${saved.token}` },
           });
           if (res.ok) {
             const me = await res.json();
             const role = me.staff?.role || "cashier";
-            const destination = role === "admin" ? "/admin" : "/pos";
             setAuthToken(saved.token);
             router.replace({
-              pathname: destination,
+              pathname: "/pos",
               params: {
                 staff: me.staff?.name || "",
                 role,
@@ -81,16 +83,23 @@ export default function Login() {
             });
             return;
           }
-          // Stale token — drop it so the user re-authenticates cleanly.
           await AsyncStorage.removeItem(AUTH_KEY);
         }
       } catch {
-        // Backend unreachable / corrupt JSON — fall through to show the form.
+        // network down / corrupt JSON — fall through to login form.
       }
       setCheckingSession(false);
     })();
   }, [router]);
 
+  // ── Clock (re-renders every minute) ────────────────────────────────────
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── Branches ───────────────────────────────────────────────────────────
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branch, setBranch] = useState<Branch | null>(null);
   const [showBranchPicker, setShowBranchPicker] = useState(false);
@@ -113,65 +122,83 @@ export default function Login() {
       const initial = (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
       setBranch(initial);
     } catch (e: any) {
-      // Surface the actual error so a stuck "Loading branches..." can be
-      // diagnosed without a debug build.  Common causes: DNS, captive WiFi,
-      // self-signed cert, wrong baked-in URL.
       setBranchLoadError(`${e?.message || String(e)}\nURL: ${API}`);
     } finally {
       setBranchLoading(false);
     }
   };
-
   useEffect(() => { loadBranches(); }, []);
 
-  const submit = async () => {
-    if (loading) return;
+  // ── Users for the chosen branch ────────────────────────────────────────
+  const [users, setUsers] = useState<BranchUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<BranchUser | null>(null);
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!branch) return;
+    let cancelled = false;
+    (async () => {
+      setUsersLoading(true);
+      setError("");
+      try {
+        const r = await fetch(`${API}/auth/branch-users?branch_id=${branch.id}`);
+        const body = await r.json().catch(() => ({} as any));
+        if (cancelled) return;
+        if (!r.ok) {
+          setUsers([]);
+          setError(body?.detail || "Couldn't load users for this branch.");
+          return;
+        }
+        setUsers(Array.isArray(body.users) ? body.users : []);
+        setSelectedUser(null);
+        setPin("");
+      } catch (e: any) {
+        if (!cancelled) {
+          setUsers([]);
+          setError(e?.message || "Network error.");
+        }
+      } finally {
+        if (!cancelled) setUsersLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [branch]);
+
+  // ── PIN submit ─────────────────────────────────────────────────────────
+  const submitPin = async (pinToSubmit: string) => {
+    if (submitting || !branch || !selectedUser) return;
+    setSubmitting(true);
     setError("");
-    if (!email.trim() || !password) {
-      setError("Email and password are required.");
-      return;
-    }
-    if (!branch) {
-      setError("Please pick a branch first.");
-      return;
-    }
-    setLoading(true);
     try {
-      const res = await fetch(`${API}/auth/login`, {
+      const res = await fetch(`${API}/auth/pin-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
           branch_id: branch.id,
+          staff_id: selectedUser.id,
+          pin: pinToSubmit,
         }),
       });
       const body = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        setError(body?.detail || "Invalid credentials.");
-        setPassword("");
+        setError(body?.detail || "Invalid PIN.");
+        setPin("");
         return;
       }
-
-      // Persist session locally so future API calls can send the Bearer token
-      // and so a reopened app remembers who's logged in.
       await AsyncStorage.setItem(
         AUTH_KEY,
-        JSON.stringify({
-          token: body.token,
-          staff: body.staff,
-          branch: body.branch,
-        }),
+        JSON.stringify({ token: body.token, staff: body.staff, branch: body.branch }),
       );
       await AsyncStorage.setItem(BRANCH_KEY, JSON.stringify(branch));
-      // Prime the in-memory token cache so the next API call has it instantly
-      // (instead of waiting for AsyncStorage to be read on first use).
       setAuthToken(body.token);
 
       const role = body.staff?.role || "cashier";
-      const destination = role === "admin" ? "/admin" : "/pos";
+      // Both roles land on POS; admin reaches admin screens via sidebar.
       router.replace({
-        pathname: destination,
+        pathname: "/pos",
         params: {
           staff: body.staff?.name || "",
           role,
@@ -181,14 +208,36 @@ export default function Login() {
       });
     } catch {
       setError("Network error. Please retry.");
+      setPin("");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const onDigit = (d: string) => {
+    if (submitting) return;
+    if (!selectedUser) {
+      setError("Please choose a user first.");
+      return;
+    }
+    setError("");
+    setPin((p) => {
+      if (p.length >= PIN_LENGTH) return p;
+      const next = p + d;
+      if (next.length === PIN_LENGTH) {
+        // Defer so the dot fills visually before the network call.
+        setTimeout(() => submitPin(next), 50);
+      }
+      return next;
+    });
+  };
+  const onBackspace = () => {
+    if (submitting) return;
+    setError("");
+    setPin((p) => p.slice(0, -1));
+  };
+
   if (checkingSession) {
-    // Don't flash the login form before we know whether the saved token is
-    // valid — if it is, we'll redirect to admin/pos in the effect above.
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -199,123 +248,125 @@ export default function Login() {
   }
 
   return (
-    <SafeAreaView
-      style={[styles.container, !isWide && styles.containerNarrow]}
-      testID="login-screen"
-    >
-      <View style={[styles.left, !isWide && styles.leftNarrow]}>
-        <View style={[styles.logoBox, !isWide && styles.logoBoxNarrow]}>
-          <View style={[styles.logoCircle, !isWide && styles.logoCircleNarrow]}>
-            <Ionicons name="storefront" size={isWide ? 48 : 36} color="#00B14F" />
-          </View>
-          <Text style={[styles.brand, !isWide && styles.brandNarrow]}>Brave POS</Text>
-          <Text style={styles.brandSub}>Point of Sale</Text>
-        </View>
-        {isWide && (
-          <View style={styles.hintBox}>
-            <Text style={styles.hintLabel}>Demo accounts</Text>
-            <Text style={styles.hintText}>admin@rollingpinn.com · admin1234</Text>
-            <Text style={styles.hintText}>cashier@rollingpinn.com · cashier1234</Text>
-          </View>
-        )}
-      </View>
+    <SafeAreaView style={s.container} testID="login-screen">
+      <View style={[s.layout, !isWide && s.layoutNarrow]}>
+        {/* ── Left: clock + branch + user list ── */}
+        <View style={[s.left, !isWide && s.leftNarrow]}>
+          <Text style={s.clock}>{formatClock(now)}</Text>
+          <Text style={s.date}>{formatThaiDate(now)}</Text>
 
-      <KeyboardAvoidingView
-        style={[styles.right, !isWide && styles.rightNarrow]}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <Text style={styles.title}>Sign in</Text>
-        <Text style={styles.subtitle}>Staff login required</Text>
-
-        <TouchableOpacity
-          style={styles.branchBtn}
-          onPress={() => setShowBranchPicker(true)}
-          disabled={branches.length <= 1}
-          testID="branch-picker-btn"
-        >
-          <Ionicons name="storefront-outline" size={16} color="#0F172A" />
-          <Text style={styles.branchLabel}>
-            {branch?.name
-              || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
-          </Text>
-          {branches.length > 1 && (
-            <Ionicons name="chevron-down" size={14} color="#94A3B8" />
-          )}
-        </TouchableOpacity>
-        {!!branchLoadError && (
-          <View style={{ width: "100%", maxWidth: 360, marginBottom: 12, alignItems: "center" }}>
-            <Text style={{ color: "#EF4444", fontSize: 11, textAlign: "center", marginBottom: 6 }}>
-              {branchLoadError}
+          <TouchableOpacity
+            style={s.branchBtn}
+            onPress={() => setShowBranchPicker(true)}
+            disabled={branches.length <= 1}
+            testID="branch-picker-btn"
+          >
+            <Ionicons name="storefront-outline" size={16} color="#0F172A" />
+            <Text style={s.branchLabel} numberOfLines={1}>
+              {branch?.name
+                || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
             </Text>
-            <TouchableOpacity
-              onPress={loadBranches}
-              style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: "#EF4444" }}
-              testID="branch-retry"
-            >
-              <Text style={{ color: "#EF4444", fontSize: 12, fontWeight: "600" }}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <View style={styles.field}>
-          <Ionicons name="mail-outline" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.fieldInput}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="Email"
-            placeholderTextColor="#94A3B8"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            testID="login-email"
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Ionicons name="lock-closed-outline" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.fieldInput}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Password"
-            placeholderTextColor="#94A3B8"
-            secureTextEntry={!showPassword}
-            onSubmitEditing={submit}
-            testID="login-password"
-          />
-          <TouchableOpacity onPress={() => setShowPassword((s) => !s)}>
-            <Ionicons
-              name={showPassword ? "eye-off-outline" : "eye-outline"}
-              size={18}
-              color="#94A3B8"
-            />
+            {branches.length > 1 && (
+              <Ionicons name="chevron-down" size={14} color="#94A3B8" />
+            )}
           </TouchableOpacity>
+          {!!branchLoadError && (
+            <View style={{ marginBottom: 12 }}>
+              <Text style={s.branchLoadError}>{branchLoadError}</Text>
+              <TouchableOpacity onPress={loadBranches} style={s.retryBtn} testID="branch-retry">
+                <Text style={s.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
+          {usersLoading ? (
+            <View style={{ paddingVertical: 24 }}>
+              <ActivityIndicator color="#00B14F" />
+            </View>
+          ) : (
+            <FlatList
+              data={users}
+              keyExtractor={(u) => u.id}
+              renderItem={({ item }) => {
+                const active = selectedUser?.id === item.id;
+                return (
+                  <TouchableOpacity
+                    style={[s.userRow, active && s.userRowActive]}
+                    onPress={() => {
+                      setSelectedUser(item);
+                      setPin("");
+                      setError("");
+                    }}
+                    testID={`user-${item.role}`}
+                  >
+                    <View style={s.avatar}>
+                      <Ionicons name="person-outline" size={20} color="#475569" />
+                    </View>
+                    <Text style={s.userName}>{item.name}</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <Text style={s.empty}>No users assigned to this branch yet.</Text>
+              }
+            />
+          )}
         </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : <View style={{ height: 18 }} />}
+        {/* ── Right: PIN dots + numeric keypad ── */}
+        <View style={[s.right, !isWide && s.rightNarrow]}>
+          <Text style={s.rightTitle}>เข้า ใช้งาน</Text>
+          <Text style={s.rightSubtitle}>
+            {selectedUser ? selectedUser.name : "เลือกพนักงาน"}
+          </Text>
 
-        <TouchableOpacity
-          style={[styles.submitBtn, (loading || !email.trim() || !password) && { opacity: 0.5 }]}
-          onPress={submit}
-          disabled={loading || !email.trim() || !password}
-          testID="login-submit"
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.submitBtnText}>Sign in</Text>
-          )}
-        </TouchableOpacity>
-
-        {!isWide && (
-          <View style={styles.hintBoxMobile}>
-            <Text style={styles.hintLabelMobile}>Demo</Text>
-            <Text style={styles.hintTextMobile}>admin@rollingpinn.com / admin1234</Text>
-            <Text style={styles.hintTextMobile}>cashier@rollingpinn.com / cashier1234</Text>
+          <View style={s.dotsRow}>
+            {Array.from({ length: PIN_LENGTH }).map((_, i) => (
+              <View
+                key={i}
+                style={[s.dot, i < pin.length && s.dotFilled]}
+                testID={`pin-dot-${i}`}
+              />
+            ))}
           </View>
-        )}
-      </KeyboardAvoidingView>
+
+          {error ? (
+            <Text style={s.error} testID="login-error">{error}</Text>
+          ) : (
+            <View style={{ height: 18 }} />
+          )}
+
+          <View style={s.keypad}>
+            {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+              <KeyButton
+                key={d}
+                label={d}
+                onPress={() => onDigit(d)}
+                disabled={submitting || !selectedUser}
+              />
+            ))}
+            <View style={s.keyEmpty} />
+            <KeyButton
+              label="0"
+              onPress={() => onDigit("0")}
+              disabled={submitting || !selectedUser}
+            />
+            <KeyButton
+              icon="backspace-outline"
+              onPress={onBackspace}
+              disabled={submitting || pin.length === 0}
+            />
+          </View>
+
+          {submitting && (
+            <View style={s.submittingOverlay}>
+              <ActivityIndicator color="#00B14F" />
+            </View>
+          )}
+        </View>
+      </View>
 
       {/* Branch picker modal */}
       <Modal
@@ -325,21 +376,18 @@ export default function Login() {
         onRequestClose={() => setShowBranchPicker(false)}
       >
         <TouchableOpacity
-          style={styles.branchModalOverlay}
+          style={s.branchModalOverlay}
           activeOpacity={1}
           onPress={() => setShowBranchPicker(false)}
         >
-          <View style={styles.branchModalSheet}>
-            <Text style={styles.branchModalTitle}>Choose Branch</Text>
+          <View style={s.branchModalSheet}>
+            <Text style={s.branchModalTitle}>Choose Branch</Text>
             <FlatList
               data={branches}
               keyExtractor={(b) => b.id}
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={[
-                    styles.branchRow,
-                    branch?.id === item.id && styles.branchRowActive,
-                  ]}
+                  style={[s.branchRow, branch?.id === item.id && s.branchRowActive]}
                   onPress={() => {
                     setBranch(item);
                     setShowBranchPicker(false);
@@ -347,7 +395,7 @@ export default function Login() {
                   testID={`branch-pick-${item.id}`}
                 >
                   <Ionicons name="storefront-outline" size={18} color="#0F172A" />
-                  <Text style={styles.branchRowName}>{item.name}</Text>
+                  <Text style={s.branchRowName}>{item.name}</Text>
                   {branch?.id === item.id && (
                     <Ionicons name="checkmark-circle" size={18} color="#10B981" />
                   )}
@@ -361,88 +409,118 @@ export default function Login() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, flexDirection: "row", backgroundColor: "#FFFFFF" },
-  containerNarrow: { flexDirection: "column" },
-  left: {
-    flex: 1,
-    backgroundColor: "#00B14F",
-    padding: 48,
-    justifyContent: "space-between",
-  },
-  leftNarrow: {
-    flex: 0,
-    padding: 32,
-    paddingTop: 48,
-    paddingBottom: 32,
-    alignItems: "center",
-  },
-  logoBox: { flex: 1, justifyContent: "center", alignItems: "flex-start" },
-  logoBoxNarrow: { flex: 0, alignItems: "center" },
-  logoCircle: {
-    width: 96, height: 96, borderRadius: 48,
-    backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center",
-    marginBottom: 20,
-  },
-  logoCircleNarrow: { width: 72, height: 72, borderRadius: 36, marginBottom: 12 },
-  brand: { fontSize: 48, fontWeight: "700", color: "#FFFFFF", letterSpacing: -1 },
-  brandNarrow: { fontSize: 32 },
-  brandSub: {
-    fontSize: 14, color: "#E5F7ED", marginTop: 4,
-    letterSpacing: 2, textTransform: "uppercase",
-  },
-  hintBox: {
-    backgroundColor: "rgba(255,255,255,0.12)", padding: 16,
-    borderRadius: 12, alignSelf: "flex-start",
-  },
-  hintLabel: {
-    color: "#E5F7ED", fontSize: 11, fontWeight: "600",
-    letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6,
-  },
-  hintText: { color: "#FFFFFF", fontSize: 13, fontFamily: "monospace" },
+function KeyButton({
+  label,
+  icon,
+  onPress,
+  disabled,
+}: {
+  label?: string;
+  icon?: any;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[s.key, disabled && { opacity: 0.4 }]}
+      onPress={onPress}
+      disabled={disabled}
+      testID={`key-${label ?? "backspace"}`}
+    >
+      {icon ? (
+        <Ionicons name={icon} size={26} color="#0F172A" />
+      ) : (
+        <Text style={s.keyLabel}>{label}</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
 
-  right: {
-    flex: 1, padding: 48, alignItems: "center", justifyContent: "center",
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  layout: { flex: 1, flexDirection: "row" },
+  layoutNarrow: { flexDirection: "column" },
+
+  left: {
+    flex: 1.1,
+    padding: 32,
+    justifyContent: "flex-start",
   },
-  rightNarrow: { padding: 24 },
-  title: { fontSize: 28, fontWeight: "700", color: "#0F172A" },
-  subtitle: { fontSize: 14, color: "#94A3B8", marginTop: 6, marginBottom: 24 },
+  leftNarrow: { flex: 0, paddingVertical: 24 },
+
+  clock: { fontSize: 56, fontWeight: "700", color: "#0F172A", letterSpacing: -1 },
+  date: { fontSize: 16, color: "#475569", marginTop: 4, marginBottom: 20 },
 
   branchBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999,
     borderWidth: 1, borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF", marginBottom: 16,
+    backgroundColor: "#FFFFFF", alignSelf: "flex-start",
+    marginBottom: 16, maxWidth: "100%",
   },
   branchLabel: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-
-  field: {
-    flexDirection: "row", alignItems: "center",
-    width: "100%", maxWidth: 360,
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 4,
-    backgroundColor: "#FFFFFF", marginBottom: 12,
+  branchLoadError: { color: "#EF4444", fontSize: 11, marginBottom: 6 },
+  retryBtn: {
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
+    borderWidth: 1, borderColor: "#EF4444", alignSelf: "flex-start",
   },
-  fieldInput: { flex: 1, paddingVertical: 12, fontSize: 14, color: "#0F172A" },
+  retryText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
 
-  error: { color: "#EF4444", fontSize: 13, marginBottom: 6, textAlign: "center" },
+  staffHeading: {
+    fontSize: 13, fontWeight: "600", color: "#64748B",
+    marginBottom: 12, marginTop: 4,
+  },
+  userRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 14, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  userRowActive: { backgroundColor: "#F0FDF4" },
+  avatar: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center", justifyContent: "center",
+  },
+  userName: { flex: 1, fontSize: 16, color: "#0F172A", fontWeight: "500" },
+  empty: { padding: 16, color: "#94A3B8", textAlign: "center" },
 
-  submitBtn: {
-    width: "100%", maxWidth: 360,
-    backgroundColor: "#00B14F", paddingVertical: 14, borderRadius: 10,
-    alignItems: "center", marginTop: 4,
+  right: {
+    flex: 1,
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    borderLeftWidth: 1,
+    borderLeftColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
   },
-  submitBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  rightNarrow: { borderLeftWidth: 0, borderTopWidth: 1, borderTopColor: "#E2E8F0", paddingVertical: 24 },
+  rightTitle: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
+  rightSubtitle: { fontSize: 14, color: "#64748B", marginTop: 4, marginBottom: 24 },
 
-  hintBoxMobile: {
-    marginTop: 28, paddingHorizontal: 16, paddingVertical: 12,
-    borderRadius: 10, backgroundColor: "#F8FAFC", alignItems: "center",
+  dotsRow: { flexDirection: "row", gap: 14, marginBottom: 8 },
+  dot: {
+    width: 16, height: 16, borderRadius: 8,
+    borderWidth: 1.5, borderColor: "#CBD5E1", backgroundColor: "transparent",
   },
-  hintLabelMobile: {
-    color: "#94A3B8", fontSize: 10, fontWeight: "700",
-    letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 4,
+  dotFilled: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
+
+  error: { color: "#EF4444", fontSize: 13, marginTop: 4, marginBottom: 4, textAlign: "center" },
+
+  keypad: {
+    flexDirection: "row", flexWrap: "wrap",
+    width: 280, justifyContent: "space-between",
   },
-  hintTextMobile: { fontSize: 11, color: "#475569", fontFamily: "monospace" },
+  key: {
+    width: 80, height: 70, borderRadius: 999,
+    alignItems: "center", justifyContent: "center",
+    marginVertical: 6,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  keyEmpty: { width: 80, height: 70, marginVertical: 6 },
+  keyLabel: { fontSize: 26, fontWeight: "500", color: "#0F172A" },
+
+  submittingOverlay: { marginTop: 16 },
 
   // Branch picker modal
   branchModalOverlay: {
@@ -452,6 +530,7 @@ const styles = StyleSheet.create({
   branchModalSheet: {
     backgroundColor: "#FFFFFF", borderRadius: 16,
     maxHeight: "70%", overflow: "hidden",
+    maxWidth: 420, alignSelf: "center", width: "100%",
   },
   branchModalTitle: {
     fontSize: 15, fontWeight: "700", color: "#0F172A", padding: 16,

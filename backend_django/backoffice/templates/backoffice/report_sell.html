@@ -1,0 +1,60 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+
+{% block title %}Sales by Bill Detail — Brave POS{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h4 class="mb-1">Sales report by Bill Detail</h4>
+        <div class="text-muted small">
+          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
+        </div>
+      </div>
+      <button class="btn btn-info text-white btn-sm" disabled>
+        <i class="bi bi-file-earmark-spreadsheet"></i> Export
+      </button>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Date</th>
+            <th>Receipt No.</th>
+            <th>Barcode</th>
+            <th>Product Name</th>
+            <th class="text-end">Quantity</th>
+            <th class="text-end">Price / Unit</th>
+            <th class="text-end">Add-on Total</th>
+            <th class="text-end">Sub Total</th>
+            <th class="text-end">Discount</th>
+            <th class="text-end">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}{% with it=row.item %}
+          <tr>
+            <td>{{ it.order.created_at|date:"d/m/Y H:i:s" }}</td>
+            <td>{{ it.order.order_number }}</td>
+            <td>{{ row.barcode|default:"-" }}</td>
+            <td>{{ it.name }}</td>
+            <td class="text-end">{{ it.qty }}</td>
+            <td class="text-end currency">{{ it.price|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ row.add_on_total|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ row.sub_total|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ row.discount|floatformat:2|intcomma }}</td>
+            <td class="text-end currency fw-semibold">{{ row.total|floatformat:2|intcomma }}</td>
+          </tr>
+          {% endwith %}{% empty %}
+          <tr><td colspan="10" class="text-center text-muted py-4">No line items in range.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "backoffice/_pagination.html" %}
+  </div>
+</div>
+{% endblock %}

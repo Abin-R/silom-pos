@@ -76,13 +76,19 @@ export type ReceiptOrder = {
 export type ReceiptShop = {
   shop_name?: string;
   branch?: string;
+  // Legacy free-form blob; new code prefers the split address_line_1/2 fields.
   address?: string;
+  address_line_1?: string;
+  address_line_2?: string;
+  company_name?: string;
   phone?: string;
   tax_id?: string;
   pos_id?: string;
   pos_number?: string;
   tax_percent?: number;
   tax_mode?: 'inclusive' | 'exclusive';
+  currency?: string;
+  business_type?: string;
 };
 
 // ─── Discovery ─────────────────────────────────────────────────────────────

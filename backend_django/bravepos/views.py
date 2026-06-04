@@ -325,6 +325,97 @@ def verify_pin(request):
     return Response({'detail': 'Invalid PIN'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
+# ─── PIN-pad login (new flow) ────────────────────────────────────────────────
+@api_view(['GET'])
+def auth_branch_users(request):
+    """List the staff who can sign in at a given branch.
+
+    Query: ?branch_id=<uuid>. Returns admins (global — can sign in anywhere)
+    plus cashiers explicitly assigned to that branch. Unauthenticated, since
+    the PIN-pad screen needs this before any session exists.
+    """
+    branch_id = request.query_params.get('branch_id')
+    if not branch_id:
+        return Response({'detail': 'branch_id is required.'}, status=400)
+    try:
+        branch = Branch.objects.get(id=branch_id, active=True)
+    except (Branch.DoesNotExist, ValueError):
+        return Response({'detail': 'Branch not found.'}, status=404)
+
+    admins = Staff.objects.filter(role='admin', active=True).order_by('name')
+    cashiers = Staff.objects.filter(role='cashier', active=True, branches=branch).order_by('name')
+    users = [
+        {'id': str(s.id), 'name': s.name, 'role': s.role}
+        for s in list(admins) + list(cashiers)
+    ]
+    return Response({'branch': {'id': str(branch.id), 'name': branch.name}, 'users': users})
+
+
+@api_view(['POST'])
+def auth_pin_login(request):
+    """Body: { branch_id, staff_id, pin }.
+
+    PIN-pad equivalent of /auth/login. Same session semantics: one active
+    session per branch (any prior session on the branch is dropped) and one
+    active session per staff (reject if signed in elsewhere).
+    """
+    branch_id = (request.data or {}).get('branch_id')
+    staff_id = (request.data or {}).get('staff_id')
+    pin = (request.data or {}).get('pin', '')
+
+    if not branch_id or not staff_id or not pin:
+        return Response({'detail': 'branch_id, staff_id, and pin are required.'}, status=400)
+
+    try:
+        staff = Staff.objects.get(id=staff_id, active=True)
+    except (Staff.DoesNotExist, ValueError):
+        return Response({'detail': 'Invalid credentials.'}, status=401)
+
+    if not staff.check_pin(pin):
+        return Response({'detail': 'Invalid PIN.'}, status=401)
+
+    try:
+        branch = Branch.objects.get(id=branch_id, active=True)
+    except (Branch.DoesNotExist, ValueError):
+        return Response({'detail': 'Branch not found.'}, status=404)
+
+    if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
+        return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
+
+    existing = (
+        BranchSession.objects
+        .select_related('branch')
+        .filter(staff=staff)
+        .first()
+    )
+    if existing and str(existing.branch_id) != str(branch.id):
+        return Response({
+            'detail': (
+                f'This account is already signed in at '
+                f'{existing.branch.name}. Sign out there first.'
+            ),
+            'code': 'user_already_signed_in',
+            'occupied_branch': existing.branch.name,
+        }, status=409)
+
+    BranchSession.objects.filter(branch=branch).delete()
+    sess = BranchSession.objects.create(
+        branch=branch, staff=staff, token=BranchSession.new_token(),
+    )
+    return Response({
+        'token': sess.token,
+        'staff': {
+            'id': str(staff.id),
+            'email': staff.email,
+            'name': staff.name,
+            'role': staff.role,
+        },
+        'branch': {'id': str(branch.id), 'name': branch.name},
+        'role': staff.role,
+        'name': staff.name,
+    })
+
+
 # ─── ViewSets — basic CRUD ───────────────────────────────────────────────────
 class CategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     queryset = Category.objects.all()
@@ -1118,13 +1209,16 @@ def seed_data(_request):
         active=True,
     )
 
-    # Seed demo staff — admin can log into any branch, cashier only to EmQuartier
+    # Seed demo staff — admin can log into any branch, cashier only to EmQuartier.
+    # PINs match the legacy /auth/verify-pin defaults so tutorials still work.
     admin = Staff(email="admin@rollingpinn.com", name="Admin", role="admin")
     admin.set_password("admin1234")
+    admin.set_pin("1234")
     admin.save()
 
     cashier = Staff(email="cashier@rollingpinn.com", name="Cashier", role="cashier")
     cashier.set_password("cashier1234")
+    cashier.set_pin("0000")
     cashier.save()
     cashier.branches.add(emq)
 

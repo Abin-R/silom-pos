@@ -9,8 +9,10 @@
 // 576 px to match the TM-T82X print head exactly.
 
 import React, { forwardRef } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Image, StyleSheet } from "react-native";
 import type { ReceiptOrder, ReceiptShop } from "../lib/starPrinter";
+
+const LOGO = require("../assets/images/rolling-pinn-logo.png");
 
 // 80mm paper @ 180 dpi = 576 dots printable width.  useStarPrinter
 // passes the same constant to captureRef.width so the captured PNG is
@@ -20,12 +22,16 @@ export const RECEIPT_WIDTH = 576;
 const FONT = "Sarabun";
 const BOLD = "Sarabun-Bold";
 
-// Hardcoded company info matching the reference receipt.  Falls back
-// gracefully — backend shop data overrides where present.
+// Final fallbacks used only when the backend Settings row is empty
+// (e.g. fresh dev install). All of these are now editable in the
+// backoffice Shop page — once a value is saved there, it flows through
+// /api/settings → ReceiptShop → this component without a code change.
 const SHOP_DEFAULTS = {
   shop_name: "The rolling pinn",
   branch: "Samyan",
   company: "บริษัท เบรฟ แบรนด์ จำกัด",
+  // Legacy hardcoded address — only rendered when both address_line_1
+  // and address_line_2 are blank.
   address: [
     "55 อาคารไบโอเฮ้าส์ ชั้น5 ห้องเลขที่508 ซอยสุขุมวิท",
     "39 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา",
@@ -46,14 +52,35 @@ const thb = (n: number) =>
 
 const Dash = () => <View style={s.dash} />;
 
-type Props = { order: ReceiptOrder; shop?: ReceiptShop };
+type Props = {
+  order: ReceiptOrder;
+  shop?: ReceiptShop;
+  // Fires once the bundled logo PNG has decoded and rendered.  The
+  // print hook gates captureRef on this — without it, view-shot can
+  // snapshot the view before the image is ready, producing a receipt
+  // with a blank space where the logo should be.
+  onLogoReady?: () => void;
+};
 
-export const ReceiptImage = forwardRef<View, Props>(({ order, shop }, ref) => {
+export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady }, ref) => {
+  // Prefer the backoffice-edited address_line_1/2 fields; fall back to the
+  // legacy `address` blob (split on newlines) and only use the hardcoded
+  // default block when no shop data exists at all.
+  const addressLines: string[] = (() => {
+    const lines = [shop?.address_line_1, shop?.address_line_2]
+      .map((l) => (l || "").trim())
+      .filter((l) => l.length > 0);
+    if (lines.length) return lines;
+    const blob = (shop?.address || "").trim();
+    if (blob) return blob.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    return SHOP_DEFAULTS.address;
+  })();
+
   const sh = {
     shop_name: shop?.shop_name || SHOP_DEFAULTS.shop_name,
     branch: shop?.branch || SHOP_DEFAULTS.branch,
-    company: SHOP_DEFAULTS.company,
-    address: SHOP_DEFAULTS.address,
+    company: shop?.company_name || SHOP_DEFAULTS.company,
+    address: addressLines,
     phone: shop?.phone || SHOP_DEFAULTS.phone,
     tax_id: shop?.tax_id || SHOP_DEFAULTS.tax_id,
     pos_id: shop?.pos_id || SHOP_DEFAULTS.pos_id,
@@ -77,13 +104,18 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop }, ref) => {
   return (
     <View ref={ref} collapsable={false} style={s.root}>
       {/* ─── Big queue number ─────────────────────────────────────── */}
-      <Text style={s.queue}>คิวที่ {queue}</Text>
+      <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>
 
-      {/* ─── Shop title ───────────────────────────────────────────── */}
-      <Text style={s.shopTitle}>{sh.shop_name}</Text>
+      {/* ─── Shop logo (replaces the text title) ──────────────────── */}
+      <Image
+        source={LOGO}
+        style={s.logo}
+        resizeMode="contain"
+        onLoadEnd={onLogoReady}
+      />
 
       {/* ─── Branch + company info ────────────────────────────────── */}
-      <Text style={s.branchLine}>สาขา: {sh.branch}</Text>
+      <Text style={s.branchLine} numberOfLines={1}>สาขา: {sh.branch}</Text>
       <Text style={s.companyCenter}>{sh.company}</Text>
       {sh.address.map((line, i) => (
         <Text key={i} style={s.companyCenter}>{line}</Text>
@@ -101,8 +133,8 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop }, ref) => {
       <Text style={s.line}>วันที่: {order.created_at_local ?? ""}</Text>
       <Text style={s.line}>Invoice #: {order.order_number}</Text>
       <View style={s.row}>
-        <Text style={s.line}>POS #: {sh.pos_number}</Text>
-        <Text style={s.line}>ชื่อพนักงาน: {order.staff || ""}</Text>
+        <Text style={s.line} numberOfLines={1}>POS #: {sh.pos_number}</Text>
+        <Text style={[s.line, s.staffName]} numberOfLines={1}>ชื่อพนักงาน: {order.staff || ""}</Text>
       </View>
 
       <Dash />
@@ -116,7 +148,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop }, ref) => {
         const lineTotal = (Number(it.price) || 0) * (Number(it.qty) || 0);
         return (
           <View key={i} style={s.row}>
-            <Text style={[s.line, { flex: 1 }]}>{it.qty}    {it.name}</Text>
+            <Text style={[s.line, s.itemName]}>{it.qty}    {it.name}</Text>
             <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(lineTotal)}</Text>
           </View>
         );
@@ -174,13 +206,13 @@ const s = StyleSheet.create({
     width: RECEIPT_WIDTH,
     backgroundColor: "#FFFFFF",
     paddingVertical: 24,
-    // Asymmetric horizontal padding.  This printer's effective right
-    // print boundary lands around dot ~460 of the 576-dot image — the
-    // last ~115 dots get physically clipped (observed: "ชื่อพนักงาน:"
-    // truncates to "ชื่อพ" with paddingRight:44).  130px keeps all
-    // right-aligned content well inside the safe zone.
+    // Asymmetric horizontal padding.  Empirically the printer's effective
+    // right print boundary lands around dot ~420 of the 576-dot image:
+    // paddingRight:130 still clipped "Admin"→"Adm", "299.00"→"299.0".
+    // 170 gives a generous safety zone so longer dynamic values (bigger
+    // amounts, longer staff names, etc.) still print intact.
     paddingLeft: 20,
-    paddingRight: 130,
+    paddingRight: 170,
   },
   queue: {
     fontFamily: BOLD,
@@ -195,6 +227,18 @@ const s = StyleSheet.create({
     fontSize: 22,
     color: "#000000",
     textAlign: "center",
+    marginBottom: 10,
+  },
+  // Brand logo printed in place of the shop-name text.  alignSelf:
+  // center + a width smaller than the receipt content area keeps the
+  // logo centered on the printed strip and away from the right-edge
+  // clip zone.  Source is 100x100 — scaling up to 140 keeps the
+  // dithered thermal output readable without going blurry.
+  logo: {
+    alignSelf: "center",
+    width: 140,
+    height: 140,
+    marginTop: 4,
     marginBottom: 10,
   },
   branchLine: {
@@ -244,6 +288,21 @@ const s = StyleSheet.create({
     minWidth: 90,
     textAlign: "right",
     marginLeft: 8,
+  },
+  // Staff label/value occupies whatever's left after POS # on the
+  // same row.  flexShrink + textAlign:right means a long staff name
+  // gets ellipsised rather than pushed off the right edge.
+  staffName: {
+    flexShrink: 1,
+    textAlign: "right",
+    marginLeft: 8,
+  },
+  // Item description.  flex:1 fills the left column; flexShrink
+  // guarantees the amount column always gets its 90px even when the
+  // product name is huge (the name wraps to additional lines).
+  itemName: {
+    flex: 1,
+    flexShrink: 1,
   },
   // Left-side VAT label.  flex: 1 + numberOfLines: 1 prevents the long
   // Thai labels (e.g. "มูลค่าสินค้าก่อน Vat") from pushing the amount

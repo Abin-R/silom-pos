@@ -53,7 +53,7 @@ const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFract
 // Kept in sync with backend/server.py BEAM_API_KEY_MASK_PREFIX.
 const BEAM_API_KEY_MASK_PREFIX = "••••";
 
-type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "branches" | "settings";
+type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "settings";
 
 type Category = { id: string; name: string; name_th?: string; color: string; source?: string; order: number };
 type Product = {
@@ -149,7 +149,7 @@ export default function Admin() {
   // in an unrenderable state — default Reports if not specified.
   const VALID_SECTIONS: Section[] = [
     "transactions", "reports", "inventory", "customers",
-    "products", "drawer", "branches", "settings",
+    "products", "drawer", "settings",
   ];
   const initialSection = (VALID_SECTIONS.includes(navParams.section as Section)
     ? (navParams.section as Section)
@@ -177,7 +177,6 @@ export default function Admin() {
     { key: "customers", label: "Customers", icon: "people-outline" },
     { key: "products", label: "Products", icon: "gift-outline" },
     { key: "drawer", label: "Drawer", icon: "calculator-outline" },
-    { key: "branches", label: "Branches", icon: "storefront-outline", adminOnly: true },
     { key: "settings", label: "Settings", icon: "settings-outline" },
   ];
   const items = allItems.filter((it) => !it.adminOnly || isAdmin);
@@ -203,7 +202,6 @@ export default function Admin() {
         });
       }
     } else {
-      if (k === "branches" && !isAdmin) return;
       setSection(k);
     }
   };
@@ -353,7 +351,6 @@ export default function Admin() {
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} />}
           {section === "drawer" && <Drawer />}
-          {section === "branches" && isAdmin && <Branches />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
@@ -529,11 +526,15 @@ type ReprintFn = (
   shop: any,
 ) => Promise<{ ok: true } | { ok: false; error: string }>;
 
+type DateFilter = "today" | "yesterday" | "week" | "all";
+
 function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
+  const [query, setQuery] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
 
   useEffect(() => {
     (async () => {
@@ -544,6 +545,37 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
       setLoading(false);
     })();
   }, [isWide]);
+
+  // Filter by order number (case-insensitive substring) and the chosen
+  // date bucket.  Buckets are computed from the local-day boundary of the
+  // *current* device so "Today" matches what the cashier sees on the wall
+  // clock, not UTC.
+  const filteredOrders = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    return orders.filter((o) => {
+      if (q && !o.order_number.toLowerCase().includes(q)) return false;
+      if (dateFilter !== "all") {
+        const t = new Date(o.created_at).getTime();
+        if (dateFilter === "today" && t < startOfToday) return false;
+        if (dateFilter === "yesterday" && (t < startOfToday - dayMs || t >= startOfToday)) return false;
+        if (dateFilter === "week" && t < startOfToday - 6 * dayMs) return false;
+      }
+      return true;
+    });
+  }, [orders, query, dateFilter]);
+
+  // If the currently-selected order falls out of the filter, drop the
+  // selection so the right-hand detail pane doesn't show a row the user
+  // can no longer see in the list.
+  useEffect(() => {
+    if (selected && !filteredOrders.some((o) => o.id === selected.id)) {
+      setSelected(isWide ? (filteredOrders[0] ?? null) : null);
+    }
+  }, [filteredOrders, selected, isWide]);
 
   if (loading) return <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />;
 
@@ -566,28 +598,75 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
     <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="transactions-section">
       <View style={[styles.txList, !isWide && styles.fullCol]}>
         <Text style={styles.sectionHeader}>Sale Transactions</Text>
-        <FlatList
-          data={orders}
-          keyExtractor={(i) => i.id}
-          ItemSeparatorComponent={() => <View style={styles.divider} />}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[
-                styles.txRow,
-                selected?.id === item.id && isWide && styles.txRowActive,
-              ]}
-              onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
-              testID={`tx-${item.order_number}`}
-            >
-              <Ionicons name="folder-outline" size={18} color="#94A3B8" />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.txNum}>{item.order_number}</Text>
-                <Text style={styles.txTime}>{item.created_time}</Text>
-              </View>
-              <Text style={styles.txAmount}>{THB(item.total)}</Text>
+        <View style={styles.searchBoxRow}>
+          <Ionicons name="search" size={16} color="#94A3B8" />
+          <TextInput
+            placeholder="Search order #"
+            style={styles.searchBoxInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholderTextColor="#94A3B8"
+            autoCapitalize="characters"
+            testID="tx-search"
+          />
+          {!!query && (
+            <TouchableOpacity onPress={() => setQuery("")} testID="tx-search-clear">
+              <Ionicons name="close-circle" size={16} color="#94A3B8" />
             </TouchableOpacity>
           )}
-        />
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.txDateChips}
+        >
+          {([
+            { key: "today", label: "Today" },
+            { key: "yesterday", label: "Yesterday" },
+            { key: "week", label: "Last 7 days" },
+            { key: "all", label: "All" },
+          ] as { key: DateFilter; label: string }[]).map((opt) => {
+            const active = dateFilter === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.catChip, active && styles.txDateChipActive]}
+                onPress={() => setDateFilter(opt.key)}
+                testID={`tx-date-${opt.key}`}
+              >
+                <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{opt.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        {filteredOrders.length === 0 ? (
+          <View style={styles.txEmpty}>
+            <Text style={styles.emptyText}>No matching transactions</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={filteredOrders}
+            keyExtractor={(i) => i.id}
+            ItemSeparatorComponent={() => <View style={styles.divider} />}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[
+                  styles.txRow,
+                  selected?.id === item.id && isWide && styles.txRowActive,
+                ]}
+                onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
+                testID={`tx-${item.order_number}`}
+              >
+                <Ionicons name="folder-outline" size={18} color="#94A3B8" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.txNum}>{item.order_number}</Text>
+                  <Text style={styles.txTime}>{item.created_time}</Text>
+                </View>
+                <Text style={styles.txAmount}>{THB(item.total)}</Text>
+              </TouchableOpacity>
+            )}
+          />
+        )}
       </View>
       {isWide && (
         <View style={styles.txDetail}>
@@ -1166,280 +1245,6 @@ function Customers({ isWide }: { isWide: boolean }) {
   );
 }
 
-// =================== BRANCHES ===================
-type Branch = {
-  id: string;
-  name: string;
-  code?: string;
-  address?: string;
-  phone?: string;
-  tax_id?: string;
-  pos_id?: string;
-  active: boolean;
-  cashier_email?: string;
-};
-
-function Branches() {
-  const [list, setList] = useState<Branch[]>([]);
-  const [editing, setEditing] = useState<Branch | "new" | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const load = async () => {
-    const r = await apiFetch(`${API}/branches`);
-    if (r.ok) setList(await r.json());
-  };
-  useEffect(() => { load(); }, []);
-
-  const save = async (b: Partial<Branch> & { cashier_email?: string; cashier_password?: string }) => {
-    setSaving(true);
-    try {
-      const isNew = editing === "new";
-      const url = isNew ? `${API}/branches` : `${API}/branches/${(editing as Branch).id}`;
-      const method = isNew ? "POST" : "PUT";
-      const res = await apiFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: true, ...b }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({} as any));
-        // Native `alert` is available on web + RN — fine as a transient toast.
-        alert(body?.detail || `Save failed (${res.status})`);
-        return;
-      }
-      setEditing(null);
-      await load();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const remove = async (b: Branch) => {
-    // Soft delete: just flip active=false so existing orders keep their FK.
-    await apiFetch(`${API}/branches/${b.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...b, active: false }),
-    });
-    await load();
-  };
-
-  return (
-    <View style={{ flex: 1 }} testID="branches-section">
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16 }}>
-        <Text style={styles.h2}>Branches</Text>
-        <TouchableOpacity
-          style={styles.primaryBtn}
-          onPress={() => setEditing("new")}
-          testID="branch-add"
-        >
-          <Text style={styles.primaryBtnText}>+ Add Branch</Text>
-        </TouchableOpacity>
-      </View>
-
-      <FlatList
-        data={list}
-        keyExtractor={(b) => b.id}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16, gap: 10 }}
-        ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Ionicons name="storefront-outline" size={40} color="#CBD5E1" />
-            <Text style={styles.emptyText}>No branches yet</Text>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.branchCard} testID={`branch-row-${item.id}`}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.branchName}>
-                {item.name}
-                {!item.active && <Text style={styles.branchInactive}>  (inactive)</Text>}
-              </Text>
-              {item.code ? <Text style={styles.branchMeta}>Code: {item.code}</Text> : null}
-              {item.address ? <Text style={styles.branchMeta} numberOfLines={2}>{item.address}</Text> : null}
-              {item.phone ? <Text style={styles.branchMeta}>📞 {item.phone}</Text> : null}
-            </View>
-            <View style={{ flexDirection: "row", gap: 6 }}>
-              <TouchableOpacity onPress={() => setEditing(item)} testID={`branch-edit-${item.id}`}>
-                <Ionicons name="pencil" size={18} color="#475569" />
-              </TouchableOpacity>
-              {item.active && (
-                <TouchableOpacity onPress={() => remove(item)} testID={`branch-del-${item.id}`}>
-                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        )}
-      />
-
-      {editing && (
-        <BranchEditModal
-          initial={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-          onSave={save}
-          saving={saving}
-        />
-      )}
-    </View>
-  );
-}
-
-function BranchEditModal({
-  initial,
-  onClose,
-  onSave,
-  saving,
-}: {
-  initial: Branch | null;
-  onClose: () => void;
-  onSave: (b: Partial<Branch> & { cashier_email?: string; cashier_password?: string }) => void;
-  saving: boolean;
-}) {
-  const isNew = !initial;
-  const [name, setName] = useState(initial?.name || "");
-  const [code, setCode] = useState(initial?.code || "");
-  const [address, setAddress] = useState(initial?.address || "");
-  const [phone, setPhone] = useState(initial?.phone || "");
-  const [taxId, setTaxId] = useState(initial?.tax_id || "");
-  const [posId, setPosId] = useState(initial?.pos_id || "");
-  // Cashier creds.  On create: backend creates a Staff row in the same txn.
-  // On edit: backend updates the existing cashier (or creates one if missing).
-  const [cashierEmail, setCashierEmail] = useState(initial?.cashier_email || "");
-  const [cashierPassword, setCashierPassword] = useState("");
-  const [showPwd, setShowPwd] = useState(false);
-
-  const initialEmail = initial?.cashier_email || "";
-  const emailChanged = cashierEmail.trim() !== initialEmail;
-  const passwordEntered = cashierPassword.length > 0;
-  // On create both must be filled together (or neither).  On edit, either can
-  // change independently — except: a brand-new cashier on a branch that has
-  // none needs both.
-  const cashierIncomplete = isNew
-    ? (!!(cashierEmail.trim() || passwordEntered) && !(cashierEmail.trim() && passwordEntered))
-    : (!initialEmail && (emailChanged || passwordEntered) && !(cashierEmail.trim() && passwordEntered));
-  const canSave = !!name.trim() && !cashierIncomplete && !saving;
-
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.editModal} testID="branch-edit-modal">
-          <View style={styles.modalHead}>
-            <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={24} color="#475569" />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>{initial ? "Edit Branch" : "New Branch"}</Text>
-            <View style={{ width: 24 }} />
-          </View>
-          <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-            <Text style={styles.formLabel}>Name *</Text>
-            <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder="e.g. EmQuartier" testID="branch-name" />
-            <Text style={styles.formLabel}>Short code</Text>
-            <TextInput style={styles.formInput} value={code} onChangeText={setCode} placeholder="EMQ" autoCapitalize="characters" testID="branch-code" />
-            <Text style={styles.formLabel}>Address</Text>
-            <TextInput style={[styles.formInput, { height: 80 }]} value={address} onChangeText={setAddress} multiline testID="branch-address" />
-            <View style={{ flexDirection: "row", gap: 12 }}>
-              <View style={{ flex: 1, gap: 6 }}>
-                <Text style={styles.formLabel}>Phone</Text>
-                <TextInput style={styles.formInput} value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="branch-phone" />
-              </View>
-              <View style={{ flex: 1, gap: 6 }}>
-                <Text style={styles.formLabel}>Tax ID</Text>
-                <TextInput style={styles.formInput} value={taxId} onChangeText={setTaxId} testID="branch-tax-id" />
-              </View>
-            </View>
-            <Text style={styles.formLabel}>POS ID</Text>
-            <TextInput style={styles.formInput} value={posId} onChangeText={setPosId} testID="branch-pos-id" />
-
-            <View style={{ marginTop: 8, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#F1F5F9" }}>
-              <Text style={[styles.formLabel, { fontSize: 13, color: "#0F172A", fontWeight: "700" }]}>
-                Cashier login {isNew ? "(optional)" : ""}
-              </Text>
-              <Text style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
-                {isNew
-                  ? "Creates a cashier account that can sign in only at this branch."
-                  : initialEmail
-                    ? "Change email or set a new password. Leave password blank to keep current."
-                    : "No cashier yet. Provide email + password to add one."}
-              </Text>
-            </View>
-            <Text style={styles.formLabel}>Cashier email</Text>
-            <TextInput
-              style={styles.formInput}
-              value={cashierEmail}
-              onChangeText={setCashierEmail}
-              placeholder="cashier+siam@rollingpinn.com"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="email-address"
-              testID="branch-cashier-email"
-            />
-            <Text style={styles.formLabel}>
-              {isNew || !initialEmail ? "Cashier password" : "New password (optional)"}
-            </Text>
-            <View style={[styles.formInput, { flexDirection: "row", alignItems: "center", paddingVertical: 0 }]}>
-              <TextInput
-                style={{ flex: 1, paddingVertical: 10, color: "#0F172A" }}
-                value={cashierPassword}
-                onChangeText={setCashierPassword}
-                placeholder={isNew || !initialEmail ? "Min 4 characters" : "Leave blank to keep current password"}
-                secureTextEntry={!showPwd}
-                autoCapitalize="none"
-                testID="branch-cashier-password"
-              />
-              <TouchableOpacity onPress={() => setShowPwd((s) => !s)}>
-                <Ionicons
-                  name={showPwd ? "eye-off-outline" : "eye-outline"}
-                  size={18}
-                  color="#94A3B8"
-                />
-              </TouchableOpacity>
-            </View>
-            {cashierIncomplete && (
-              <Text style={{ color: "#EF4444", fontSize: 12 }}>
-                Fill both email and password to add a cashier.
-              </Text>
-            )}
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, !canSave && { opacity: 0.4 }]}
-              onPress={() => {
-                const payload: any = {
-                  name: name.trim(),
-                  code, address, phone, tax_id: taxId, pos_id: posId,
-                };
-                // Only send cashier fields when the admin actually wants to
-                // create/change them — keeps PUT semantics clean.
-                if (isNew) {
-                  if (cashierEmail.trim() && cashierPassword) {
-                    payload.cashier_email = cashierEmail.trim();
-                    payload.cashier_password = cashierPassword;
-                  }
-                } else {
-                  if (cashierEmail.trim() && cashierEmail.trim() !== initialEmail) {
-                    payload.cashier_email = cashierEmail.trim();
-                  }
-                  if (cashierPassword) {
-                    payload.cashier_password = cashierPassword;
-                  }
-                  // Cover the "no cashier yet, add one now" case from edit mode.
-                  if (!initialEmail && cashierEmail.trim() && cashierPassword) {
-                    payload.cashier_email = cashierEmail.trim();
-                    payload.cashier_password = cashierPassword;
-                  }
-                }
-                onSave(payload);
-              }}
-              disabled={!canSave}
-              testID="branch-save"
-            >
-              <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Branch"}</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
 
 // =================== PRODUCTS ===================
 function Products({ isWide }: { isWide: boolean }) {
@@ -3093,6 +2898,9 @@ const styles = StyleSheet.create({
   // Transactions
   txList: { width: 320, backgroundColor: "#FFFFFF", borderRightWidth: 1, borderRightColor: "#E2E8F0" },
   txDetail: { flex: 1 },
+  txDateChips: { flexDirection: "row", gap: 6, paddingHorizontal: 10, paddingBottom: 10 },
+  txDateChipActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
+  txEmpty: { padding: 24, alignItems: "center" },
   txRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
   txRowActive: { backgroundColor: "#E5F7ED" },
   txNum: { fontSize: 13, color: "#3B82F6", fontWeight: "600" },
@@ -3340,16 +3148,6 @@ const styles = StyleSheet.create({
   },
   imgPickBtnText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
   imgClearText: { fontSize: 12, color: "#EF4444", textAlign: "center" },
-
-  // Branches
-  branchCard: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    padding: 14, borderRadius: 12,
-    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF",
-  },
-  branchName: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
-  branchInactive: { fontSize: 12, color: "#EF4444", fontWeight: "500" },
-  branchMeta: { fontSize: 12, color: "#64748B", marginTop: 2 },
 
   favToggle: {
     flexDirection: "row", alignItems: "center", gap: 8,

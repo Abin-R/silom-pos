@@ -1,0 +1,4 @@
+screenshots/
+.venv/
+__pycache__/
+*.pyc

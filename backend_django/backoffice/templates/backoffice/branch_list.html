@@ -1,0 +1,97 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+
+{% block title %}Shops &amp; Branches — Bravepos{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-1">Shops &amp; Branches</h4>
+    <div class="text-muted small">{{ branches_all|length }} branch{{ branches_all|length|pluralize:"es" }}</div>
+  </div>
+  <a class="btn btn-success" href="{% url 'backoffice:branch_new' %}">
+    <i class="bi bi-plus-lg"></i> Add Branch
+  </a>
+</div>
+
+{% for b in branches_all %}
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="row align-items-center g-3">
+      <div class="col-md-4 text-center border-end">
+        <h5 class="mb-2">{{ settings.shop_name|default:"Bravepos" }}</h5>
+        {% if b.logo_url %}
+          <img src="{{ b.logo_url }}" alt="{{ b.name }}"
+               style="max-height:140px; max-width:80%; object-fit:contain;">
+        {% elif settings.logo_url %}
+          <img src="{{ settings.logo_url }}" alt="{{ settings.shop_name }}"
+               style="max-height:140px; max-width:80%; object-fit:contain;">
+        {% else %}
+          <div style="height:140px; background:#f5f7fa; display:flex; align-items:center;
+                      justify-content:center; border-radius:8px;">
+            <i class="bi bi-shop text-muted fs-1"></i>
+          </div>
+        {% endif %}
+        <div class="mt-3">
+          <span class="text-success fw-semibold fs-5">{{ b.name }}</span>
+          {% if not b.active %}<span class="badge bg-secondary ms-2">Inactive</span>{% endif %}
+        </div>
+      </div>
+      <div class="col-md-8">
+        <div class="row mb-2">
+          <div class="col-4 text-muted">Business Type</div>
+          <div class="col-8 text-end">{{ settings.business_type|default:"—" }}</div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-4 text-muted">Tax ID</div>
+          <div class="col-8 text-end text-success">
+            {{ b.tax_id|default:settings.tax_id|default:"—" }}
+          </div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-4 text-muted">Address</div>
+          <div class="col-8 text-end">
+            {{ b.address|default:settings.address|default:"—"|linebreaksbr }}
+          </div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-4 text-muted">Tel</div>
+          <div class="col-8 text-end">{{ b.phone|default:settings.phone|default:"—" }}</div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-4 text-muted">Open</div>
+          <div class="col-8 text-end">
+            {% if settings %}{{ settings.open_time }} - {{ settings.close_time }}{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-4 text-muted">POS ID</div>
+          <div class="col-8 text-end">{{ b.pos_id|default:"—" }}</div>
+        </div>
+        <div class="row">
+          <div class="col-4 text-muted">Code</div>
+          <div class="col-8 text-end">{{ b.code|default:"—" }}</div>
+        </div>
+
+        <div class="d-flex justify-content-end gap-2 mt-3">
+          <a class="btn btn-outline-primary btn-sm"
+             href="{% url 'backoffice:branch_detail' branch_id=b.id %}">
+            <i class="bi bi-pencil"></i> Edit
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% empty %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-shop text-muted" style="font-size: 3rem;"></i>
+    <div class="text-muted mt-3">No branches yet.</div>
+    <a class="btn btn-success mt-3" href="{% url 'backoffice:branch_new' %}">
+      <i class="bi bi-plus-lg"></i> Create your first branch
+    </a>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

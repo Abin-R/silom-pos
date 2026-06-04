@@ -1,0 +1,253 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}Shop — Bravepos{% endblock %}
+
+{% block content %}
+<form method="post">
+  {% csrf_token %}
+
+  <div class="card mb-4">
+    <div class="card-body p-4">
+      <div class="text-center mb-4">
+        <h4 class="mb-1">
+          {{ settings.shop_name }}
+          {% if branch_obj %} — {{ branch_obj.name }}{% endif %}
+        </h4>
+        <div class="text-muted small">Shop information management</div>
+        {% if not branch_obj %}
+        <div class="alert alert-warning mt-3 mb-0 py-2 small">
+          No branch selected — pick one from the filter bar above to edit
+          branch-level details (logo, tax ID, address, phone).
+        </div>
+        {% endif %}
+        <hr>
+      </div>
+
+      <div class="row g-4">
+        {# ─── Left column: Information ─── #}
+        <div class="col-md-6">
+          <h6 class="text-muted text-uppercase small fw-bold mb-3">Information</h6>
+
+          {# Logo block — per-branch #}
+          <div class="mb-3">
+            <label class="form-label">Logo</label>
+            <div class="d-flex flex-column align-items-center">
+              <div id="logoPreview"
+                   style="width:200px; height:200px; border:1px solid #dee2e6; border-radius:8px;
+                          background:#f5f7fa; display:flex; align-items:center; justify-content:center;
+                          overflow:hidden;">
+                {% if branch_obj.logo_url %}
+                  <img src="{{ branch_obj.logo_url }}" alt="{{ branch_obj.name }}"
+                       style="width:100%; height:100%; object-fit:contain;">
+                {% else %}
+                  <i class="bi bi-image text-muted fs-1"></i>
+                {% endif %}
+              </div>
+              <input type="hidden" name="logo_url" id="logoUrl" value="{{ branch_obj.logo_url }}">
+              <div class="d-flex align-items-center gap-2 mt-2 w-100">
+                <div class="input-group input-group-sm flex-grow-1">
+                  <input type="text" class="form-control form-control-sm" id="logoFileName"
+                         readonly placeholder="Selected File (File size no more than 2 MB.)">
+                  <label class="btn btn-outline-secondary btn-sm mb-0">
+                    Browse
+                    <input type="file" id="logoFile" accept="image/*" hidden>
+                  </label>
+                </div>
+              </div>
+              {% if branch_obj.logo_url %}
+              <button type="button" class="btn btn-link btn-sm text-danger mt-1" id="logoClear">
+                Remove logo
+              </button>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label"><span class="text-danger">*</span> Shop Name</label>
+            <input type="text" name="shop_name" required class="form-control"
+                   value="{{ settings.shop_name }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label"><span class="text-danger">*</span> Branch Name</label>
+            <input type="text" name="branch_name" required class="form-control"
+                   value="{{ branch_obj.name }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label"><span class="text-danger">*</span> Business Type</label>
+            <select name="business_type" class="form-select">
+              <option value="Restaurant" {% if settings.business_type == 'Restaurant' %}selected{% endif %}>Restaurant</option>
+              <option value="Cafe" {% if settings.business_type == 'Cafe' %}selected{% endif %}>Cafe</option>
+              <option value="Retail" {% if settings.business_type == 'Retail' %}selected{% endif %}>Retail</option>
+              <option value="Bakery" {% if settings.business_type == 'Bakery' %}selected{% endif %}>Bakery</option>
+              <option value="Bar" {% if settings.business_type == 'Bar' %}selected{% endif %}>Bar</option>
+              <option value="Other" {% if settings.business_type == 'Other' %}selected{% endif %}>Other</option>
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Company Name</label>
+            <input type="text" name="company_name" class="form-control"
+                   value="{{ settings.company_name }}"
+                   placeholder="e.g. บริษัท เบรฟ แบรนด์ จำกัด">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Tax ID</label>
+            <input type="text" name="tax_id" class="form-control"
+                   value="{{ branch_obj.tax_id }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Tax</label>
+            <div class="d-flex align-items-center gap-2">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="tax_mode" id="taxExcl"
+                       value="exclusive" {% if settings.tax_mode == 'exclusive' %}checked{% endif %}>
+                <label class="form-check-label" for="taxExcl">Exclusive</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="tax_mode" id="taxIncl"
+                       value="inclusive" {% if settings.tax_mode == 'inclusive' %}checked{% endif %}>
+                <label class="form-check-label" for="taxIncl">Inclusive</label>
+              </div>
+              <div class="input-group input-group-sm" style="max-width: 140px;">
+                <input type="number" step="0.01" min="0" name="tax_percent"
+                       class="form-control" value="{{ settings.tax_percent }}">
+                <span class="input-group-text">%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Service Charge</label>
+            <div class="input-group" style="max-width: 200px;">
+              <input type="number" step="0.01" min="0" name="service_charge"
+                     class="form-control" value="{{ settings.service_charge_percent }}">
+              <span class="input-group-text">%</span>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Currency</label>
+            <select name="currency" class="form-select">
+              <option value="THB" {% if settings.currency == 'THB' %}selected{% endif %}>THB — Thai Baht</option>
+              <option value="USD" {% if settings.currency == 'USD' %}selected{% endif %}>USD — US Dollar</option>
+              <option value="EUR" {% if settings.currency == 'EUR' %}selected{% endif %}>EUR — Euro</option>
+              <option value="GBP" {% if settings.currency == 'GBP' %}selected{% endif %}>GBP — British Pound</option>
+              <option value="JPY" {% if settings.currency == 'JPY' %}selected{% endif %}>JPY — Japanese Yen</option>
+              <option value="SGD" {% if settings.currency == 'SGD' %}selected{% endif %}>SGD — Singapore Dollar</option>
+            </select>
+          </div>
+        </div>
+
+        {# ─── Right column: Hours + Address ─── #}
+        <div class="col-md-6">
+          <h6 class="text-muted text-uppercase small fw-bold mb-3">Open – Closed</h6>
+
+          <div class="alert alert-info py-2 small">
+            <i class="bi bi-info-circle"></i>
+            Changing the stores opening and closing hours will affect the calculation of bills
+            in the daily sales report. Please make the changes before processing the first bill
+            of the modified date.
+          </div>
+
+          <div class="row g-2 mb-4">
+            <div class="col-6">
+              <label class="form-label">Open</label>
+              <input type="time" name="open_time" class="form-control"
+                     value="{{ settings.open_time }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Closed</label>
+              <input type="time" name="close_time" class="form-control"
+                     value="{{ settings.close_time }}">
+            </div>
+          </div>
+
+          <h6 class="text-muted text-uppercase small fw-bold mb-3">Address</h6>
+
+          <div class="mb-3">
+            <label class="form-label">Address Line 1</label>
+            <input type="text" name="address_line_1" class="form-control"
+                   value="{{ branch_obj.address_line_1 }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Address Line 2</label>
+            <input type="text" name="address_line_2" class="form-control"
+                   value="{{ branch_obj.address_line_2 }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Tel</label>
+            <input type="text" name="phone" class="form-control"
+                   value="{{ branch_obj.phone }}">
+          </div>
+
+          <h6 class="text-muted text-uppercase small fw-bold mb-2">Pin Shop's Location</h6>
+          <div class="alert alert-light border py-2 mb-2 small">
+            <i class="bi bi-info-circle text-primary"></i>
+            Store address for delivery and QR-Order service
+          </div>
+          <div class="alert alert-secondary py-3 text-center small mb-0">
+            The location has not been pinned yet
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-success w-100 rounded-0 rounded-bottom">
+      <i class="bi bi-check2-circle"></i> Update data
+    </button>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // File-to-data-URL: avoids needing MEDIA_ROOT / file storage. The image
+  // lives as a data: URL in the hidden `logo_url` field and persists with
+  // the rest of the form — matches the branch_form.html flow.
+  (function () {
+    const fileInput = document.getElementById('logoFile');
+    const urlInput  = document.getElementById('logoUrl');
+    const preview   = document.getElementById('logoPreview');
+    const nameInput = document.getElementById('logoFileName');
+    const clearBtn  = document.getElementById('logoClear');
+
+    function renderPreview(src) {
+      preview.innerHTML = src
+        ? `<img src="${src}" style="width:100%;height:100%;object-fit:contain;">`
+        : '<i class="bi bi-image text-muted fs-1"></i>';
+    }
+
+    if (fileInput) {
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 2 * 1024 * 1024) {
+          nameInput.value = `Too large (${Math.round(file.size/1024)} KB) — keep under 2 MB`;
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          urlInput.value = ev.target.result;
+          renderPreview(ev.target.result);
+          nameInput.value = `${file.name} (${Math.round(file.size/1024)} KB)`;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        urlInput.value = '';
+        renderPreview('');
+        nameInput.value = '';
+      });
+    }
+  })();
+</script>
+{% endblock %}

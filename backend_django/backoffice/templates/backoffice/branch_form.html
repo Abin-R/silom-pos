@@ -1,0 +1,169 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}
+  {% if mode == 'new' %}Add Branch{% else %}Edit {{ branch_obj.name }}{% endif %} — Bravepos
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">
+    {% if mode == 'new' %}Add Branch{% else %}Edit branch — {{ branch_obj.name }}{% endif %}
+  </h4>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:branch_list' %}">
+    <i class="bi bi-arrow-left"></i> Back to list
+  </a>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="card">
+    <div class="card-body">
+      <div class="row g-3">
+
+        {# ─── Logo ─── #}
+        <div class="col-12">
+          <label class="form-label">Branch Logo</label>
+          <div class="d-flex align-items-start gap-3">
+            <div id="logoPreview"
+                 style="width:120px; height:120px; border:1px solid #dee2e6; border-radius:8px;
+                        background:#f5f7fa; display:flex; align-items:center; justify-content:center;
+                        overflow:hidden; flex-shrink:0;">
+              {% if branch_obj.logo_url %}
+                <img src="{{ branch_obj.logo_url }}" alt=""
+                     style="width:100%; height:100%; object-fit:contain;">
+              {% else %}
+                <i class="bi bi-image text-muted fs-2"></i>
+              {% endif %}
+            </div>
+            <div class="flex-grow-1">
+              <input type="url" name="logo_url" id="logoUrl" class="form-control mb-2"
+                     value="{{ branch_obj.logo_url }}"
+                     placeholder="https://… (paste image URL or upload below)">
+              <div class="d-flex gap-2 align-items-center">
+                <label class="btn btn-outline-secondary btn-sm mb-0">
+                  <i class="bi bi-upload"></i> Upload from device
+                  <input type="file" id="logoFile" accept="image/*" hidden>
+                </label>
+                {% if branch_obj.logo_url %}
+                <button type="button" class="btn btn-outline-danger btn-sm" id="logoClear">
+                  <i class="bi bi-x-lg"></i> Remove
+                </button>
+                {% endif %}
+                <span id="logoStatus" class="text-muted small"></span>
+              </div>
+              <div class="form-text">PNG / JPG. Files are embedded as data: URLs — keep under ~500 KB.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label"><span class="text-danger">*</span> Branch Name</label>
+          <input type="text" name="name" required class="form-control"
+                 value="{{ branch_obj.name }}" placeholder="e.g. Central Chidlom">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Code</label>
+          <input type="text" name="code" class="form-control"
+                 value="{{ branch_obj.code }}" placeholder="Short code (optional)">
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Tax ID</label>
+          <input type="text" name="tax_id" class="form-control"
+                 value="{{ branch_obj.tax_id }}"
+                 placeholder="Leave blank to inherit shop tax ID">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">POS ID</label>
+          <input type="text" name="pos_id" class="form-control"
+                 value="{{ branch_obj.pos_id }}">
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Phone</label>
+          <input type="text" name="phone" class="form-control"
+                 value="{{ branch_obj.phone }}"
+                 placeholder="Leave blank to inherit shop phone">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Status</label>
+          <div class="form-check form-switch mt-2 ps-5">
+            <input type="checkbox" name="active" id="branch-active"
+                   class="form-check-input"
+                   {% if branch_obj.active %}checked{% endif %}>
+            <label class="form-check-label" for="branch-active">Active</label>
+          </div>
+          <div class="form-text">Inactive branches stay in the system but
+            don't show in branch selectors.</div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Address</label>
+          <textarea name="address" class="form-control" rows="3"
+                    placeholder="Leave blank to inherit shop address">{{ branch_obj.address }}</textarea>
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-end gap-2 mt-4">
+        <a class="btn btn-outline-secondary" href="{% url 'backoffice:branch_list' %}">Cancel</a>
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-check2"></i> {% if mode == 'new' %}Create branch{% else %}Save changes{% endif %}
+        </button>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // Inline file-to-data-URL conversion. Lets users "upload" without us
+  // needing MEDIA_ROOT / file storage — image lives as a data: URL in the
+  // text field and is persisted alongside the rest of the form.
+  (function () {
+    const fileInput = document.getElementById('logoFile');
+    const urlInput  = document.getElementById('logoUrl');
+    const preview   = document.getElementById('logoPreview');
+    const status    = document.getElementById('logoStatus');
+    const clearBtn  = document.getElementById('logoClear');
+
+    function renderPreview(src) {
+      preview.innerHTML = src
+        ? `<img src="${src}" style="width:100%;height:100%;object-fit:contain;">`
+        : '<i class="bi bi-image text-muted fs-2"></i>';
+    }
+
+    if (fileInput) {
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 800 * 1024) {
+          status.textContent = `Too large (${Math.round(file.size/1024)} KB). Resize and try again.`;
+          status.classList.add('text-danger');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          urlInput.value = ev.target.result;
+          renderPreview(ev.target.result);
+          status.textContent = `${Math.round(file.size/1024)} KB loaded`;
+          status.classList.remove('text-danger');
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    if (urlInput) {
+      urlInput.addEventListener('input', (e) => renderPreview(e.target.value));
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        urlInput.value = '';
+        renderPreview('');
+        status.textContent = '';
+      });
+    }
+  })();
+</script>
+{% endblock %}

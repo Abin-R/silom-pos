@@ -42,13 +42,36 @@ export function useStarPrinter() {
   const receiptRef = useRef<View>(null);
   const [pending, setPending] = useState<PendingPrint | null>(null);
 
+  // Promise that resolves when the brand logo inside ReceiptImage finishes
+  // decoding.  We reset it per-print so each capture waits on its own load
+  // signal — view-shot will otherwise snapshot before the bundled PNG is
+  // ready and the receipt prints with a blank space where the logo should
+  // be.  Falls back to a 2-second timeout in case onLoadEnd never fires
+  // (e.g. cached image, or RN platform quirk) so prints can't hang.
+  const logoReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+
   // ─── Capture + send when a print is pending ────────────────────────
   useEffect(() => {
     if (!pending) return;
     let cancelled = false;
 
+    // Fresh logo-ready promise for this print.  Resolved by the Image's
+    // onLoadEnd callback inside ReceiptOverlay below.
+    let resolveLogo: () => void = () => {};
+    logoReadyRef.current = {
+      promise: new Promise<void>((res) => { resolveLogo = res; }),
+      resolve: () => resolveLogo(),
+    };
+
     const run = async () => {
+      // Wait for both: layout settle (Sarabun glyph shaping) AND logo
+      // decode.  Race the logo wait against a 2s timeout as a safety net.
       await new Promise((r) => setTimeout(r, LAYOUT_SETTLE_MS));
+      if (cancelled) return;
+      await Promise.race([
+        logoReadyRef.current?.promise ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, 2000)),
+      ]);
       if (cancelled) return;
 
       let result: { ok: true } | { ok: false; error: string };
@@ -93,6 +116,13 @@ export function useStarPrinter() {
           await queue.recordAttempt(pending.queueId, result.error);
         }
       } catch {/* AsyncStorage failures shouldn't block resolve */}
+
+      // Release the in-flight claim so another drainer can retry on the
+      // next tick (failure path) or so the slot is freed up for cleanup
+      // (success path — removeJob already cleared it but this is safe).
+      // MUST run regardless of result so a failed retry doesn't stick
+      // the job in "claimed" state forever.
+      if (pending.queueId) queue.release(pending.queueId);
 
       pending.resolve(result);
       setPending(null);
@@ -169,6 +199,7 @@ export function useStarPrinter() {
           ref={receiptRef}
           order={pending.order}
           shop={pending.shop}
+          onLogoReady={() => logoReadyRef.current?.resolve()}
         />
       </View>
     );

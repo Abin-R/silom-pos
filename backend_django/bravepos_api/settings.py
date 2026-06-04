@@ -25,18 +25,31 @@ ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.auth',
+    # Sessions + messages are required for the backoffice login flow
+    # (django.contrib.auth.views.LoginView reads session and flashes
+    # messages on success/failure).
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.humanize',
     'django.contrib.staticfiles',
     # Third-party
     'rest_framework',
     'corsheaders',
     # Brave POS app — table prefix `bravepos_*`
     'bravepos.apps.BraveposConfig',
+    # Server-rendered backoffice (Bootstrap + Chart.js). Read-only views
+    # against the bravepos models. No tables of its own.
+    'backoffice.apps.BackofficeConfig',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -51,6 +64,9 @@ TEMPLATES = [
             'context_processors': [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
+                # Required by login_required / template `user`/`messages`
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -60,21 +76,22 @@ WSGI_APPLICATION = 'bravepos_api.wsgi.application'
 
 
 # ── Database ────────────────────────────────────────────────────────────────
-# Local dev: SQLite (zero setup).
-# Production: set DATABASE_URL or the individual POSTGRES_* env vars and switch
-# the ENGINE to django.db.backends.postgresql.  Migrations only ever create/
-# alter tables prefixed with `bravepos_` because of the app label.
-if os.environ.get('POSTGRES_HOST'):
+# Shared Azure Postgres `instamator3`, also used by `home` and `instamator_app`.
+# All Brave POS tables are prefixed `bravepos_*` via the app label, so
+# migrations only ever touch our own tables — never the other servers'.
+# Env var names (DATABASE_USER/PASSWORD/HOST) match what the other two App
+# Services already have configured.
+if os.environ.get('DATABASE_HOST'):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ['POSTGRES_DB'],
-            'USER': os.environ['POSTGRES_USER'],
-            'PASSWORD': os.environ['POSTGRES_PASSWORD'],
-            'HOST': os.environ['POSTGRES_HOST'],
-            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'NAME': 'instamator3',
+            'USER': os.environ['DATABASE_USER'],
+            'PASSWORD': os.environ['DATABASE_PASSWORD'],
+            'HOST': os.environ['DATABASE_HOST'],
+            'PORT': '5432',
             'CONN_MAX_AGE': 60,
-            'OPTIONS': {'sslmode': os.environ.get('POSTGRES_SSLMODE', 'prefer')},
+            'OPTIONS': {'sslmode': 'require'},
         }
     }
 else:
@@ -125,6 +142,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # configured to match.  Disabling APPEND_SLASH avoids 301-redirecting POSTs,
 # which silently drops the request body.
 APPEND_SLASH = False
+
+# ── Auth (backoffice only) ──────────────────────────────────────────────────
+# The DRF-based POS API at /api/* uses its own PIN/token auth; these settings
+# only affect server-rendered /backoffice/* pages, which require a Django
+# admin/staff login.
+LOGIN_URL = '/backoffice/login/'
+LOGIN_REDIRECT_URL = '/backoffice/'
+LOGOUT_REDIRECT_URL = '/backoffice/login/'
 
 # Brave POS app config
 BRAVEPOS = {

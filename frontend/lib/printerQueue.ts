@@ -37,6 +37,27 @@ export type PrintJob = {
   lastError?: string;
 };
 
+// In-flight claim set.  When two useStarPrinter instances are mounted at
+// the same time (e.g. pos.tsx + admin.tsx live in the navigation stack),
+// their independent drainers can both read the same job out of
+// AsyncStorage and both call printImage — producing duplicate physical
+// receipts.  Single-instance ticks can race the same way between the
+// listJobs() read and the removeJob() write.
+//
+// To prevent that, nextDueJob atomically claims the job by adding its id
+// to this Set before returning it.  Any other drainer skips claimed
+// jobs.  release(id) MUST be called by the caller after the print
+// attempt completes (success OR failure) — otherwise the job sticks in
+// the in-flight set forever and never gets retried.
+//
+// Module state is shared across the entire JS runtime, so a single Set
+// is enough to coordinate every useStarPrinter instance in the app.
+const inFlight = new Set<string>();
+
+export function release(id: string): void {
+  inFlight.delete(id);
+}
+
 export async function listJobs(): Promise<PrintJob[]> {
   try {
     const raw = await AsyncStorage.getItem(QUEUE_KEY);
@@ -79,6 +100,10 @@ export async function enqueue(
 export async function removeJob(id: string): Promise<void> {
   const jobs = await listJobs();
   await save(jobs.filter((j) => j.id !== id));
+  // Job no longer exists in the queue, so any in-flight claim is moot —
+  // clear it so we don't leak a permanent entry in the Set if the same
+  // id ever gets re-used.
+  inFlight.delete(id);
 }
 
 export async function recordAttempt(id: string, error?: string): Promise<void> {
@@ -103,8 +128,13 @@ export async function nextDueJob(retryIntervalMs: number): Promise<PrintJob | nu
   if (fresh.length < jobs.length) await save(fresh);
 
   for (const j of fresh) {
+    if (inFlight.has(j.id)) continue;                  // claimed by another drainer
     if (j.attempts >= MAX_ATTEMPTS) continue;
     if (now - j.lastAttemptAt < retryIntervalMs) continue;
+    // Atomic claim: from here until release(j.id) no other drainer can
+    // pick this job.  The Set.add + return below is synchronous so
+    // there's no await between checking and claiming.
+    inFlight.add(j.id);
     return j;
   }
   return null;

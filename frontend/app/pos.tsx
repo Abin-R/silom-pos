@@ -13,14 +13,14 @@ import {
   Platform,
   useWindowDimensions,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { SidebarDrawer } from "../components/SidebarDrawer";
-import { apiFetch, clearAuthToken, setAuthToken } from "../lib/api";
+import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -75,6 +75,7 @@ const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigi
 
 export default function POS() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   // Receipt-printing hook.  printReceipt renders ReceiptImage to a PNG
   // and ships it via the native module's printImage().  ReceiptOverlay
   // is the off-screen component that gets captured — must be in JSX.
@@ -88,9 +89,6 @@ export default function POS() {
   const [activeBranchName, setActiveBranchName] = useState<string>("");
   const [authLoaded, setAuthLoaded] = useState(false);
   const isAdmin = role === "admin";
-  const [showBranchSwitcher, setShowBranchSwitcher] = useState(false);
-  const [adminBranches, setAdminBranches] = useState<{ id: string; name: string }[]>([]);
-  const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -178,49 +176,6 @@ export default function POS() {
   useEffect(() => {
     reloadPosData();
   }, [reloadPosData]);
-
-  const openBranchSwitcher = async () => {
-    try {
-      const r = await apiFetch(`${API}/branches?active=true`);
-      const list = await r.json().catch(() => []);
-      setAdminBranches(Array.isArray(list) ? list : []);
-    } catch {
-      setAdminBranches([]);
-    }
-    setShowBranchSwitcher(true);
-  };
-
-  const confirmBranchSwitch = async (b: { id: string; name: string }) => {
-    if (switching || b.id === activeBranchId) {
-      setShowBranchSwitcher(false);
-      return;
-    }
-    setSwitching(true);
-    try {
-      const r = await apiFetch(`${API}/auth/switch-branch`, {
-        method: "POST",
-        body: JSON.stringify({ branch_id: b.id }),
-      });
-      const body = await r.json().catch(() => ({} as any));
-      if (!r.ok) {
-        console.warn("Switch branch failed", body);
-        return;
-      }
-      const raw = await AsyncStorage.getItem(AUTH_KEY);
-      const prev = raw ? JSON.parse(raw) : {};
-      await AsyncStorage.setItem(AUTH_KEY, JSON.stringify({
-        ...prev, token: body.token, staff: body.staff, branch: body.branch,
-      }));
-      setAuthToken(body.token);
-      setActiveBranchId(body.branch?.id || b.id);
-      setActiveBranchName(body.branch?.name || b.name);
-      setCart([]);  // a different branch has a different product catalog
-      await reloadPosData();
-    } finally {
-      setSwitching(false);
-      setShowBranchSwitcher(false);
-    }
-  };
 
   const refreshBadges = async () => {
     try {
@@ -466,16 +421,10 @@ export default function POS() {
         {/* Branch chip lives in the top bar only on tablet/desktop; on phone
             it moves into the mobile search row to avoid overflowing the bar. */}
         {isMid && !!activeBranchName && (
-          <TouchableOpacity
-            style={[styles.branchChip, !isAdmin && { opacity: 1 }]}
-            onPress={() => isAdmin && openBranchSwitcher()}
-            disabled={!isAdmin}
-            testID="branch-chip"
-          >
+          <View style={styles.branchChip} testID="branch-chip">
             <Ionicons name="storefront-outline" size={16} color="#00B14F" />
             <Text style={styles.branchChipText} numberOfLines={1}>{activeBranchName}</Text>
-            {isAdmin && <Ionicons name="swap-horizontal" size={14} color="#64748B" />}
-          </TouchableOpacity>
+          </View>
         )}
         {isWide && (
           <View style={styles.staffChip}>
@@ -507,16 +456,10 @@ export default function POS() {
             />
           </View>
           {!!activeBranchName && (
-            <TouchableOpacity
-              style={styles.branchChipMobile}
-              onPress={() => isAdmin && openBranchSwitcher()}
-              disabled={!isAdmin}
-              testID="branch-chip"
-            >
+            <View style={styles.branchChipMobile} testID="branch-chip">
               <Ionicons name="storefront-outline" size={14} color="#00B14F" />
               <Text style={styles.branchChipMobileText} numberOfLines={1}>{activeBranchName}</Text>
-              {isAdmin && <Ionicons name="swap-horizontal" size={12} color="#64748B" />}
-            </TouchableOpacity>
+            </View>
           )}
         </View>
       )}
@@ -681,7 +624,7 @@ export default function POS() {
       >
         <View style={styles.cartSheetOverlay}>
           <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setShowCart(false)} />
-          <View style={styles.cartSheet}>
+          <View style={[styles.cartSheet, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
             <View style={styles.cartSheetHandle} />
             <View style={styles.cartSheetHeader}>
               <Text style={styles.cartSheetTitle}>Current Order</Text>
@@ -816,50 +759,6 @@ export default function POS() {
           Only mounts when a print is in flight; invisible to the user. */}
       <ReceiptOverlay />
 
-      {/* Admin-only: pick a different branch to place orders against */}
-      <Modal
-        visible={showBranchSwitcher}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowBranchSwitcher(false)}
-      >
-        <TouchableOpacity
-          style={styles.branchModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowBranchSwitcher(false)}
-          testID="branch-switcher-overlay"
-        >
-          <View style={styles.branchModalSheet}>
-            <Text style={styles.branchModalTitle}>Switch Branch</Text>
-            <FlatList
-              data={adminBranches}
-              keyExtractor={(b) => b.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.branchRow,
-                    item.id === activeBranchId && styles.branchRowActive,
-                  ]}
-                  onPress={() => confirmBranchSwitch(item)}
-                  disabled={switching}
-                  testID={`branch-switch-${item.id}`}
-                >
-                  <Ionicons name="storefront-outline" size={18} color="#0F172A" />
-                  <Text style={styles.branchRowName}>{item.name}</Text>
-                  {item.id === activeBranchId && (
-                    <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-                  )}
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <Text style={{ padding: 16, color: "#94A3B8", textAlign: "center" }}>
-                  No branches available.
-                </Text>
-              }
-            />
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -2606,26 +2505,6 @@ const styles = StyleSheet.create({
     maxWidth: 130,
   },
   branchChipMobileText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
-  branchModalOverlay: {
-    flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
-    justifyContent: "center", padding: 24,
-  },
-  branchModalSheet: {
-    backgroundColor: "#FFFFFF", borderRadius: 16,
-    maxHeight: "70%", overflow: "hidden", maxWidth: 420, alignSelf: "center",
-    width: "100%",
-  },
-  branchModalTitle: {
-    fontSize: 15, fontWeight: "700", color: "#0F172A", padding: 16,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
-  },
-  branchRow: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F8FAFC",
-  },
-  branchRowActive: { backgroundColor: "#F0FDF4" },
-  branchRowName: { flex: 1, fontSize: 14, color: "#0F172A", fontWeight: "500" },
   adminBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -2726,7 +2605,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 10,
-    paddingBottom: 20,
     maxHeight: "85%",
   },
   cartSheetHandle: {

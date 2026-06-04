@@ -31,6 +31,9 @@ urlpatterns = [
     path('auth/logout', views.auth_logout),
     path('auth/me', views.auth_me),
     path('auth/switch-branch', views.auth_switch_branch),
+    # PIN-pad login (current frontend flow): pick branch → pick user → enter PIN.
+    path('auth/branch-users', views.auth_branch_users),
+    path('auth/pin-login', views.auth_pin_login),
     # Legacy PIN endpoint — keep for backwards compat until everyone migrates.
     path('auth/verify-pin', views.verify_pin),
 

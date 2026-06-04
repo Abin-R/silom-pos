@@ -32,6 +32,10 @@ class Staff(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     password_hash = models.CharField(max_length=256)
+    # PIN is the only credential the in-app login uses. Email/password remain
+    # in the schema so a Django-admin/script-driven flow can still seed staff,
+    # but the cashier-facing PIN pad never touches them.
+    pin_hash = models.CharField(max_length=256, blank=True, default="")
     name = models.CharField(max_length=120)
     role = models.CharField(max_length=16, choices=ROLE_CHOICES, default="cashier")
     branches = models.ManyToManyField(
@@ -52,6 +56,15 @@ class Staff(models.Model):
 
     def check_password(self, plain: str) -> bool:
         return check_password(plain, self.password_hash)
+
+    # ── PIN helpers (4-digit numeric, hashed at rest) ──
+    def set_pin(self, plain: str) -> None:
+        self.pin_hash = make_password(plain)
+
+    def check_pin(self, plain: str) -> bool:
+        if not self.pin_hash:
+            return False
+        return check_password(plain, self.pin_hash)
 
 
 class BranchSession(models.Model):
@@ -91,9 +104,15 @@ class Branch(models.Model):
     name = models.CharField(max_length=120, unique=True)
     code = models.CharField(max_length=16, blank=True, default="")  # optional short code
     address = models.TextField(blank=True, default="")
+    # SilomPOS-style split: shown as two free-form lines on the Shop page
+    # and printed on the per-branch receipt. The legacy `address` blob is
+    # kept in sync on save for older callers that still read it.
+    address_line_1 = models.CharField(max_length=200, blank=True, default="")
+    address_line_2 = models.CharField(max_length=200, blank=True, default="")
     phone = models.CharField(max_length=32, blank=True, default="")
     tax_id = models.CharField(max_length=64, blank=True, default="")
     pos_id = models.CharField(max_length=64, blank=True, default="")
+    logo_url = models.TextField(blank=True, default="")
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -225,6 +244,14 @@ class Settings(models.Model):
     logo_url = models.TextField(blank=True, default="")
     logo_path = models.TextField(blank=True, default="")
     address = models.TextField(blank=True, default="")
+    # SilomPOS-style split: the dashboard shows two free-form lines. We keep
+    # the legacy single `address` blob for back-compat (older callers still
+    # read it), but new edits write both lines and receipts render them.
+    address_line_1 = models.CharField(max_length=200, blank=True, default="")
+    address_line_2 = models.CharField(max_length=200, blank=True, default="")
+    # Legal entity printed above the address on tax-invoice receipts.
+    company_name = models.CharField(max_length=200, blank=True, default="")
+    currency = models.CharField(max_length=8, default="THB")
     phone = models.CharField(max_length=32, blank=True, default="")
 
     # Beam gateway
