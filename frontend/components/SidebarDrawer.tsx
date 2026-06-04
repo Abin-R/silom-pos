@@ -33,16 +33,17 @@ export type SidebarItem = {
 
 // Single source of truth for the menu.  Keep in sync with admin.tsx's
 // internal `allItems` list (admin section keys must match).
-// Cashier role only sees "Shop" — every other entry is admin-only.
+// All tabs are visible to both roles; cashier-vs-admin gating happens at
+// the action level (e.g. product add/edit/delete is hidden for cashier).
 export const SIDEBAR_ITEMS: SidebarItem[] = [
   { key: "shop", label: "Shop", icon: "home-outline" },
-  { key: "transactions", label: "Transactions", icon: "swap-horizontal-outline", adminOnly: true },
-  { key: "reports", label: "Reports", icon: "pie-chart-outline", adminOnly: true },
-  { key: "inventory", label: "Inventory", icon: "cube-outline", adminOnly: true },
-  { key: "customers", label: "Customers", icon: "people-outline", adminOnly: true },
-  { key: "products", label: "Products", icon: "gift-outline", adminOnly: true },
-  { key: "drawer", label: "Drawer", icon: "calculator-outline", adminOnly: true },
-  { key: "settings", label: "Settings", icon: "settings-outline", adminOnly: true },
+  { key: "transactions", label: "Transactions", icon: "swap-horizontal-outline" },
+  { key: "reports", label: "Reports", icon: "pie-chart-outline" },
+  { key: "inventory", label: "Inventory", icon: "cube-outline" },
+  { key: "customers", label: "Customers", icon: "people-outline" },
+  { key: "products", label: "Products", icon: "gift-outline" },
+  { key: "drawer", label: "Drawer", icon: "calculator-outline" },
+  { key: "settings", label: "Settings", icon: "settings-outline" },
 ];
 
 type Props = {

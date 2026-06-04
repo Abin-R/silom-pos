@@ -78,6 +78,16 @@ def _filter_qs(request, **extra):
     return urlencode(keep)
 
 
+def customer_receipt(request, order_number: str):
+    """Public landing page for the receipt QR code.  No auth required —
+    customers scan the QR on their thermal receipt and land here.  Two
+    CTAs: request a full tax invoice (ใบกำกับภาษีเต็มรูป) and leave a
+    review.  Buttons are placeholders until the real flows are wired."""
+    return render(request, "backoffice/customer_receipt.html", {
+        "order_number": order_number,
+    })
+
+
 @login_required
 def dashboard(request):
     today = timezone.localdate()

@@ -10,9 +10,54 @@
 
 import React, { forwardRef } from "react";
 import { View, Text, Image, StyleSheet } from "react-native";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const qrcode: (typeNumber: number, errorCorrectionLevel: string) => {
+  addData: (data: string) => void;
+  make: () => void;
+  getModuleCount: () => number;
+  isDark: (row: number, col: number) => boolean;
+} = require("qrcode-generator");
 import type { ReceiptOrder, ReceiptShop } from "../lib/starPrinter";
 
 const LOGO = require("../assets/images/rolling-pinn-logo.png");
+
+// Base URL the QR resolves to.  Per-receipt URLs are formed by
+// appending the invoice number so each receipt has a unique
+// landing page once the backend route exists.  Matches the prod
+// backend host from .env.production (EXPO_PUBLIC_BACKEND_URL).
+const QR_BASE_URL = "https://pos.rollingpinn.com/receipt";
+
+// Renders a QR code as a grid of black/white View cells.  Pure JS,
+// no native dep — works through view-shot capture exactly like the
+// rest of the receipt.  Cell size is floored to an integer so the
+// thermal printer maps each module to a whole number of dots, which
+// keeps the code crisp instead of antialiased/blurry.
+function QrCode({ value, targetSize }: { value: string; targetSize: number }) {
+  const qr = qrcode(0, "M");
+  qr.addData(value);
+  qr.make();
+  const modules = qr.getModuleCount();
+  const cell = Math.max(2, Math.floor(targetSize / modules));
+  const quiet = cell * 4; // QR spec requires ≥4-module quiet zone for reliable scanning
+  return (
+    <View style={{ alignSelf: "center", backgroundColor: "#FFF", padding: quiet }}>
+      {Array.from({ length: modules }).map((_, row) => (
+        <View key={row} style={{ flexDirection: "row" }}>
+          {Array.from({ length: modules }).map((_, col) => (
+            <View
+              key={col}
+              style={{
+                width: cell,
+                height: cell,
+                backgroundColor: qr.isDark(row, col) ? "#000" : "#FFF",
+              }}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
 
 // 80mm paper @ 180 dpi = 576 dots printable width.  useStarPrinter
 // passes the same constant to captureRef.width so the captured PNG is
@@ -190,6 +235,12 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
         </View>
       )}
 
+      {/* ─── QR code ──────────────────────────────────────────────── */}
+      <View style={s.qrSection}>
+        <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}`} targetSize={180} />
+        <Text style={s.qrCaption}>สแกนเพื่อดูใบเสร็จ / Scan to view receipt</Text>
+      </View>
+
       {/* ─── Footer ───────────────────────────────────────────────── */}
       <Text style={s.smallCenter}>ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว</Text>
       <Text style={s.thankYou}>THANK YOU FOR YOUR SHOPPING</Text>
@@ -344,5 +395,17 @@ const s = StyleSheet.create({
     color: "#555555",
     textAlign: "center",
     marginTop: 8,
+  },
+  qrSection: {
+    alignItems: "center",
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  qrCaption: {
+    fontFamily: FONT,
+    fontSize: 12,
+    color: "#000000",
+    textAlign: "center",
+    marginTop: 6,
   },
 });

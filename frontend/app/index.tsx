@@ -6,6 +6,9 @@
  *   4. POST /api/auth/pin-login → backend replaces any existing
  *      BranchSession on this branch and returns a token + role.
  *   5. Both roles land on /pos; admin reaches admin screens via the sidebar.
+ *
+ * Layout: side-by-side panels on tablet/desktop; on phone we render two
+ * sequential states (user picker → PIN pad) so the keypad isn't squeezed.
  */
 import { useEffect, useState } from "react";
 import {
@@ -18,7 +21,7 @@ import {
   Modal,
   useWindowDimensions,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -42,7 +45,6 @@ const THAI_DAYS = [
 ];
 
 function formatThaiDate(d: Date): string {
-  // Buddhist-era year (CE + 543), matching the SilomPOS reference UI.
   return `${THAI_DAYS[d.getDay()]}ที่ ${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
 }
 
@@ -54,8 +56,12 @@ function formatClock(d: Date): string {
 
 export default function Login() {
   const router = useRouter();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isWide = width >= 700;
+  const insets = useSafeAreaInsets();
+  // Pack things tighter on shorter phones so the keypad never hits the
+  // gesture-nav strip. Tested visually against ~640px-tall androids.
+  const isShort = height < 760;
 
   // ── Session restore ────────────────────────────────────────────────────
   const [checkingSession, setCheckingSession] = useState(true);
@@ -92,7 +98,7 @@ export default function Login() {
     })();
   }, [router]);
 
-  // ── Clock (re-renders every minute) ────────────────────────────────────
+  // ── Clock ──────────────────────────────────────────────────────────────
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -196,7 +202,6 @@ export default function Login() {
       setAuthToken(body.token);
 
       const role = body.staff?.role || "cashier";
-      // Both roles land on POS; admin reaches admin screens via sidebar.
       router.replace({
         pathname: "/pos",
         params: {
@@ -225,7 +230,6 @@ export default function Login() {
       if (p.length >= PIN_LENGTH) return p;
       const next = p + d;
       if (next.length === PIN_LENGTH) {
-        // Defer so the dot fills visually before the network call.
         setTimeout(() => submitPin(next), 50);
       }
       return next;
@@ -247,164 +251,248 @@ export default function Login() {
     );
   }
 
-  return (
-    <SafeAreaView style={s.container} testID="login-screen">
-      <View style={[s.layout, !isWide && s.layoutNarrow]}>
-        {/* ── Left: clock + branch + user list ── */}
-        <View style={[s.left, !isWide && s.leftNarrow]}>
-          <Text style={s.clock}>{formatClock(now)}</Text>
-          <Text style={s.date}>{formatThaiDate(now)}</Text>
-
-          <TouchableOpacity
-            style={s.branchBtn}
-            onPress={() => setShowBranchPicker(true)}
-            disabled={branches.length <= 1}
-            testID="branch-picker-btn"
-          >
-            <Ionicons name="storefront-outline" size={16} color="#0F172A" />
-            <Text style={s.branchLabel} numberOfLines={1}>
-              {branch?.name
-                || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
-            </Text>
-            {branches.length > 1 && (
-              <Ionicons name="chevron-down" size={14} color="#94A3B8" />
-            )}
-          </TouchableOpacity>
-          {!!branchLoadError && (
-            <View style={{ marginBottom: 12 }}>
-              <Text style={s.branchLoadError}>{branchLoadError}</Text>
-              <TouchableOpacity onPress={loadBranches} style={s.retryBtn} testID="branch-retry">
-                <Text style={s.retryText}>Retry</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
-          {usersLoading ? (
-            <View style={{ paddingVertical: 24 }}>
-              <ActivityIndicator color="#00B14F" />
-            </View>
-          ) : (
-            <FlatList
-              data={users}
-              keyExtractor={(u) => u.id}
-              renderItem={({ item }) => {
-                const active = selectedUser?.id === item.id;
-                return (
-                  <TouchableOpacity
-                    style={[s.userRow, active && s.userRowActive]}
-                    onPress={() => {
-                      setSelectedUser(item);
-                      setPin("");
-                      setError("");
-                    }}
-                    testID={`user-${item.role}`}
-                  >
-                    <View style={s.avatar}>
-                      <Ionicons name="person-outline" size={20} color="#475569" />
-                    </View>
-                    <Text style={s.userName}>{item.name}</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={
-                <Text style={s.empty}>No users assigned to this branch yet.</Text>
-              }
-            />
-          )}
-        </View>
-
-        {/* ── Right: PIN dots + numeric keypad ── */}
-        <View style={[s.right, !isWide && s.rightNarrow]}>
-          <Text style={s.rightTitle}>เข้า ใช้งาน</Text>
-          <Text style={s.rightSubtitle}>
-            {selectedUser ? selectedUser.name : "เลือกพนักงาน"}
-          </Text>
-
-          <View style={s.dotsRow}>
-            {Array.from({ length: PIN_LENGTH }).map((_, i) => (
-              <View
-                key={i}
-                style={[s.dot, i < pin.length && s.dotFilled]}
-                testID={`pin-dot-${i}`}
-              />
-            ))}
-          </View>
-
-          {error ? (
-            <Text style={s.error} testID="login-error">{error}</Text>
-          ) : (
-            <View style={{ height: 18 }} />
-          )}
-
-          <View style={s.keypad}>
-            {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
-              <KeyButton
-                key={d}
-                label={d}
-                onPress={() => onDigit(d)}
-                disabled={submitting || !selectedUser}
-              />
-            ))}
-            <View style={s.keyEmpty} />
-            <KeyButton
-              label="0"
-              onPress={() => onDigit("0")}
-              disabled={submitting || !selectedUser}
-            />
-            <KeyButton
-              icon="backspace-outline"
-              onPress={onBackspace}
-              disabled={submitting || pin.length === 0}
-            />
-          </View>
-
-          {submitting && (
-            <View style={s.submittingOverlay}>
-              <ActivityIndicator color="#00B14F" />
-            </View>
-          )}
-        </View>
-      </View>
-
-      {/* Branch picker modal */}
-      <Modal
-        visible={showBranchPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowBranchPicker(false)}
+  // ── Shared sub-renderers ───────────────────────────────────────────────
+  const BranchButton = () => (
+    <>
+      <TouchableOpacity
+        style={s.branchBtn}
+        onPress={() => setShowBranchPicker(true)}
+        disabled={branches.length <= 1}
+        testID="branch-picker-btn"
       >
-        <TouchableOpacity
-          style={s.branchModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowBranchPicker(false)}
-        >
-          <View style={s.branchModalSheet}>
-            <Text style={s.branchModalTitle}>Choose Branch</Text>
-            <FlatList
-              data={branches}
-              keyExtractor={(b) => b.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[s.branchRow, branch?.id === item.id && s.branchRowActive]}
-                  onPress={() => {
-                    setBranch(item);
-                    setShowBranchPicker(false);
-                  }}
-                  testID={`branch-pick-${item.id}`}
-                >
-                  <Ionicons name="storefront-outline" size={18} color="#0F172A" />
-                  <Text style={s.branchRowName}>{item.name}</Text>
-                  {branch?.id === item.id && (
-                    <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-                  )}
-                </TouchableOpacity>
-              )}
-            />
+        <Ionicons name="storefront-outline" size={16} color="#0F172A" />
+        <Text style={s.branchLabel} numberOfLines={1}>
+          {branch?.name
+            || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
+        </Text>
+        {branches.length > 1 && (
+          <Ionicons name="chevron-down" size={14} color="#94A3B8" />
+        )}
+      </TouchableOpacity>
+      {!!branchLoadError && (
+        <View style={{ marginBottom: 12 }}>
+          <Text style={s.branchLoadError}>{branchLoadError}</Text>
+          <TouchableOpacity onPress={loadBranches} style={s.retryBtn} testID="branch-retry">
+            <Text style={s.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </>
+  );
+
+  const UserRow = ({ item }: { item: BranchUser }) => {
+    const active = selectedUser?.id === item.id;
+    return (
+      <TouchableOpacity
+        style={[s.userRow, active && s.userRowActive]}
+        onPress={() => {
+          setSelectedUser(item);
+          setPin("");
+          setError("");
+        }}
+        testID={`user-${item.role}`}
+      >
+        <View style={s.avatar}>
+          <Ionicons name="person-outline" size={20} color="#475569" />
+        </View>
+        <Text style={s.userName}>{item.name}</Text>
+        <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+      </TouchableOpacity>
+    );
+  };
+
+  const UserList = () => (
+    <>
+      <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
+      {usersLoading ? (
+        <View style={{ paddingVertical: 24 }}>
+          <ActivityIndicator color="#00B14F" />
+        </View>
+      ) : isWide ? (
+        <FlatList
+          data={users}
+          keyExtractor={(u) => u.id}
+          renderItem={({ item }) => <UserRow item={item} />}
+          ListEmptyComponent={
+            <Text style={s.empty}>No users assigned to this branch yet.</Text>
+          }
+        />
+      ) : users.length === 0 ? (
+        <Text style={s.empty}>No users assigned to this branch yet.</Text>
+      ) : (
+        users.map((u) => <UserRow key={u.id} item={u} />)
+      )}
+    </>
+  );
+
+  const keySize = isWide || !isShort ? 72 : 62;
+  const keypadWidth = keySize * 3 + 24;
+  const PinPad = () => (
+    <View style={s.pinPad}>
+      <Text style={s.rightTitle}>เข้า ใช้งาน</Text>
+      <Text style={s.rightSubtitle} numberOfLines={1}>
+        {selectedUser ? selectedUser.name : "เลือกพนักงาน"}
+      </Text>
+      <View style={s.dotsRow}>
+        {Array.from({ length: PIN_LENGTH }).map((_, i) => (
+          <View
+            key={i}
+            style={[s.dot, i < pin.length && s.dotFilled]}
+            testID={`pin-dot-${i}`}
+          />
+        ))}
+      </View>
+      {error ? (
+        <Text style={s.error} testID="login-error">{error}</Text>
+      ) : (
+        <View style={{ height: 18 }} />
+      )}
+      <View style={[s.keypad, { width: keypadWidth }]}>
+        {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+          <KeyButton
+            key={d}
+            label={d}
+            size={keySize}
+            onPress={() => onDigit(d)}
+            disabled={submitting || !selectedUser}
+          />
+        ))}
+        <View style={{ width: keySize, height: keySize }} />
+        <KeyButton
+          label="0"
+          size={keySize}
+          onPress={() => onDigit("0")}
+          disabled={submitting || !selectedUser}
+        />
+        <KeyButton
+          icon="backspace-outline"
+          size={keySize}
+          onPress={onBackspace}
+          disabled={submitting || pin.length === 0}
+        />
+      </View>
+      {submitting && (
+        <View style={{ marginTop: 12 }}>
+          <ActivityIndicator color="#00B14F" />
+        </View>
+      )}
+    </View>
+  );
+
+  const BranchPickerModal = () => (
+    <Modal
+      visible={showBranchPicker}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowBranchPicker(false)}
+    >
+      <TouchableOpacity
+        style={s.branchModalOverlay}
+        activeOpacity={1}
+        onPress={() => setShowBranchPicker(false)}
+      >
+        <View style={s.branchModalSheet}>
+          <Text style={s.branchModalTitle}>Choose Branch</Text>
+          <FlatList
+            data={branches}
+            keyExtractor={(b) => b.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[s.branchRow, branch?.id === item.id && s.branchRowActive]}
+                onPress={() => {
+                  setBranch(item);
+                  setShowBranchPicker(false);
+                }}
+                testID={`branch-pick-${item.id}`}
+              >
+                <Ionicons name="storefront-outline" size={18} color="#0F172A" />
+                <Text style={s.branchRowName}>{item.name}</Text>
+                {branch?.id === item.id && (
+                  <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                )}
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // ── Tablet: side-by-side ───────────────────────────────────────────────
+  if (isWide) {
+    return (
+      <SafeAreaView style={s.container} testID="login-screen">
+        <View style={s.tabletLayout}>
+          <View style={s.tabletLeft}>
+            <Text style={s.clock}>{formatClock(now)}</Text>
+            <Text style={s.date}>{formatThaiDate(now)}</Text>
+            <BranchButton />
+            <UserList />
           </View>
-        </TouchableOpacity>
-      </Modal>
+          <View style={s.tabletRight}>
+            <PinPad />
+          </View>
+        </View>
+        <BranchPickerModal />
+      </SafeAreaView>
+    );
+  }
+
+  // ── Phone: two-state flow (user picker → PIN pad) ──────────────────────
+  return (
+    <SafeAreaView
+      style={s.container}
+      edges={["top", "left", "right"]}
+      testID="login-screen"
+    >
+      <View
+        style={[
+          s.phoneRoot,
+          { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+        ]}
+      >
+        {!selectedUser ? (
+          // State 1: pick a user
+          <View style={{ flex: 1 }}>
+            <Text style={[s.clock, isShort && { fontSize: 44 }]}>{formatClock(now)}</Text>
+            <Text style={s.date}>{formatThaiDate(now)}</Text>
+            <View style={{ marginTop: 12 }}>
+              <BranchButton />
+            </View>
+            <View style={{ flex: 1 }}>
+              <UserList />
+            </View>
+          </View>
+        ) : (
+          // State 2: enter PIN
+          <View style={{ flex: 1 }}>
+            <View style={s.phonePinHeader}>
+              <TouchableOpacity
+                style={s.backBtn}
+                onPress={() => {
+                  setSelectedUser(null);
+                  setPin("");
+                  setError("");
+                }}
+                testID="pin-back"
+              >
+                <Ionicons name="chevron-back" size={18} color="#0F172A" />
+                <Text style={s.backText}>เปลี่ยนพนักงาน</Text>
+              </TouchableOpacity>
+              {!!branch && (
+                <View style={s.phoneBranchTag}>
+                  <Ionicons name="storefront-outline" size={12} color="#00B14F" />
+                  <Text style={s.phoneBranchText} numberOfLines={1}>{branch.name}</Text>
+                </View>
+              )}
+            </View>
+            <View style={{ flex: 1, justifyContent: "center" }}>
+              <PinPad />
+            </View>
+          </View>
+        )}
+      </View>
+      <BranchPickerModal />
     </SafeAreaView>
   );
 }
@@ -412,25 +500,31 @@ export default function Login() {
 function KeyButton({
   label,
   icon,
+  size,
   onPress,
   disabled,
 }: {
   label?: string;
   icon?: any;
+  size: number;
   onPress: () => void;
   disabled?: boolean;
 }) {
   return (
     <TouchableOpacity
-      style={[s.key, disabled && { opacity: 0.4 }]}
+      style={[
+        s.key,
+        { width: size, height: size, borderRadius: size / 2 },
+        disabled && { opacity: 0.4 },
+      ]}
       onPress={onPress}
       disabled={disabled}
       testID={`key-${label ?? "backspace"}`}
     >
       {icon ? (
-        <Ionicons name={icon} size={26} color="#0F172A" />
+        <Ionicons name={icon} size={Math.round(size * 0.36)} color="#0F172A" />
       ) : (
-        <Text style={s.keyLabel}>{label}</Text>
+        <Text style={[s.keyLabel, { fontSize: Math.round(size * 0.36) }]}>{label}</Text>
       )}
     </TouchableOpacity>
   );
@@ -438,25 +532,59 @@ function KeyButton({
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
-  layout: { flex: 1, flexDirection: "row" },
-  layoutNarrow: { flexDirection: "column" },
 
-  left: {
-    flex: 1.1,
+  // ── Tablet layout ──
+  tabletLayout: { flex: 1, flexDirection: "row" },
+  tabletLeft: { flex: 1.1, padding: 32 },
+  tabletRight: {
+    flex: 1,
     padding: 32,
-    justifyContent: "flex-start",
+    alignItems: "center",
+    justifyContent: "center",
+    borderLeftWidth: 1,
+    borderLeftColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
   },
-  leftNarrow: { flex: 0, paddingVertical: 24 },
 
+  // ── Phone layout ──
+  phoneRoot: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
+  phonePinHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  backBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 6,
+    paddingRight: 8,
+  },
+  backText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  phoneBranchTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    maxWidth: 160,
+  },
+  phoneBranchText: { fontSize: 12, fontWeight: "600", color: "#0F172A" },
+
+  // ── Header / branch ──
   clock: { fontSize: 56, fontWeight: "700", color: "#0F172A", letterSpacing: -1 },
-  date: { fontSize: 16, color: "#475569", marginTop: 4, marginBottom: 20 },
-
+  date: { fontSize: 16, color: "#475569", marginTop: 4, marginBottom: 12 },
   branchBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999,
     borderWidth: 1, borderColor: "#E2E8F0",
     backgroundColor: "#FFFFFF", alignSelf: "flex-start",
-    marginBottom: 16, maxWidth: "100%",
+    marginBottom: 12, maxWidth: "100%",
   },
   branchLabel: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
   branchLoadError: { color: "#EF4444", fontSize: 11, marginBottom: 6 },
@@ -466,9 +594,10 @@ const s = StyleSheet.create({
   },
   retryText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
 
+  // ── User list ──
   staffHeading: {
     fontSize: 13, fontWeight: "600", color: "#64748B",
-    marginBottom: 12, marginTop: 4,
+    marginBottom: 8, marginTop: 8,
   },
   userRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
@@ -484,45 +613,35 @@ const s = StyleSheet.create({
   userName: { flex: 1, fontSize: 16, color: "#0F172A", fontWeight: "500" },
   empty: { padding: 16, color: "#94A3B8", textAlign: "center" },
 
-  right: {
-    flex: 1,
-    padding: 32,
-    alignItems: "center",
-    justifyContent: "center",
-    borderLeftWidth: 1,
-    borderLeftColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
-  },
-  rightNarrow: { borderLeftWidth: 0, borderTopWidth: 1, borderTopColor: "#E2E8F0", paddingVertical: 24 },
+  // ── PIN pad ──
+  pinPad: { alignItems: "center" },
   rightTitle: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
-  rightSubtitle: { fontSize: 14, color: "#64748B", marginTop: 4, marginBottom: 24 },
-
-  dotsRow: { flexDirection: "row", gap: 14, marginBottom: 8 },
+  rightSubtitle: {
+    fontSize: 14, color: "#64748B",
+    marginTop: 4, marginBottom: 20,
+    maxWidth: 280, textAlign: "center",
+  },
+  dotsRow: { flexDirection: "row", gap: 14, marginBottom: 4 },
   dot: {
-    width: 16, height: 16, borderRadius: 8,
+    width: 14, height: 14, borderRadius: 7,
     borderWidth: 1.5, borderColor: "#CBD5E1", backgroundColor: "transparent",
   },
   dotFilled: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-
   error: { color: "#EF4444", fontSize: 13, marginTop: 4, marginBottom: 4, textAlign: "center" },
-
   keypad: {
     flexDirection: "row", flexWrap: "wrap",
-    width: 280, justifyContent: "space-between",
+    justifyContent: "space-between",
+    marginTop: 4,
   },
   key: {
-    width: 80, height: 70, borderRadius: 999,
     alignItems: "center", justifyContent: "center",
-    marginVertical: 6,
+    marginVertical: 4,
     backgroundColor: "#F8FAFC",
     borderWidth: 1, borderColor: "#E2E8F0",
   },
-  keyEmpty: { width: 80, height: 70, marginVertical: 6 },
-  keyLabel: { fontSize: 26, fontWeight: "500", color: "#0F172A" },
+  keyLabel: { fontWeight: "500", color: "#0F172A" },
 
-  submittingOverlay: { marginTop: 16 },
-
-  // Branch picker modal
+  // ── Branch picker modal ──
   branchModalOverlay: {
     flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
     justifyContent: "center", padding: 24,

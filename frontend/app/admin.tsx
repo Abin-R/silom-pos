@@ -349,7 +349,7 @@ export default function Admin() {
           {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} />}
           {section === "inventory" && <Inventory isWide={isWide} />}
           {section === "customers" && <Customers isWide={isWide} />}
-          {section === "products" && <Products isWide={isWide} />}
+          {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
           {section === "drawer" && <Drawer />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
@@ -1247,7 +1247,7 @@ function Customers({ isWide }: { isWide: boolean }) {
 
 
 // =================== PRODUCTS ===================
-function Products({ isWide }: { isWide: boolean }) {
+function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
   const [cats, setCats] = useState<Category[]>([]);
   const [prods, setProds] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
@@ -1399,12 +1399,16 @@ function Products({ isWide }: { isWide: boolean }) {
                 </Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity testID="edit-products">
-              <Text style={styles.linkText}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setEdit("new")} testID="add-product">
-              <Text style={styles.linkTextBold}>Add Product</Text>
-            </TouchableOpacity>
+            {isAdmin && (
+              <>
+                <TouchableOpacity testID="edit-products">
+                  <Text style={styles.linkText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setEdit("new")} testID="add-product">
+                  <Text style={styles.linkTextBold}>Add Product</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
         <FlatList
@@ -1435,7 +1439,11 @@ function Products({ isWide }: { isWide: boolean }) {
                   )}
                 </View>
               </View>
-              <TouchableOpacity onPress={() => toggleFav(item)} testID={`fav-${item.id}`}>
+              <TouchableOpacity
+                onPress={() => toggleFav(item)}
+                disabled={!isAdmin}
+                testID={`fav-${item.id}`}
+              >
                 <Ionicons
                   name={item.is_favorite ? "heart" : "heart-outline"}
                   size={22}
@@ -1448,9 +1456,11 @@ function Products({ isWide }: { isWide: boolean }) {
                   Type: {item.product_type}
                 </Text>
               </View>
-              <TouchableOpacity style={styles.editBtn} onPress={() => setEdit(item)} testID={`edit-${item.id}`}>
-                <Ionicons name="create-outline" size={18} color="#475569" />
-              </TouchableOpacity>
+              {isAdmin && (
+                <TouchableOpacity style={styles.editBtn} onPress={() => setEdit(item)} testID={`edit-${item.id}`}>
+                  <Ionicons name="create-outline" size={18} color="#475569" />
+                </TouchableOpacity>
+              )}
             </View>
           )}
         />
