@@ -21,24 +21,24 @@ import type { ReceiptOrder, ReceiptShop } from "../lib/starPrinter";
 
 const LOGO = require("../assets/images/rolling-pinn-logo.png");
 
-// Base URL the QR resolves to.  Per-receipt URLs are formed by
-// appending the invoice number so each receipt has a unique
-// landing page once the backend route exists.  Matches the prod
+// Base URL the receipt QR resolves to.  Per-receipt URLs are formed by
+// appending the order number so each receipt lands on its own customer
+// page (Issue Tax Invoice + Leave a Review buttons).  Matches the prod
 // backend host from .env.production (EXPO_PUBLIC_BACKEND_URL).
 const QR_BASE_URL = "https://pos.rollingpinn.com/receipt";
 
-// Renders a QR code as a grid of black/white View cells.  Pure JS,
-// no native dep — works through view-shot capture exactly like the
-// rest of the receipt.  Cell size is floored to an integer so the
-// thermal printer maps each module to a whole number of dots, which
-// keeps the code crisp instead of antialiased/blurry.
+// Renders a QR code as a grid of black/white View cells.  Pure JS, no
+// native dep — works through view-shot capture exactly like the rest
+// of the receipt.  Cell size is floored to an integer so the thermal
+// printer maps each module to a whole number of dots, keeping the
+// code crisp instead of antialiased.
 function QrCode({ value, targetSize }: { value: string; targetSize: number }) {
   const qr = qrcode(0, "M");
   qr.addData(value);
   qr.make();
   const modules = qr.getModuleCount();
   const cell = Math.max(2, Math.floor(targetSize / modules));
-  const quiet = cell * 4; // QR spec requires ≥4-module quiet zone for reliable scanning
+  const quiet = cell * 4; // QR spec: ≥4-module quiet zone for reliable scanning
   return (
     <View style={{ alignSelf: "center", backgroundColor: "#FFF", padding: quiet }}>
       {Array.from({ length: modules }).map((_, row) => (
@@ -237,7 +237,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
 
       {/* ─── QR code ──────────────────────────────────────────────── */}
       <View style={s.qrSection}>
-        <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}`} targetSize={180} />
+        <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}/`} targetSize={180} />
         <Text style={s.qrCaption}>สแกนเพื่อดูใบเสร็จ / Scan to view receipt</Text>
       </View>
 
