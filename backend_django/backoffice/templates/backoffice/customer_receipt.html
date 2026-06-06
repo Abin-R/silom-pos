@@ -8,10 +8,16 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --brand-pink: #ffacef;
+      --brand-red: #d61222;
+      --brand-red-dark: #a40d1a;
+      --on-pink-soft: rgba(0, 0, 0, 0.55);
+    }
     body {
-      background: linear-gradient(180deg, #fff7f9 0%, #ffe6ee 100%);
+      background: var(--brand-pink);
       min-height: 100vh;
       font-family: "Sarabun", -apple-system, BlinkMacSystemFont, sans-serif;
     }
@@ -19,19 +25,59 @@
       max-width: 480px;
       margin: 2rem auto;
       border: 0;
-      border-radius: 20px;
-      box-shadow: 0 12px 48px rgba(214, 51, 108, 0.12);
+      border-radius: 22px;
+      background: #ffffff;
+      box-shadow: 0 14px 48px rgba(164, 13, 26, 0.15);
     }
-    .brand {
-      font-size: 1.75rem;
-      font-weight: 700;
-      color: #d6336c;
-      letter-spacing: -0.01em;
+    /* Hand-script brand mark.  "The" small + slanted, "Rolling" inline
+       above "Pinn", "Pinn" oversized in brand red — mirroring the
+       layered look of the colourful kiss-mark logo. */
+    .logo {
+      position: relative;
+      display: inline-block;
+      margin: 0.25rem auto 0.75rem;
+      line-height: 1;
+      text-align: center;
+    }
+    .logo .the {
+      font-family: "Pacifico", cursive;
+      color: #ffffff;
+      text-shadow: 0 2px 0 var(--brand-pink), 0 0 14px rgba(255, 255, 255, 0.6);
+      font-size: 1.4rem;
+      transform: rotate(-12deg);
+      display: inline-block;
+      position: absolute;
+      top: -0.4rem;
+      left: -0.3rem;
+    }
+    .logo .rolling {
+      font-family: "Pacifico", cursive;
+      color: #ffffff;
+      text-shadow: 0 2px 0 var(--brand-pink);
+      font-size: 2.2rem;
+      transform: rotate(-6deg);
+      display: block;
+    }
+    .logo .pinn {
+      font-family: "Pacifico", cursive;
+      color: var(--brand-red);
+      font-size: 4rem;
+      letter-spacing: -0.02em;
+      display: block;
+      margin-top: -0.5rem;
+    }
+    .logo .by {
+      font-family: "Pacifico", cursive;
+      color: var(--brand-red);
+      font-size: 0.95rem;
+      transform: rotate(-8deg);
+      display: inline-block;
+      margin-top: -0.4rem;
     }
     .order-ref {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 0.85rem;
-      color: #888;
+      color: var(--on-pink-soft);
       letter-spacing: 0.05em;
     }
     .action-btn {
@@ -43,7 +89,14 @@
       display: flex;
       align-items: center;
       gap: 0.85rem;
-      transition: transform 0.08s ease, box-shadow 0.15s ease;
+      background: var(--brand-red);
+      border: 0;
+      color: #ffffff;
+      transition: transform 0.08s ease, background 0.15s ease;
+    }
+    .action-btn:hover, .action-btn:focus, .action-btn:active {
+      background: var(--brand-red-dark);
+      color: #ffffff;
     }
     .action-btn:active { transform: scale(0.985); }
     .action-btn .bi {
@@ -57,30 +110,11 @@
     }
     .action-btn .labels small {
       font-weight: 400;
-      opacity: 0.85;
-    }
-    .btn-tax {
-      background: #d6336c;
-      border-color: #d6336c;
-      color: #fff;
-    }
-    .btn-tax:hover, .btn-tax:focus {
-      background: #b02753;
-      border-color: #b02753;
-      color: #fff;
-    }
-    .btn-review {
-      background: #fff;
-      border: 2px solid #d6336c;
-      color: #d6336c;
-    }
-    .btn-review:hover, .btn-review:focus {
-      background: #fff7f9;
-      color: #b02753;
+      opacity: 0.9;
     }
     .footnote {
       font-size: 0.82rem;
-      color: #999;
+      color: var(--on-pink-soft);
     }
   </style>
 </head>
@@ -88,13 +122,18 @@
   <div class="container">
     <div class="card receipt-card">
       <div class="card-body p-4 p-md-5 text-center">
-        <div class="brand mb-1">The Rolling Pinn</div>
+        <div class="logo">
+          <span class="the">The</span>
+          <span class="rolling">Rolling</span>
+          <span class="pinn">Pinn</span>
+          <span class="by">by Pinnjan</span>
+        </div>
         <div class="order-ref mb-4">Receipt #{{ order_number }}</div>
 
         <div class="d-grid gap-3">
           <a href="https://shopster.ai/en/app/peak/create-receipt/{{ order_number }}/?event_id=lpqutq4chcnqchop0mv7dfjpv0&platform=silompos&branch_id=Nsoayr4MBh1xbBJBOjOH"
              target="_blank" rel="noopener"
-             class="btn action-btn btn-tax">
+             class="btn action-btn">
             <i class="bi bi-file-earmark-text"></i>
             <span class="labels">
               <span>ออกใบกำกับภาษีเต็มรูป</span>
@@ -103,7 +142,7 @@
           </a>
           <a href="https://rollingpinn.formaloo.me/zg8zkq?oid={{ order_number }}"
              target="_blank" rel="noopener"
-             class="btn action-btn btn-review">
+             class="btn action-btn">
             <i class="bi bi-star"></i>
             <span class="labels">
               <span>รีวิวร้านค้า</span>
