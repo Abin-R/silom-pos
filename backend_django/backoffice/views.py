@@ -89,12 +89,122 @@ def customer_receipt(request, order_number: str):
 
 
 def create_tax_invoice(request, order_number: str):
-    """Tax-invoice creation form for a given order.  Visual mock only —
-    no save handler yet — so the Save button is inert.  Linked from the
-    customer receipt landing page's 'Issue Full Tax Invoice' button."""
+    """Tax-invoice creation form for a given order.  The Save button
+    POSTs the form to :func:`save_tax_invoice` which then hands off to
+    the Peak flow.  Linked from the customer receipt landing page's
+    'Issue Full Tax Invoice' button."""
     return render(request, "backoffice/create_tax_invoice.html", {
         "order_number": order_number,
     })
+
+
+# ─── Peak full-tax-invoice flow ─────────────────────────────────────────────
+# Three views move the customer from "filled out the form" to "looking
+# at their tax-invoice PDF":
+#
+#   POST /receipt/<n>/tax-invoice/save/      → save_tax_invoice
+#         persists form data → returns loading page URL
+#   GET  /receipt/<n>/tax-invoice/progress/  → tax_invoice_progress
+#         renders a polling page that JS-fetches the process URL
+#   GET  /receipt/<n>/tax-invoice/process/   → tax_invoice_process
+#         runs the Peak workflow, returns {documentLink} when ready
+#
+# CSRF is exempted on save/process because the customer hitting Submit
+# isn't a logged-in user — this is the same trust model Shopster uses
+# for its public peak_create_receipt_view endpoint.
+
+from django.http import HttpResponseRedirect, JsonResponse
+from django.urls import reverse
+from django.views.decorators.csrf import csrf_exempt
+
+from bravepos.models import Order
+from bravepos.peak import create_peak_receipt_for_order
+
+
+def _form_to_tax_invoice_data(post) -> dict:
+    """Extract the form fields submitted from create_tax_invoice.html
+    into a flat dict.  Stored verbatim on Order.tax_invoice_data so the
+    Peak helper (or a human inspecting the DB later) can re-build the
+    contact payload without parsing a request body twice."""
+    fields = (
+        "name", "tax_id", "customer_type",
+        "registered_address", "registered_country",
+        "registered_province", "registered_city",
+        "registered_district", "registered_postal_code",
+    )
+    return {f: (post.get(f) or "").strip() for f in fields}
+
+
+@csrf_exempt
+def save_tax_invoice(request, order_number: str):
+    """Persist the customer-submitted tax-invoice form on the matching
+    Order row, then redirect the browser to the loading page that will
+    drive the Peak API call.  Idempotent — a second submit just
+    overwrites the previously-saved form data."""
+    if request.method != "POST":
+        return HttpResponseRedirect(
+            reverse("create_tax_invoice", kwargs={"order_number": order_number})
+        )
+
+    order = get_object_or_404(Order, order_number=order_number)
+    order.tax_invoice_data = _form_to_tax_invoice_data(request.POST)
+    order.save(update_fields=["tax_invoice_data"])
+
+    return HttpResponseRedirect(
+        reverse("tax_invoice_progress", kwargs={"order_number": order_number})
+    )
+
+
+def tax_invoice_progress(request, order_number: str):
+    """Loading page — JS on the page polls the process endpoint and
+    redirects to the Peak document URL when one comes back.  Kept as a
+    separate route so a user who refreshes the form-save target doesn't
+    re-trigger the Peak flow."""
+    process_url = reverse("tax_invoice_process", kwargs={"order_number": order_number})
+    return render(request, "backoffice/tax_invoice_progress.html", {
+        "order_number": order_number,
+        "process_url": process_url,
+    })
+
+
+@csrf_exempt
+def tax_invoice_process(request, order_number: str):
+    """Run the Peak workflow for ``order_number`` and return JSON.
+
+    Response shape:
+        * ``{"status": "ready", "url": "<documentLink>"}`` — receipt done,
+          progress page should redirect to ``url``.
+        * ``{"status": "processing", "queueId": "..."}`` (HTTP 202) — Peak
+          hasn't finished; the progress page should poll again.
+        * ``{"status": "error", "error": "..."}`` (HTTP 400/500) — give up
+          and surface the message.
+
+    The actual API work happens inline.  This means the request can take
+    up to ~50 seconds during the polling loop, which is fine for a
+    customer-initiated single-shot request but would NOT be appropriate
+    for a high-QPS endpoint."""
+    order = get_object_or_404(Order, order_number=order_number)
+    if not order.tax_invoice_data:
+        return JsonResponse({"status": "error", "error": "Tax invoice form not submitted"}, status=400)
+
+    # If we already have a document link from a previous attempt, short-
+    # circuit and return it.  Lets the customer come back to the URL
+    # later without re-creating the receipt in Peak.
+    existing = (order.peak_response or {}).get("PeakReceipts", {}).get("receipts") or []
+    if existing and existing[0].get("documentLink"):
+        return JsonResponse({"status": "ready", "url": existing[0]["documentLink"]})
+
+    try:
+        document_link = create_peak_receipt_for_order(order)
+    except Exception as exc:  # noqa: BLE001 — surface Peak/HTTP errors to caller
+        return JsonResponse({"status": "error", "error": str(exc)}, status=500)
+
+    if document_link:
+        return JsonResponse({"status": "ready", "url": document_link})
+    return JsonResponse(
+        {"status": "processing", "queueId": order.peak_queue_id},
+        status=202,
+    )
 
 
 @login_required

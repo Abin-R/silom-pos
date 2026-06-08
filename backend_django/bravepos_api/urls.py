@@ -15,4 +15,7 @@ urlpatterns = [
     path('backoffice/', include('backoffice.urls')),
     path('receipt/<str:order_number>/', backoffice_views.customer_receipt, name='customer_receipt'),
     path('receipt/<str:order_number>/tax-invoice/', backoffice_views.create_tax_invoice, name='create_tax_invoice'),
+    path('receipt/<str:order_number>/tax-invoice/save/', backoffice_views.save_tax_invoice, name='save_tax_invoice'),
+    path('receipt/<str:order_number>/tax-invoice/progress/', backoffice_views.tax_invoice_progress, name='tax_invoice_progress'),
+    path('receipt/<str:order_number>/tax-invoice/process/', backoffice_views.tax_invoice_process, name='tax_invoice_process'),
 ]

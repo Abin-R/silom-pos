@@ -94,26 +94,27 @@
   </style>
 </head>
 <body>
-  <header class="page-header">
-    <h1>Create peak receipt for {{ order_number }}</h1>
-    <button type="button" class="save-btn">Save</button>
-  </header>
+  <form method="post" action="{% url 'save_tax_invoice' order_number=order_number %}" id="tax-invoice-form">
+    {% csrf_token %}
+    <header class="page-header">
+      <h1>Create peak receipt for {{ order_number }}</h1>
+      <button type="submit" class="save-btn">Save</button>
+    </header>
 
-  <form onsubmit="event.preventDefault()">
     <div class="form-row">
       <div class="label">Name</div>
-      <div class="field"><input type="text" placeholder="Name"></div>
+      <div class="field"><input type="text" name="name" placeholder="Name" required></div>
     </div>
 
     <div class="form-row">
       <div class="label">Tax ID</div>
-      <div class="field"><input type="text" placeholder="Tax ID"></div>
+      <div class="field"><input type="text" name="tax_id" placeholder="Tax ID" required></div>
     </div>
 
     <div class="form-row">
       <div class="label">Customer Type</div>
       <div class="field">
-        <select>
+        <select name="customer_type">
           <option value="">---------</option>
           <option>Individual</option>
           <option>Company</option>
@@ -123,13 +124,13 @@
 
     <div class="form-row focused">
       <div class="label">Registered Address</div>
-      <div class="field"><input type="text"></div>
+      <div class="field"><input type="text" name="registered_address"></div>
     </div>
 
     <div class="form-row">
       <div class="label">Registered Country</div>
       <div class="field">
-        <select>
+        <select name="registered_country">
           <option>Thailand</option>
         </select>
       </div>
@@ -137,22 +138,22 @@
 
     <div class="form-row">
       <div class="label">Registered Province</div>
-      <div class="field"><input type="text" placeholder="Registered Province"></div>
+      <div class="field"><input type="text" name="registered_province" placeholder="Registered Province"></div>
     </div>
 
     <div class="form-row">
       <div class="label">Registered City</div>
-      <div class="field"><input type="text" placeholder="Registered City"></div>
+      <div class="field"><input type="text" name="registered_city" placeholder="Registered City"></div>
     </div>
 
     <div class="form-row">
       <div class="label">Registered District</div>
-      <div class="field"><input type="text" placeholder="Registered District"></div>
+      <div class="field"><input type="text" name="registered_district" placeholder="Registered District"></div>
     </div>
 
     <div class="form-row">
       <div class="label">Registered Postal Code</div>
-      <div class="field"><input type="text" placeholder="Registered Postal Code"></div>
+      <div class="field"><input type="text" name="registered_postal_code" placeholder="Registered Postal Code"></div>
     </div>
   </form>
 </body>

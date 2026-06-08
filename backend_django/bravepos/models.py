@@ -315,6 +315,17 @@ class Order(models.Model):
     created_time = models.CharField(max_length=8, blank=True, default="")  # "HH:MM"
     staff = models.CharField(max_length=120, blank=True, default="")
 
+    # ── Peak full-tax-invoice integration ──────────────────────────────
+    # Populated when a customer scans the receipt QR and submits the
+    # full-tax-invoice form.  ``tax_invoice_data`` captures the form
+    # fields verbatim (name, taxId, address, etc.).  ``peak_queue_id`` is
+    # returned by Peak's /receipts/queue endpoint so we can poll for the
+    # final receipt.  ``peak_response`` is the final queue payload,
+    # including the documentLink we redirect the customer to.
+    tax_invoice_data = models.JSONField(null=True, blank=True)
+    peak_queue_id = models.CharField(max_length=128, blank=True, default="")
+    peak_response = models.JSONField(null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
@@ -399,3 +410,54 @@ class ShiftMovement(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+# ─── Peak (full tax-invoice) integration ────────────────────────────────────
+# The customer-receipt landing page lets shoppers request a "full tax
+# invoice" — the form data goes to Peak's API and produces a downloadable
+# tax-invoice document, mirroring what Shopster's Django app already does
+# for SilomPOS / Grab / Buzzb. These three models cover what we need to
+# replicate that flow ourselves.
+
+class PeakProductMap(models.Model):
+    """Maps one of our Products to its Peak product code, so receipt
+    submissions don't have to create a fresh Peak product for every item
+    every time.  Created lazily — on the first receipt that includes a
+    product, we POST /products to Peak, get a code back, and cache the
+    pair here.  Subsequent receipts reuse it."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.OneToOneField(
+        Product, on_delete=models.CASCADE, related_name="peak_map",
+    )
+    peak_code = models.CharField(max_length=64, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PeakRequest(models.Model):
+    """Audit log of every outbound Peak API call.  Mirrors the structure
+    of Shopster's PeakRequest table — invaluable for debugging when a
+    receipt fails to materialise (the response body is the only source
+    of truth for Peak's error codes)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    url = models.TextField()
+    method = models.CharField(max_length=8)
+    headers = models.JSONField(null=True, blank=True)
+    body = models.JSONField(null=True, blank=True)
+    response = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["-created_at"])]
+
+
+class PeakClientToken(models.Model):
+    """Singleton-ish row holding Peak's rotating client token.  On a
+    fresh install seed it from the env var PEAK_CLIENT_TOKEN.  The token
+    refresh flow (when Peak returns resCode '600') is intentionally
+    out-of-band for now — set up an admin/cron task to update this row
+    when the token expires."""
+    id = models.CharField(primary_key=True, max_length=16, default="default")
+    token = models.CharField(max_length=512)
+    updated_at = models.DateTimeField(auto_now=True)
+
