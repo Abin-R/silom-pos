@@ -14,4 +14,5 @@ urlpatterns = [
     path('api/', include('bravepos.urls')),
     path('backoffice/', include('backoffice.urls')),
     path('receipt/<str:order_number>/', backoffice_views.customer_receipt, name='customer_receipt'),
+    path('receipt/<str:order_number>/tax-invoice/', backoffice_views.create_tax_invoice, name='create_tax_invoice'),
 ]

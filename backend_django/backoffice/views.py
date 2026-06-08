@@ -88,6 +88,15 @@ def customer_receipt(request, order_number: str):
     })
 
 
+def create_tax_invoice(request, order_number: str):
+    """Tax-invoice creation form for a given order.  Visual mock only —
+    no save handler yet — so the Save button is inert.  Linked from the
+    customer receipt landing page's 'Issue Full Tax Invoice' button."""
+    return render(request, "backoffice/create_tax_invoice.html", {
+        "order_number": order_number,
+    })
+
+
 @login_required
 def dashboard(request):
     today = timezone.localdate()

@@ -131,8 +131,7 @@
         <div class="order-ref mb-4">Receipt #{{ order_number }}</div>
 
         <div class="d-grid gap-3">
-          <a href="https://shopster.ai/en/app/peak/create-receipt/{{ order_number }}/?event_id=lpqutq4chcnqchop0mv7dfjpv0&platform=silompos&branch_id=Nsoayr4MBh1xbBJBOjOH"
-             target="_blank" rel="noopener"
+          <a href="{% url 'create_tax_invoice' order_number=order_number %}"
              class="btn action-btn">
             <i class="bi bi-file-earmark-text"></i>
             <span class="labels">
