@@ -241,17 +241,22 @@ def _build_peak_contact(form_data: dict) -> dict:
 
 def _create_peak_contact(form_data: dict) -> str:
     """Send the contact to Peak and return its ``id``, retrying up to
-    five times for transient KeyError/IndexError in the response shape."""
+    five times for transient response-shape failures.  Raises with
+    Peak's actual response on the wire when retries exhaust — without
+    that we'd just see "list index out of range" with no clue which
+    Peak error code caused it."""
     body = {"PeakContacts": {"contacts": [_build_peak_contact(form_data)]}}
-    last_err: Optional[Exception] = None
-    for attempt in range(5):
-        resp = make_peak_request("/contacts", "POST", body)
+    last_resp: dict = {}
+    for _ in range(5):
+        last_resp = make_peak_request("/contacts", "POST", body)
         try:
-            return resp["PeakContacts"]["contacts"][0]["id"]
-        except (KeyError, IndexError, TypeError) as e:
-            last_err = e
+            return last_resp["PeakContacts"]["contacts"][0]["id"]
+        except (KeyError, IndexError, TypeError):
             time.sleep(2)
-    raise RuntimeError(f"Could not extract Peak contact id after 5 retries: {last_err}")
+    raise RuntimeError(
+        "Peak /contacts did not return a contact id after 5 retries. "
+        f"Last response: {last_resp!r}. Last request body: {body!r}"
+    )
 
 
 def create_peak_receipt_for_order(order: Order) -> Optional[str]:
