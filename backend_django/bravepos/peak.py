@@ -50,22 +50,54 @@ PEAK_BASE_URL = "https://peakengineapi.azurewebsites.net/api/v1"
 
 
 def _get_peak_token() -> str:
-    """Return the current Peak Client-Token.  Reads the DB row each call
-    so a refreshed token (written by an admin task / cron) takes effect
-    without an app restart.  Falls back to env vars when no row exists
-    yet — checks both ``PEAK_TOKEN`` (Shopster's name) and
-    ``PEAK_CLIENT_TOKEN`` (our internal name) so a freshly-copied .env
-    from Shopster works without renaming.  Seeds the DB row on first
-    successful read so subsequent calls hit the DB only."""
-    row = PeakClientToken.objects.filter(pk="default").first()
-    if row and row.token:
-        return row.token
+    """Return the current Peak Client-Token, resolved in this order:
+
+    1. **Shopster's ``instamator_app_clientpeaktoken`` table** on the
+       shared ``instamator3`` Postgres.  Shopster's existing refresh
+       flow writes the rotating token here, so reading it directly
+       means we stay current automatically — no cron / sync job on our
+       side.  Column index ``[1]`` matches Shopster's own
+       ``get_peak_token()`` implementation.
+    2. **Our own** ``PeakClientToken`` singleton row.  Acts as a manual
+       override — useful if Shopster's table is briefly stale or the
+       cross-app DB read is down.
+    3. **Env var** ``PEAK_TOKEN`` (Shopster's naming) or
+       ``PEAK_CLIENT_TOKEN`` (ours).  Last-resort seed for fresh
+       installs / dev.
+
+    Any of these returning empty falls through to the next source.
+    """
+    # 1. Shopster's table on the shared DB.
+    try:
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM instamator_app_clientpeaktoken "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+        if row and len(row) > 1 and row[1]:
+            return row[1]
+    except Exception:
+        # Table missing, permission error, etc. — fall through.  We
+        # deliberately swallow this so the override paths still work
+        # on environments that aren't sharing Shopster's DB.
+        pass
+
+    # 2. Our manual override row.
+    row_obj = PeakClientToken.objects.filter(pk="default").first()
+    if row_obj and row_obj.token:
+        return row_obj.token
+
+    # 3. Env-var seed.  Seed the override row on first successful read.
     seed = (
         os.environ.get("PEAK_TOKEN", "")
         or os.environ.get("PEAK_CLIENT_TOKEN", "")
     )
     if seed:
-        PeakClientToken.objects.update_or_create(pk="default", defaults={"token": seed})
+        PeakClientToken.objects.update_or_create(
+            pk="default", defaults={"token": seed},
+        )
     return seed
 
 
