@@ -52,13 +52,18 @@ PEAK_BASE_URL = "https://peakengineapi.azurewebsites.net/api/v1"
 def _get_peak_token() -> str:
     """Return the current Peak Client-Token.  Reads the DB row each call
     so a refreshed token (written by an admin task / cron) takes effect
-    without an app restart.  Falls back to the env var ``PEAK_CLIENT_TOKEN``
-    when no row exists yet — seeds the row on first use so subsequent
-    calls hit the DB."""
+    without an app restart.  Falls back to env vars when no row exists
+    yet — checks both ``PEAK_TOKEN`` (Shopster's name) and
+    ``PEAK_CLIENT_TOKEN`` (our internal name) so a freshly-copied .env
+    from Shopster works without renaming.  Seeds the DB row on first
+    successful read so subsequent calls hit the DB only."""
     row = PeakClientToken.objects.filter(pk="default").first()
     if row and row.token:
         return row.token
-    seed = os.environ.get("PEAK_CLIENT_TOKEN", "")
+    seed = (
+        os.environ.get("PEAK_TOKEN", "")
+        or os.environ.get("PEAK_CLIENT_TOKEN", "")
+    )
     if seed:
         PeakClientToken.objects.update_or_create(pk="default", defaults={"token": seed})
     return seed
