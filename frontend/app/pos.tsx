@@ -120,8 +120,6 @@ export default function POS() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [discountType, setDiscountType] = useState<"none" | "amount" | "percent">("none");
-  const [discountValue, setDiscountValue] = useState<number>(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [parkedCount, setParkedCount] = useState(0);
@@ -129,7 +127,6 @@ export default function POS() {
 
   // modal states
   const [showPayment, setShowPayment] = useState(false);
-  const [showDiscount, setShowDiscount] = useState(false);
   const [showCustomer, setShowCustomer] = useState(false);
   const [showOrderHub, setShowOrderHub] = useState(false);
   const [showParked, setShowParked] = useState(false);
@@ -245,15 +242,16 @@ export default function POS() {
     return list;
   }, [products, activeCat, search]);
 
+  // Subtotal is the gross line value; discounts are per-product only (no
+  // common/order-level discount). A line discount is clamped to its line total.
   const subtotal = useMemo(
-    () => cart.reduce((s, i) => s + Math.max(0, i.price * i.qty - (i.discount || 0)), 0),
+    () => cart.reduce((s, i) => s + i.price * i.qty, 0),
     [cart]
   );
-  const discountAmount = useMemo(() => {
-    if (discountType === "amount") return Math.min(discountValue, subtotal);
-    if (discountType === "percent") return (subtotal * discountValue) / 100;
-    return 0;
-  }, [discountType, discountValue, subtotal]);
+  const discountAmount = useMemo(
+    () => cart.reduce((s, i) => s + Math.min(i.discount || 0, i.price * i.qty), 0),
+    [cart]
+  );
   const total = Math.max(0, subtotal - discountAmount);
   const cartCount = cart.reduce((s, i) => s + i.qty, 0);
 
@@ -291,8 +289,6 @@ export default function POS() {
   const clearCart = () => {
     setCart([]);
     setCustomer(null);
-    setDiscountType("none");
-    setDiscountValue(0);
   };
 
   const handlePaySuccess = async (
@@ -307,8 +303,8 @@ export default function POS() {
         body: JSON.stringify({
           items: cart,
           subtotal,
-          discount_type: discountType,
-          discount_value: discountValue,
+          discount_type: discountAmount > 0 ? "item" : "none",
+          discount_value: 0,
           discount_amount: discountAmount,
           total,
           payment_method: method,
@@ -446,13 +442,6 @@ export default function POS() {
           label="Drawer"
           onPress={() => setShowDrawer(true)}
           testId="toolbar-drawer"
-          compact={!isWide}
-        />
-        <ToolbarIcon
-          icon="pricetag-outline"
-          label="Discount"
-          onPress={() => setShowDiscount(true)}
-          testId="toolbar-discount"
           compact={!isWide}
         />
         <ToolbarIcon
@@ -630,8 +619,6 @@ export default function POS() {
             cart={cart}
             customer={customer}
             subtotal={subtotal}
-            discountType={discountType}
-            discountValue={discountValue}
             discountAmount={discountAmount}
             total={total}
             cartCount={cartCount}
@@ -739,8 +726,6 @@ export default function POS() {
               cart={cart}
               customer={customer}
               subtotal={subtotal}
-              discountType={discountType}
-              discountValue={discountValue}
               discountAmount={discountAmount}
               total={total}
               cartCount={cartCount}
@@ -759,18 +744,6 @@ export default function POS() {
               onEdit={setEditItem}
               embedded
             />
-            <TouchableOpacity
-              style={styles.mobileDiscBtn}
-              onPress={() => {
-                setShowCart(false);
-                setShowDiscount(true);
-              }}
-              disabled={cart.length === 0}
-              testID="mobile-discount"
-            >
-              <Ionicons name="pricetag-outline" size={16} color="#00B14F" />
-              <Text style={styles.mobileDiscText}>Add Discount</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -783,15 +756,6 @@ export default function POS() {
         cartCount={cartCount}
         onClose={() => setShowPayment(false)}
         onPay={handlePaySuccess}
-      />
-      <DiscountModal
-        visible={showDiscount}
-        onClose={() => setShowDiscount(false)}
-        onApply={(t, v) => {
-          setDiscountType(t);
-          setDiscountValue(v);
-          setShowDiscount(false);
-        }}
       />
       <CartItemModal
         item={editItem}
@@ -979,8 +943,6 @@ function CartSidebar({
   cart,
   customer,
   subtotal,
-  discountType,
-  discountValue,
   discountAmount,
   total,
   cartCount,
@@ -996,8 +958,6 @@ function CartSidebar({
   cart: CartItem[];
   customer: Customer | null;
   subtotal: number;
-  discountType: "none" | "amount" | "percent";
-  discountValue: number;
   discountAmount: number;
   total: number;
   cartCount: number;
@@ -1040,11 +1000,9 @@ function CartSidebar({
           <Text style={styles.totalLabel}>Sub Total</Text>
           <Text style={styles.subTotalVal}>{subtotal.toFixed(2)}</Text>
         </View>
-        {discountType !== "none" && (
+        {discountAmount > 0 && (
           <View style={styles.discRow}>
-            <Text style={styles.discLabel}>
-              Discount {discountType === "percent" ? `(${discountValue}%)` : ""}
-            </Text>
+            <Text style={styles.discLabel}>Discount</Text>
             <Text style={styles.discVal}>-{THB(discountAmount)}</Text>
           </View>
         )}
@@ -1807,7 +1765,6 @@ function PaymentModal({
   );
 }
 
-// ---------- Discount Modal ----------
 // ---------- Cart Item Modal (per-line quantity + discount) ----------
 function CartItemModal({
   item,
@@ -1896,146 +1853,6 @@ function CartItemModal({
             testID="item-modal-save"
           >
             <Text style={styles.doneBtnText}>Save</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function DiscountModal({
-  visible,
-  onClose,
-  onApply,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onApply: (t: "amount" | "percent" | "none", v: number) => void;
-}) {
-  const [mode, setMode] = useState<"amount" | "percent">("percent");
-  const [val, setVal] = useState("");
-
-  useEffect(() => {
-    if (visible) {
-      setMode("percent");
-      setVal("");
-    }
-  }, [visible]);
-
-  const onKey = (k: string) => {
-    if (k === "back") setVal((v) => v.slice(0, -1));
-    else if (k === ".") {
-      if (!val.includes(".")) setVal((v) => (v || "0") + ".");
-    } else setVal((v) => (v === "0" ? k : v + k));
-  };
-
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "back"];
-  const quicks = [5, 10, 15, 20];
-  const { width: winW } = useWindowDimensions();
-  const isNarrow = winW < 600;
-
-  const apply = () => {
-    const n = parseFloat(val) || 0;
-    if (n === 0) {
-      onApply("none", 0);
-    } else {
-      onApply(mode, n);
-    }
-  };
-
-  const discColors = ["#00B14F", "#8B5CF6", "#3B82F6", "#06B6D4"];
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={styles.discountModal} testID="discount-modal">
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={onClose} testID="close-discount">
-              <Ionicons name="chevron-back" size={26} color="#EF4444" />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>Discount</Text>
-            <TouchableOpacity style={styles.scanBarBtn} testID="disc-scan">
-              <Ionicons name="barcode-outline" size={16} color="#475569" />
-              <Text style={styles.scanBarText}>Scan Barcode/QR code</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={[styles.toggleRow, isNarrow && { margin: 12 }]}>
-            <TouchableOpacity
-              style={[styles.toggleBtn, mode === "amount" && styles.toggleBtnActive, isNarrow && { paddingVertical: 8 }]}
-              onPress={() => setMode("amount")}
-              testID="disc-amount"
-            >
-              <Text style={[styles.toggleText, mode === "amount" && styles.toggleTextActive]}>
-                Amount
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleBtn, mode === "percent" && styles.toggleBtnActive, isNarrow && { paddingVertical: 8 }]}
-              onPress={() => setMode("percent")}
-              testID="disc-percent"
-            >
-              <Text style={[styles.toggleText, mode === "percent" && styles.toggleTextActive]}>
-                %
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={[styles.discountInput, isNarrow && { padding: 12, marginHorizontal: 12 }]}>
-            <Text style={[styles.discountInputText, isNarrow && { fontSize: 24 }]}>
-              {val || "0"}
-              {mode === "percent" && val ? "%" : ""}
-            </Text>
-          </View>
-
-          <View style={[styles.quickRow, isNarrow && { marginVertical: 8, paddingHorizontal: 12 }]}>
-            {quicks.map((q, i) => (
-              <TouchableOpacity
-                key={q}
-                style={[
-                  styles.quickPct,
-                  { borderColor: discColors[i] },
-                  isNarrow && { width: 48, height: 48, borderRadius: 24 },
-                ]}
-                onPress={() => {
-                  setMode("percent");
-                  setVal(String(q));
-                }}
-                testID={`disc-quick-${q}`}
-              >
-                <Text style={[styles.quickPctText, { color: discColors[i] }, isNarrow && { fontSize: 13 }]}>
-                  {q}%
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <View style={[styles.discPad, isNarrow && { paddingHorizontal: 12 }]}>
-            {keys.map((k) => (
-              <TouchableOpacity
-                key={k}
-                // Square-ish buttons on phone — without overriding aspectRatio
-                // each key would be ~115×230px and the keypad alone would
-                // dominate the screen.
-                style={[styles.discKey, isNarrow && { aspectRatio: 1.4, paddingVertical: 6 }]}
-                onPress={() => onKey(k)}
-                testID={`disc-pad-${k}`}
-              >
-                {k === "back" ? (
-                  <Ionicons name="backspace-outline" size={22} color="#00B14F" />
-                ) : (
-                  <Text style={[styles.discKeyText, isNarrow && { fontSize: 22 }]}>{k}</Text>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.doneBtn, isNarrow && { margin: 12, padding: 14 }]}
-            onPress={apply}
-            testID="disc-done"
-          >
-            <Text style={styles.doneBtnText}>Done</Text>
           </TouchableOpacity>
         </View>
       </View>

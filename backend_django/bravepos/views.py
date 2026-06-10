@@ -761,6 +761,7 @@ def orders_list_create(request):
                 name=it.get('name', ''),
                 price=Decimal(str(it.get('price', 0))),
                 qty=qty,
+                discount=Decimal(str(it.get('discount', 0) or 0)),
                 category_id=cat_id,
                 category_name=cat_name or '',
             )

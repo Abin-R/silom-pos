@@ -355,6 +355,9 @@ class OrderItem(models.Model):
     name = models.CharField(max_length=200)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     qty = models.IntegerField(default=1)
+    # Per-line discount (flat THB). There is no order-level discount in the POS —
+    # the order's discount_amount is just the sum of these line discounts.
+    discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     category_id = models.UUIDField(null=True, blank=True)
     category_name = models.CharField(max_length=120, blank=True, default="")
 

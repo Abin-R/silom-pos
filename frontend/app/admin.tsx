@@ -583,9 +583,70 @@ function rangeLabel(range: DateRange): string {
   if (!range.start) return "Custom";
   return range.end && range.end !== range.start ? `${range.start} → ${range.end}` : range.start;
 }
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const fmtISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
-// Custom date-range picker (YYYY-MM-DD start / end).
+// In-app month calendar with range highlighting (no native picker dependency).
+function Calendar({ start, end, onPick }: { start: string; end: string; onPick: (iso: string) => void }) {
+  const base = start ? new Date(start + "T00:00:00") : new Date();
+  const [view, setView] = useState(new Date(base.getFullYear(), base.getMonth(), 1));
+  const year = view.getFullYear();
+  const month = view.getMonth();
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [
+    ...Array(firstDow).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+  while (cells.length % 7 !== 0) cells.push(null);
+  const monthLabel = view.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const todayISO = fmtISO(new Date());
+  const shift = (delta: number) => setView(new Date(year, month + delta, 1));
+
+  return (
+    <View>
+      <View style={styles.calHeader}>
+        <TouchableOpacity onPress={() => shift(-1)} style={styles.calNavBtn} testID="cal-prev">
+          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+        </TouchableOpacity>
+        <Text style={styles.calMonth}>{monthLabel}</Text>
+        <TouchableOpacity onPress={() => shift(1)} style={styles.calNavBtn} testID="cal-next">
+          <Ionicons name="chevron-forward" size={20} color="#0F172A" />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.calWeekRow}>
+        {WEEKDAYS.map((w) => <Text key={w} style={styles.calWeekday}>{w}</Text>)}
+      </View>
+      <View style={styles.calGrid}>
+        {cells.map((d, i) => {
+          if (d === null) return <View key={i} style={styles.calCell} />;
+          const iso = fmtISO(new Date(year, month, d));
+          const isStart = iso === start;
+          const isEnd = iso === end;
+          const isEdge = isStart || isEnd;
+          const inRange = !!start && !!end && iso > start && iso < end;
+          return (
+            <TouchableOpacity
+              key={i}
+              style={[styles.calCell, inRange && styles.calCellInRange, isEdge && styles.calCellSel]}
+              onPress={() => onPick(iso)}
+              testID={`cal-day-${iso}`}
+            >
+              <Text style={[
+                styles.calCellText,
+                iso === todayISO && !isEdge && styles.calCellToday,
+                isEdge && styles.calCellTextSel,
+              ]}>{d}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+// Custom date-range picker — tap a start day, then an end day (optional).
 function DateRangeModal({
   visible, initial, onClose, onApply,
 }: { visible: boolean; initial: DateRange; onClose: () => void; onApply: (r: DateRange) => void }) {
@@ -593,7 +654,11 @@ function DateRangeModal({
   const [end, setEnd] = useState(initial.end);
   useEffect(() => { if (visible) { setStart(initial.start); setEnd(initial.end); } }, [visible, initial]);
 
-  const valid = ISO_DATE.test(start) && (!end || ISO_DATE.test(end)) && (!end || end >= start);
+  const pick = (iso: string) => {
+    if (!start || (start && end)) { setStart(iso); setEnd(""); }   // begin a fresh range
+    else if (iso < start) { setStart(iso); }                        // earlier than start → new start
+    else { setEnd(iso); }                                           // later → close the range
+  };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -604,24 +669,22 @@ function DateRangeModal({
             <Text style={styles.modalTitle}>Custom range</Text>
             <View style={{ width: 22 }} />
           </View>
-          <View style={{ padding: 20, gap: 14 }}>
-            <View style={{ gap: 4 }}>
-              <Text style={styles.docFieldLabel}>Start date</Text>
-              <TextInput
-                style={styles.docInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94A3B8"
-                value={start} onChangeText={setStart} autoCapitalize="none" testID="range-start"
-              />
+          <View style={{ padding: 16, gap: 12 }}>
+            <View style={styles.rangeSummary}>
+              <View style={styles.rangeSummaryCol}>
+                <Text style={styles.docFieldLabel}>Start</Text>
+                <Text style={styles.rangeSummaryVal}>{start || "—"}</Text>
+              </View>
+              <Ionicons name="arrow-forward" size={16} color="#94A3B8" />
+              <View style={styles.rangeSummaryCol}>
+                <Text style={styles.docFieldLabel}>End</Text>
+                <Text style={styles.rangeSummaryVal}>{end || (start ? "Same day" : "—")}</Text>
+              </View>
             </View>
-            <View style={{ gap: 4 }}>
-              <Text style={styles.docFieldLabel}>End date (optional)</Text>
-              <TextInput
-                style={styles.docInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94A3B8"
-                value={end} onChangeText={setEnd} autoCapitalize="none" testID="range-end"
-              />
-            </View>
+            <Calendar start={start} end={end} onPick={pick} />
             <TouchableOpacity
-              style={[styles.primaryBtn, !valid && { opacity: 0.5 }]}
-              disabled={!valid}
+              style={[styles.primaryBtn, !start && { opacity: 0.5 }]}
+              disabled={!start}
               onPress={() => onApply({ start, end })}
               testID="range-apply"
             >
@@ -875,11 +938,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
             </TouchableOpacity>
           )}
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.txDateChips}
-        >
+        <View style={styles.txDateChips}>
           {([
             { key: "today", label: "Today" },
             { key: "yesterday", label: "Yesterday" },
@@ -890,15 +949,20 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
             return (
               <TouchableOpacity
                 key={opt.key}
-                style={[styles.catChip, active && styles.txDateChipActive]}
+                style={[styles.txDateChip, active && styles.txDateChipActive]}
                 onPress={() => setDateFilter(opt.key)}
                 testID={`tx-date-${opt.key}`}
               >
-                <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{opt.label}</Text>
+                <Text
+                  style={[styles.txDateChipText, active && { color: "#FFF" }]}
+                  numberOfLines={1}
+                >
+                  {opt.label}
+                </Text>
               </TouchableOpacity>
             );
           })}
-        </ScrollView>
+        </View>
         {filteredOrders.length === 0 ? (
           <View style={styles.txEmpty}>
             <Text style={styles.emptyText}>No matching transactions</Text>
@@ -4132,7 +4196,16 @@ const styles = StyleSheet.create({
   // Transactions
   txList: { width: 320, backgroundColor: "#FFFFFF", borderRightWidth: 1, borderRightColor: "#E2E8F0" },
   txDetail: { flex: 1 },
-  txDateChips: { flexDirection: "row", gap: 6, paddingHorizontal: 10, paddingBottom: 10 },
+  txDateChips: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 10, paddingBottom: 10,
+  },
+  txDateChip: {
+    flex: 1, height: 34, borderRadius: 17,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF",
+  },
+  txDateChipText: { fontSize: 11, color: "#0F172A", fontWeight: "600" },
   txDateChipActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
   txEmpty: { padding: 24, alignItems: "center" },
   txRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
@@ -4599,9 +4672,30 @@ const styles = StyleSheet.create({
   },
   reportsBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 14 },
   rangeCard: {
-    width: "88%", maxWidth: 420, backgroundColor: "#FFFFFF",
+    width: "92%", maxWidth: 420, backgroundColor: "#FFFFFF",
     borderRadius: 16, overflow: "hidden",
   },
+  rangeSummary: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: "#F8FAFC", borderRadius: 10, padding: 12,
+  },
+  rangeSummaryCol: { flex: 1, gap: 2 },
+  rangeSummaryVal: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  calHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6 },
+  calNavBtn: { padding: 8, borderRadius: 8 },
+  calMonth: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  calWeekRow: { flexDirection: "row" },
+  calWeekday: { flex: 1, textAlign: "center", fontSize: 11, fontWeight: "600", color: "#94A3B8", paddingVertical: 4 },
+  calGrid: { flexDirection: "row", flexWrap: "wrap" },
+  calCell: {
+    width: `${100 / 7}%`, aspectRatio: 1, alignItems: "center", justifyContent: "center",
+    marginVertical: 1,
+  },
+  calCellText: { fontSize: 14, color: "#0F172A" },
+  calCellToday: { color: "#00B14F", fontWeight: "700" },
+  calCellSel: { backgroundColor: "#00B14F", borderRadius: 8 },
+  calCellTextSel: { color: "#FFFFFF", fontWeight: "700" },
+  calCellInRange: { backgroundColor: "#D1FAE5" },
   chPeriodRow: {
     flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center",
     paddingHorizontal: 12, paddingVertical: 10,
