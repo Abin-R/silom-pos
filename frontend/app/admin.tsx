@@ -1088,6 +1088,10 @@ function TransactionDetail({
   const sendPrint = async (receipt: ReceiptOrder): Promise<boolean> => {
     const shopRes = await apiFetch(`${API}/settings`);
     const shop = shopRes.ok ? await shopRes.json() : {};
+    // Settings.branch is a shop-wide string default ("Main"); the
+    // order itself carries the actual branch it was rung up at.
+    // Override so a reprint shows the correct location.
+    if (order.branch_name) shop.branch = order.branch_name;
     const r = await reprint(receipt, shop);
     if (!r.ok) {
       Alert.alert(

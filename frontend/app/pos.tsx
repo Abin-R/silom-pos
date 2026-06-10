@@ -339,6 +339,10 @@ export default function POS() {
           setPrintStatus({ state: "printing" });
           const shopRes = await apiFetch(`${API}/settings`);
           const shop = shopRes.ok ? await shopRes.json() : {};
+          // Settings.branch is a shop-wide string default ("Main"), not
+          // the cashier's actually-selected branch.  Override with the
+          // active branch so receipts carry the correct location.
+          if (activeBranchName) shop.branch = activeBranchName;
           const r = await printReceipt(
             cfg,
             {

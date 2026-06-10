@@ -78,11 +78,25 @@ class OrderSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     items = OrderItemSerializer(many=True)
     customer_id = serializers.UUIDField(required=False, allow_null=True)
+    # Branch is the *Order's* branch, not the global Settings.branch.
+    # Needed so the reprint flow can render the correct branch label
+    # on the receipt (otherwise every receipt prints "Main").  Both
+    # fields are method-based to handle Order.branch being null
+    # without raising AttributeError.
+    branch_id = serializers.SerializerMethodField()
+    branch_name = serializers.SerializerMethodField()
+
+    def get_branch_id(self, obj):
+        return str(obj.branch_id) if obj.branch_id else None
+
+    def get_branch_name(self, obj):
+        return obj.branch.name if obj.branch_id else ""
 
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'items',
+            'branch_id', 'branch_name',
             'subtotal', 'discount_type', 'discount_value', 'discount_amount', 'total',
             'payment_method', 'paid_amount', 'change',
             'status', 'source',
