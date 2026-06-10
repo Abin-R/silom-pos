@@ -15,6 +15,7 @@ def _register(r):
     r.register(r'products', views.ProductViewSet, basename='product')
     r.register(r'customers', views.CustomerViewSet, basename='customer')
     r.register(r'branches', views.BranchViewSet, basename='branch')
+    r.register(r'shift-categories', views.DrawerCategoryViewSet, basename='shift-category')
 
 router = DefaultRouter()          # /api/categories/
 router_no_slash = DefaultRouter(trailing_slash='')  # /api/categories
@@ -51,11 +52,16 @@ urlpatterns = [
     # Stock movements
     path('stock-movements', views.stock_movements),
 
+    # Stock documents (multi-line stock-in / stock-out)
+    path('stock-documents', views.stock_documents),
+    path('stock-documents/<uuid:doc_id>', views.stock_document_detail),
+
     # Shifts
     path('shifts/current', views.shift_current),
     path('shifts/open', views.shift_open),
     path('shifts/movement', views.shift_movement),
     path('shifts/close', views.shift_close),
+    path('shifts/<uuid:shift_id>/summary', views.shift_summary),
     path('shifts', views.shifts_list),
 
     # Customer stats (manual route — keeps `/customers/` ViewSet clean)
@@ -63,6 +69,7 @@ urlpatterns = [
 
     # Dashboard
     path('dashboard', views.dashboard),
+    path('dashboard/channels', views.dashboard_channels),
 
     # Beam payment
     path('beam/charge', views.beam_charge_create),

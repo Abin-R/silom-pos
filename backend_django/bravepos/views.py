@@ -23,14 +23,16 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import (
-    Branch, BranchSession, Category, Customer, Order, OrderItem, ParkedOrder,
-    Product, Settings, Shift, ShiftMovement, Staff, StockMovement,
+    Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
+    ParkedOrder, Product, Settings, Shift, ShiftMovement, Staff, StockMovement,
+    StockDocument, StockDocumentItem,
 )
 from .serializers import (
     BranchSerializer,
-    CategorySerializer, CustomerSerializer, OrderSerializer,
-    ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
+    CategorySerializer, CustomerSerializer, DrawerCategorySerializer,
+    OrderSerializer, ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
+    StockDocumentSerializer,
 )
 
 logger = logging.getLogger("bravepos")
@@ -442,6 +444,26 @@ class CustomerViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
 
 
+class DrawerCategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
+    """Paid In / Paid Out reason codes, branch-scoped + admin-editable.
+
+    Filter to one side with ``?type=paid_in`` / ``?type=paid_out``; the Drawer
+    picker passes ``?active=true`` to hide deactivated rows from cashiers.
+    """
+    queryset = DrawerCategory.objects.all()
+    serializer_class = DrawerCategorySerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        type_ = self.request.query_params.get('type')
+        active = self.request.query_params.get('active')
+        if type_ in ('paid_in', 'paid_out'):
+            qs = qs.filter(type=type_)
+        if active in ('true', 'false'):
+            qs = qs.filter(active=(active == 'true'))
+        return qs
+
+
 class BranchViewSet(viewsets.ModelViewSet):
     """Branches (physical shop locations).
 
@@ -771,7 +793,20 @@ def order_update_status(request, order_id):
     if new_status not in dict(Order.STATUS_CHOICES):
         return Response({'detail': 'Invalid status'}, status=400)
     order.status = new_status
-    order.save(update_fields=['status'])
+    update_fields = ['status']
+    # Stamp the void audit the first time a bill is cancelled so the
+    # receipt detail can show "Voided by: <name>".  Leave any earlier
+    # stamp untouched on a re-cancel; clear it if a bill is un-cancelled.
+    if new_status == 'cancel':
+        if not order.voided_at:
+            order.voided_by = request.session_obj.staff.name
+            order.voided_at = djtz.now()
+            update_fields += ['voided_by', 'voided_at']
+    elif order.voided_at:
+        order.voided_by = ''
+        order.voided_at = None
+        update_fields += ['voided_by', 'voided_at']
+    order.save(update_fields=update_fields)
     return Response(OrderSerializer(order).data)
 
 
@@ -892,6 +927,7 @@ def shift_movement(request):
         return Response({'detail': 'Invalid type'}, status=400)
     mv = ShiftMovement.objects.create(
         shift=s, type=type_, amount=amount,
+        category=request.data.get('category', '') or '',
         note=request.data.get('note', '') or '',
     )
     if type_ == 'paid_in':
@@ -924,7 +960,91 @@ def shift_close(request):
     s.total_sales_cash = cash_total
     s.expected_in_drawer = expected
     s.save()
-    return Response(ShiftSerializer(s).data)
+    return Response({**ShiftSerializer(s).data, 'summary': _shift_summary(s)})
+
+
+# Cash-equivalent payment methods — money that actually lands in the drawer.
+CASH_METHODS = ['Cash', 'Easy Pay']
+
+
+def _shift_summary(shift):
+    """Aggregate everything the close-shift slip (ใบสรุปปิดรอบการขาย) prints.
+
+    Computed from the orders created within the shift's open window for its
+    branch.  Returns plain JSON-able types (strings/floats) so it can be
+    embedded in a Response and rendered straight onto the printed image.
+    """
+    from django.db.models import Count, Sum
+
+    branch = shift.branch
+    orders = Order.objects.filter(branch=branch, created_at__gte=shift.opened_at)
+    if shift.closed_at:
+        orders = orders.filter(created_at__lte=shift.closed_at)
+
+    sold = orders.exclude(status='cancel')
+    cancelled = orders.filter(status='cancel')
+
+    def _money(v):
+        return float(v or 0)
+
+    nums = list(sold.order_by('created_at').values_list('order_number', flat=True))
+    sales_total = sold.aggregate(t=Sum('total'))['t'] or Decimal('0')
+    cash_sales = (
+        sold.filter(payment_method__in=CASH_METHODS).aggregate(t=Sum('total'))['t']
+        or Decimal('0')
+    )
+
+    payments = [
+        {
+            'method': p['payment_method'] or 'Cash',
+            'amount': _money(p['amt']),
+            'count': p['n'],
+        }
+        for p in sold.values('payment_method').annotate(amt=Sum('total'), n=Count('id')).order_by('-amt')
+    ]
+
+    def _movements(kind):
+        return [
+            {'category': m.category, 'note': m.note, 'amount': _money(m.amount)}
+            for m in shift.movements.filter(type=kind).order_by('created_at')
+        ]
+
+    actual = shift.actual_in_drawer if shift.actual_in_drawer is not None else Decimal('0')
+
+    return {
+        'round_number': shift.round_number,
+        'opened_at': shift.opened_at.isoformat() if shift.opened_at else None,
+        'opened_by': shift.opened_by,
+        'closed_at': shift.closed_at.isoformat() if shift.closed_at else None,
+        'closed_by': shift.closed_by,
+        'invoice_first': nums[0] if nums else '',
+        'invoice_last': nums[-1] if nums else '',
+        'bill_count': len(nums),
+        # Cash drawer
+        'start_cash': _money(shift.start_cash),
+        'cash_sales': _money(cash_sales),
+        'paid_in': _money(shift.total_paid_in),
+        'paid_out': _money(shift.total_paid_out),
+        'actual_in_drawer': _money(actual),
+        'expected_in_drawer': _money(shift.expected_in_drawer),
+        'difference': _money(actual - (shift.expected_in_drawer or 0)),
+        'paid_in_items': _movements('paid_in'),
+        'paid_out_items': _movements('paid_out'),
+        # Payment + sales summary
+        'payments': payments,
+        'sales_total': _money(sales_total),
+        'discount_total': _money(sold.aggregate(t=Sum('discount_amount'))['t'] or Decimal('0')),
+        'cancelled_total': _money(cancelled.aggregate(t=Sum('total'))['t'] or Decimal('0')),
+        'cancelled_count': cancelled.count(),
+    }
+
+
+@api_view(['GET'])
+@require_session
+def shift_summary(request, shift_id):
+    """Re-fetch a (usually closed) shift's printable summary for reprint."""
+    s = get_object_or_404(Shift, id=shift_id, branch=request.session_obj.branch)
+    return Response(_shift_summary(s))
 
 
 @api_view(['GET'])
@@ -1066,6 +1186,204 @@ def dashboard(request):
         'top_products': top_products,
         'top_categories': top_categories,
     })
+
+
+def _period_start(period, now):
+    if period == 'today':
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == 'week':
+        return now - timedelta(days=7)
+    if period == 'year':
+        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return now - timedelta(days=30)
+
+
+# ─── Sales channel report ────────────────────────────────────────────────────
+CHANNEL_LABELS = {
+    'table': 'Store',
+    'delivery': 'Delivery',
+    'kiosk': 'KIOSK',
+    'other': 'Other',
+}
+
+
+@api_view(['GET'])
+@require_session
+def dashboard_channels(request):
+    """Sales grouped by order source — one row per channel with the
+    before-GP / GP / after-GP breakdown.  GP (a per-channel gross-profit
+    deduction) is not configured per channel yet, so every channel reports
+    ``has_gp: false`` → "No GP" and before == after, matching SilomPOS."""
+    branch = request.session_obj.branch
+    period = request.query_params.get('period', 'today')
+    now = djtz.now()
+    start = _period_start(period, now)
+
+    orders = (
+        Order.objects
+        .filter(branch=branch, created_at__gte=start)
+        .exclude(status='cancel')
+        .only('source', 'delivery_provider', 'total')
+    )
+
+    rows: dict = {}
+    for o in orders:
+        provider = (o.delivery_provider or '').strip()
+        if o.source == 'delivery' and provider:
+            key, label = f'delivery:{provider}', provider
+        else:
+            key = o.source or 'other'
+            label = CHANNEL_LABELS.get(o.source, 'Other')
+        entry = rows.setdefault(
+            key, {'channel': label, 'source': o.source, 'count': 0, 'before_gp': 0.0},
+        )
+        entry['count'] += 1
+        entry['before_gp'] += float(o.total or 0)
+
+    channels = []
+    for r in sorted(rows.values(), key=lambda x: -x['before_gp']):
+        gp = 0.0  # no per-channel GP deduction configured
+        channels.append({
+            'channel': r['channel'],
+            'source': r['source'],
+            'count': r['count'],
+            'before_gp': r['before_gp'],
+            'gp': gp,
+            'after_gp': r['before_gp'] - gp,
+            'has_gp': False,
+        })
+
+    return Response({
+        'period': period,
+        'channels': channels,
+        'total_before_gp': sum(c['before_gp'] for c in channels),
+        'total_gp': sum(c['gp'] for c in channels),
+        'total_after_gp': sum(c['after_gp'] for c in channels),
+        'total_count': sum(c['count'] for c in channels),
+    })
+
+
+# ─── Stock documents (multi-line stock-in / -out / adjust / check) ───────────
+def _random_doc_suffix(n: int = 8) -> str:
+    import secrets
+    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789'
+    return ''.join(secrets.choice(alphabet) for _ in range(n))
+
+
+def _next_stock_doc_no(branch, doc_type, adjust_type='') -> str:
+    """Document number matching SilomPOS conventions:
+      • in/out  → ``#YYMMDD-XXXXXXXX`` (date prefix + random)
+      • adjust  → ``A+0000001`` / ``A-0000001`` (sign + running count)
+      • check   → ``CK0000001``
+    """
+    if doc_type in ('in', 'out'):
+        return f"#{datetime.now(timezone.utc).strftime('%y%m%d')}-{_random_doc_suffix()}"
+    seq = StockDocument.objects.filter(branch=branch, type=doc_type).count() + 1
+    if doc_type == 'adjust':
+        prefix = adjust_type if adjust_type in ('A+', 'A-') else 'A+'
+        return f"{prefix}{seq:07d}"
+    return f"CK{seq:07d}"
+
+
+@api_view(['GET', 'POST'])
+@require_session
+def stock_documents(request):
+    branch = request.session_obj.branch
+
+    if request.method == 'GET':
+        qs = StockDocument.objects.filter(branch=branch).prefetch_related('items')
+        doc_type = request.query_params.get('type')
+        if doc_type in ('in', 'out', 'adjust', 'check'):
+            qs = qs.filter(type=doc_type)
+        start = request.query_params.get('start')
+        end = request.query_params.get('end')
+        if start:
+            qs = qs.filter(created_at__date__gte=start)
+        if end:
+            qs = qs.filter(created_at__date__lte=end)
+        return Response(StockDocumentSerializer(qs[:500], many=True).data)
+
+    # POST — create the document, snapshot lines, and apply stock deltas.
+    payload = dict(request.data)
+    doc_type = payload.get('type')
+    if doc_type not in ('in', 'out', 'adjust', 'check'):
+        return Response({'detail': 'Invalid type'}, status=400)
+    items = payload.get('items') or []
+    if not items:
+        return Response({'detail': 'At least one item is required'}, status=400)
+
+    adjust_type = payload.get('adjust_type', '') or ''
+    staff_name = getattr(request.session_obj.staff, 'name', '') or ''
+    doc_no = _next_stock_doc_no(branch, doc_type, adjust_type)
+
+    with transaction.atomic():
+        doc = StockDocument.objects.create(
+            branch=branch,
+            type=doc_type,
+            document_no=doc_no,
+            document_name=payload.get('document_name', '') or '',
+            adjust_type=adjust_type if doc_type == 'adjust' else '',
+            ref_no=payload.get('ref_no', '') or '',
+            vendor=payload.get('vendor', '') or '',
+            receiver=payload.get('receiver', '') or '',
+            note=payload.get('note', '') or '',
+            tax_included=bool(payload.get('tax_included', False)),
+            avg_cost=bool(payload.get('avg_cost', False)),
+            subtotal=Decimal(str(payload.get('subtotal', 0) or 0)),
+            discount=Decimal(str(payload.get('discount', 0) or 0)),
+            tax=Decimal(str(payload.get('tax', 0) or 0)),
+            total=Decimal(str(payload.get('total', 0) or 0)),
+            created_by=staff_name,
+        )
+        for line in items:
+            pid = line.get('product_id')
+            product = None
+            if pid:
+                product = Product.objects.filter(id=pid, branch=branch).first()
+            qty = Decimal(str(line.get('qty', 0) or 0))
+            StockDocumentItem.objects.create(
+                document=doc,
+                product=product,
+                barcode=line.get('barcode', '') or (product.barcode if product else ''),
+                product_name=line.get('product_name', '') or (product.name if product else ''),
+                qty=qty,
+                price=Decimal(str(line.get('price', 0) or 0)),
+                discount=Decimal(str(line.get('discount', 0) or 0)),
+                total=Decimal(str(line.get('total', 0) or 0)),
+            )
+            # Apply the on-hand delta and snapshot a movement per line.
+            # check = non-mutating audit (records counted qty, leaves stock).
+            if product and qty and doc_type != 'check':
+                if doc_type == 'in':
+                    delta = int(qty)
+                elif doc_type == 'out':
+                    delta = -int(qty)
+                else:  # adjust
+                    delta = -int(qty) if adjust_type == 'A-' else int(qty)
+                product.stock = (product.stock or 0) + delta
+                product.save(update_fields=['stock'])
+            if product and qty:
+                StockMovement.objects.create(
+                    branch=branch,
+                    product=product,
+                    product_name=product.name,
+                    type=doc_type if doc_type in ('in', 'out', 'adjust', 'check') else 'adjust',
+                    qty=int(qty),
+                    note=doc.note or doc.document_name,
+                    document_no=doc_no,
+                )
+
+    return Response(StockDocumentSerializer(doc).data, status=201)
+
+
+@api_view(['GET'])
+@require_session
+def stock_document_detail(request, doc_id):
+    branch = request.session_obj.branch
+    doc = StockDocument.objects.filter(id=doc_id, branch=branch).prefetch_related('items').first()
+    if not doc:
+        return Response({'detail': 'Not found'}, status=404)
+    return Response(StockDocumentSerializer(doc).data)
 
 
 # ─── Beam Payment ────────────────────────────────────────────────────────────

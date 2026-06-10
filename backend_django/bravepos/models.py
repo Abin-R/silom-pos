@@ -315,6 +315,14 @@ class Order(models.Model):
     created_time = models.CharField(max_length=8, blank=True, default="")  # "HH:MM"
     staff = models.CharField(max_length=120, blank=True, default="")
 
+    # ── Void / cancel audit ────────────────────────────────────────────
+    # Set when a cashier voids a completed bill from the Transactions
+    # screen.  ``voided_by`` snapshots the staff name (history-safe like
+    # ``staff`` above) and ``voided_at`` the moment of the void so the
+    # receipt detail can show "Voided by: <name>".
+    voided_by = models.CharField(max_length=120, blank=True, default="")
+    voided_at = models.DateTimeField(null=True, blank=True)
+
     # ── Peak full-tax-invoice integration ──────────────────────────────
     # Populated when a customer scans the receipt QR and submits the
     # full-tax-invoice form.  ``tax_invoice_data`` captures the form
@@ -405,11 +413,41 @@ class ShiftMovement(models.Model):
     shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="movements")
     type = models.CharField(max_length=16, choices=TYPE_CHOICES)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+    # Snapshot of the chosen DrawerCategory name at the time of the movement,
+    # so renaming/deleting a category later never rewrites historical records.
+    category = models.CharField(max_length=120, blank=True, default="")
     note = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class DrawerCategory(models.Model):
+    """Reason codes for cash Paid In / Paid Out movements.
+
+    Branch-scoped and editable by admins in Settings → Drawer.  Defaults
+    (Thai reason codes) are seeded per branch on creation, but each row can be
+    renamed, reordered, deactivated, or deleted independently.
+    """
+    TYPE_CHOICES = [("paid_in", "Paid In"), ("paid_out", "Paid Out")]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="drawer_categories",
+        null=True, blank=True,
+    )
+    type = models.CharField(max_length=16, choices=TYPE_CHOICES)
+    name = models.CharField(max_length=120)
+    name_th = models.CharField(max_length=120, blank=True, default="")
+    sort_order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        indexes = [models.Index(fields=["branch", "type"])]
+
+    def __str__(self) -> str:
+        return f"{self.type}:{self.name}"
 
 
 # ─── Peak (full tax-invoice) integration ────────────────────────────────────
@@ -460,4 +498,65 @@ class PeakClientToken(models.Model):
     id = models.CharField(primary_key=True, max_length=16, default="default")
     token = models.CharField(max_length=512)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+# ─── Stock Documents (multi-line stock-in / stock-out) ───────────────────────
+class StockDocument(models.Model):
+    """A multi-line stock-in or stock-out document — the SilomPOS-style
+    inventory paperwork (vendor / receiver, reference no., a table of
+    product lines).  Saving one applies the per-line stock deltas and
+    snapshots a StockMovement per line so the movement ledger stays the
+    single source of truth for on-hand quantities."""
+    TYPES = [
+        ("in", "Stock in"),
+        ("out", "Stock out"),
+        ("adjust", "Adjust stock"),
+        ("check", "Check stock"),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="stock_documents",
+        null=True, blank=True,
+    )
+    type = models.CharField(max_length=8, choices=TYPES)
+    document_no = models.CharField(max_length=64, db_index=True)
+    document_name = models.CharField(max_length=200, blank=True, default="")  # adjust / check
+    adjust_type = models.CharField(max_length=8, blank=True, default="")      # "A+" / "A-"
+    ref_no = models.CharField(max_length=120, blank=True, default="")  # purchasing / ref doc no.
+    vendor = models.CharField(max_length=200, blank=True, default="")    # stock-in
+    receiver = models.CharField(max_length=200, blank=True, default="")  # stock-out
+    note = models.TextField(blank=True, default="")
+    tax_included = models.BooleanField(default=False)
+    avg_cost = models.BooleanField(default=False)  # "AVG Cost Calculate" toggle (stock-in)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_by = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["branch", "type", "-created_at"]),
+        ]
+
+
+class StockDocumentItem(models.Model):
+    """One product line of a StockDocument.  Name / barcode are snapshotted
+    so later product edits never rewrite the document."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(
+        StockDocument, on_delete=models.CASCADE, related_name="items",
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="stock_document_items",
+    )
+    barcode = models.CharField(max_length=64, blank=True, default="")
+    product_name = models.CharField(max_length=200, blank=True, default="")
+    qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 

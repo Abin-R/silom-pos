@@ -12,6 +12,8 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Platform,
+  Switch,
+  Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -27,6 +29,7 @@ import {
   type ReceiptOrder,
 } from "../lib/starPrinter";
 import { useStarPrinter } from "../lib/useStarPrinter";
+import { useShiftSummaryPrint } from "../lib/useShiftSummaryPrint";
 import { usePrinterStatus } from "../lib/usePrinterStatus";
 import { SidebarDrawer } from "../components/SidebarDrawer";
 import {
@@ -59,7 +62,22 @@ type Category = { id: string; name: string; name_th?: string; color: string; sou
 type Product = {
   id: string; name: string; name_th?: string; price: number; cost: number;
   category_id: string; image_url: string; image_base64?: string; is_favorite: boolean;
-  stock: number; tax_type: string; product_type: string;
+  stock: number; tax_type: string; product_type: string; barcode?: string;
+};
+type StockDocItem = {
+  product_id?: string | null; barcode: string; product_name: string;
+  qty: number; price: number; discount: number; total: number;
+};
+type StockDoc = {
+  id: string; type: "in" | "out" | "adjust" | "check"; document_no: string;
+  document_name: string; adjust_type: string; ref_no: string;
+  vendor: string; receiver: string; note: string;
+  subtotal: number; discount: number; tax: number; total: number;
+  created_by: string; created_at: string; items: StockDocItem[];
+};
+type ChannelRow = {
+  channel: string; source: string; count: number;
+  before_gp: number; gp: number; after_gp: number; has_gp: boolean;
 };
 type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
 type CustomerStats = {
@@ -75,6 +93,7 @@ type Order = {
   id: string; order_number: string; items: any[]; total: number;
   status: string; source: string; created_time: string; created_at: string;
   payment_method?: string; delivery_provider?: string; delivery_status?: string;
+  staff?: string; voided_by?: string; voided_at?: string | null;
 };
 type Dashboard = {
   total_sales: number; cost: number; profit: number; gp_percent: number;
@@ -346,7 +365,7 @@ export default function Admin() {
         )}
         <View style={styles.content}>
           {section === "reports" && <Reports isWide={isWide} />}
-          {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} />}
+          {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} staff={staff || "Admin"} />}
           {section === "inventory" && <Inventory isWide={isWide} />}
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
@@ -365,6 +384,7 @@ function Reports({ isWide }: { isWide: boolean }) {
   const [period, setPeriod] = useState("month");
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showChannels, setShowChannels] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -390,7 +410,23 @@ function Reports({ isWide }: { isWide: boolean }) {
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} testID="reports-section">
-      <Text style={styles.h1}>Sales Dashboard</Text>
+      <View style={styles.reportsHeader}>
+        <Text style={styles.h1}>Sales Dashboard</Text>
+        <TouchableOpacity
+          style={styles.reportsBtn}
+          onPress={() => setShowChannels(true)}
+          testID="open-channel-report"
+        >
+          <Ionicons name="bar-chart-outline" size={16} color="#00B14F" />
+          <Text style={styles.reportsBtnText}>Reports</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ChannelReportModal
+        visible={showChannels}
+        period={period}
+        onClose={() => setShowChannels(false)}
+      />
 
       <View style={styles.periodRow}>
         {periods.map((p) => (
@@ -520,6 +556,99 @@ function GPStat({ label, value, accent }: { label: string; value: string; accent
   );
 }
 
+const PERIOD_LABELS: Record<string, string> = {
+  today: "Today", week: "This week", month: "This month", year: "This Year",
+};
+
+// Sales channel report — orders grouped by source (image 2).
+function ChannelReportModal({
+  visible, period, onClose,
+}: { visible: boolean; period: string; onClose: () => void }) {
+  const [rows, setRows] = useState<ChannelRow[] | null>(null);
+  const [totals, setTotals] = useState({ before: 0, gp: 0, after: 0, count: 0 });
+
+  useEffect(() => {
+    if (!visible) return;
+    setRows(null);
+    (async () => {
+      try {
+        const res = await apiFetch(`${API}/dashboard/channels?period=${period}`);
+        const d = await res.json();
+        setRows(d.channels || []);
+        setTotals({
+          before: d.total_before_gp || 0, gp: d.total_gp || 0,
+          after: d.total_after_gp || 0, count: d.total_count || 0,
+        });
+      } catch { setRows([]); }
+    })();
+  }, [visible, period]);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.docScreen} testID="channel-report">
+        <View style={styles.docTopBar}>
+          <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
+            <Ionicons name="chevron-back" size={22} color="#0F172A" />
+            <Text style={styles.docBackText}>Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.docTopTitle}>Sales channel report</Text>
+          <View style={{ width: 70 }} />
+        </View>
+
+        <View style={styles.docDateNav}>
+          <Ionicons name="chevron-back" size={18} color="#CBD5E1" />
+          <Text style={styles.docDateNavText}>{PERIOD_LABELS[period] || "Today"}</Text>
+          <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+        </View>
+
+        <View style={styles.chTableHead}>
+          <Text style={[styles.chHeadCell, { width: 30 }]}>#</Text>
+          <Text style={[styles.chHeadCell, { flex: 1, textAlign: "left" }]}>Channel name</Text>
+          <Text style={[styles.chHeadCell, { width: 70 }]}>Count</Text>
+          <Text style={[styles.chHeadCell, { width: 110 }]}>Before GP</Text>
+          <Text style={[styles.chHeadCell, { width: 90 }]}>GP</Text>
+          <Text style={[styles.chHeadCell, { width: 110 }]}>After GP</Text>
+        </View>
+
+        {rows === null ? (
+          <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />
+        ) : rows.length === 0 ? (
+          <View style={styles.emptyBox}><Text style={styles.emptyText}>No sales</Text></View>
+        ) : (
+          <ScrollView>
+            {rows.map((r, i) => (
+              <View key={r.source + i} style={styles.chRow}>
+                <Text style={[styles.chCell, { width: 30 }]}>{i + 1}</Text>
+                <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={styles.chIcon}>
+                    <Ionicons name="storefront" size={14} color="#00B14F" />
+                  </View>
+                  <Text style={styles.chName} numberOfLines={1}>{r.channel}</Text>
+                  {!r.has_gp && (
+                    <View style={styles.noGpBadge}><Text style={styles.noGpText}>No GP</Text></View>
+                  )}
+                </View>
+                <Text style={[styles.chCell, { width: 70 }]}>{r.count}</Text>
+                <Text style={[styles.chCell, { width: 110 }]}>{r.before_gp.toFixed(2)}</Text>
+                <Text style={[styles.chCell, { width: 90 }]}>{r.gp.toFixed(2)}</Text>
+                <Text style={[styles.chCell, { width: 110 }]}>{r.after_gp.toFixed(2)}</Text>
+              </View>
+            ))}
+            <View style={[styles.chRow, { backgroundColor: "#F8FAFC" }]}>
+              <Text style={[styles.chCell, { width: 30 }]} />
+              <Text style={[styles.chCell, { flex: 1, textAlign: "left", fontWeight: "700" }]}>Total</Text>
+              <Text style={[styles.chCell, { width: 70, fontWeight: "700" }]}>{totals.count}</Text>
+              <Text style={[styles.chCell, { width: 110, fontWeight: "700" }]}>{totals.before.toFixed(2)}</Text>
+              <Text style={[styles.chCell, { width: 90, fontWeight: "700" }]}>{totals.gp.toFixed(2)}</Text>
+              <Text style={[styles.chCell, { width: 110, fontWeight: "700" }]}>{totals.after.toFixed(2)}</Text>
+            </View>
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // =================== TRANSACTIONS ===================
 type ReprintFn = (
   order: ReceiptOrder,
@@ -528,13 +657,20 @@ type ReprintFn = (
 
 type DateFilter = "today" | "yesterday" | "week" | "all";
 
-function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn }) {
+function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: ReprintFn; staff: string }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+
+  // Merge a server-updated order (e.g. after a void) back into the list
+  // and the open detail pane so the "Voided" state shows without a reload.
+  const handleVoided = useCallback((updated: Order) => {
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)));
+    setSelected((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -588,7 +724,7 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
           <Text style={styles.backText}>Back to transactions</Text>
         </TouchableOpacity>
         <ScrollView contentContainerStyle={{ padding: 16 }}>
-          <TransactionDetail order={selected} reprint={reprint} />
+          <TransactionDetail order={selected} reprint={reprint} staff={staff} onVoided={handleVoided} />
         </ScrollView>
       </View>
     );
@@ -648,7 +784,9 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
             data={filteredOrders}
             keyExtractor={(i) => i.id}
             ItemSeparatorComponent={() => <View style={styles.divider} />}
-            renderItem={({ item }) => (
+            renderItem={({ item }) => {
+              const voided = item.status === "cancel";
+              return (
               <TouchableOpacity
                 style={[
                   styles.txRow,
@@ -657,14 +795,18 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
                 onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
                 testID={`tx-${item.order_number}`}
               >
-                <Ionicons name="folder-outline" size={18} color="#94A3B8" />
+                <Ionicons name="folder-outline" size={18} color={voided ? "#DC2626" : "#94A3B8"} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.txNum}>{item.order_number}</Text>
-                  <Text style={styles.txTime}>{item.created_time}</Text>
+                  <Text style={[styles.txNum, voided && styles.txVoided]}>{item.order_number}</Text>
+                  <Text style={styles.txTime}>
+                    {item.created_time}
+                    {voided && <Text style={styles.txVoided}>   Voided</Text>}
+                  </Text>
                 </View>
-                <Text style={styles.txAmount}>{THB(item.total)}</Text>
+                <Text style={[styles.txAmount, voided && styles.txVoided]}>{THB(item.total)}</Text>
               </TouchableOpacity>
-            )}
+              );
+            }}
           />
         )}
       </View>
@@ -677,7 +819,7 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
             </View>
           ) : (
             <ScrollView contentContainerStyle={{ padding: 20 }}>
-              <TransactionDetail order={selected} reprint={reprint} />
+              <TransactionDetail order={selected} reprint={reprint} staff={staff} onVoided={handleVoided} />
             </ScrollView>
           )}
         </View>
@@ -686,9 +828,39 @@ function Transactions({ isWide, reprint }: { isWide: boolean; reprint: ReprintFn
   );
 }
 
-function TransactionDetail({ order, reprint }: { order: Order; reprint: ReprintFn }) {
+function TransactionDetail({
+  order,
+  reprint,
+  staff,
+  onVoided,
+}: {
+  order: Order;
+  reprint: ReprintFn;
+  staff: string;
+  onVoided: (updated: Order) => void;
+}) {
   const [reprintBusy, setReprintBusy] = useState(false);
   const [reprintMsg, setReprintMsg] = useState("");
+  const [voidBusy, setVoidBusy] = useState(false);
+  const [voidMsg, setVoidMsg] = useState("");
+
+  const isVoided = order.status === "cancel";
+
+  // Snapshot this order into the printer's ReceiptOrder shape.  `voided`
+  // stamps the VOIDED banner on the printed copy (and carries the name of
+  // whoever voided it) so the cancelled-bill reprint is unmistakable.
+  const toReceiptOrder = (voided: boolean, voidedBy?: string): ReceiptOrder => ({
+    order_number: order.order_number,
+    items: order.items.map((it: any) => ({ name: it.name, qty: it.qty, price: it.price })),
+    total: order.total,
+    payment_method: order.payment_method || undefined,
+    paid_amount: order.total,
+    change: 0,
+    created_at_local: new Date(order.created_at).toLocaleString("en-GB"),
+    staff: order.staff || "",
+    voided,
+    voided_by: voided ? voidedBy || order.voided_by || staff : undefined,
+  });
 
   const onReprint = async () => {
     setReprintBusy(true);
@@ -696,21 +868,7 @@ function TransactionDetail({ order, reprint }: { order: Order; reprint: ReprintF
     try {
       const shopRes = await apiFetch(`${API}/settings`);
       const shop = shopRes.ok ? await shopRes.json() : {};
-      const receiptOrder: ReceiptOrder = {
-        order_number: order.order_number,
-        items: order.items.map((it: any) => ({
-          name: it.name,
-          qty: it.qty,
-          price: it.price,
-        })),
-        total: order.total,
-        payment_method: order.payment_method || undefined,
-        paid_amount: order.total,
-        change: 0,
-        created_at_local: new Date(order.created_at).toLocaleString("en-GB"),
-        staff: (order as any).staff || "",
-      };
-      const r = await reprint(receiptOrder, shop);
+      const r = await reprint(toReceiptOrder(isVoided), shop);
       setReprintMsg(r.ok ? "Reprint sent ✓" : `Failed: ${r.error}`);
     } catch (e: any) {
       setReprintMsg(`Failed: ${e?.message || e}`);
@@ -719,10 +877,53 @@ function TransactionDetail({ order, reprint }: { order: Order; reprint: ReprintF
     }
   };
 
+  // Void = mark the bill cancelled on the server, then auto-print a void
+  // copy (matches the reference POS, where confirming a void immediately
+  // prints).  The list/detail update optimistically via onVoided().
+  const doVoid = async () => {
+    setVoidBusy(true);
+    setVoidMsg("");
+    try {
+      const res = await apiFetch(`${API}/orders/${order.id}/status`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "cancel" }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `HTTP ${res.status}`);
+      }
+      const updated: Order = await res.json();
+      onVoided(updated);
+      // Auto-print the void receipt (fires the "Printing…" overlay).
+      const shopRes = await apiFetch(`${API}/settings`);
+      const shop = shopRes.ok ? await shopRes.json() : {};
+      await reprint(toReceiptOrder(true, updated.voided_by), shop);
+    } catch (e: any) {
+      setVoidMsg(`Failed: ${e?.message || e}`);
+    } finally {
+      setVoidBusy(false);
+    }
+  };
+
+  const onVoid = () => {
+    Alert.alert(
+      "Void bill",
+      "Are you sure you want to void this bill? Can't undo this action.",
+      [
+        { text: "Close", style: "cancel" },
+        { text: "Confirm", style: "destructive", onPress: doVoid },
+      ],
+    );
+  };
+
   return (
     <View style={styles.receipt}>
       <Text style={styles.receiptTitle}>{order.order_number}</Text>
       <Text style={styles.receiptSub}>{new Date(order.created_at).toLocaleString()}</Text>
+      {isVoided && (
+        <Text style={styles.voidedBy}>Voided by: {order.voided_by || "—"}</Text>
+      )}
       <View style={styles.divider2} />
       {order.items.map((it: any, i: number) => (
         <View key={i} style={styles.receiptRow}>
@@ -779,18 +980,48 @@ function TransactionDetail({ order, reprint }: { order: Order; reprint: ReprintF
           {reprintMsg}
         </Text>
       )}
+
+      {/* Cancel Bill (void) — flips the bill to cancelled on the server and
+          auto-prints a VOIDED copy.  Hidden once the bill is already
+          voided (the action can't be undone). */}
+      {!isVoided && (
+        <TouchableOpacity
+          style={[styles.voidBtn, voidBusy && { opacity: 0.5 }]}
+          onPress={onVoid}
+          disabled={voidBusy}
+          testID={`void-${order.order_number}`}
+        >
+          <Ionicons name="close-circle-outline" size={18} color="#DC2626" />
+          <Text style={styles.voidBtnText}>
+            {voidBusy ? "Voiding…" : "Cancel Bill"}
+          </Text>
+        </TouchableOpacity>
+      )}
+      {!!voidMsg && (
+        <Text style={[styles.reprintMsg, { color: "#DC2626" }]}>{voidMsg}</Text>
+      )}
     </View>
   );
 }
 
 // =================== INVENTORY ===================
+const INV_TABS = [
+  { k: "movement", l: "Stock Movement" },
+  { k: "in", l: "Stock-In" },
+  { k: "out", l: "Stock-Out" },
+  { k: "adjust", l: "Adjust Stock" },
+  { k: "check", l: "Check Stock" },
+] as const;
+type InvTab = (typeof INV_TABS)[number]["k"];
+
 function Inventory({ isWide }: { isWide: boolean }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
-  const [tab, setTab] = useState<"movement" | "in" | "out" | "adjust" | "check">("movement");
+  const [tab, setTab] = useState<InvTab>("movement");
   const [stockModal, setStockModal] = useState<Product | null>(null);
   const [sortBy, setSortBy] = useState<"custom" | "name" | "inventory">("custom");
+  const [search, setSearch] = useState("");
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -804,11 +1035,13 @@ function Inventory({ isWide }: { isWide: boolean }) {
   useEffect(() => { load(); }, []);
 
   const filtered = useMemo(() => {
-    const list = products.filter((p) => p.category_id === activeCat);
+    const q = search.trim().toLowerCase();
+    let list = products.filter((p) => p.category_id === activeCat);
+    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.barcode || "").toLowerCase().includes(q));
     if (sortBy === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
     if (sortBy === "inventory") return [...list].sort((a, b) => a.stock - b.stock);
     return list;
-  }, [products, activeCat, sortBy]);
+  }, [products, activeCat, sortBy, search]);
   const curCat = categories.find((c) => c.id === activeCat);
 
   const doMovement = async (type: "in" | "out" | "adjust", qty: number) => {
@@ -822,142 +1055,678 @@ function Inventory({ isWide }: { isWide: boolean }) {
     load();
   };
 
+  const isDocTab = tab !== "movement";
+
   return (
     <View style={{ flex: 1 }} testID="inventory-section">
-      <View style={[styles.twoCol, !isWide && styles.stackedCol, { flex: 1 }]}>
-        {isWide ? (
-          <View style={styles.leftNav}>
-            <Text style={styles.sectionHeader}>Stock Movement</Text>
-            <ScrollView>
-              {categories.filter((c) => c.name !== "Favorite").map((c) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.leftNavRow, activeCat === c.id && styles.leftNavRowActive]}
-                  onPress={() => setActiveCat(c.id)}
-                  testID={`inv-cat-${c.id}`}
-                >
-                  <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
-                  <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        ) : (
-          <View style={styles.narrowCatBar}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
+      {/* Top tab bar (image 3/4) */}
+      <View style={styles.invTabBar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ alignItems: "center", paddingHorizontal: 12, gap: 6 }}
+        >
+          {INV_TABS.map((t) => (
+            <TouchableOpacity
+              key={t.k}
+              style={[styles.invTopTab, tab === t.k && styles.invTopTabActive]}
+              onPress={() => setTab(t.k)}
+              testID={`inv-tab-${t.k}`}
             >
-              {categories.filter((c) => c.name !== "Favorite").map((c) => {
-                const active = activeCat === c.id;
-                return (
+              <Text style={[styles.invTopTabText, tab === t.k && styles.invTopTabTextActive]}>
+                {t.l}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          <Ionicons name="chevron-forward" size={18} color="#94A3B8" style={{ marginLeft: 4 }} />
+        </ScrollView>
+      </View>
+
+      {isDocTab ? (
+        <StockDocuments type={tab as DocType} products={products} categories={categories} onChanged={load} />
+      ) : (
+        <View style={[styles.twoCol, !isWide && styles.stackedCol, { flex: 1 }]}>
+          {isWide ? (
+            <View style={styles.leftNav}>
+              <View style={styles.invSearchRow}>
+                <Ionicons name="search" size={16} color="#94A3B8" />
+                <TextInput
+                  style={styles.invSearchInput}
+                  placeholder="Search"
+                  placeholderTextColor="#94A3B8"
+                  value={search}
+                  onChangeText={setSearch}
+                />
+              </View>
+              <ScrollView>
+                {categories.map((c) => (
                   <TouchableOpacity
                     key={c.id}
-                    style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                    style={[styles.leftNavRow, activeCat === c.id && styles.leftNavRowActive]}
                     onPress={() => setActiveCat(c.id)}
                     testID={`inv-cat-${c.id}`}
                   >
-                    <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                    <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
+                    <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
                   </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.sectionHeader}>
-            {curCat?.name} ({filtered.length})
-          </Text>
-          <View style={styles.sortRow}>
-            <Text style={styles.sortLabel}>Sort</Text>
-            {(["custom", "name", "inventory"] as const).map((s) => (
-              <TouchableOpacity
-                key={s}
-                style={[styles.sortTab, sortBy === s && styles.sortTabActive]}
-                onPress={() => setSortBy(s)}
-                testID={`inv-sort-${s}`}
+                ))}
+              </ScrollView>
+            </View>
+          ) : (
+            <View style={styles.narrowCatBar}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
               >
-                <Text style={[styles.sortTabText, sortBy === s && styles.sortTabTextActive]}>
-                  {s === "custom" ? "Custom" : s === "name" ? "Name" : "Inventory"}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <FlatList
-            data={filtered}
-            keyExtractor={(i) => i.id}
-            contentContainerStyle={{ padding: 14 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.invRow}
-                onPress={() => setStockModal(item)}
-                testID={`inv-prod-${item.id}`}
-              >
-                <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
-                  <Text style={styles.invPrice}>{THB(item.price)}</Text>
-                </View>
-                <View style={styles.stockBox}>
-                  {item.product_type === "BOM" ? (
-                    <Text style={styles.nonStockText}>Non-stock product</Text>
-                  ) : (
-                    <>
-                      <Text style={[styles.stockNum, item.stock <= 0 && { color: "#EF4444" }]}>
-                        {item.stock}
-                      </Text>
-                      <Text style={[styles.stockStatus, item.stock <= 0 && { color: "#EF4444" }]}>
-                        {item.stock <= 0 ? "Out of stock" : "In stock"}
-                      </Text>
-                    </>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyBox}>
-                <Text style={styles.emptyText}>No products</Text>
-              </View>
-            }
-          />
-        </View>
-      </View>
-
-      <View style={styles.invTabs}>
-        {[
-          { k: "movement", l: "Stock Movement", i: "list-outline" },
-          { k: "in", l: "Stock-In", i: "arrow-down-outline" },
-          { k: "out", l: "Stock-Out", i: "arrow-up-outline" },
-          { k: "adjust", l: "Adjust Stock", i: "construct-outline" },
-          { k: "check", l: "Check Stock", i: "checkmark-circle-outline" },
-        ].map((t) => (
-          <TouchableOpacity
-            key={t.k}
-            style={[styles.invTab, tab === t.k && styles.invTabActive]}
-            onPress={() => setTab(t.k as any)}
-            testID={`inv-tab-${t.k}`}
-          >
-            <Ionicons
-              name={t.i as any}
-              size={16}
-              color={tab === t.k ? "#00B14F" : "#475569"}
-            />
-            <Text style={[styles.invTabText, tab === t.k && { color: "#00B14F" }]}>
-              {t.l}
+                {categories.map((c) => {
+                  const active = activeCat === c.id;
+                  return (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                      onPress={() => setActiveCat(c.id)}
+                      testID={`inv-cat-${c.id}`}
+                    >
+                      <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sectionHeader}>
+              {curCat?.name} ({filtered.length})
             </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+            <View style={styles.sortRow}>
+              <Text style={styles.sortLabel}>Sort</Text>
+              {(["custom", "name", "inventory"] as const).map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.sortTab, sortBy === s && styles.sortTabActive]}
+                  onPress={() => setSortBy(s)}
+                  testID={`inv-sort-${s}`}
+                >
+                  <Text style={[styles.sortTabText, sortBy === s && styles.sortTabTextActive]}>
+                    {s === "custom" ? "Custom" : s === "name" ? "Name" : "Inventory"}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <FlatList
+              data={filtered}
+              keyExtractor={(i) => i.id}
+              contentContainerStyle={{ padding: 14 }}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.invRow}
+                  onPress={() => setStockModal(item)}
+                  testID={`inv-prod-${item.id}`}
+                >
+                  <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
+                    <Text style={styles.invPrice}>{THB(item.price)}</Text>
+                  </View>
+                  <View style={styles.stockBox}>
+                    {item.product_type === "BOM" ? (
+                      <Text style={styles.nonStockText}>Non-stock product</Text>
+                    ) : (
+                      <>
+                        <Text style={[styles.stockNum, item.stock <= 0 && { color: "#EF4444" }]}>
+                          {item.stock}
+                        </Text>
+                        <Text style={[styles.stockStatus, item.stock <= 0 && { color: "#EF4444" }]}>
+                          {item.stock <= 0 ? "Out of stock" : "In stock"}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptyBox}>
+                  <Text style={styles.emptyText}>No products</Text>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      )}
 
       <StockMovementModal
         product={stockModal}
-        defaultType={tab === "in" ? "in" : tab === "out" ? "out" : tab === "adjust" ? "adjust" : "in"}
+        defaultType={tab === "adjust" ? "adjust" : "in"}
         onClose={() => setStockModal(null)}
         onSave={doMovement}
       />
     </View>
+  );
+}
+
+// ───── Stock document flows (Stock-In / Stock-Out / Adjust / Check) ─────
+type DocType = "in" | "out" | "adjust" | "check";
+
+const DOC_CONFIG: Record<DocType, {
+  title: string;            // "Create Stock-In Document"
+  partyLabel?: string;      // Vendor / Receiver
+  refLabel?: string;        // Purchasing Document Ref. / Ref Doc No.
+  refCol?: string;          // list column header for the ref/name
+  hasParty: boolean;        // show vendor/receiver select
+  hasPrice: boolean;        // show price/discount/total columns
+  hasName: boolean;         // adjust/check use a Document Name
+  hasAdjustType: boolean;   // adjust shows A+/A- toggle
+  hasAvgCost: boolean;      // stock-in only
+}> = {
+  in: {
+    title: "Create Stock-In Document", partyLabel: "Vendor",
+    refLabel: "Purchasing Document Ref.", refCol: "Purchasing Document Ref.",
+    hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: true,
+  },
+  out: {
+    title: "Create Stock-Out Document", partyLabel: "Receiver",
+    refLabel: "Ref Doc No.", refCol: "Ref Doc No.",
+    hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: false,
+  },
+  adjust: {
+    title: "Create Adjust Stock Document", refCol: "Document Name",
+    hasParty: false, hasPrice: false, hasName: true, hasAdjustType: true, hasAvgCost: false,
+  },
+  check: {
+    title: "Create Check Stock Document", refCol: "Document Name",
+    hasParty: false, hasPrice: false, hasName: false, hasAdjustType: false, hasAvgCost: false,
+  },
+};
+
+function thaiDate(d: Date): string {
+  const months = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
+
+// Document list for a given type (images 4 / adjust / check).
+function StockDocuments({
+  type, products, categories, onChanged,
+}: {
+  type: DocType; products: Product[]; categories: Category[]; onChanged: () => void;
+}) {
+  const cfg = DOC_CONFIG[type];
+  const [docs, setDocs] = useState<StockDoc[] | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const today = useMemo(() => new Date(), []);
+  const weekAgo = useMemo(() => new Date(Date.now() - 7 * 86400000), []);
+  const rangeLabel = `${thaiDate(weekAgo)} - ${thaiDate(today)}`;
+
+  const load = useCallback(async () => {
+    setDocs(null);
+    try {
+      const res = await apiFetch(`${API}/stock-documents?type=${type}`);
+      setDocs(await res.json());
+    } catch { setDocs([]); }
+  }, [type]);
+  useEffect(() => { load(); }, [load]);
+
+  const total = (docs || []).reduce((s, d) => s + (d.total || 0), 0);
+
+  return (
+    <View style={{ flex: 1 }} testID={`stockdoc-${type}`}>
+      <View style={styles.docListBar}>
+        <View style={styles.docDateRange}>
+          <Ionicons name="chevron-back" size={16} color="#CBD5E1" />
+          <Text style={styles.docDateRangeText}>{rangeLabel}</Text>
+          <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+        </View>
+        {cfg.hasPrice && (
+          <Text style={styles.docListTotal}>Total <Text style={{ fontWeight: "700", color: "#0F172A" }}>{total.toFixed(2)}</Text></Text>
+        )}
+        <TouchableOpacity style={styles.createDocBtn} onPress={() => setCreating(true)} testID="create-document">
+          <Ionicons name="add" size={16} color="#00B14F" />
+          <Text style={styles.createDocBtnText}>Create Document</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* column headers */}
+      <View style={styles.docColHead}>
+        <Text style={[styles.docColCell, { width: 150 }]}>Date</Text>
+        <Text style={[styles.docColCell, { width: 150 }]}>Document No.</Text>
+        <Text style={[styles.docColCell, { flex: 1 }]}>{cfg.refCol}</Text>
+        {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>Total</Text>}
+        {cfg.hasAdjustType && <Text style={[styles.docColCell, { width: 110 }]}>Document Type</Text>}
+        <Text style={[styles.docColCell, { width: 100, textAlign: "right" }]}>Created by</Text>
+      </View>
+
+      {docs === null ? (
+        <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />
+      ) : docs.length === 0 ? (
+        <View style={styles.emptyBox}><Text style={styles.emptyText}>No document</Text></View>
+      ) : (
+        <FlatList
+          data={docs}
+          keyExtractor={(d) => d.id}
+          renderItem={({ item }) => {
+            const dt = new Date(item.created_at);
+            const refText = type === "in" || type === "out"
+              ? item.ref_no
+              : (item.document_name || item.note || "");
+            return (
+              <View style={styles.docRow} testID={`doc-${item.id}`}>
+                <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
+                <Text style={[styles.docCell, { width: 150, color: "#0F172A" }]}>{item.document_no}</Text>
+                <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
+                {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(item.total || 0).toFixed(2)}</Text>}
+                {cfg.hasAdjustType && <Text style={[styles.docCell, { width: 110 }]}>{item.adjust_type || ""}</Text>}
+                <Text style={[styles.docCell, { width: 100, textAlign: "right" }]}>{item.created_by || ""}</Text>
+              </View>
+            );
+          }}
+        />
+      )}
+
+      <CreateStockDocModal
+        visible={creating}
+        type={type}
+        products={products}
+        categories={categories}
+        onClose={() => setCreating(false)}
+        onSaved={() => { setCreating(false); load(); onChanged(); }}
+      />
+    </View>
+  );
+}
+
+type DraftLine = {
+  product_id: string; barcode: string; product_name: string;
+  qty: string; price: string; discount: string;
+};
+
+// Create-document form (image 5) + Select Products popup (images 6/7).
+function CreateStockDocModal({
+  visible, type, products, categories, onClose, onSaved,
+}: {
+  visible: boolean; type: DocType; products: Product[]; categories: Category[];
+  onClose: () => void; onSaved: () => void;
+}) {
+  const cfg = DOC_CONFIG[type];
+  const [lines, setLines] = useState<DraftLine[]>([]);
+  const [ref, setRef] = useState("");
+  const [docName, setDocName] = useState("");
+  const [party, setParty] = useState("");
+  const [note, setNote] = useState("");
+  const [adjustType, setAdjustType] = useState<"A+" | "A-">("A+");
+  const [taxIncluded, setTaxIncluded] = useState(false);
+  const [avgCost, setAvgCost] = useState(false);
+  const [picker, setPicker] = useState(false);
+  const [keypad, setKeypad] = useState<{ idx: number; field: "qty" | "price" | "discount" } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setLines([]); setRef(""); setDocName(""); setParty(""); setNote("");
+      setAdjustType("A+"); setTaxIncluded(false); setAvgCost(false);
+    }
+  }, [visible]);
+
+  const lineTotal = (l: DraftLine) =>
+    Math.max(0, (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) - (parseFloat(l.discount) || 0));
+  const subtotal = lines.reduce((s, l) => s + lineTotal(l), 0);
+  const discountSum = lines.reduce((s, l) => s + (parseFloat(l.discount) || 0), 0);
+  const tax = taxIncluded ? subtotal * 0.07 : 0;
+
+  const addProducts = (picked: Product[]) => {
+    setLines((prev) => {
+      const existing = new Set(prev.map((l) => l.product_id));
+      const fresh = picked
+        .filter((p) => !existing.has(p.id))
+        .map((p) => ({
+          product_id: p.id, barcode: p.barcode || "", product_name: p.name,
+          qty: "0", price: String(p.cost || 0), discount: "0",
+        }));
+      return [...prev, ...fresh];
+    });
+    setPicker(false);
+  };
+
+  const setField = (idx: number, field: "qty" | "price" | "discount", val: string) =>
+    setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: val } : l)));
+
+  const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
+
+  const save = async () => {
+    if (!lines.length || saving) return;
+    setSaving(true);
+    const body: any = {
+      type,
+      ref_no: ref,
+      note: cfg.hasName ? docName : note,
+      tax_included: taxIncluded,
+      avg_cost: avgCost,
+      subtotal, discount: discountSum, tax, total: subtotal,
+      items: lines.map((l) => ({
+        product_id: l.product_id, barcode: l.barcode, product_name: l.product_name,
+        qty: parseFloat(l.qty) || 0, price: parseFloat(l.price) || 0,
+        discount: parseFloat(l.discount) || 0, total: lineTotal(l),
+      })),
+    };
+    if (type === "in") body.vendor = party;
+    if (type === "out") body.receiver = party;
+    if (cfg.hasAdjustType) body.adjust_type = adjustType;
+    if (cfg.hasName) body.document_name = docName;
+    try {
+      await apiFetch(`${API}/stock-documents`, { method: "POST", body: JSON.stringify(body) });
+      onSaved();
+    } catch {}
+    setSaving(false);
+  };
+
+  const confirmSave = () => {
+    if (!lines.length) return;
+    if (Platform.OS === "web") { save(); return; }
+    Alert.alert("Confirm Save Document", "Are you sure you want to save document.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Save", style: "destructive", onPress: save },
+    ]);
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.docScreen}>
+        <View style={styles.docTopBar}>
+          <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
+            <Ionicons name="chevron-back" size={22} color="#0F172A" />
+            <Text style={styles.docBackText}>Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.docTopTitle}>{cfg.title}</Text>
+          <TouchableOpacity onPress={confirmSave} disabled={!lines.length}>
+            <Text style={[styles.docSaveText, !lines.length && { color: "#CBD5E1" }]}>Save</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView keyboardShouldPersistTaps="handled">
+          {/* header fields */}
+          <View style={styles.docForm}>
+            <View style={styles.docFormRow}>
+              <View style={styles.docField}>
+                <Text style={styles.docFieldLabel}>{type === "in" ? "Bill Date Ref." : "Date Ref."}</Text>
+                <Text style={styles.docFieldDate}>{thaiDate(new Date())}</Text>
+              </View>
+              {cfg.hasName ? (
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>Document Name</Text>
+                  <TextInput style={styles.docInput} value={docName} onChangeText={setDocName} placeholder="" />
+                </View>
+              ) : (
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>{cfg.refLabel}</Text>
+                  <TextInput style={styles.docInput} value={ref} onChangeText={setRef} placeholder="" />
+                </View>
+              )}
+            </View>
+
+            <View style={styles.docFormRow}>
+              {cfg.hasParty ? (
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>{cfg.partyLabel}</Text>
+                  <TextInput style={styles.docInput} value={party} onChangeText={setParty} placeholder="" />
+                </View>
+              ) : cfg.hasAdjustType ? (
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>Document Type</Text>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {(["A+", "A-"] as const).map((t) => (
+                      <TouchableOpacity
+                        key={t}
+                        style={[styles.adjTypeBtn, adjustType === t && styles.adjTypeBtnActive]}
+                        onPress={() => setAdjustType(t)}
+                      >
+                        <Text style={[styles.adjTypeText, adjustType === t && { color: "#FFF" }]}>{t}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : <View style={styles.docField} />}
+              <View style={styles.docField}>
+                <Text style={styles.docFieldLabel}>Note</Text>
+                <TextInput style={styles.docInput} value={note} onChangeText={setNote} placeholder="" />
+              </View>
+            </View>
+          </View>
+
+          {/* items table */}
+          <View style={styles.itemsHead}>
+            <Text style={[styles.itemsHeadCell, { width: 30 }]}>#</Text>
+            <Text style={[styles.itemsHeadCell, { width: 120 }]}>Barcode</Text>
+            <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>Product name</Text>
+            <Text style={[styles.itemsHeadCell, { width: 70 }]}>Quantity</Text>
+            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 80 }]}>Price/Unit</Text>}
+            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 70 }]}>Discount</Text>}
+            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 80 }]}>Total</Text>}
+            <View style={{ width: 28 }} />
+          </View>
+
+          {lines.map((l, i) => (
+            <View key={l.product_id} style={styles.itemRow}>
+              <Text style={[styles.itemCell, { width: 30 }]}>{i + 1}</Text>
+              <Text style={[styles.itemCell, { width: 120, fontSize: 11 }]} numberOfLines={1}>{l.barcode}</Text>
+              <Text style={[styles.itemCell, { flex: 1, textAlign: "left" }]} numberOfLines={1}>{l.product_name}</Text>
+              <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "qty" })}>
+                <Text style={styles.itemInputText}>{l.qty}</Text>
+              </TouchableOpacity>
+              {cfg.hasPrice && (
+                <TouchableOpacity style={[styles.itemInput, { width: 80 }]} onPress={() => setKeypad({ idx: i, field: "price" })}>
+                  <Text style={styles.itemInputText}>{(parseFloat(l.price) || 0).toFixed(2)}</Text>
+                </TouchableOpacity>
+              )}
+              {cfg.hasPrice && (
+                <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "discount" })}>
+                  <Text style={styles.itemInputText}>{(parseFloat(l.discount) || 0).toFixed(2)}</Text>
+                </TouchableOpacity>
+              )}
+              {cfg.hasPrice && <Text style={[styles.itemCell, { width: 80, textAlign: "right" }]}>{lineTotal(l).toFixed(2)}</Text>}
+              <TouchableOpacity style={{ width: 28, alignItems: "center" }} onPress={() => removeLine(i)}>
+                <Ionicons name="close-circle" size={18} color="#EF4444" />
+              </TouchableOpacity>
+            </View>
+          ))}
+
+          <TouchableOpacity style={styles.itemsAddBar} onPress={() => setPicker(true)} testID="add-items">
+            <Text style={styles.itemsAddBarText}>Items</Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* footer totals */}
+        <View style={styles.docFooter}>
+          {cfg.hasAvgCost && (
+            <View style={styles.footToggle}>
+              <Text style={styles.footToggleLabel}>AVG Cost Calculate</Text>
+              <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: "#00B14F" }} />
+            </View>
+          )}
+          {cfg.hasPrice && (
+            <View style={styles.footToggle}>
+              <Text style={styles.footToggleLabel}>Tax Included</Text>
+              <Switch value={taxIncluded} onValueChange={setTaxIncluded} trackColor={{ true: "#00B14F" }} />
+            </View>
+          )}
+          {cfg.hasPrice && (
+            <>
+              <View style={styles.footStat}><Text style={styles.footStatLabel}>Total</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
+              <View style={styles.footStat}><Text style={styles.footStatLabel}>Discount</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
+              <View style={styles.footStat}><Text style={styles.footStatLabel}>Tax 7%</Text><Text style={styles.footStatVal}>{tax.toFixed(2)}</Text></View>
+            </>
+          )}
+        </View>
+
+        <ProductPickerModal
+          visible={picker}
+          products={products}
+          categories={categories}
+          existing={lines.map((l) => l.product_id)}
+          onClose={() => setPicker(false)}
+          onDone={addProducts}
+        />
+        <AmountKeypad
+          visible={!!keypad}
+          initial={keypad ? lines[keypad.idx]?.[keypad.field] ?? "0" : "0"}
+          onCancel={() => setKeypad(null)}
+          onDone={(v) => { if (keypad) setField(keypad.idx, keypad.field, v); setKeypad(null); }}
+        />
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+// Select Products popup (images 6 / 7).
+function ProductPickerModal({
+  visible, products, categories, existing, onClose, onDone,
+}: {
+  visible: boolean; products: Product[]; categories: Category[];
+  existing: string[]; onClose: () => void; onDone: (picked: Product[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [catId, setCatId] = useState<string>("");
+  const [sort, setSort] = useState<"custom" | "name">("custom");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [catOpen, setCatOpen] = useState(false);
+
+  useEffect(() => { if (visible) { setSearch(""); setCatId(""); setSelected(new Set()); } }, [visible]);
+
+  const list = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let l = products.filter((p) => p.product_type !== "BOM");
+    if (catId) l = l.filter((p) => p.category_id === catId);
+    if (q) l = l.filter((p) => p.name.toLowerCase().includes(q) || (p.barcode || "").toLowerCase().includes(q));
+    if (sort === "name") l = [...l].sort((a, b) => a.name.localeCompare(b.name));
+    return l;
+  }, [products, catId, search, sort]);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+
+  const curCatName = catId ? (categories.find((c) => c.id === catId)?.name || "All Categories") : "All Categories";
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.pickerOverlay}>
+        <View style={styles.pickerCard} testID="product-picker">
+          <View style={styles.pickerHead}>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+            <Text style={styles.pickerTitle}>Select Products</Text>
+            <TouchableOpacity onPress={() => onDone(products.filter((p) => selected.has(p.id)))}>
+              <Text style={styles.pickerDone}>Done</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity style={styles.pickerCatRow} onPress={() => setCatOpen((o) => !o)}>
+            <Text style={styles.pickerCatText}>{curCatName}</Text>
+            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+          </TouchableOpacity>
+          {catOpen && (
+            <View style={styles.pickerCatList}>
+              <ScrollView style={{ maxHeight: 160 }}>
+                <TouchableOpacity style={styles.pickerCatItem} onPress={() => { setCatId(""); setCatOpen(false); }}>
+                  <Text style={styles.pickerCatItemText}>All Categories</Text>
+                </TouchableOpacity>
+                {categories.map((c) => (
+                  <TouchableOpacity key={c.id} style={styles.pickerCatItem} onPress={() => { setCatId(c.id); setCatOpen(false); }}>
+                    <Text style={styles.pickerCatItemText}>{c.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          <View style={styles.pickerSearchRow}>
+            <Ionicons name="search" size={16} color="#94A3B8" />
+            <TextInput style={styles.pickerSearchInput} placeholder="Search" placeholderTextColor="#94A3B8" value={search} onChangeText={setSearch} />
+            <Ionicons name="barcode-outline" size={20} color="#00B14F" />
+          </View>
+
+          <View style={styles.pickerSortRow}>
+            <Text style={styles.sortLabel}>Sort</Text>
+            {(["custom", "name"] as const).map((s) => (
+              <TouchableOpacity key={s} style={[styles.sortTab, sort === s && styles.sortTabActive]} onPress={() => setSort(s)}>
+                <Text style={[styles.sortTabText, sort === s && styles.sortTabTextActive]}>{s === "custom" ? "Custom" : "Name"}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <FlatList
+            data={list}
+            keyExtractor={(p) => p.id}
+            style={{ flex: 1 }}
+            renderItem={({ item }) => {
+              const checked = selected.has(item.id);
+              const already = existing.includes(item.id);
+              return (
+                <TouchableOpacity
+                  style={styles.pickerRow}
+                  disabled={already}
+                  onPress={() => toggle(item.id)}
+                  testID={`pick-${item.id}`}
+                >
+                  <Ionicons
+                    name={already || checked ? "radio-button-on" : "radio-button-off"}
+                    size={20}
+                    color={already ? "#CBD5E1" : checked ? "#00B14F" : "#CBD5E1"}
+                  />
+                  <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.pickerImg} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.pickerName, already && { color: "#CBD5E1" }]} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.pickerBarcode}>{item.barcode}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>No products</Text></View>}
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// Custom numeric keypad popup (the "Amount" pad).
+function AmountKeypad({
+  visible, initial, onCancel, onDone,
+}: { visible: boolean; initial: string; onCancel: () => void; onDone: (v: string) => void }) {
+  const [val, setVal] = useState(initial);
+  useEffect(() => { if (visible) setVal(initial === "0" ? "" : initial); }, [visible, initial]);
+
+  const press = (k: string) => {
+    if (k === "del") { setVal((v) => v.slice(0, -1)); return; }
+    if (k === ".") { setVal((v) => (v.includes(".") ? v : (v || "0") + ".")); return; }
+    setVal((v) => (v === "0" ? k : v + k));
+  };
+  const keys = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "del"];
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <TouchableOpacity style={styles.keypadOverlay} activeOpacity={1} onPress={onCancel}>
+        <TouchableOpacity activeOpacity={1} style={styles.keypadCard}>
+          <Text style={styles.keypadTitle}>Amount</Text>
+          <Text style={styles.keypadValue}>{val || "0"}</Text>
+          <View style={styles.keypadGrid}>
+            {keys.map((k) => (
+              <TouchableOpacity key={k} style={styles.keypadKey} onPress={() => press(k)}>
+                {k === "del"
+                  ? <Ionicons name="backspace-outline" size={22} color="#0F172A" />
+                  : <Text style={styles.keypadKeyText}>{k}</Text>}
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity style={styles.keypadDone} onPress={() => onDone(val || "0")}>
+            <Text style={styles.keypadDoneText}>Done</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
   );
 }
 
@@ -1700,6 +2469,15 @@ type ShiftType = {
   status: string;
 };
 
+type DrawerCat = {
+  id: string;
+  type: "paid_in" | "paid_out";
+  name: string;
+  name_th?: string;
+  sort_order?: number;
+  active?: boolean;
+};
+
 function Drawer() {
   const [current, setCurrent] = useState<ShiftType | null>(null);
   const [history, setHistory] = useState<ShiftType[]>([]);
@@ -1711,6 +2489,22 @@ function Drawer() {
   const [actualCash, setActualCash] = useState("0");
   const [moveAmt, setMoveAmt] = useState("");
   const [moveNote, setMoveNote] = useState("");
+  const [moveCat, setMoveCat] = useState<string>("");
+  const [cats, setCats] = useState<DrawerCat[]>([]);
+  const [showCatPicker, setShowCatPicker] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const { printShiftSummary, ShiftSummaryOverlay } = useShiftSummaryPrint();
+
+  // Fetch shop header (POS#, tax %) for the printed slip — same shape the
+  // receipt reprint uses.
+  const fetchShop = async () => {
+    try {
+      const r = await apiFetch(`${API}/settings`);
+      return r.ok ? await r.json() : {};
+    } catch {
+      return {};
+    }
+  };
 
   const load = async () => {
     const [cur, hist] = await Promise.all([
@@ -1722,6 +2516,15 @@ function Drawer() {
   };
   useEffect(() => { load(); }, []);
 
+  // Pull the reason-code list for whichever side (Paid In / Paid Out) is open.
+  useEffect(() => {
+    if (!moveDlg) return;
+    apiFetch(`${API}/shift-categories?type=${moveDlg}&active=true`)
+      .then((r) => r.json())
+      .then((rows) => setCats(Array.isArray(rows) ? rows : []))
+      .catch(() => setCats([]));
+  }, [moveDlg]);
+
   const openShift = async () => {
     await apiFetch(`${API}/shifts/open`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1730,20 +2533,53 @@ function Drawer() {
     setOpenDlg(false); setStartCash("0"); load();
   };
   const closeShift = async () => {
-    await apiFetch(`${API}/shifts/close`, {
+    const res = await apiFetch(`${API}/shifts/close`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actual_in_drawer: parseFloat(actualCash) || 0, closed_by: "Admin" }),
     });
-    setCloseDlg(false); setActualCash("0"); load();
+    setCloseDlg(false); setActualCash("0");
+    // Print the close-shift summary (ใบสรุปปิดรอบการขาย) the moment the round
+    // is closed, matching the reference POS. Print failures don't block the
+    // close — the slip can be reprinted from History.
+    try {
+      const body = await res.json().catch(() => ({}));
+      if (body?.summary) {
+        setPrinting(true);
+        const shop = await fetchShop();
+        await printShiftSummary(body.summary, shop);
+      }
+    } catch (e) {
+      console.error("shift summary print failed", e);
+    } finally {
+      setPrinting(false);
+      load();
+    }
+  };
+
+  // Reprint a (closed) shift's summary from the History tab.
+  const reprintSummary = async (shiftId: string) => {
+    setPrinting(true);
+    try {
+      const [summary, shop] = await Promise.all([
+        apiFetch(`${API}/shifts/${shiftId}/summary`).then((r) => r.json()),
+        fetchShop(),
+      ]);
+      await printShiftSummary(summary, shop);
+    } catch (e) {
+      console.error("reprint summary failed", e);
+    } finally {
+      setPrinting(false);
+    }
   };
   const addMovement = async () => {
     if (!moveDlg || !moveAmt) return;
     await apiFetch(`${API}/shifts/movement`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: moveDlg, amount: parseFloat(moveAmt), note: moveNote }),
+      body: JSON.stringify({ type: moveDlg, amount: parseFloat(moveAmt), category: moveCat, note: moveNote }),
     });
-    setMoveDlg(null); setMoveAmt(""); setMoveNote(""); load();
+    setMoveDlg(null); setMoveAmt(""); setMoveNote(""); setMoveCat(""); load();
   };
+  const closeMoveDlg = () => { setMoveDlg(null); setMoveAmt(""); setMoveNote(""); setMoveCat(""); };
 
   const expected = current
     ? current.start_cash + current.total_paid_in - current.total_paid_out
@@ -1814,6 +2650,15 @@ function Drawer() {
                 <Text style={styles.histAmt}>{THB(item.total_sales_cash)}</Text>
                 <Text style={styles.histSub}>Cash sales</Text>
               </View>
+              {item.status !== "open" && (
+                <TouchableOpacity
+                  style={styles.histReprint}
+                  onPress={() => reprintSummary(item.id)}
+                  testID={`shift-reprint-${item.id}`}
+                >
+                  <Ionicons name="print-outline" size={20} color="#00B14F" />
+                </TouchableOpacity>
+              )}
             </View>
           )}
         />
@@ -1849,46 +2694,121 @@ function Drawer() {
         </View>
       </Modal>
 
-      {/* Close Shift dialog */}
+      {/* Close Shift dialog — "Actual in Drawer" */}
       <Modal visible={closeDlg} transparent animationType="fade" onRequestClose={() => setCloseDlg(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
-              <Text style={styles.modalTitle}>Close Shift</Text><View style={{ width: 24 }} />
+              <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Actual in Drawer</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
-              <Text style={styles.helperText}>Expected: {THB(expected)}</Text>
-              <Text style={styles.formLabel}>Actual Cash Count (THB)</Text>
-              <TextInput style={styles.formInput} value={actualCash} onChangeText={setActualCash} keyboardType="decimal-pad" testID="actual-cash" />
-              <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: "#EF4444" }]} onPress={closeShift} testID="confirm-close-shift">
-                <Text style={styles.primaryBtnText}>Close Shift</Text>
+              <TextInput
+                style={[styles.formInput, { fontSize: 18 }]}
+                value={actualCash}
+                onChangeText={setActualCash}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                selectTextOnFocus
+                testID="actual-cash"
+              />
+              <TouchableOpacity style={styles.closeShiftBtn} onPress={closeShift} testID="confirm-close-shift">
+                <Ionicons name="save-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Text style={styles.closeShiftText}>CLOSE SHIFT</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Paid-In/Out dialog */}
-      <Modal visible={!!moveDlg} transparent animationType="fade" onRequestClose={() => setMoveDlg(null)}>
+      {/* Paid-In/Out dialog — Amount, Category, Description */}
+      <Modal visible={!!moveDlg} transparent animationType="fade" onRequestClose={closeMoveDlg}>
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setMoveDlg(null)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={closeMoveDlg}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
               <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
-              <Text style={styles.formLabel}>Amount (THB)</Text>
-              <TextInput style={styles.formInput} value={moveAmt} onChangeText={setMoveAmt} keyboardType="decimal-pad" testID="move-amt" />
-              <Text style={styles.formLabel}>Note</Text>
-              <TextInput style={styles.formInput} value={moveNote} onChangeText={setMoveNote} placeholder="Reason" testID="move-note" />
-              <TouchableOpacity style={styles.primaryBtn} onPress={addMovement} testID="confirm-movement">
-                <Text style={styles.primaryBtnText}>Save</Text>
+              <View style={styles.moveRow}>
+                <Text style={styles.moveRowLabel}>Amount</Text>
+                <TextInput
+                  style={styles.moveRowInput}
+                  value={moveAmt}
+                  onChangeText={setMoveAmt}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                  textAlign="right"
+                  testID="move-amt"
+                />
+              </View>
+              <TouchableOpacity style={styles.moveRow} onPress={() => setShowCatPicker(true)} testID="move-cat">
+                <Text style={styles.moveRowLabel}>Category</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Text style={[styles.moveRowValue, !moveCat && { color: "#94A3B8" }]}>
+                    {moveCat || "Choose category"}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.formLabel}>Description</Text>
+              <TextInput
+                style={[styles.formInput, { height: 96, textAlignVertical: "top" }]}
+                value={moveNote}
+                onChangeText={setMoveNote}
+                placeholder=""
+                multiline
+                testID="move-note"
+              />
+              <TouchableOpacity
+                style={[styles.primaryBtn, { backgroundColor: moveDlg === "paid_in" ? "#00B14F" : "#EF4444" }]}
+                onPress={addMovement}
+                testID="confirm-movement"
+              >
+                <Text style={styles.primaryBtnText}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
+
+      {/* Category picker — slides over the Paid In/Out dialog */}
+      <Modal visible={showCatPicker} transparent animationType="fade" onRequestClose={() => setShowCatPicker(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCatPicker(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
+            <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>Category</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {cats.length === 0 ? (
+                <Text style={[styles.emptyText, { padding: 24 }]}>No categories yet</Text>
+              ) : (
+                cats.map((c) => (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={styles.catRow}
+                    onPress={() => { setMoveCat(c.name); setShowCatPicker(false); }}
+                    testID={`cat-${c.id}`}
+                  >
+                    <Text style={styles.catRowText}>{c.name}</Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* "Printing…" indicator while the close-shift slip is captured + sent */}
+      <Modal visible={printing} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.printingBox}>
+            <ActivityIndicator color="#00B14F" size="large" />
+            <Text style={styles.printingText}>Printing…</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Off-screen capture target for the printed summary */}
+      <ShiftSummaryOverlay />
     </View>
   );
 }
@@ -2159,6 +3079,8 @@ function SettingsView({ isWide }: { isWide: boolean }) {
           })()
         ) : active === "Printers" && s ? (
           <PrintersSection s={s} update={update} save={save} saving={saving} />
+        ) : active === "Drawer" ? (
+          <DrawerCategoriesSection />
         ) : (
           <View style={styles.emptyBox}>
             <Ionicons name="construct-outline" size={40} color="#CBD5E1" />
@@ -2177,6 +3099,113 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
     <View style={{ gap: 6, flex: flex ? 1 : undefined }}>
       <Text style={styles.formLabel}>{label}</Text>
       {children}
+    </View>
+  );
+}
+
+// ── Settings → Drawer: manage Paid In / Paid Out reason codes ──
+function DrawerCategoriesSection() {
+  const [type, setType] = useState<"paid_in" | "paid_out">("paid_in");
+  const [rows, setRows] = useState<DrawerCat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<DrawerCat | null>(null);
+  const [name, setName] = useState("");
+
+  const load = async (t: "paid_in" | "paid_out") => {
+    setLoading(true);
+    try {
+      const r = await apiFetch(`${API}/shift-categories?type=${t}`);
+      const data = await r.json();
+      setRows(Array.isArray(data) ? data : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(type); }, [type]);
+
+  const openNew = () => { setEditing({ id: "", type, name: "" }); setName(""); };
+  const openEdit = (c: DrawerCat) => { setEditing(c); setName(c.name); };
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!editing || !trimmed) return;
+    const body = JSON.stringify({ type, name: trimmed, name_th: trimmed, sort_order: rows.length });
+    if (editing.id) {
+      await apiFetch(`${API}/shift-categories/${editing.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed, name_th: trimmed }),
+      });
+    } else {
+      await apiFetch(`${API}/shift-categories`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body,
+      });
+    }
+    setEditing(null); setName(""); load(type);
+  };
+
+  const remove = async (c: DrawerCat) => {
+    await apiFetch(`${API}/shift-categories/${c.id}`, { method: "DELETE" });
+    load(type);
+  };
+
+  return (
+    <View style={{ flex: 1 }} testID="drawer-settings">
+      <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+        <Text style={styles.h2}>Drawer Categories</Text>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          {([["paid_in", "Paid In"], ["paid_out", "Paid Out"]] as const).map(([k, label]) => (
+            <TouchableOpacity
+              key={k}
+              style={[styles.bizBtn, type === k && styles.bizBtnActive]}
+              onPress={() => setType(k)}
+              testID={`drawer-cat-tab-${k}`}
+            >
+              <Text style={[styles.bizBtnText, type === k && { color: "#FFF" }]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {loading ? (
+          <ActivityIndicator color="#00B14F" style={{ marginTop: 20 }} />
+        ) : (
+          rows.map((c) => (
+            <View key={c.id} style={styles.moveRow} testID={`drawer-cat-row-${c.id}`}>
+              <Text style={styles.moveRowValue}>{c.name}</Text>
+              <View style={{ flexDirection: "row", gap: 16 }}>
+                <TouchableOpacity onPress={() => openEdit(c)} testID={`drawer-cat-edit-${c.id}`}>
+                  <Ionicons name="create-outline" size={20} color="#3B82F6" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => remove(c)} testID={`drawer-cat-del-${c.id}`}>
+                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
+
+        <TouchableOpacity style={[styles.primaryBtn, { marginTop: 6 }]} onPress={openNew} testID="drawer-cat-add">
+          <Ionicons name="add" size={18} color="#FFFFFF" style={{ marginRight: 4 }} />
+          <Text style={styles.primaryBtnText}>Add Category</Text>
+        </TouchableOpacity>
+      </ScrollView>
+
+      <Modal visible={!!editing} transparent animationType="fade" onRequestClose={() => setEditing(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setEditing(null)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <Text style={styles.modalTitle}>{editing?.id ? "Edit Category" : "New Category"}</Text><View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 14 }}>
+              <Text style={styles.formLabel}>Category name</Text>
+              <TextInput style={styles.formInput} value={name} onChangeText={setName} autoFocus testID="drawer-cat-name" />
+              <TouchableOpacity style={styles.primaryBtn} onPress={submit} testID="drawer-cat-save">
+                <Text style={styles.primaryBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2916,6 +3945,7 @@ const styles = StyleSheet.create({
   txNum: { fontSize: 13, color: "#3B82F6", fontWeight: "600" },
   txTime: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
   txAmount: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
+  txVoided: { color: "#DC2626", fontWeight: "700" },
   divider: { height: 1, backgroundColor: "#F1F5F9" },
   divider2: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 10 },
   receipt: {
@@ -2924,6 +3954,7 @@ const styles = StyleSheet.create({
   },
   receiptTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A" },
   receiptSub: { fontSize: 12, color: "#94A3B8", marginTop: 4 },
+  voidedBy: { fontSize: 13, color: "#DC2626", fontWeight: "700", marginTop: 4 },
   receiptRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
   receiptItem: { flex: 1, fontSize: 13, color: "#475569" },
   receiptLabel: { fontSize: 12, color: "#94A3B8" },
@@ -2937,6 +3968,13 @@ const styles = StyleSheet.create({
   },
   reprintBtnText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
   reprintMsg: { marginTop: 8, fontSize: 12, color: "#10B981", textAlign: "center" },
+  voidBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: 10, padding: 12,
+    backgroundColor: "#FEF2F2", borderRadius: 10,
+    borderWidth: 1, borderColor: "#FECACA",
+  },
+  voidBtnText: { fontSize: 14, fontWeight: "600", color: "#DC2626" },
   // Generic text input used by the "Add by IP" field in Local Printer.
   // Standard 40px height + rounded corners + slate border to match the
   // rest of the admin form fields.
@@ -3123,9 +4161,38 @@ const styles = StyleSheet.create({
   inOutText: { fontSize: 15, fontWeight: "700" },
   closeShiftBtn: {
     backgroundColor: "#00B14F", padding: 18,
-    borderRadius: 10, alignItems: "center",
+    borderRadius: 10, alignItems: "center", justifyContent: "center",
+    flexDirection: "row",
   },
   closeShiftText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700", letterSpacing: 1 },
+  // Paid In / Paid Out form rows (label left, value/input right)
+  moveRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: "#F8FAFC", borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  moveRowLabel: { fontSize: 14, color: "#475569", fontWeight: "500" },
+  moveRowValue: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
+  moveRowInput: { fontSize: 16, color: "#0F172A", fontWeight: "600", minWidth: 120, padding: 0 },
+  // Category picker rows
+  catRow: {
+    paddingHorizontal: 20, paddingVertical: 16,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  catRowText: { fontSize: 15, color: "#0F172A" },
+  histReprint: {
+    width: 40, height: 40, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "#D1FAE5", backgroundColor: "#F0FDF4",
+    alignSelf: "center",
+  },
+  printingBox: {
+    backgroundColor: "#FFFFFF", borderRadius: 16,
+    paddingVertical: 28, paddingHorizontal: 40,
+    alignItems: "center", gap: 14, alignSelf: "center",
+  },
+  printingText: { fontSize: 15, fontWeight: "600", color: "#475569" },
   histRow: {
     flexDirection: "row", padding: 14, gap: 10,
     backgroundColor: "#FFFFFF", borderRadius: 10,
@@ -3212,7 +4279,7 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     backgroundColor: "#00B14F", padding: 14, borderRadius: 10,
-    alignItems: "center", marginTop: 6,
+    alignItems: "center", justifyContent: "center", flexDirection: "row", marginTop: 6,
   },
   primaryBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
   secondaryBtn: {
@@ -3323,4 +4390,194 @@ const styles = StyleSheet.create({
     width: "88%", maxWidth: 560, maxHeight: "88%",
     backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
   },
+
+  // ── Reports header / Reports button ──
+  reportsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  reportsBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    borderWidth: 1, borderColor: "#00B14F", borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#FFFFFF",
+  },
+  reportsBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 14 },
+
+  // ── Full-screen document scaffolding ──
+  docScreen: { flex: 1, backgroundColor: "#FFFFFF" },
+  docTopBar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  docBackBtn: { flexDirection: "row", alignItems: "center", width: 70 },
+  docBackText: { fontSize: 15, color: "#0F172A", fontWeight: "600" },
+  docTopTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  docSaveText: { fontSize: 15, color: "#00B14F", fontWeight: "700", width: 70, textAlign: "right" },
+
+  // ── Channel report ──
+  docDateNav: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 24,
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  docDateNavText: { fontSize: 15, fontWeight: "700", color: "#00B14F" },
+  chTableHead: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  chHeadCell: { fontSize: 12, fontWeight: "700", color: "#64748B", textAlign: "center" },
+  chRow: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  chCell: { fontSize: 13, color: "#0F172A", textAlign: "center" },
+  chIcon: {
+    width: 24, height: 24, borderRadius: 6, backgroundColor: "#E5F7ED",
+    alignItems: "center", justifyContent: "center",
+  },
+  chName: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  noGpBadge: { backgroundColor: "#E5F7ED", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
+  noGpText: { fontSize: 11, color: "#00B14F", fontWeight: "700" },
+
+  // ── Inventory top tab bar ──
+  invTabBar: {
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9", paddingVertical: 8, backgroundColor: "#FFFFFF",
+  },
+  invTopTab: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  invTopTabActive: { backgroundColor: "#EFF6FF" },
+  invTopTabText: { fontSize: 14, fontWeight: "600", color: "#475569" },
+  invTopTabTextActive: { color: "#2563EB", fontWeight: "700" },
+  invSearchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, margin: 10,
+    backgroundColor: "#F1F5F9", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8,
+  },
+  invSearchInput: { flex: 1, fontSize: 13, color: "#0F172A", padding: 0 },
+
+  // ── Document list ──
+  docListBar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 14, paddingVertical: 10, gap: 10,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  docDateRange: { flexDirection: "row", alignItems: "center", gap: 10 },
+  docDateRangeText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
+  docListTotal: { fontSize: 13, color: "#64748B" },
+  createDocBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
+  },
+  createDocBtnText: { color: "#0F172A", fontWeight: "600", fontSize: 13 },
+  docColHead: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  docColCell: { fontSize: 12, fontWeight: "600", color: "#64748B" },
+  docRow: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  docCell: { fontSize: 13, color: "#475569" },
+
+  // ── Create document form ──
+  docForm: { padding: 14, gap: 12, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  docFormRow: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
+  docField: { flex: 1, minWidth: 160, gap: 4 },
+  docFieldLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
+  docFieldDate: { fontSize: 14, color: "#00B14F", fontWeight: "700", paddingVertical: 8 },
+  docInput: {
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: "#0F172A",
+  },
+  adjTypeBtn: {
+    paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8,
+    borderWidth: 1, borderColor: "#E2E8F0",
+  },
+  adjTypeBtnActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
+  adjTypeText: { fontSize: 14, fontWeight: "700", color: "#475569" },
+
+  // ── Items table ──
+  itemsHead: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  itemsHeadCell: { fontSize: 12, fontWeight: "600", color: "#64748B", textAlign: "center" },
+  itemRow: {
+    flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 6,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  itemCell: { fontSize: 13, color: "#0F172A", textAlign: "center" },
+  itemInput: {
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 6,
+    paddingVertical: 6, paddingHorizontal: 6, alignItems: "center",
+  },
+  itemInputText: { fontSize: 13, color: "#0F172A" },
+  itemsAddBar: {
+    backgroundColor: "#00B14F", margin: 14, borderRadius: 8,
+    paddingVertical: 14, alignItems: "center",
+  },
+  itemsAddBarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 14 },
+
+  // ── Create document footer ──
+  docFooter: {
+    flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 18,
+    paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#F1F5F9",
+  },
+  footToggle: { flexDirection: "row", alignItems: "center", gap: 6 },
+  footToggleLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
+  footStat: { alignItems: "center" },
+  footStatLabel: { fontSize: 11, color: "#94A3B8" },
+  footStatVal: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+
+  // ── Product picker popup ──
+  pickerOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.4)", alignItems: "center", justifyContent: "center" },
+  pickerCard: {
+    width: "92%", maxWidth: 560, height: "82%",
+    backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
+  },
+  pickerHead: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  pickerTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  pickerDone: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  pickerCatRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    margin: 14, marginBottom: 8, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 12,
+  },
+  pickerCatText: { fontSize: 14, color: "#0F172A" },
+  pickerCatList: {
+    marginHorizontal: 14, marginTop: -4, marginBottom: 8,
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, overflow: "hidden",
+  },
+  pickerCatItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  pickerCatItemText: { fontSize: 13, color: "#0F172A" },
+  pickerSearchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 14,
+    backgroundColor: "#F1F5F9", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10,
+  },
+  pickerSearchInput: { flex: 1, fontSize: 14, color: "#0F172A", padding: 0 },
+  pickerSortRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
+  pickerRow: {
+    flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  pickerImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: "#F1F5F9" },
+  pickerName: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
+  pickerBarcode: { fontSize: 12, color: "#94A3B8" },
+
+  // ── Amount keypad ──
+  keypadOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.3)", alignItems: "center", justifyContent: "center" },
+  keypadCard: { width: 300, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden", paddingTop: 16 },
+  keypadTitle: { fontSize: 15, fontWeight: "700", color: "#0F172A", textAlign: "center", marginBottom: 8 },
+  keypadValue: {
+    fontSize: 34, fontWeight: "700", color: "#0F172A", textAlign: "right",
+    paddingHorizontal: 24, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  keypadGrid: { flexDirection: "row", flexWrap: "wrap" },
+  keypadKey: {
+    width: "33.333%", height: 60, alignItems: "center", justifyContent: "center",
+    borderBottomWidth: 1, borderRightWidth: 1, borderColor: "#F1F5F9",
+  },
+  keypadKeyText: { fontSize: 22, fontWeight: "600", color: "#0F172A" },
+  keypadDone: { backgroundColor: "#00B14F", paddingVertical: 16, alignItems: "center" },
+  keypadDoneText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
 });

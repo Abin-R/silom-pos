@@ -148,6 +148,16 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
 
   return (
     <View ref={ref} collapsable={false} style={s.root}>
+      {/* ─── Void banner ──────────────────────────────────────────── */}
+      {order.voided && (
+        <View style={s.voidBanner}>
+          <Text style={s.voidBannerText}>** ยกเลิก / VOIDED **</Text>
+          {!!order.voided_by && (
+            <Text style={s.voidBannerSub}>โดย / by: {order.voided_by}</Text>
+          )}
+        </View>
+      )}
+
       {/* ─── Big queue number ─────────────────────────────────────── */}
       <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>
 
@@ -264,6 +274,26 @@ const s = StyleSheet.create({
     // amounts, longer staff names, etc.) still print intact.
     paddingLeft: 20,
     paddingRight: 170,
+  },
+  voidBanner: {
+    borderWidth: 2,
+    borderColor: "#000000",
+    paddingVertical: 6,
+    marginBottom: 12,
+    alignItems: "center",
+  },
+  voidBannerText: {
+    fontFamily: BOLD,
+    fontSize: 26,
+    color: "#000000",
+    textAlign: "center",
+  },
+  voidBannerSub: {
+    fontFamily: FONT,
+    fontSize: 15,
+    color: "#000000",
+    textAlign: "center",
+    marginTop: 2,
   },
   queue: {
     fontFamily: BOLD,

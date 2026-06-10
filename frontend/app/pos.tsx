@@ -14,7 +14,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { useStarPrinter } from "../lib/useStarPrinter";
@@ -152,6 +152,46 @@ export default function POS() {
   >(null);
   const [showDrawer, setShowDrawer] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Selling gate: until a shift is open, the product grid / cart are blocked.
+  // `null` = still loading (render nothing rather than flash the gate).
+  const [shiftOpen, setShiftOpen] = useState<boolean | null>(null);
+  const [showOpenShift, setShowOpenShift] = useState(false);
+  const [startCash, setStartCash] = useState("0");
+  const [openingShift, setOpeningShift] = useState(false);
+
+  const loadShift = useCallback(async () => {
+    try {
+      const cur = await apiFetch(`${API}/shifts/current`).then((r) => r.json());
+      setShiftOpen(!!(cur && cur.id));
+    } catch {
+      // Treat a failed lookup as "no shift" so the cashier is told to open one
+      // rather than silently selling against a closed drawer.
+      setShiftOpen(false);
+    }
+  }, []);
+  useEffect(() => { loadShift(); }, [loadShift]);
+  // Re-check on focus so closing a shift in the admin Drawer re-raises the gate
+  // the moment the cashier returns to the POS screen.
+  useFocusEffect(useCallback(() => { loadShift(); }, [loadShift]));
+
+  const openShift = async () => {
+    if (openingShift) return;
+    setOpeningShift(true);
+    try {
+      await apiFetch(`${API}/shifts/open`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_cash: parseFloat(startCash) || 0, opened_by: staff || "Admin" }),
+      });
+      setShowOpenShift(false);
+      setStartCash("0");
+      await loadShift();
+    } catch (e) {
+      console.error("open shift failed", e);
+    } finally {
+      setOpeningShift(false);
+    }
+  };
 
   // Load initial data
   const reloadPosData = useCallback(async () => {
@@ -465,6 +505,7 @@ export default function POS() {
       )}
 
       {/* ============ MAIN LAYOUT ============ */}
+      <View style={{ flex: 1 }}>
       <View style={[styles.main, !isWide && styles.mainStacked]}>
         {/* Category rail — vertical on wide, horizontal scroll on narrow */}
         {isWide ? (
@@ -614,6 +655,55 @@ export default function POS() {
           )
         )}
       </View>
+
+        {/* Selling gate — blocks the grid/cart until a shift is open. The top
+            bar (and its sidebar → admin/reports) stays reachable above this. */}
+        {shiftOpen === false && (
+          <View style={styles.shiftGate} testID="shift-gate">
+            <Ionicons name="lock-closed-outline" size={44} color="#CBD5E1" />
+            <Text style={styles.shiftGateText}>Open shift to continue</Text>
+            <TouchableOpacity
+              style={styles.shiftGateBtn}
+              onPress={() => setShowOpenShift(true)}
+              testID="gate-open-shift"
+            >
+              <Text style={styles.shiftGateBtnText}>OPEN SHIFT</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* Open Shift dialog (from the selling gate) */}
+      <Modal visible={showOpenShift} transparent animationType="fade" onRequestClose={() => setShowOpenShift(false)}>
+        <View style={styles.gateModalOverlay}>
+          <View style={styles.gateModal}>
+            <View style={styles.gateModalHead}>
+              <TouchableOpacity onPress={() => setShowOpenShift(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <Text style={styles.gateModalTitle}>Open Shift</Text><View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 12 }}>
+              <Text style={styles.gateModalLabel}>Start Cash in Drawer (THB)</Text>
+              <TextInput
+                style={styles.gateModalInput}
+                value={startCash}
+                onChangeText={setStartCash}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                selectTextOnFocus
+                testID="gate-start-cash"
+              />
+              <TouchableOpacity
+                style={[styles.shiftGateBtn, openingShift && { opacity: 0.6 }]}
+                onPress={openShift}
+                disabled={openingShift}
+                testID="gate-confirm-open"
+              >
+                <Text style={styles.shiftGateBtnText}>{openingShift ? "Opening…" : "OPEN SHIFT"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Mobile cart modal */}
       <Modal
@@ -3637,6 +3727,44 @@ const styles = StyleSheet.create({
   printPillWarn: { backgroundColor: "#FEF3C7", borderColor: "#FCD34D" },
   printPillText: { fontSize: 13, color: "#475569", fontWeight: "600" },
   printPillSub: { fontSize: 11, color: "#92400E", marginTop: 2 },
+
+  // Selling gate (no open shift)
+  shiftGate: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(241,245,249,0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 14,
+  },
+  shiftGateText: { fontSize: 17, color: "#475569", fontWeight: "600" },
+  shiftGateBtn: {
+    backgroundColor: "#00B14F",
+    paddingHorizontal: 40,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  shiftGateBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700", letterSpacing: 1 },
+  gateModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  gateModal: { width: "100%", maxWidth: 380, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden" },
+  gateModalHead: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
+  gateModalTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  gateModalLabel: { fontSize: 13, color: "#475569", fontWeight: "500" },
+  gateModalInput: {
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 18, color: "#0F172A",
+    ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
+  },
 
   // Drawer
   drawerOverlay: {

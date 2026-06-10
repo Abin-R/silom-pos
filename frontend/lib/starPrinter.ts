@@ -71,6 +71,10 @@ export type ReceiptOrder = {
   change?: number;
   created_at_local?: string;
   staff?: string;
+  // When true the receipt is reprinted as a void copy: a "ยกเลิก / VOIDED"
+  // banner is stamped on the image so the cancelled bill is unmistakable.
+  voided?: boolean;
+  voided_by?: string;
 };
 
 export type ReceiptShop = {
