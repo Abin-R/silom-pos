@@ -94,6 +94,7 @@ type Order = {
   status: string; source: string; created_time: string; created_at: string;
   payment_method?: string; delivery_provider?: string; delivery_status?: string;
   staff?: string; voided_by?: string; voided_at?: string | null;
+  subtotal?: number; paid_amount?: number; change?: number;
 };
 type Dashboard = {
   total_sales: number; cost: number; profit: number; gp_percent: number;
@@ -382,6 +383,8 @@ export default function Admin() {
 // =================== REPORTS / DASHBOARD ===================
 function Reports({ isWide }: { isWide: boolean }) {
   const [period, setPeriod] = useState("month");
+  const [range, setRange] = useState<DateRange>({ start: "", end: "" });
+  const [showRange, setShowRange] = useState(false);
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [showChannels, setShowChannels] = useState(false);
@@ -389,19 +392,12 @@ function Reports({ isWide }: { isWide: boolean }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiFetch(`${API}/dashboard?period=${period}`);
+      const res = await apiFetch(`${API}/dashboard?${periodQuery(period, range)}`);
       setData(await res.json());
     } catch {}
     setLoading(false);
-  }, [period]);
+  }, [period, range]);
   useEffect(() => { load(); }, [load]);
-
-  const periods = [
-    { k: "today", l: "Today" },
-    { k: "week", l: "This week" },
-    { k: "month", l: "This month" },
-    { k: "year", l: "This year" },
-  ];
 
   const maxBar = Math.max(1, ...(data?.timeline || []).map((t) => t.value));
   const topProdTotal = (data?.top_products || []).reduce((s, p) => s + p.total, 0) || 1;
@@ -425,19 +421,27 @@ function Reports({ isWide }: { isWide: boolean }) {
       <ChannelReportModal
         visible={showChannels}
         period={period}
+        range={range}
         onClose={() => setShowChannels(false)}
       />
 
+      <DateRangeModal
+        visible={showRange}
+        initial={range}
+        onClose={() => setShowRange(false)}
+        onApply={(r) => { setRange(r); setPeriod("custom"); setShowRange(false); }}
+      />
+
       <View style={styles.periodRow}>
-        {periods.map((p) => (
+        {PERIODS.map((p) => (
           <TouchableOpacity
             key={p.k}
             style={[styles.periodBtn, period === p.k && styles.periodBtnActive]}
-            onPress={() => setPeriod(p.k)}
+            onPress={() => (p.k === "custom" ? setShowRange(true) : setPeriod(p.k))}
             testID={`period-${p.k}`}
           >
             <Text style={[styles.periodText, period === p.k && styles.periodTextActive]}>
-              {p.l}
+              {p.k === "custom" && period === "custom" && range.start ? rangeLabel(range) : p.l}
             </Text>
           </TouchableOpacity>
         ))}
@@ -556,23 +560,99 @@ function GPStat({ label, value, accent }: { label: string; value: string; accent
   );
 }
 
+// ── Shared period filter helpers (dashboard + channel report) ──
+type DateRange = { start: string; end: string };
+const PERIODS = [
+  { k: "today", l: "Today" },
+  { k: "week", l: "This week" },
+  { k: "month", l: "This month" },
+  { k: "year", l: "This Year" },
+  { k: "custom", l: "Custom" },
+] as const;
 const PERIOD_LABELS: Record<string, string> = {
-  today: "Today", week: "This week", month: "This month", year: "This Year",
+  today: "Today", week: "This week", month: "This month", year: "This Year", custom: "Custom",
 };
+
+function periodQuery(period: string, range: DateRange): string {
+  if (period === "custom" && range.start) {
+    return `period=custom&start=${range.start}&end=${range.end || range.start}`;
+  }
+  return `period=${period}`;
+}
+function rangeLabel(range: DateRange): string {
+  if (!range.start) return "Custom";
+  return range.end && range.end !== range.start ? `${range.start} → ${range.end}` : range.start;
+}
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Custom date-range picker (YYYY-MM-DD start / end).
+function DateRangeModal({
+  visible, initial, onClose, onApply,
+}: { visible: boolean; initial: DateRange; onClose: () => void; onApply: (r: DateRange) => void }) {
+  const [start, setStart] = useState(initial.start);
+  const [end, setEnd] = useState(initial.end);
+  useEffect(() => { if (visible) { setStart(initial.start); setEnd(initial.end); } }, [visible, initial]);
+
+  const valid = ISO_DATE.test(start) && (!end || ISO_DATE.test(end)) && (!end || end >= start);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.rangeCard} testID="date-range-modal">
+          <View style={styles.modalHead}>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color="#475569" /></TouchableOpacity>
+            <Text style={styles.modalTitle}>Custom range</Text>
+            <View style={{ width: 22 }} />
+          </View>
+          <View style={{ padding: 20, gap: 14 }}>
+            <View style={{ gap: 4 }}>
+              <Text style={styles.docFieldLabel}>Start date</Text>
+              <TextInput
+                style={styles.docInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94A3B8"
+                value={start} onChangeText={setStart} autoCapitalize="none" testID="range-start"
+              />
+            </View>
+            <View style={{ gap: 4 }}>
+              <Text style={styles.docFieldLabel}>End date (optional)</Text>
+              <TextInput
+                style={styles.docInput} placeholder="YYYY-MM-DD" placeholderTextColor="#94A3B8"
+                value={end} onChangeText={setEnd} autoCapitalize="none" testID="range-end"
+              />
+            </View>
+            <TouchableOpacity
+              style={[styles.primaryBtn, !valid && { opacity: 0.5 }]}
+              disabled={!valid}
+              onPress={() => onApply({ start, end })}
+              testID="range-apply"
+            >
+              <Text style={styles.primaryBtnText}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 // Sales channel report — orders grouped by source (image 2).
 function ChannelReportModal({
-  visible, period, onClose,
-}: { visible: boolean; period: string; onClose: () => void }) {
+  visible, period, range, onClose,
+}: { visible: boolean; period: string; range: DateRange; onClose: () => void }) {
   const [rows, setRows] = useState<ChannelRow[] | null>(null);
   const [totals, setTotals] = useState({ before: 0, gp: 0, after: 0, count: 0 });
+  const [curPeriod, setCurPeriod] = useState(period);
+  const [curRange, setCurRange] = useState<DateRange>(range);
+  const [showRange, setShowRange] = useState(false);
+
+  // Adopt the dashboard's current selection each time the report is opened.
+  useEffect(() => { if (visible) { setCurPeriod(period); setCurRange(range); } }, [visible, period, range]);
 
   useEffect(() => {
     if (!visible) return;
     setRows(null);
     (async () => {
       try {
-        const res = await apiFetch(`${API}/dashboard/channels?period=${period}`);
+        const res = await apiFetch(`${API}/dashboard/channels?${periodQuery(curPeriod, curRange)}`);
         const d = await res.json();
         setRows(d.channels || []);
         setTotals({
@@ -581,7 +661,7 @@ function ChannelReportModal({
         });
       } catch { setRows([]); }
     })();
-  }, [visible, period]);
+  }, [visible, curPeriod, curRange]);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -595,11 +675,28 @@ function ChannelReportModal({
           <View style={{ width: 70 }} />
         </View>
 
-        <View style={styles.docDateNav}>
-          <Ionicons name="chevron-back" size={18} color="#CBD5E1" />
-          <Text style={styles.docDateNavText}>{PERIOD_LABELS[period] || "Today"}</Text>
-          <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+        {/* Working period filter */}
+        <View style={styles.chPeriodRow}>
+          {PERIODS.map((p) => (
+            <TouchableOpacity
+              key={p.k}
+              style={[styles.periodBtn, curPeriod === p.k && styles.periodBtnActive]}
+              onPress={() => (p.k === "custom" ? setShowRange(true) : setCurPeriod(p.k))}
+              testID={`ch-period-${p.k}`}
+            >
+              <Text style={[styles.periodText, curPeriod === p.k && styles.periodTextActive]}>
+                {p.k === "custom" && curPeriod === "custom" && curRange.start ? rangeLabel(curRange) : p.l}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
+
+        <DateRangeModal
+          visible={showRange}
+          initial={curRange}
+          onClose={() => setShowRange(false)}
+          onApply={(r) => { setCurRange(r); setCurPeriod("custom"); setShowRange(false); }}
+        />
 
         <View style={styles.chTableHead}>
           <Text style={[styles.chHeadCell, { width: 30 }]}>#</Text>
@@ -656,6 +753,7 @@ type ReprintFn = (
 ) => Promise<{ ok: true } | { ok: false; error: string }>;
 
 type DateFilter = "today" | "yesterday" | "week" | "all";
+type ProductRef = { image: string; barcode: string };
 
 function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: ReprintFn; staff: string }) {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -664,6 +762,11 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  // Order items only snapshot name/price/qty, so we join to the live
+  // product catalogue (by product_id) to show the thumbnail + barcode on
+  // each receipt line — matching the reference Sale Transactions screen.
+  const [productMap, setProductMap] = useState<Record<string, ProductRef>>({});
+  const [taxPercent, setTaxPercent] = useState(7);
 
   // Merge a server-updated order (e.g. after a void) back into the list
   // and the open detail pane so the "Voided" state shows without a reload.
@@ -674,10 +777,26 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
 
   useEffect(() => {
     (async () => {
-      const res = await apiFetch(`${API}/orders`);
+      const [res, prodRes, setRes] = await Promise.all([
+        apiFetch(`${API}/orders`),
+        apiFetch(`${API}/products`).catch(() => null),
+        apiFetch(`${API}/settings`).catch(() => null),
+      ]);
       const o: Order[] = await res.json();
       setOrders(o);
       if (o[0] && isWide) setSelected(o[0]);
+      if (prodRes?.ok) {
+        const prods: any[] = await prodRes.json();
+        const map: Record<string, ProductRef> = {};
+        for (const p of prods) {
+          map[p.id] = { image: p.image_base64 || p.image_url || "", barcode: p.barcode || p.sku || "" };
+        }
+        setProductMap(map);
+      }
+      if (setRes?.ok) {
+        const s = await setRes.json();
+        if (s?.tax_percent != null) setTaxPercent(Number(s.tax_percent) || 7);
+      }
       setLoading(false);
     })();
   }, [isWide]);
@@ -723,9 +842,14 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           <Ionicons name="chevron-back" size={22} color="#00B14F" />
           <Text style={styles.backText}>Back to transactions</Text>
         </TouchableOpacity>
-        <ScrollView contentContainerStyle={{ padding: 16 }}>
-          <TransactionDetail order={selected} reprint={reprint} staff={staff} onVoided={handleVoided} />
-        </ScrollView>
+        <TransactionDetail
+          order={selected}
+          reprint={reprint}
+          staff={staff}
+          onVoided={handleVoided}
+          productMap={productMap}
+          taxPercent={taxPercent}
+        />
       </View>
     );
   }
@@ -812,19 +936,40 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       </View>
       {isWide && (
         <View style={styles.txDetail}>
-          <Text style={styles.sectionHeader}>Description</Text>
           {!selected ? (
             <View style={styles.emptyBox}>
               <Text style={styles.emptyText}>Please select bill</Text>
             </View>
           ) : (
-            <ScrollView contentContainerStyle={{ padding: 20 }}>
-              <TransactionDetail order={selected} reprint={reprint} staff={staff} onVoided={handleVoided} />
-            </ScrollView>
+            <TransactionDetail
+              order={selected}
+              reprint={reprint}
+              staff={staff}
+              onVoided={handleVoided}
+              productMap={productMap}
+              taxPercent={taxPercent}
+            />
           )}
         </View>
       )}
     </View>
+  );
+}
+
+const RECEIPT_MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// "09 June 2569 15:18:47" — English month, Thai Buddhist year (+543), like
+// the reference receipt header.
+function formatThaiDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${pad(d.getDate())} ${RECEIPT_MONTHS[d.getMonth()]} ${d.getFullYear() + 543} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   );
 }
 
@@ -833,18 +978,30 @@ function TransactionDetail({
   reprint,
   staff,
   onVoided,
+  productMap,
+  taxPercent,
 }: {
   order: Order;
   reprint: ReprintFn;
   staff: string;
   onVoided: (updated: Order) => void;
+  productMap: Record<string, ProductRef>;
+  taxPercent: number;
 }) {
   const [reprintBusy, setReprintBusy] = useState(false);
-  const [reprintMsg, setReprintMsg] = useState("");
   const [voidBusy, setVoidBusy] = useState(false);
-  const [voidMsg, setVoidMsg] = useState("");
 
   const isVoided = order.status === "cancel";
+
+  // Money breakdown.  Prices are VAT-inclusive (Thai retail), so ex-tax and
+  // tax are derived from the gross total at the configured rate.
+  const subtotal = Number(order.subtotal ?? order.total) || 0;
+  const gross = Number(order.total) || 0;
+  const rate = (Number(taxPercent) || 0) / 100;
+  const exTax = rate > 0 ? gross / (1 + rate) : gross;
+  const tax = gross - exTax;
+  const paid = Number(order.paid_amount ?? order.total) || 0;
+  const change = Number(order.change) || 0;
 
   // Snapshot this order into the printer's ReceiptOrder shape.  `voided`
   // stamps the VOIDED banner on the printed copy (and carries the name of
@@ -854,24 +1011,35 @@ function TransactionDetail({
     items: order.items.map((it: any) => ({ name: it.name, qty: it.qty, price: it.price })),
     total: order.total,
     payment_method: order.payment_method || undefined,
-    paid_amount: order.total,
-    change: 0,
+    paid_amount: paid,
+    change,
     created_at_local: new Date(order.created_at).toLocaleString("en-GB"),
     staff: order.staff || "",
     voided,
     voided_by: voided ? voidedBy || order.voided_by || staff : undefined,
   });
 
+  // Centralised so both Re-Print and the void auto-print surface their
+  // result the same way — a failed print used to be swallowed silently.
+  const sendPrint = async (receipt: ReceiptOrder): Promise<boolean> => {
+    const shopRes = await apiFetch(`${API}/settings`);
+    const shop = shopRes.ok ? await shopRes.json() : {};
+    const r = await reprint(receipt, shop);
+    if (!r.ok) {
+      Alert.alert(
+        "Print failed",
+        `${r.error}\n\nCheck the printer under Settings → Local Printer (it must be enabled and connected on this device).`,
+      );
+    }
+    return r.ok;
+  };
+
   const onReprint = async () => {
     setReprintBusy(true);
-    setReprintMsg("");
     try {
-      const shopRes = await apiFetch(`${API}/settings`);
-      const shop = shopRes.ok ? await shopRes.json() : {};
-      const r = await reprint(toReceiptOrder(isVoided), shop);
-      setReprintMsg(r.ok ? "Reprint sent ✓" : `Failed: ${r.error}`);
+      await sendPrint(toReceiptOrder(isVoided));
     } catch (e: any) {
-      setReprintMsg(`Failed: ${e?.message || e}`);
+      Alert.alert("Print failed", e?.message || String(e));
     } finally {
       setReprintBusy(false);
     }
@@ -882,7 +1050,6 @@ function TransactionDetail({
   // prints).  The list/detail update optimistically via onVoided().
   const doVoid = async () => {
     setVoidBusy(true);
-    setVoidMsg("");
     try {
       const res = await apiFetch(`${API}/orders/${order.id}/status`, {
         method: "PUT",
@@ -896,11 +1063,9 @@ function TransactionDetail({
       const updated: Order = await res.json();
       onVoided(updated);
       // Auto-print the void receipt (fires the "Printing…" overlay).
-      const shopRes = await apiFetch(`${API}/settings`);
-      const shop = shopRes.ok ? await shopRes.json() : {};
-      await reprint(toReceiptOrder(true, updated.voided_by), shop);
+      await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
-      setVoidMsg(`Failed: ${e?.message || e}`);
+      Alert.alert("Void failed", e?.message || String(e));
     } finally {
       setVoidBusy(false);
     }
@@ -918,90 +1083,120 @@ function TransactionDetail({
   };
 
   return (
-    <View style={styles.receipt}>
-      <Text style={styles.receiptTitle}>{order.order_number}</Text>
-      <Text style={styles.receiptSub}>{new Date(order.created_at).toLocaleString()}</Text>
-      {isVoided && (
-        <Text style={styles.voidedBy}>Voided by: {order.voided_by || "—"}</Text>
-      )}
-      <View style={styles.divider2} />
-      {order.items.map((it: any, i: number) => (
-        <View key={i} style={styles.receiptRow}>
-          <Text style={styles.receiptItem} numberOfLines={1}>
-            {it.qty}× {it.name}
-          </Text>
-          <Text style={styles.receiptVal}>{THB(it.price * it.qty)}</Text>
+    <View style={styles.txDetailWrap}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.txDetailScroll}>
+        {/* ── Header: order # + grand total ── */}
+        <View style={styles.tdHeadRow}>
+          <Text style={[styles.tdOrderNo, isVoided && styles.txVoided]}>{order.order_number}</Text>
+          <Text style={[styles.tdGrand, isVoided && styles.txVoided]}>{THB(order.total)}</Text>
         </View>
-      ))}
-      <View style={styles.divider2} />
-      <View style={styles.receiptRow}>
-        <Text style={styles.receiptLabel}>Method</Text>
-        <Text style={styles.receiptVal}>{order.payment_method || "-"}</Text>
-      </View>
-      <View style={styles.receiptRow}>
-        <Text style={styles.receiptLabel}>Source</Text>
-        <Text style={styles.receiptVal}>{order.source}</Text>
-      </View>
-      {order.delivery_provider && (
-        <View style={styles.receiptRow}>
-          <Text style={styles.receiptLabel}>Delivery</Text>
-          <Text style={styles.receiptVal}>
-            {order.delivery_provider} · {order.delivery_status}
-          </Text>
+        <Text style={styles.tdMeta}>{formatThaiDateTime(order.created_at)}</Text>
+        <Text style={styles.tdMeta}>Cashier: {order.staff || "—"}</Text>
+        {isVoided && (
+          <Text style={styles.voidedBy}>Voided by: {order.voided_by || "—"}</Text>
+        )}
+
+        {/* ── Description ── */}
+        <SectionLabel text="Description" />
+        {order.items.map((it: any, i: number) => {
+          const ref = it.product_id ? productMap[it.product_id] : undefined;
+          const img = ref?.image;
+          return (
+            <View key={i} style={styles.tdItemRow}>
+              {img ? (
+                <Image source={{ uri: img }} style={styles.tdItemImg} />
+              ) : (
+                <View style={[styles.tdItemImg, styles.tdItemImgEmpty]}>
+                  <Ionicons name="image-outline" size={18} color="#CBD5E1" />
+                </View>
+              )}
+              <View style={styles.tdItemMid}>
+                <Text style={styles.tdItemName}>{it.name}</Text>
+                <Text style={styles.tdItemSub}>
+                  {ref?.barcode ? `${ref.barcode}   ` : ""}
+                  {THB(it.price)} x {it.qty}
+                </Text>
+              </View>
+              <Text style={styles.tdItemTotal}>{THB((Number(it.price) || 0) * (Number(it.qty) || 0))}</Text>
+            </View>
+          );
+        })}
+
+        {/* ── Totals ── */}
+        <View style={styles.tdTotalsBlock}>
+          <TdLine label="Subtotal" value={THB(subtotal)} />
+          <TdLine label="Subtotal (ex-Tax)" value={THB(exTax)} />
+          <TdLine label={`Tax ${taxPercent} %`} value={THB(tax)} />
         </View>
-      )}
-      <View style={styles.divider2} />
-      <View style={styles.receiptRow}>
-        <Text style={styles.receiptTotal}>Total</Text>
-        <Text style={styles.receiptTotal}>{THB(order.total)}</Text>
-      </View>
 
-      {/* Reprint button — re-sends this order to the configured local
-          printer.  Useful when the original print failed (power outage,
-          paper jam) or the customer wants a duplicate. */}
-      <TouchableOpacity
-        style={[styles.reprintBtn, reprintBusy && { opacity: 0.5 }]}
-        onPress={onReprint}
-        disabled={reprintBusy}
-        testID={`reprint-${order.order_number}`}
-      >
-        <Ionicons name="print-outline" size={18} color="#0F172A" />
-        <Text style={styles.reprintBtnText}>
-          {reprintBusy ? "Sending…" : "Reprint Receipt"}
-        </Text>
-      </TouchableOpacity>
-      {!!reprintMsg && (
-        <Text
-          style={[
-            styles.reprintMsg,
-            reprintMsg.startsWith("Failed") && { color: "#DC2626" },
-          ]}
-        >
-          {reprintMsg}
-        </Text>
-      )}
+        {/* ── Payment ── */}
+        <SectionLabel text="Payment" />
+        <TdLine label={order.payment_method || "Cash"} value={THB(paid)} />
+        <TdLine label="Change" value={THB(change)} bold />
 
-      {/* Cancel Bill (void) — flips the bill to cancelled on the server and
-          auto-prints a VOIDED copy.  Hidden once the bill is already
-          voided (the action can't be undone). */}
-      {!isVoided && (
+        {/* ── Sales channels ── */}
+        <SectionLabel text="Sales channels" />
+        <View style={styles.tdChannelRow}>
+          <View style={styles.tdChannelBadge}>
+            <Ionicons name="storefront" size={14} color="#00B14F" />
+            <Text style={styles.tdChannelText}>{channelLabel(order.source)}</Text>
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* ── Fixed action bar ── */}
+      <View style={styles.tdActionBar}>
         <TouchableOpacity
-          style={[styles.voidBtn, voidBusy && { opacity: 0.5 }]}
+          style={[styles.tdCancelBtn, (isVoided || voidBusy) && styles.tdCancelBtnDisabled]}
           onPress={onVoid}
-          disabled={voidBusy}
+          disabled={isVoided || voidBusy}
           testID={`void-${order.order_number}`}
         >
-          <Ionicons name="close-circle-outline" size={18} color="#DC2626" />
-          <Text style={styles.voidBtnText}>
-            {voidBusy ? "Voiding…" : "Cancel Bill"}
-          </Text>
+          <Text style={styles.tdActionText}>{voidBusy ? "Voiding…" : "Cancel Bill"}</Text>
         </TouchableOpacity>
-      )}
-      {!!voidMsg && (
-        <Text style={[styles.reprintMsg, { color: "#DC2626" }]}>{voidMsg}</Text>
-      )}
+        <TouchableOpacity
+          style={[styles.tdReprintBtn, reprintBusy && { opacity: 0.6 }]}
+          onPress={onReprint}
+          disabled={reprintBusy}
+          testID={`reprint-${order.order_number}`}
+        >
+          <Text style={styles.tdActionText}>{reprintBusy ? "Printing…" : "Re-Print"}</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
+}
+
+// Centered section divider label: ───── Label ─────
+function SectionLabel({ text }: { text: string }) {
+  return (
+    <View style={styles.tdSectionRow}>
+      <View style={styles.tdSectionLine} />
+      <Text style={styles.tdSectionText}>{text}</Text>
+      <View style={styles.tdSectionLine} />
+    </View>
+  );
+}
+
+// One right-aligned label/value line in the totals + payment blocks.
+function TdLine({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+  return (
+    <View style={styles.tdLineRow}>
+      <Text style={[styles.tdLineLabel, bold && styles.tdLineBold]}>{label}</Text>
+      <Text style={[styles.tdLineValue, bold && styles.tdLineBold]}>{value}</Text>
+    </View>
+  );
+}
+
+// Order.source → customer-facing sales-channel label.
+function channelLabel(source: string): string {
+  switch (source) {
+    case "delivery": return "Delivery";
+    case "kiosk": return "Kiosk";
+    case "table":
+    case "other":
+    default: return "Store";
+  }
 }
 
 // =================== INVENTORY ===================
@@ -3947,34 +4142,38 @@ const styles = StyleSheet.create({
   txAmount: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
   txVoided: { color: "#DC2626", fontWeight: "700" },
   divider: { height: 1, backgroundColor: "#F1F5F9" },
-  divider2: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 10 },
-  receipt: {
-    backgroundColor: "#FFFFFF", padding: 20, borderRadius: 12,
-    borderWidth: 1, borderColor: "#E2E8F0",
-  },
-  receiptTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A" },
-  receiptSub: { fontSize: 12, color: "#94A3B8", marginTop: 4 },
   voidedBy: { fontSize: 13, color: "#DC2626", fontWeight: "700", marginTop: 4 },
-  receiptRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-  receiptItem: { flex: 1, fontSize: 13, color: "#475569" },
-  receiptLabel: { fontSize: 12, color: "#94A3B8" },
-  receiptVal: { fontSize: 13, color: "#0F172A", fontWeight: "500" },
-  receiptTotal: { fontSize: 15, color: "#0F172A", fontWeight: "700" },
-  reprintBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 14, padding: 12,
-    backgroundColor: "#F1F5F9", borderRadius: 10,
-    borderWidth: 1, borderColor: "#E2E8F0",
-  },
-  reprintBtnText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
-  reprintMsg: { marginTop: 8, fontSize: 12, color: "#10B981", textAlign: "center" },
-  voidBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 10, padding: 12,
-    backgroundColor: "#FEF2F2", borderRadius: 10,
-    borderWidth: 1, borderColor: "#FECACA",
-  },
-  voidBtnText: { fontSize: 14, fontWeight: "600", color: "#DC2626" },
+
+  // ── Transaction detail (reference "Sale Transactions" layout) ──
+  txDetailWrap: { flex: 1, backgroundColor: "#FFFFFF" },
+  txDetailScroll: { padding: 24, paddingBottom: 32 },
+  tdHeadRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  tdOrderNo: { fontSize: 26, fontWeight: "700", color: "#0F172A", flexShrink: 1 },
+  tdGrand: { fontSize: 26, fontWeight: "700", color: "#0F172A", marginLeft: 12 },
+  tdMeta: { fontSize: 13, color: "#94A3B8", marginTop: 4 },
+  tdSectionRow: { flexDirection: "row", alignItems: "center", marginVertical: 16 },
+  tdSectionLine: { flex: 1, height: 1, backgroundColor: "#E2E8F0" },
+  tdSectionText: { fontSize: 13, color: "#64748B", fontWeight: "600", marginHorizontal: 12 },
+  tdItemRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
+  tdItemImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: "#F1F5F9" },
+  tdItemImgEmpty: { alignItems: "center", justifyContent: "center" },
+  tdItemMid: { flex: 1, marginLeft: 12 },
+  tdItemName: { fontSize: 15, color: "#0F172A", fontWeight: "500" },
+  tdItemSub: { fontSize: 12, color: "#94A3B8", marginTop: 3 },
+  tdItemTotal: { fontSize: 15, color: "#0F172A", fontWeight: "600", marginLeft: 12 },
+  tdTotalsBlock: { marginTop: 4 },
+  tdLineRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", marginBottom: 8 },
+  tdLineLabel: { fontSize: 14, color: "#64748B", marginRight: 24 },
+  tdLineValue: { fontSize: 14, color: "#0F172A", fontWeight: "500", minWidth: 80, textAlign: "right" },
+  tdLineBold: { fontWeight: "700", color: "#0F172A" },
+  tdChannelRow: { flexDirection: "row", justifyContent: "flex-end" },
+  tdChannelBadge: { flexDirection: "row", alignItems: "center", gap: 6 },
+  tdChannelText: { fontSize: 14, color: "#0F172A", fontWeight: "500" },
+  tdActionBar: { flexDirection: "row" },
+  tdCancelBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: "#9F1239" },
+  tdCancelBtnDisabled: { backgroundColor: "#F9A8C4" },
+  tdReprintBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: "#15803D" },
+  tdActionText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
   // Generic text input used by the "Add by IP" field in Local Printer.
   // Standard 40px height + rounded corners + slate border to match the
   // rest of the admin form fields.
@@ -4399,6 +4598,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#FFFFFF",
   },
   reportsBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 14 },
+  rangeCard: {
+    width: "88%", maxWidth: 420, backgroundColor: "#FFFFFF",
+    borderRadius: 16, overflow: "hidden",
+  },
+  chPeriodRow: {
+    flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center",
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+  },
 
   // ── Full-screen document scaffolding ──
   docScreen: { flex: 1, backgroundColor: "#FFFFFF" },

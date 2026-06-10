@@ -49,7 +49,7 @@ type Product = {
   image_base64?: string;
   is_favorite: boolean;
 };
-type CartItem = { product_id: string; name: string; price: number; qty: number };
+type CartItem = { product_id: string; name: string; price: number; qty: number; discount?: number };
 type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
 type Order = {
   id: string;
@@ -118,6 +118,7 @@ export default function POS() {
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("favorite");
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [discountType, setDiscountType] = useState<"none" | "amount" | "percent">("none");
   const [discountValue, setDiscountValue] = useState<number>(0);
@@ -245,7 +246,7 @@ export default function POS() {
   }, [products, activeCat, search]);
 
   const subtotal = useMemo(
-    () => cart.reduce((s, i) => s + i.price * i.qty, 0),
+    () => cart.reduce((s, i) => s + Math.max(0, i.price * i.qty - (i.discount || 0)), 0),
     [cart]
   );
   const discountAmount = useMemo(() => {
@@ -275,6 +276,17 @@ export default function POS() {
 
   const removeItem = (pid: string) =>
     setCart((c) => c.filter((i) => i.product_id !== pid));
+
+  // Apply qty/discount edits from the cart-item modal. A zero qty removes the line.
+  const applyItemEdit = (pid: string, qty: number, discount: number) => {
+    setCart((c) =>
+      c
+        .map((i) =>
+          i.product_id === pid ? { ...i, qty, discount: discount > 0 ? discount : undefined } : i
+        )
+        .filter((i) => i.qty > 0)
+    );
+  };
 
   const clearCart = () => {
     setCart([]);
@@ -629,6 +641,7 @@ export default function POS() {
             onInc={(pid) => updateQty(pid, 1)}
             onDec={(pid) => updateQty(pid, -1)}
             onRemove={removeItem}
+            onEdit={setEditItem}
           />
         ) : (
           cart.length > 0 && (
@@ -743,6 +756,7 @@ export default function POS() {
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
+              onEdit={setEditItem}
               embedded
             />
             <TouchableOpacity
@@ -777,6 +791,18 @@ export default function POS() {
           setDiscountType(t);
           setDiscountValue(v);
           setShowDiscount(false);
+        }}
+      />
+      <CartItemModal
+        item={editItem}
+        onClose={() => setEditItem(null)}
+        onSave={(pid, qty, discount) => {
+          applyItemEdit(pid, qty, discount);
+          setEditItem(null);
+        }}
+        onRemove={(pid) => {
+          removeItem(pid);
+          setEditItem(null);
         }}
       />
       <CustomerModal
@@ -964,6 +990,7 @@ function CartSidebar({
   onInc,
   onDec,
   onRemove,
+  onEdit,
   embedded,
 }: {
   cart: CartItem[];
@@ -980,6 +1007,7 @@ function CartSidebar({
   onInc: (pid: string) => void;
   onDec: (pid: string) => void;
   onRemove: (pid: string) => void;
+  onEdit: (item: CartItem) => void;
   embedded?: boolean;
 }) {
   return (
@@ -1060,14 +1088,21 @@ function CartSidebar({
         }
         renderItem={({ item }) => (
           <View style={styles.cartItem} testID={`cart-item-${item.product_id}`}>
-            <View style={{ flex: 1 }}>
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              onPress={() => onEdit(item)}
+              testID={`cart-item-edit-${item.product_id}`}
+            >
               <Text style={styles.cartItemName} numberOfLines={2}>
                 {item.name}
               </Text>
               <Text style={styles.cartItemPrice}>
                 {THB(item.price)} × {item.qty}
               </Text>
-            </View>
+              {!!item.discount && item.discount > 0 && (
+                <Text style={styles.cartItemDisc}>Discount -{THB(item.discount)}</Text>
+              )}
+            </TouchableOpacity>
             <View style={styles.qtyCtrl}>
               <TouchableOpacity
                 style={styles.qtyBtn}
@@ -1773,6 +1808,101 @@ function PaymentModal({
 }
 
 // ---------- Discount Modal ----------
+// ---------- Cart Item Modal (per-line quantity + discount) ----------
+function CartItemModal({
+  item,
+  onClose,
+  onSave,
+  onRemove,
+}: {
+  item: CartItem | null;
+  onClose: () => void;
+  onSave: (pid: string, qty: number, discount: number) => void;
+  onRemove: (pid: string) => void;
+}) {
+  const [qty, setQty] = useState(1);
+  const [disc, setDisc] = useState("");
+
+  useEffect(() => {
+    if (item) {
+      setQty(item.qty);
+      setDisc(item.discount ? String(item.discount) : "");
+    }
+  }, [item]);
+
+  if (!item) return null;
+
+  const discNum = Math.max(0, parseFloat(disc) || 0);
+  const lineTotal = Math.max(0, item.price * qty - discNum);
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <View style={styles.itemModal} testID="cart-item-modal">
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={onClose} testID="close-item-modal">
+              <Ionicons name="chevron-back" size={26} color="#00B14F" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <TouchableOpacity onPress={() => onRemove(item.product_id)} testID="item-modal-remove">
+              <Ionicons name="trash-outline" size={22} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.itemRow}>
+            <Text style={styles.itemRowLabel}>Quantity</Text>
+            <View style={styles.itemStepper}>
+              <TouchableOpacity
+                style={styles.itemStepBtn}
+                onPress={() => setQty((q) => Math.max(1, q - 1))}
+                testID="item-qty-dec"
+              >
+                <Ionicons name="remove" size={20} color="#0F172A" />
+              </TouchableOpacity>
+              <Text style={styles.itemStepVal}>{qty}</Text>
+              <TouchableOpacity
+                style={styles.itemStepBtn}
+                onPress={() => setQty((q) => q + 1)}
+                testID="item-qty-inc"
+              >
+                <Ionicons name="add" size={20} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.itemRow}>
+            <Text style={styles.itemRowLabel}>Discount (฿)</Text>
+            <TextInput
+              style={styles.itemDiscInput}
+              value={disc}
+              onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor="#CBD5E1"
+              testID="item-discount-input"
+            />
+          </View>
+
+          <View style={styles.itemTotalRow}>
+            <Text style={styles.itemRowLabel}>Line Total</Text>
+            <Text style={styles.itemTotalVal}>{THB(lineTotal)}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.doneBtn}
+            onPress={() => onSave(item.product_id, qty, discNum)}
+            testID="item-modal-save"
+          >
+            <Text style={styles.doneBtnText}>Save</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function DiscountModal({
   visible,
   onClose,
@@ -2951,7 +3081,52 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
   },
-  modalTitle: { fontSize: 17, fontWeight: "700", color: "#0F172A" },
+  modalTitle: { fontSize: 17, fontWeight: "700", color: "#0F172A", flex: 1, textAlign: "center", marginHorizontal: 8 },
+
+  // Cart item edit modal (per-line qty + discount)
+  itemModal: { width: "100%", maxWidth: 440, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden" },
+  itemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  itemRowLabel: { fontSize: 15, color: "#0F172A", fontWeight: "600" },
+  itemStepper: { flexDirection: "row", alignItems: "center", gap: 18 },
+  itemStepBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  itemStepVal: { fontSize: 18, fontWeight: "700", minWidth: 28, textAlign: "center", color: "#0F172A" },
+  itemDiscInput: {
+    minWidth: 110,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#EF4444",
+    textAlign: "right",
+  },
+  itemTotalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  itemTotalVal: { fontSize: 18, fontWeight: "800", color: "#00B14F" },
+  cartItemDisc: { fontSize: 11, color: "#EF4444", marginTop: 2, fontWeight: "600" },
 
   // Payment modal
   paymentModal: {

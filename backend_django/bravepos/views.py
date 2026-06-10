@@ -1119,21 +1119,16 @@ def dashboard(request):
     branch = request.session_obj.branch
     period = request.query_params.get('period', 'month')
     now = djtz.now()
-    if period == 'today':
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    elif period == 'week':
-        start = now - timedelta(days=7)
-    elif period == 'year':
-        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:
-        start = now - timedelta(days=30)
-
-    orders = list(
-        Order.objects
-        .filter(branch=branch, created_at__gte=start)
-        .exclude(status='cancel')
-        .prefetch_related('items')
+    start, end = _period_range(
+        period, now,
+        request.query_params.get('start', ''),
+        request.query_params.get('end', ''),
     )
+
+    oq = Order.objects.filter(branch=branch, created_at__gte=start)
+    if end:
+        oq = oq.filter(created_at__lt=end)
+    orders = list(oq.exclude(status='cancel').prefetch_related('items'))
 
     total_sales = sum(float(o.total or 0) for o in orders)
     tx_count = len(orders)
@@ -1188,14 +1183,31 @@ def dashboard(request):
     })
 
 
-def _period_start(period, now):
+def _period_range(period, now, start_q='', end_q=''):
+    """Return ``(start_dt, end_dt_or_None)`` for a dashboard period.
+
+    ``period='custom'`` uses the ``YYYY-MM-DD`` strings ``start_q`` / ``end_q``
+    (end is inclusive of the whole day).  Any other period is an open-ended
+    range starting at the preset boundary."""
+    if period == 'custom' and start_q:
+        try:
+            s = djtz.make_aware(datetime.strptime(start_q, '%Y-%m-%d'))
+        except (ValueError, TypeError):
+            return now - timedelta(days=30), None
+        end_dt = None
+        if end_q:
+            try:
+                end_dt = djtz.make_aware(datetime.strptime(end_q, '%Y-%m-%d')) + timedelta(days=1)
+            except (ValueError, TypeError):
+                end_dt = None
+        return s, end_dt
     if period == 'today':
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), None
     if period == 'week':
-        return now - timedelta(days=7)
+        return now - timedelta(days=7), None
     if period == 'year':
-        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    return now - timedelta(days=30)
+        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0), None
+    return now - timedelta(days=30), None
 
 
 # ─── Sales channel report ────────────────────────────────────────────────────
@@ -1217,14 +1229,16 @@ def dashboard_channels(request):
     branch = request.session_obj.branch
     period = request.query_params.get('period', 'today')
     now = djtz.now()
-    start = _period_start(period, now)
-
-    orders = (
-        Order.objects
-        .filter(branch=branch, created_at__gte=start)
-        .exclude(status='cancel')
-        .only('source', 'delivery_provider', 'total')
+    start, end = _period_range(
+        period, now,
+        request.query_params.get('start', ''),
+        request.query_params.get('end', ''),
     )
+
+    oq = Order.objects.filter(branch=branch, created_at__gte=start)
+    if end:
+        oq = oq.filter(created_at__lt=end)
+    orders = oq.exclude(status='cancel').only('source', 'delivery_provider', 'total')
 
     rows: dict = {}
     for o in orders:
