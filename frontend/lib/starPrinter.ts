@@ -65,6 +65,12 @@ export type ReceiptOrder = {
   order_number: string;
   queue_number?: string | number;
   items: Array<{ name: string; qty: number; price: number }>;
+  // ``subtotal`` is the gross sum of items BEFORE any discount.  ``total``
+  // is the net the customer pays AFTER discount.  ``discount_amount`` is
+  // the difference — rendered as its own line on the receipt so the
+  // customer can see what was taken off.
+  subtotal?: number;
+  discount_amount?: number;
   total: number;
   payment_method?: string;
   paid_amount?: number;

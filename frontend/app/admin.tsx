@@ -1073,6 +1073,8 @@ function TransactionDetail({
   const toReceiptOrder = (voided: boolean, voidedBy?: string): ReceiptOrder => ({
     order_number: order.order_number,
     items: order.items.map((it: any) => ({ name: it.name, qty: it.qty, price: it.price })),
+    subtotal: Number(order.subtotal) || 0,
+    discount_amount: Number(order.discount_amount) || 0,
     total: order.total,
     payment_method: order.payment_method || undefined,
     paid_amount: paid,

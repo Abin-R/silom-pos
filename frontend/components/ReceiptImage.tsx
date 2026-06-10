@@ -142,6 +142,17 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
   const taxRate = sh.tax_percent / 100;
   const subtotalBeforeVat = taxRate > 0 ? grandTotal / (1 + taxRate) : grandTotal;
   const vat = grandTotal - subtotalBeforeVat;
+  // Discount: prefer the value the caller sent, but fall back to
+  // (gross item subtotal − net total) if the caller forgot to pass
+  // discount_amount.  This keeps old call sites working.
+  const itemsGross = order.items.reduce(
+    (sum, it) => sum + (Number(it.price) || 0) * (Number(it.qty) || 0),
+    0,
+  );
+  const grossSubtotal = Number(order.subtotal) || itemsGross;
+  const discountAmount =
+    Number(order.discount_amount) || Math.max(0, grossSubtotal - grandTotal);
+  const hasDiscount = discountAmount > 0;
   const itemCount = order.items.reduce((sum, it) => sum + (Number(it.qty) || 0), 0);
   const paid = Number(order.paid_amount ?? order.total) || 0;
   const change = Number(order.change) || 0;
@@ -212,6 +223,18 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
       <Dash />
 
       {/* ─── VAT breakdown ────────────────────────────────────────── */}
+      {hasDiscount && (
+        <>
+          <View style={s.row}>
+            <Text style={[s.line, s.vatLabel]} numberOfLines={1}>รวมยอดสินค้า</Text>
+            <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(grossSubtotal)}</Text>
+          </View>
+          <View style={s.row}>
+            <Text style={[s.line, s.vatLabel]} numberOfLines={1}>ส่วนลด</Text>
+            <Text style={[s.line, s.amount]} numberOfLines={1}>-{thb(discountAmount)}</Text>
+          </View>
+        </>
+      )}
       <View style={s.row}>
         <Text style={[s.line, s.vatLabel]} numberOfLines={1}>รวมเป็นเงิน</Text>
         <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(grandTotal)}</Text>

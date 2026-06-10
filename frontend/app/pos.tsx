@@ -348,6 +348,8 @@ export default function POS() {
             {
               order_number: order.order_number,
               items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
+              subtotal,
+              discount_amount: discountAmount,
               total,
               payment_method: method,
               paid_amount: paid,
