@@ -558,8 +558,12 @@ class StockDocumentItem(models.Model):
     )
     barcode = models.CharField(max_length=64, blank=True, default="")
     product_name = models.CharField(max_length=200, blank=True, default="")
-    qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)  # in/out qty OR adjust update-delta
     price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Reconcile flow (adjust / check): snapshot of on-hand before the count and
+    # the counted ("reconcile") target.  ``qty`` carries the resulting delta.
+    before_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    reconcile_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 

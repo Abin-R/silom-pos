@@ -153,6 +153,7 @@ class StockDocumentItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product_id', 'barcode', 'product_name',
             'qty', 'price', 'discount', 'total',
+            'before_qty', 'reconcile_qty',
         ]
         read_only_fields = ['id']
 

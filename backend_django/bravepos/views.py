@@ -1327,7 +1327,17 @@ def stock_documents(request):
     if not items:
         return Response({'detail': 'At least one item is required'}, status=400)
 
-    adjust_type = payload.get('adjust_type', '') or ''
+    def _dec(v):
+        return Decimal(str(v if v not in (None, '') else 0))
+
+    is_reconcile = doc_type in ('adjust', 'check')
+    # For adjust, the "Update" delta per line (qty) reconciles on-hand to the
+    # counted value; the document's A+/A- type is the sign of the net delta.
+    net_delta = sum(_dec(l.get('qty')) for l in items)
+    if doc_type == 'adjust':
+        adjust_type = 'A+' if net_delta >= 0 else 'A-'
+    else:
+        adjust_type = payload.get('adjust_type', '') or ''
     staff_name = getattr(request.session_obj.staff, 'name', '') or ''
     doc_no = _next_stock_doc_no(branch, doc_type, adjust_type)
 
@@ -1344,10 +1354,10 @@ def stock_documents(request):
             note=payload.get('note', '') or '',
             tax_included=bool(payload.get('tax_included', False)),
             avg_cost=bool(payload.get('avg_cost', False)),
-            subtotal=Decimal(str(payload.get('subtotal', 0) or 0)),
-            discount=Decimal(str(payload.get('discount', 0) or 0)),
-            tax=Decimal(str(payload.get('tax', 0) or 0)),
-            total=Decimal(str(payload.get('total', 0) or 0)),
+            subtotal=_dec(payload.get('subtotal')),
+            discount=_dec(payload.get('discount')),
+            tax=_dec(payload.get('tax')),
+            total=_dec(payload.get('total')),
             created_by=staff_name,
         )
         for line in items:
@@ -1355,34 +1365,39 @@ def stock_documents(request):
             product = None
             if pid:
                 product = Product.objects.filter(id=pid, branch=branch).first()
-            qty = Decimal(str(line.get('qty', 0) or 0))
+            qty = _dec(line.get('qty'))           # in/out qty OR adjust update-delta
+            reconcile = _dec(line.get('reconcile_qty'))
+            before = _dec(line.get('before_qty'))
             StockDocumentItem.objects.create(
                 document=doc,
                 product=product,
                 barcode=line.get('barcode', '') or (product.barcode if product else ''),
                 product_name=line.get('product_name', '') or (product.name if product else ''),
                 qty=qty,
-                price=Decimal(str(line.get('price', 0) or 0)),
-                discount=Decimal(str(line.get('discount', 0) or 0)),
-                total=Decimal(str(line.get('total', 0) or 0)),
+                price=_dec(line.get('price')),
+                discount=_dec(line.get('discount')),
+                total=_dec(line.get('total')),
+                before_qty=before,
+                reconcile_qty=reconcile,
             )
-            # Apply the on-hand delta and snapshot a movement per line.
-            # check = non-mutating audit (records counted qty, leaves stock).
-            if product and qty and doc_type != 'check':
+            # Apply on-hand change per line.
+            #   in   → +qty,  out → -qty
+            #   adjust → set stock to the counted (reconcile) value
+            #   check  → non-mutating audit (records the count, leaves stock)
+            if product and doc_type != 'check':
                 if doc_type == 'in':
-                    delta = int(qty)
+                    product.stock = (product.stock or 0) + int(qty)
                 elif doc_type == 'out':
-                    delta = -int(qty)
-                else:  # adjust
-                    delta = -int(qty) if adjust_type == 'A-' else int(qty)
-                product.stock = (product.stock or 0) + delta
+                    product.stock = (product.stock or 0) - int(qty)
+                else:  # adjust → reconcile to the counted value
+                    product.stock = int(reconcile)
                 product.save(update_fields=['stock'])
-            if product and qty:
+            if product and (qty or is_reconcile):
                 StockMovement.objects.create(
                     branch=branch,
                     product=product,
                     product_name=product.name,
-                    type=doc_type if doc_type in ('in', 'out', 'adjust', 'check') else 'adjust',
+                    type=doc_type,
                     qty=int(qty),
                     note=doc.note or doc.document_name,
                     document_no=doc_no,

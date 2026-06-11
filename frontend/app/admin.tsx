@@ -14,6 +14,7 @@ import {
   Platform,
   Switch,
   Alert,
+  Linking,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -41,6 +42,8 @@ import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+// Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
+const BACKOFFICE_URL = `${process.env.EXPO_PUBLIC_BACKEND_URL}/backoffice/`;
 const AUTH_KEY = "bravepos:auth:v1";
 
 async function doLogout(): Promise<void> {
@@ -95,6 +98,7 @@ type Order = {
   payment_method?: string; delivery_provider?: string; delivery_status?: string;
   staff?: string; voided_by?: string; voided_at?: string | null;
   subtotal?: number; paid_amount?: number; change?: number;
+  discount_amount?: number; branch_name?: string;
 };
 type Dashboard = {
   total_sales: number; cost: number; profit: number; gp_percent: number;
@@ -535,6 +539,15 @@ function Reports({ isWide }: { isWide: boolean }) {
           </View>
         </>
       )}
+
+      <TouchableOpacity
+        style={styles.backofficeBtn}
+        onPress={() => Linking.openURL(BACKOFFICE_URL)}
+        testID="open-backoffice"
+      >
+        <Ionicons name="desktop-outline" size={18} color="#00B14F" />
+        <Text style={styles.backofficeBtnText}>Back office</Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -1475,6 +1488,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
 type DocType = "in" | "out" | "adjust" | "check";
 
 const DOC_CONFIG: Record<DocType, {
+  mode: "purchase" | "reconcile"; // purchase = in/out (qty·price); reconcile = adjust/check (count)
   title: string;            // "Create Stock-In Document"
   partyLabel?: string;      // Vendor / Receiver
   refLabel?: string;        // Purchasing Document Ref. / Ref Doc No.
@@ -1484,24 +1498,38 @@ const DOC_CONFIG: Record<DocType, {
   hasName: boolean;         // adjust/check use a Document Name
   hasAdjustType: boolean;   // adjust shows A+/A- toggle
   hasAvgCost: boolean;      // stock-in only
+  addBarLabel: string;      // green bar: "Items" / "Search Products"
+  reasonLabel?: string;     // reconcile: "Reason"
+  reconcileCols?: { before: string; input: string; result: string };
+  mutates?: boolean;        // reconcile: adjust mutates stock, check does not
 }> = {
   in: {
+    mode: "purchase",
     title: "Create Stock-In Document", partyLabel: "Vendor",
     refLabel: "Purchasing Document Ref.", refCol: "Purchasing Document Ref.",
     hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: true,
+    addBarLabel: "Items",
   },
   out: {
+    mode: "purchase",
     title: "Create Stock-Out Document", partyLabel: "Receiver",
     refLabel: "Ref Doc No.", refCol: "Ref Doc No.",
     hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: false,
+    addBarLabel: "Items",
   },
   adjust: {
-    title: "Create Adjust Stock Document", refCol: "Document Name",
+    mode: "reconcile",
+    title: "Create adjust stock document", refCol: "Document Name",
     hasParty: false, hasPrice: false, hasName: true, hasAdjustType: true, hasAvgCost: false,
+    addBarLabel: "Search Products", reasonLabel: "Reason", mutates: true,
+    reconcileCols: { before: "Before Adjust", input: "Qty Reconcile", result: "Update" },
   },
   check: {
-    title: "Create Check Stock Document", refCol: "Document Name",
-    hasParty: false, hasPrice: false, hasName: false, hasAdjustType: false, hasAvgCost: false,
+    mode: "reconcile",
+    title: "Create check stock document", refCol: "Document Name",
+    hasParty: false, hasPrice: false, hasName: true, hasAdjustType: false, hasAvgCost: false,
+    addBarLabel: "Search Products", reasonLabel: "Note", mutates: false,
+    reconcileCols: { before: "Before Count", input: "Counted Qty", result: "Difference" },
   },
 };
 
@@ -1602,12 +1630,16 @@ function StockDocuments({
   );
 }
 
+type DraftField = "qty" | "price" | "discount" | "reconcile";
 type DraftLine = {
   product_id: string; barcode: string; product_name: string;
   qty: string; price: string; discount: string;
+  before: string; reconcile: string;
 };
 
 // Create-document form (image 5) + Select Products popup (images 6/7).
+// Two layouts: "purchase" (in/out — qty·price) and "reconcile" (adjust/check
+// — Before / counted / delta), driven by DOC_CONFIG[type].mode.
 function CreateStockDocModal({
   visible, type, products, categories, onClose, onSaved,
 }: {
@@ -1615,27 +1647,30 @@ function CreateStockDocModal({
   onClose: () => void; onSaved: () => void;
 }) {
   const cfg = DOC_CONFIG[type];
+  const reconcile = cfg.mode === "reconcile";
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [ref, setRef] = useState("");
   const [docName, setDocName] = useState("");
   const [party, setParty] = useState("");
   const [note, setNote] = useState("");
-  const [adjustType, setAdjustType] = useState<"A+" | "A-">("A+");
+  const [reason, setReason] = useState("");
   const [taxIncluded, setTaxIncluded] = useState(false);
   const [avgCost, setAvgCost] = useState(false);
   const [picker, setPicker] = useState(false);
-  const [keypad, setKeypad] = useState<{ idx: number; field: "qty" | "price" | "discount" } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [keypad, setKeypad] = useState<{ idx: number; field: DraftField } | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      setLines([]); setRef(""); setDocName(""); setParty(""); setNote("");
-      setAdjustType("A+"); setTaxIncluded(false); setAvgCost(false);
+      setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
+      setTaxIncluded(false); setAvgCost(false);
     }
   }, [visible]);
 
   const lineTotal = (l: DraftLine) =>
     Math.max(0, (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) - (parseFloat(l.discount) || 0));
+  const updateDelta = (l: DraftLine) => (parseFloat(l.reconcile) || 0) - (parseFloat(l.before) || 0);
   const subtotal = lines.reduce((s, l) => s + lineTotal(l), 0);
   const discountSum = lines.reduce((s, l) => s + (parseFloat(l.discount) || 0), 0);
   const tax = taxIncluded ? subtotal * 0.07 : 0;
@@ -1648,13 +1683,22 @@ function CreateStockDocModal({
         .map((p) => ({
           product_id: p.id, barcode: p.barcode || "", product_name: p.name,
           qty: "0", price: String(p.cost || 0), discount: "0",
+          before: String(p.stock ?? 0), reconcile: "0",
         }));
       return [...prev, ...fresh];
     });
     setPicker(false);
   };
 
-  const setField = (idx: number, field: "qty" | "price" | "discount", val: string) =>
+  // Import the product lines of previously-saved documents (reconcile flow).
+  const importDocs = (docs: StockDoc[]) => {
+    const picked = docs.flatMap((d) => d.items).map((it) => it.product_id).filter(Boolean) as string[];
+    const toAdd = products.filter((p) => picked.includes(p.id));
+    addProducts(toAdd);
+    setImportOpen(false);
+  };
+
+  const setField = (idx: number, field: DraftField, val: string) =>
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, [field]: val } : l)));
 
   const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
@@ -1662,23 +1706,30 @@ function CreateStockDocModal({
   const save = async () => {
     if (!lines.length || saving) return;
     setSaving(true);
-    const body: any = {
-      type,
-      ref_no: ref,
-      note: cfg.hasName ? docName : note,
-      tax_included: taxIncluded,
-      avg_cost: avgCost,
-      subtotal, discount: discountSum, tax, total: subtotal,
-      items: lines.map((l) => ({
+    const body: any = { type };
+    if (reconcile) {
+      body.document_name = reason || docName;
+      body.note = reason || note;
+      body.items = lines.map((l) => ({
+        product_id: l.product_id, barcode: l.barcode, product_name: l.product_name,
+        qty: updateDelta(l),
+        before_qty: parseFloat(l.before) || 0,
+        reconcile_qty: parseFloat(l.reconcile) || 0,
+      }));
+    } else {
+      body.ref_no = ref;
+      body.note = note;
+      body.tax_included = taxIncluded;
+      body.avg_cost = avgCost;
+      body.subtotal = subtotal; body.discount = discountSum; body.tax = tax; body.total = subtotal;
+      body.items = lines.map((l) => ({
         product_id: l.product_id, barcode: l.barcode, product_name: l.product_name,
         qty: parseFloat(l.qty) || 0, price: parseFloat(l.price) || 0,
         discount: parseFloat(l.discount) || 0, total: lineTotal(l),
-      })),
-    };
-    if (type === "in") body.vendor = party;
-    if (type === "out") body.receiver = party;
-    if (cfg.hasAdjustType) body.adjust_type = adjustType;
-    if (cfg.hasName) body.document_name = docName;
+      }));
+      if (type === "in") body.vendor = party;
+      if (type === "out") body.receiver = party;
+    }
     try {
       await apiFetch(`${API}/stock-documents`, { method: "POST", body: JSON.stringify(body) });
       onSaved();
@@ -1695,6 +1746,8 @@ function CreateStockDocModal({
     ]);
   };
 
+  const rc = cfg.reconcileCols;
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.docScreen}>
@@ -1710,119 +1763,134 @@ function CreateStockDocModal({
         </View>
 
         <ScrollView keyboardShouldPersistTaps="handled">
-          {/* header fields */}
-          <View style={styles.docForm}>
-            <View style={styles.docFormRow}>
-              <View style={styles.docField}>
-                <Text style={styles.docFieldLabel}>{type === "in" ? "Bill Date Ref." : "Date Ref."}</Text>
-                <Text style={styles.docFieldDate}>{thaiDate(new Date())}</Text>
-              </View>
-              {cfg.hasName ? (
-                <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>Document Name</Text>
-                  <TextInput style={styles.docInput} value={docName} onChangeText={setDocName} placeholder="" />
+          {/* ── header fields ── */}
+          {reconcile ? (
+            <View style={styles.docForm}>
+              <View style={styles.docFormRow}>
+                <TouchableOpacity style={[styles.docField, styles.importBtn]} onPress={() => setImportOpen(true)} testID="import-documents">
+                  <Text style={styles.importBtnText}>Import Documents</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                </TouchableOpacity>
+                <View style={[styles.docField, { flex: 2 }]}>
+                  <TextInput
+                    style={styles.docInput}
+                    value={reason}
+                    onChangeText={setReason}
+                    placeholder={cfg.reasonLabel}
+                    placeholderTextColor="#94A3B8"
+                    testID="reconcile-reason"
+                  />
                 </View>
-              ) : (
+              </View>
+            </View>
+          ) : (
+            <View style={styles.docForm}>
+              <View style={styles.docFormRow}>
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>{type === "in" ? "Bill Date Ref." : "Date Ref."}</Text>
+                  <Text style={styles.docFieldDate}>{thaiDate(new Date())}</Text>
+                </View>
                 <View style={styles.docField}>
                   <Text style={styles.docFieldLabel}>{cfg.refLabel}</Text>
                   <TextInput style={styles.docInput} value={ref} onChangeText={setRef} placeholder="" />
                 </View>
-              )}
-            </View>
-
-            <View style={styles.docFormRow}>
-              {cfg.hasParty ? (
+              </View>
+              <View style={styles.docFormRow}>
                 <View style={styles.docField}>
                   <Text style={styles.docFieldLabel}>{cfg.partyLabel}</Text>
                   <TextInput style={styles.docInput} value={party} onChangeText={setParty} placeholder="" />
                 </View>
-              ) : cfg.hasAdjustType ? (
                 <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>Document Type</Text>
-                  <View style={{ flexDirection: "row", gap: 8 }}>
-                    {(["A+", "A-"] as const).map((t) => (
-                      <TouchableOpacity
-                        key={t}
-                        style={[styles.adjTypeBtn, adjustType === t && styles.adjTypeBtnActive]}
-                        onPress={() => setAdjustType(t)}
-                      >
-                        <Text style={[styles.adjTypeText, adjustType === t && { color: "#FFF" }]}>{t}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                  <Text style={styles.docFieldLabel}>Note</Text>
+                  <TextInput style={styles.docInput} value={note} onChangeText={setNote} placeholder="" />
                 </View>
-              ) : <View style={styles.docField} />}
-              <View style={styles.docField}>
-                <Text style={styles.docFieldLabel}>Note</Text>
-                <TextInput style={styles.docInput} value={note} onChangeText={setNote} placeholder="" />
               </View>
             </View>
-          </View>
+          )}
 
-          {/* items table */}
+          {/* ── items table header ── */}
           <View style={styles.itemsHead}>
             <Text style={[styles.itemsHeadCell, { width: 30 }]}>#</Text>
-            <Text style={[styles.itemsHeadCell, { width: 120 }]}>Barcode</Text>
-            <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>Product name</Text>
-            <Text style={[styles.itemsHeadCell, { width: 70 }]}>Quantity</Text>
-            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 80 }]}>Price/Unit</Text>}
-            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 70 }]}>Discount</Text>}
-            {cfg.hasPrice && <Text style={[styles.itemsHeadCell, { width: 80 }]}>Total</Text>}
+            <Text style={[styles.itemsHeadCell, { width: 130 }]}>Barcode</Text>
+            <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>Product Name</Text>
+            {reconcile ? (
+              <>
+                <Text style={[styles.itemsHeadCell, { width: 90, textAlign: "right" }]}>{rc?.before}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 90 }]}>{rc?.input}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80, textAlign: "right" }]}>{rc?.result}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.itemsHeadCell, { width: 70 }]}>Quantity</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80 }]}>Price/Unit</Text>
+                <Text style={[styles.itemsHeadCell, { width: 70 }]}>Discount</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80 }]}>Total</Text>
+              </>
+            )}
             <View style={{ width: 28 }} />
           </View>
 
-          {lines.map((l, i) => (
-            <View key={l.product_id} style={styles.itemRow}>
-              <Text style={[styles.itemCell, { width: 30 }]}>{i + 1}</Text>
-              <Text style={[styles.itemCell, { width: 120, fontSize: 11 }]} numberOfLines={1}>{l.barcode}</Text>
-              <Text style={[styles.itemCell, { flex: 1, textAlign: "left" }]} numberOfLines={1}>{l.product_name}</Text>
-              <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "qty" })}>
-                <Text style={styles.itemInputText}>{l.qty}</Text>
-              </TouchableOpacity>
-              {cfg.hasPrice && (
-                <TouchableOpacity style={[styles.itemInput, { width: 80 }]} onPress={() => setKeypad({ idx: i, field: "price" })}>
-                  <Text style={styles.itemInputText}>{(parseFloat(l.price) || 0).toFixed(2)}</Text>
+          {lines.map((l, i) => {
+            const d = updateDelta(l);
+            return (
+              <View key={l.product_id} style={styles.itemRow}>
+                <Text style={[styles.itemCell, { width: 30 }]}>{i + 1}</Text>
+                <Text style={[styles.itemCell, { width: 130, fontSize: 11 }]} numberOfLines={1}>{l.barcode}</Text>
+                <Text style={[styles.itemCell, { flex: 1, textAlign: "left" }]} numberOfLines={1}>{l.product_name}</Text>
+                {reconcile ? (
+                  <>
+                    <Text style={[styles.itemCellRO, { width: 90 }]}>{parseFloat(l.before) || 0}</Text>
+                    <TouchableOpacity style={[styles.itemInput, { width: 90 }]} onPress={() => setKeypad({ idx: i, field: "reconcile" })} testID={`reconcile-${i}`}>
+                      <Text style={styles.itemInputText}>{parseFloat(l.reconcile) || 0}</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.itemCellRO, { width: 80, textAlign: "right", color: d > 0 ? "#00B14F" : d < 0 ? "#EF4444" : "#64748B" }]}>
+                      {d > 0 ? `+${d}` : `${d}`}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "qty" })}>
+                      <Text style={styles.itemInputText}>{l.qty}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.itemInput, { width: 80 }]} onPress={() => setKeypad({ idx: i, field: "price" })}>
+                      <Text style={styles.itemInputText}>{(parseFloat(l.price) || 0).toFixed(2)}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "discount" })}>
+                      <Text style={styles.itemInputText}>{(parseFloat(l.discount) || 0).toFixed(2)}</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.itemCell, { width: 80, textAlign: "right" }]}>{lineTotal(l).toFixed(2)}</Text>
+                  </>
+                )}
+                <TouchableOpacity style={{ width: 28, alignItems: "center" }} onPress={() => removeLine(i)}>
+                  <Ionicons name="close-circle" size={18} color="#EF4444" />
                 </TouchableOpacity>
-              )}
-              {cfg.hasPrice && (
-                <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "discount" })}>
-                  <Text style={styles.itemInputText}>{(parseFloat(l.discount) || 0).toFixed(2)}</Text>
-                </TouchableOpacity>
-              )}
-              {cfg.hasPrice && <Text style={[styles.itemCell, { width: 80, textAlign: "right" }]}>{lineTotal(l).toFixed(2)}</Text>}
-              <TouchableOpacity style={{ width: 28, alignItems: "center" }} onPress={() => removeLine(i)}>
-                <Ionicons name="close-circle" size={18} color="#EF4444" />
-              </TouchableOpacity>
-            </View>
-          ))}
+              </View>
+            );
+          })}
 
           <TouchableOpacity style={styles.itemsAddBar} onPress={() => setPicker(true)} testID="add-items">
-            <Text style={styles.itemsAddBarText}>Items</Text>
+            <Text style={styles.itemsAddBarText}>{cfg.addBarLabel}</Text>
           </TouchableOpacity>
         </ScrollView>
 
-        {/* footer totals */}
-        <View style={styles.docFooter}>
-          {cfg.hasAvgCost && (
-            <View style={styles.footToggle}>
-              <Text style={styles.footToggleLabel}>AVG Cost Calculate</Text>
-              <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: "#00B14F" }} />
-            </View>
-          )}
-          {cfg.hasPrice && (
+        {/* ── footer totals (purchase only) ── */}
+        {!reconcile && (
+          <View style={styles.docFooter}>
+            {cfg.hasAvgCost && (
+              <View style={styles.footToggle}>
+                <Text style={styles.footToggleLabel}>AVG Cost Calculate</Text>
+                <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: "#00B14F" }} />
+              </View>
+            )}
             <View style={styles.footToggle}>
               <Text style={styles.footToggleLabel}>Tax Included</Text>
               <Switch value={taxIncluded} onValueChange={setTaxIncluded} trackColor={{ true: "#00B14F" }} />
             </View>
-          )}
-          {cfg.hasPrice && (
-            <>
-              <View style={styles.footStat}><Text style={styles.footStatLabel}>Total</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
-              <View style={styles.footStat}><Text style={styles.footStatLabel}>Discount</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
-              <View style={styles.footStat}><Text style={styles.footStatLabel}>Tax 7%</Text><Text style={styles.footStatVal}>{tax.toFixed(2)}</Text></View>
-            </>
-          )}
-        </View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>Total</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>Discount</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>Tax 7%</Text><Text style={styles.footStatVal}>{tax.toFixed(2)}</Text></View>
+          </View>
+        )}
 
         <ProductPickerModal
           visible={picker}
@@ -1831,6 +1899,12 @@ function CreateStockDocModal({
           existing={lines.map((l) => l.product_id)}
           onClose={() => setPicker(false)}
           onDone={addProducts}
+        />
+        <SelectDocumentsModal
+          visible={importOpen}
+          type={type}
+          onClose={() => setImportOpen(false)}
+          onLoad={importDocs}
         />
         <AmountKeypad
           visible={!!keypad}
@@ -1991,6 +2065,115 @@ function AmountKeypad({
           </TouchableOpacity>
         </TouchableOpacity>
       </TouchableOpacity>
+    </Modal>
+  );
+}
+
+// Import Documents → Select Documents popup (image 4). Lists previously-saved
+// documents of the same type; "Load Documents" pulls their product lines in.
+function SelectDocumentsModal({
+  visible, type, onClose, onLoad,
+}: { visible: boolean; type: DocType; onClose: () => void; onLoad: (docs: StockDoc[]) => void }) {
+  const [docs, setDocs] = useState<StockDoc[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [cal, setCal] = useState<null | "from" | "to">(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setSelected(new Set()); setFrom(""); setTo(""); setDocs(null);
+    (async () => {
+      try {
+        const res = await apiFetch(`${API}/stock-documents?type=${type}`);
+        setDocs(await res.json());
+      } catch { setDocs([]); }
+    })();
+  }, [visible, type]);
+
+  const filtered = (docs || []).filter((d) => {
+    const day = (d.created_at || "").slice(0, 10);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    return true;
+  });
+
+  const toggle = (id: string) =>
+    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.pickerOverlay}>
+        <View style={styles.pickerCard} testID="select-documents">
+          <View style={styles.pickerHead}>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+            <Text style={styles.pickerTitle}>Select Documents</Text>
+            <TouchableOpacity
+              style={styles.loadDocsBtn}
+              onPress={() => onLoad((docs || []).filter((d) => selected.has(d.id)))}
+            >
+              <Text style={styles.loadDocsText}>Load Documents</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.selDateRow}>
+            <TouchableOpacity style={styles.selDateField} onPress={() => setCal("from")}>
+              <Text style={styles.docFieldLabel}>From Date</Text>
+              <Text style={styles.selDateVal}>{from || "Select date"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.selDateField} onPress={() => setCal("to")}>
+              <Text style={styles.docFieldLabel}>To Date</Text>
+              <Text style={styles.selDateVal}>{to || "Select date"}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {cal && (
+            <View style={styles.selCalPop}>
+              <Calendar
+                start={cal === "from" ? from : to}
+                end=""
+                onPick={(iso) => { if (cal === "from") setFrom(iso); else setTo(iso); setCal(null); }}
+              />
+            </View>
+          )}
+
+          <View style={styles.docColHead}>
+            <Text style={[styles.docColCell, { width: 150 }]}>Date</Text>
+            <Text style={[styles.docColCell, { flex: 1 }]}>Document Name</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          {docs === null ? (
+            <ActivityIndicator color="#00B14F" style={{ marginTop: 30 }} />
+          ) : filtered.length === 0 ? (
+            <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+          ) : (
+            <FlatList
+              data={filtered}
+              keyExtractor={(d) => d.id}
+              style={{ flex: 1 }}
+              renderItem={({ item }) => {
+                const dt = new Date(item.created_at);
+                const checked = selected.has(item.id);
+                return (
+                  <TouchableOpacity style={styles.docRow} onPress={() => toggle(item.id)}>
+                    <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)}</Text>
+                    <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>
+                      {item.document_name || item.note || item.document_no}
+                    </Text>
+                    <Ionicons
+                      name={checked ? "checkbox" : "square-outline"}
+                      size={20}
+                      color={checked ? "#00B14F" : "#CBD5E1"}
+                      style={{ width: 28 }}
+                    />
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          )}
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -4677,6 +4860,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#FFFFFF",
   },
   reportsBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 14 },
+  backofficeBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: 20, borderWidth: 1, borderColor: "#00B14F", borderRadius: 12,
+    paddingVertical: 14, backgroundColor: "#FFFFFF",
+  },
+  backofficeBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 16 },
   rangeCard: {
     width: "92%", maxWidth: 420, backgroundColor: "#FFFFFF",
     borderRadius: 16, overflow: "hidden",
@@ -4888,4 +5077,30 @@ const styles = StyleSheet.create({
   keypadKeyText: { fontSize: 22, fontWeight: "600", color: "#0F172A" },
   keypadDone: { backgroundColor: "#00B14F", paddingVertical: 16, alignItems: "center" },
   keypadDoneText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+
+  // ── Reconcile (adjust/check) form ──
+  importBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 12,
+  },
+  importBtnText: { fontSize: 14, color: "#00B14F", fontWeight: "600" },
+  itemCellRO: {
+    fontSize: 13, color: "#64748B", textAlign: "right",
+    backgroundColor: "#F8FAFC", borderRadius: 6, paddingVertical: 6, paddingHorizontal: 6,
+  },
+
+  // ── Select Documents popup ──
+  loadDocsBtn: {
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
+  },
+  loadDocsText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
+  selDateRow: { flexDirection: "row", gap: 16, paddingHorizontal: 16, paddingVertical: 14 },
+  selDateField: { flexDirection: "row", alignItems: "center", gap: 8 },
+  selDateVal: { fontSize: 14, color: "#00B14F", fontWeight: "600" },
+  selCalPop: {
+    marginHorizontal: 16, marginBottom: 8, padding: 8,
+    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 12, backgroundColor: "#FFFFFF",
+  },
 });
