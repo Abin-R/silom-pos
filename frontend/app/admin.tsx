@@ -374,7 +374,7 @@ export default function Admin() {
           {section === "inventory" && <Inventory isWide={isWide} />}
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
-          {section === "drawer" && <Drawer />}
+          {section === "drawer" && <Drawer isWide={isWide} />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
@@ -2926,7 +2926,7 @@ type DrawerCat = {
   active?: boolean;
 };
 
-function Drawer() {
+function Drawer({ isWide }: { isWide: boolean }) {
   const [current, setCurrent] = useState<ShiftType | null>(null);
   const [history, setHistory] = useState<ShiftType[]>([]);
   const [tab, setTab] = useState<"shift" | "history">("shift");
@@ -3081,34 +3081,11 @@ function Drawer() {
           )}
         </ScrollView>
       ) : (
-        <FlatList
-          data={history}
-          keyExtractor={(i) => i.id}
-          contentContainerStyle={{ padding: 16, gap: 10 }}
-          ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>No shift history</Text></View>}
-          renderItem={({ item }) => (
-            <View style={styles.histRow} testID={`shift-hist-${item.id}`}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.histRound}>Round #{item.round_number} · {item.status === "open" ? "OPEN" : "CLOSED"}</Text>
-                <Text style={styles.histTime}>
-                  {fmtDT(item.opened_at)}{item.closed_at ? ` → ${fmtDT(item.closed_at)}` : ""}
-                </Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={styles.histAmt}>{THB(item.total_sales_cash)}</Text>
-                <Text style={styles.histSub}>Cash sales</Text>
-              </View>
-              {item.status !== "open" && (
-                <TouchableOpacity
-                  style={styles.histReprint}
-                  onPress={() => reprintSummary(item.id)}
-                  testID={`shift-reprint-${item.id}`}
-                >
-                  <Ionicons name="print-outline" size={20} color="#00B14F" />
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
+        <ShiftHistory
+          shifts={history}
+          isWide={isWide}
+          onReprint={reprintSummary}
+          fmtDT={fmtDT}
         />
       )}
 
@@ -3268,6 +3245,221 @@ function ShiftRow({ label, value, strong }: { label: string; value: string; stro
       <Text style={[styles.shiftVal, strong && { color: "#3B82F6", fontWeight: "700", fontSize: 20 }]}>
         {value}
       </Text>
+    </View>
+  );
+}
+
+// =================== SHIFT HISTORY ===================
+// SilomPOS-style History: left = date-range scoped, date-grouped shift list;
+// right = detail card for the selected round. Buddhist-era year is shown on
+// the range header (year + 543) to match the reference UI; the in-modal
+// Calendar reuses the existing Gregorian picker.
+const BE_OFFSET = 543;
+const MONTHS_SHORT_HIST = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const isoToDate = (iso: string) => new Date(iso + "T00:00:00");
+const shiftIsoDays = (iso: string, delta: number) => {
+  const d = isoToDate(iso);
+  d.setDate(d.getDate() + delta);
+  return fmtISO(d);
+};
+const fmtRangeLabel = (r: DateRange) => {
+  if (!r.start) return "Select date";
+  const s = isoToDate(r.start);
+  const e = isoToDate(r.end || r.start);
+  return `${s.getDate()} ${MONTHS_SHORT_HIST[s.getMonth()]} ${s.getFullYear() + BE_OFFSET} - ` +
+    `${e.getDate()} ${MONTHS_SHORT_HIST[e.getMonth()]} ${e.getFullYear() + BE_OFFSET}`;
+};
+const fmtTimeOfDay = (iso?: string) => {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+};
+
+function ShiftHistory({
+  shifts,
+  isWide,
+  onReprint,
+  fmtDT,
+}: {
+  shifts: ShiftType[];
+  isWide: boolean;
+  onReprint: (id: string) => void;
+  fmtDT: (iso?: string) => string;
+}) {
+  const initialRange = useMemo<DateRange>(() => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setDate(start.getDate() - 9);
+    return { start: fmtISO(start), end: fmtISO(today) };
+  }, []);
+  const [range, setRange] = useState<DateRange>(initialRange);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Filter to the chosen range; group by closed_at date (or opened_at if open).
+  const grouped = useMemo(() => {
+    const fromMs = isoToDate(range.start).getTime();
+    const toMs = isoToDate(range.end || range.start).getTime() + 24 * 60 * 60 * 1000 - 1;
+    const byDate = new Map<string, ShiftType[]>();
+    for (const s of shifts) {
+      const ref = s.closed_at || s.opened_at;
+      const ts = new Date(ref).getTime();
+      if (ts < fromMs || ts > toMs) continue;
+      const d = new Date(ref);
+      const key = fmtISO(d);
+      const arr = byDate.get(key) || [];
+      arr.push(s);
+      byDate.set(key, arr);
+    }
+    return Array.from(byDate.entries())
+      .map(([date, rows]) => ({
+        date,
+        rows: rows.sort((a, b) =>
+          new Date(b.closed_at || b.opened_at).getTime() -
+          new Date(a.closed_at || a.opened_at).getTime(),
+        ),
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [shifts, range]);
+
+  const flat = useMemo(() => grouped.flatMap((g) => g.rows), [grouped]);
+  const selected = useMemo(
+    () => flat.find((s) => s.id === selectedId) || flat[0] || null,
+    [flat, selectedId],
+  );
+
+  const shiftRange = (delta: number) => {
+    setRange((r) => ({
+      start: shiftIsoDays(r.start, delta),
+      end: shiftIsoDays(r.end || r.start, delta),
+    }));
+  };
+
+  const detailCard = selected ? (
+    <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <View style={styles.histCard}>
+        <ShiftRow label="Round" value={String(selected.round_number)} strong />
+        <ShiftRow label="Shift opened" value={fmtDT(selected.opened_at)} />
+        <ShiftRow label="Shift opened by" value={selected.opened_by || "-"} />
+        <ShiftRow label="Shift closed" value={fmtDT(selected.closed_at)} />
+        <ShiftRow label="Shift closed by" value={selected.closed_by || "-"} />
+      </View>
+      <View style={styles.histCard}>
+        <ShiftRow label="Total Sales (cash)" value={(selected.total_sales_cash || 0).toFixed(2)} />
+        <ShiftRow label="Start Drawer" value={(selected.start_cash || 0).toFixed(2)} />
+        <View style={styles.shiftRow}>
+          <Text style={styles.shiftLabel}>Paid In</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={styles.shiftVal}>{(selected.total_paid_in || 0).toFixed(2)}</Text>
+            <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+          </View>
+        </View>
+        <View style={styles.shiftRow}>
+          <Text style={styles.shiftLabel}>Paid Out</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={[styles.shiftVal, { color: "#EF4444" }]}>{(selected.total_paid_out || 0).toFixed(2)}</Text>
+            <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+          </View>
+        </View>
+        <ShiftRow label="Actual in Drawer" value={(selected.actual_in_drawer ?? 0).toFixed(2)} />
+        <ShiftRow label="Expected in Drawer" value={(selected.expected_in_drawer || 0).toFixed(2)} />
+        <ShiftRow
+          label="Difference"
+          value={((selected.actual_in_drawer ?? 0) - (selected.expected_in_drawer || 0)).toFixed(2)}
+        />
+      </View>
+      {selected.status !== "open" && (
+        <TouchableOpacity
+          style={styles.histReprintBtn}
+          onPress={() => onReprint(selected.id)}
+          testID={`shift-reprint-${selected.id}`}
+        >
+          <Ionicons name="print-outline" size={18} color="#00B14F" />
+          <Text style={styles.histReprintText}>Reprint summary</Text>
+        </TouchableOpacity>
+      )}
+    </ScrollView>
+  ) : (
+    <View style={styles.emptyBox}>
+      <Ionicons name="time-outline" size={40} color="#CBD5E1" />
+      <Text style={styles.emptyText}>Pick a shift to see details</Text>
+    </View>
+  );
+
+  const listPanel = (
+    <View style={styles.histListPanel}>
+      <View style={styles.histRangeRow}>
+        <TouchableOpacity onPress={() => shiftRange(-10)} testID="hist-range-prev">
+          <Ionicons name="chevron-back" size={20} color="#00B14F" />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.histRangeLabelBtn}
+          onPress={() => setShowCalendar(true)}
+          testID="hist-range-open"
+        >
+          <Text style={styles.histRangeLabel}>{fmtRangeLabel(range)}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => shiftRange(10)} testID="hist-range-next">
+          <Ionicons name="chevron-forward" size={20} color="#00B14F" />
+        </TouchableOpacity>
+      </View>
+      <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+        {grouped.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyText}>No shifts in this range</Text>
+          </View>
+        ) : (
+          grouped.map((g) => (
+            <View key={g.date}>
+              <Text style={styles.histDateHeader}>{g.date}</Text>
+              {g.rows.map((row) => {
+                const active = selected?.id === row.id;
+                return (
+                  <TouchableOpacity
+                    key={row.id}
+                    style={[styles.histListRow, active && styles.histListRowActive]}
+                    onPress={() => setSelectedId(row.id)}
+                    testID={`shift-hist-${row.id}`}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.histListRound}>Round {row.round_number}</Text>
+                      <Text style={styles.histListSub}>
+                        End Drawer: {fmtTimeOfDay(row.closed_at || row.opened_at)}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </View>
+  );
+
+  return (
+    <View style={{ flex: 1, flexDirection: isWide ? "row" : "column" }}>
+      <View style={isWide ? styles.histLeftWide : { maxHeight: 280 }}>
+        {listPanel}
+      </View>
+      <View style={isWide ? styles.histRightWide : { flex: 1 }}>
+        {detailCard}
+      </View>
+
+      <DateRangeModal
+        visible={showCalendar}
+        initial={range}
+        onClose={() => setShowCalendar(false)}
+        onApply={(r) => {
+          setRange(r);
+          setShowCalendar(false);
+        }}
+      />
     </View>
   );
 }
@@ -4642,27 +4834,53 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
   },
   catRowText: { fontSize: 15, color: "#0F172A" },
-  histReprint: {
-    width: 40, height: 40, borderRadius: 8,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "#D1FAE5", backgroundColor: "#F0FDF4",
-    alignSelf: "center",
-  },
   printingBox: {
     backgroundColor: "#FFFFFF", borderRadius: 16,
     paddingVertical: 28, paddingHorizontal: 40,
     alignItems: "center", gap: 14, alignSelf: "center",
   },
   printingText: { fontSize: 15, fontWeight: "600", color: "#475569" },
-  histRow: {
-    flexDirection: "row", padding: 14, gap: 10,
-    backgroundColor: "#FFFFFF", borderRadius: 10,
-    borderWidth: 1, borderColor: "#F1F5F9",
+
+  // Shift History — split list + detail
+  histLeftWide: { width: 340, borderRightWidth: 1, borderRightColor: "#E2E8F0" },
+  histRightWide: { flex: 1 },
+  histListPanel: { flex: 1 },
+  histRangeRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 12, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
   },
-  histRound: { fontSize: 13, fontWeight: "700", color: "#0F172A" },
-  histTime: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
-  histAmt: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
-  histSub: { fontSize: 10, color: "#94A3B8" },
+  histRangeLabelBtn: {
+    flex: 1, alignItems: "center",
+    paddingVertical: 6, paddingHorizontal: 8,
+    borderRadius: 999,
+  },
+  histRangeLabel: { fontSize: 13, fontWeight: "600", color: "#00B14F" },
+  histDateHeader: {
+    fontSize: 13, fontWeight: "600", color: "#475569",
+    paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: "#F8FAFC",
+  },
+  histListRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    backgroundColor: "#FFFFFF",
+  },
+  histListRowActive: { backgroundColor: "#F0FDF4" },
+  histListRound: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
+  histListSub: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  histCard: {
+    backgroundColor: "#FFFFFF", borderRadius: 12,
+    borderWidth: 1, borderColor: "#F1F5F9",
+    paddingHorizontal: 16, paddingVertical: 4,
+  },
+  histReprintBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: "#00B14F", backgroundColor: "#F0FDF4",
+  },
+  histReprintText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
 
   catPick: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
