@@ -1,0 +1,143 @@
+{% load humanize %}<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Receipt {{ order.order_number }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --w: 80mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #e9ecef; }
+    body { font-family: 'Sarabun', sans-serif; color: #000; }
+
+    /* On-screen toolbar (hidden when printing) */
+    .toolbar {
+      position: sticky; top: 0; display: flex; gap: .5rem; justify-content: center;
+      padding: .75rem; background: #fff; border-bottom: 1px solid #dee2e6;
+    }
+    .toolbar button {
+      font: inherit; padding: .4rem .9rem; border-radius: .375rem; cursor: pointer;
+      border: 1px solid #0dcaf0; background: #0dcaf0; color: #fff;
+    }
+    .toolbar button.secondary { background: #fff; color: #495057; border-color: #ced4da; }
+
+    .slip {
+      width: var(--w); margin: 1rem auto; background: #fff; padding: 4mm 3mm;
+      font-size: 12px; line-height: 1.35;
+    }
+    .center { text-align: center; }
+    .right { text-align: right; }
+    .bold { font-weight: 700; }
+    .muted { color: #444; }
+    .sm { font-size: 11px; }
+
+    .logo { display: block; max-width: 55%; margin: 0 auto 4px; }
+    .shop-name { font-size: 16px; font-weight: 700; text-align: center; margin: 2px 0; }
+    .hdr-line { text-align: center; font-size: 11px; }
+
+    .hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+
+    .queue { font-size: 13px; }
+    .queue b { font-size: 26px; vertical-align: -2px; }
+
+    .row { display: flex; justify-content: space-between; gap: 6px; }
+    .row > .l { text-align: left; }
+    .row > .r { text-align: right; white-space: nowrap; }
+
+    .items .it { display: flex; justify-content: space-between; gap: 6px; margin-top: 2px; }
+    .items .it .qty { width: 18px; flex: 0 0 18px; }
+    .items .it .desc { flex: 1 1 auto; }
+    .items .it .desc .bc { font-size: 10px; color: #555; }
+    .items .it .amt { flex: 0 0 auto; white-space: nowrap; }
+
+    .grand b { font-size: 16px; }
+
+    @media print {
+      html, body { background: #fff; }
+      .toolbar { display: none; }
+      .slip { margin: 0; width: auto; box-shadow: none; padding: 0 2mm; }
+      @page { size: 80mm auto; margin: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button onclick="window.print()">&#128424; Print / Save as PDF</button>
+    <button class="secondary" onclick="window.close()">Close</button>
+  </div>
+
+  <div class="slip">
+    {% if shop.logo_url %}<img class="logo" src="{{ shop.logo_url }}" alt="logo">{% endif %}
+    <div class="shop-name">{{ shop.shop_name|default:"" }}</div>
+    {% if shop.company_name %}<div class="hdr-line">{{ shop.company_name }}</div>{% endif %}
+    {% if shop.address_line_1 %}<div class="hdr-line">{{ shop.address_line_1 }}</div>{% endif %}
+    {% if shop.address_line_2 %}<div class="hdr-line">{{ shop.address_line_2 }}</div>{% endif %}
+    {% if not shop.address_line_1 and shop.address %}<div class="hdr-line">{{ shop.address|linebreaksbr }}</div>{% endif %}
+    {% if shop.phone %}<div class="hdr-line">{{ shop.phone }}</div>{% endif %}
+    {% if shop.tax_id %}<div class="hdr-line">TAX ID: {{ shop.tax_id }}</div>{% endif %}
+    <div class="hdr-line">POS ID: {{ shop.pos_id|default:"" }}</div>
+
+    <div class="center bold" style="margin-top:6px;">&#3651;&#3610;&#3648;&#3626;&#3619;&#3655;&#3592;&#3619;&#3633;&#3610;&#3648;&#3591;&#3636;&#3609;/&#3651;&#3610;&#3585;&#3635;&#3585;&#3633;&#3610;&#3616;&#3634;&#3625;&#3637;&#3629;&#3618;&#3656;&#3634;&#3591;&#3618;&#3656;&#3629;</div>
+
+    {% if order.status == 'cancel' %}
+      <div class="center bold" style="margin-top:4px;">*** &#3618;&#3585;&#3648;&#3621;&#3636;&#3585; / VOID ***</div>
+    {% endif %}
+
+    <div style="margin-top:6px;">{{ branch_name }}</div>
+    <hr class="hr">
+
+    <div class="queue">&#3588;&#3636;&#3623;&#3607;&#3637;&#3656; <b>{{ queue }}</b></div>
+    <div>Order Ref:</div>
+    <div>&#3623;&#3633;&#3609;&#3607;&#3637;&#3656;: {{ thai_date }}</div>
+    <div>Invoice: {{ order.order_number }}</div>
+    <div>Order Number: {{ short_code }}</div>
+    <div class="row"><span class="l">POS #: {{ pos_number }}</span><span class="r">&#3614;&#3609;&#3633;&#3585;&#3591;&#3634;&#3609;: {{ order.staff|default:"" }}</span></div>
+    <hr class="hr">
+
+    <div class="items">
+      <div class="row bold"><span class="l">QTY &#3619;&#3634;&#3618;&#3621;&#3632;&#3648;&#3629;&#3637;&#3618;&#3604;</span><span class="r">Total</span></div>
+      {% for it in items %}
+      <div class="it">
+        <div class="qty">{{ it.qty }}</div>
+        <div class="desc">{{ it.name }}{% if it.barcode %}<div class="bc">{{ it.barcode }}</div>{% endif %}</div>
+        <div class="amt">{{ it.line_total|floatformat:2 }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <hr class="hr">
+
+    <div class="row"><span class="l">&#3626;&#3656;&#3623;&#3609;&#3621;&#3604;&#3607;&#3657;&#3634;&#3618;&#3610;&#3636;&#3621;</span><span class="r">-{{ discount_amount|floatformat:2 }}</span></div>
+    <div class="row"><span class="l">&#3626;&#3636;&#3609;&#3588;&#3657;&#3634;&#3617;&#3637;&#3616;&#3634;&#3625;&#3637;</span><span class="r">{{ taxable_total|floatformat:2 }}</span></div>
+    <div class="row"><span class="l">&#3626;&#3636;&#3609;&#3588;&#3657;&#3634;&#3652;&#3617;&#3656;&#3617;&#3637;&#3616;&#3634;&#3625;&#3637;</span><span class="r">{{ nontax_total|floatformat:2 }}</span></div>
+    <div class="row"><span class="l">&#3617;&#3641;&#3621;&#3588;&#3656;&#3634;&#3585;&#3656;&#3629;&#3609;&#3616;&#3634;&#3625;&#3637;</span><span class="r">{{ sub_before_vat|floatformat:2 }}</span></div>
+    <div class="row"><span class="l">&#3617;&#3641;&#3621;&#3588;&#3656;&#3634;&#3616;&#3634;&#3625;&#3637; {{ tax_percent|floatformat:"-2" }}%</span><span class="r">{{ vat|floatformat:2 }}</span></div>
+    <div class="row grand bold" style="margin-top:2px;"><span class="l">&#3592;&#3635;&#3609;&#3623;&#3609; {{ item_count }} &#3594;&#3636;&#3657;&#3609; &#3619;&#3623;&#3617;&#3617;&#3641;&#3621;&#3588;&#3656;&#3634;</span><span class="r"><b>{{ total|floatformat:2 }}</b></span></div>
+    <hr class="hr">
+
+    <div>&#3585;&#3634;&#3619;&#3594;&#3635;&#3619;&#3632;&#3648;&#3591;&#3636;&#3609;</div>
+    <div class="row"><span class="l">{{ payment_label }}</span><span class="r">{{ paid_amount|floatformat:2 }}</span></div>
+    {% if is_cash %}<div class="row"><span class="l">&#3648;&#3591;&#3636;&#3609;&#3607;&#3629;&#3609;</span><span class="r">{{ change|floatformat:2 }}</span></div>{% endif %}
+    <hr class="hr">
+
+    <div class="center sm">&#3619;&#3634;&#3588;&#3634;&#3626;&#3636;&#3609;&#3588;&#3657;&#3634;&#3619;&#3623;&#3617;&#3616;&#3634;&#3625;&#3637;&#3617;&#3641;&#3621;&#3588;&#3656;&#3634;&#3648;&#3614;&#3636;&#3656;&#3617;&#3649;&#3621;&#3657;&#3623;</div>
+    <div class="center bold" style="margin-top:6px;">THANK YOU FOR YOUR SHOPPING</div>
+    {% if shop.phone %}<div class="center">Tel. {{ shop.phone }}</div>{% endif %}
+    <div class="center muted sm" style="margin-top:6px;">Powered by Brave POS</div>
+  </div>
+
+  <script>
+    // Auto-open the print dialog once the Thai web-font has settled.
+    window.addEventListener('load', function () {
+      var go = function () { window.print(); };
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { setTimeout(go, 150); });
+      } else {
+        setTimeout(go, 400);
+      }
+    });
+  </script>
+</body>
+</html>

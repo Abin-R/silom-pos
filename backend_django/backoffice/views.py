@@ -5,12 +5,14 @@ auth and is unaffected. Filtering is via query string:
 ?branch=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD."""
 from __future__ import annotations
 
+import csv
 import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
+from django.http import HttpResponse
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum, Q
 from django.db.models.functions import Coalesce, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
@@ -24,7 +26,10 @@ from bravepos.models import (
     OrderItem,
     Product,
     Settings,
+    Staff,
+    Unit,
 )
+from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -76,6 +81,39 @@ def _filter_qs(request, **extra):
     keep.update({k: v for k, v in extra.items() if v is not None})
     from urllib.parse import urlencode
     return urlencode(keep)
+
+
+def _csv_num(v) -> str:
+    """Format a Decimal/number for CSV money cells: fixed 2 places, no commas."""
+    return f"{(v or Decimal(0)):.2f}"
+
+
+def _csv_response(filename: str):
+    """A text/csv attachment response, BOM-prefixed so Excel reads UTF-8
+    (Thai shop/product names) correctly, with a csv.writer over it."""
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.write("﻿")  # UTF-8 BOM
+    return response, csv.writer(response)
+
+
+def _write_export_header(writer, title, branch, dfrom, dto):
+    """Write the shared report header block (title, shop, branch, date
+    window) used by every backoffice CSV export. The 'To' value caps at the
+    export moment for an in-progress current day, matching SilomPOS."""
+    settings_row = Settings.objects.first()
+    shop_name = settings_row.shop_name if settings_row else ""
+    start, end = _date_window(dfrom, dto)
+    now = timezone.localtime()
+    to_dt = now if dto == now.date() else timezone.localtime(end)
+
+    writer.writerow([title])
+    writer.writerow(["Shop", shop_name])
+    writer.writerow(["Branch", branch.name if branch else "All"])
+    writer.writerow([])
+    writer.writerow(["From", timezone.localtime(start).strftime("%d %B %Y %H:%M:%S")])
+    writer.writerow(["To", to_dt.strftime("%d %B %Y %H:%M:%S")])
+    writer.writerow([])
 
 
 def customer_receipt(request, order_number: str):
@@ -415,15 +453,9 @@ def dashboard(request):
 
 
 # ─── Transactions ───────────────────────────────────────────────────────
-@login_required
-def transactions(request):
-    """Per-bill list with expandable detail rows.
-
-    Maps to SilomPOS `/report/transaction`. Each row mirrors the columns
-    you see there (Sub Total, Discount, Grand Total, Total incl/non-Tax,
-    Sub-total ex-Tax, Tax, Add-on, Service Charge, Rounding, Shipping,
-    Status). Clicking a row expands an inline panel with the line items
-    and payment block."""
+def _transactions_qs(request):
+    """Filtered, prefetched order queryset shared by the page and the
+    CSV export so both honour the same ?branch=&from=&to= filters."""
     branches, branch, dfrom, dto = _common_filters(request)
     start, end = _date_window(dfrom, dto)
 
@@ -434,7 +466,11 @@ def transactions(request):
     )
     if branch:
         qs = qs.filter(branch=branch)
+    return branches, branch, dfrom, dto, qs
 
+
+def _tax_settings():
+    """Tax / service-charge settings used to derive each row's tax split."""
     settings_row = Settings.objects.first()
     tax_percent = settings_row.tax_percent if settings_row else Decimal("7")
     tax_mode = settings_row.tax_mode if settings_row else "exclusive"
@@ -443,49 +479,69 @@ def transactions(request):
         if settings_row and settings_row.service_charge_enabled
         else Decimal(0)
     )
+    return tax_percent, tax_mode, service_charge_pct
+
+
+def _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct):
+    """Derive the displayed/exported columns for a single order."""
+    sub = o.subtotal or Decimal(0)
+    disc = o.discount_amount or Decimal(0)
+    taxable = sub - disc
+    if tax_mode == "inclusive":
+        tax_amount = taxable * tax_percent / (Decimal(100) + tax_percent)
+        total_incl_tax = taxable
+        total_non_tax = taxable - tax_amount
+        sub_ex_tax = taxable - tax_amount
+    else:
+        tax_amount = taxable * tax_percent / Decimal(100)
+        total_incl_tax = taxable + tax_amount
+        total_non_tax = taxable
+        sub_ex_tax = taxable
+    service_charge = taxable * service_charge_pct / Decimal(100)
+
+    items_data = []
+    for it in o.items.all():
+        line_total = (it.price or Decimal(0)) * (it.qty or 0)
+        items_data.append({
+            "item": it,
+            "barcode": it.product.barcode if it.product_id else "",
+            "line_total": line_total,
+        })
+
+    return {
+        "order": o,
+        "items": items_data,
+        "promotion_discount": Decimal(0),   # no promo tracking yet
+        "add_on_total": Decimal(0),         # no add-on tracking yet
+        "service_charge": service_charge,
+        "rounding_adj": Decimal(0),
+        "shipping_fee": Decimal(0),
+        "tax_amount": tax_amount,
+        "total_incl_tax": total_incl_tax,
+        "total_non_tax": total_non_tax,
+        "sub_ex_tax": sub_ex_tax,
+    }
+
+
+@login_required
+def transactions(request):
+    """Per-bill list with expandable detail rows.
+
+    Maps to SilomPOS `/report/transaction`. Each row mirrors the columns
+    you see there (Sub Total, Discount, Grand Total, Total incl/non-Tax,
+    Sub-total ex-Tax, Tax, Add-on, Service Charge, Rounding, Shipping,
+    Status). Clicking a row expands an inline panel with the line items
+    and payment block."""
+    branches, branch, dfrom, dto, qs = _transactions_qs(request)
+    tax_percent, tax_mode, service_charge_pct = _tax_settings()
 
     paginator = Paginator(qs, 25)
     page_obj = paginator.get_page(request.GET.get("page"))
 
-    rows = []
-    for o in page_obj.object_list:
-        sub = o.subtotal or Decimal(0)
-        disc = o.discount_amount or Decimal(0)
-        taxable = sub - disc
-        if tax_mode == "inclusive":
-            tax_amount = taxable * tax_percent / (Decimal(100) + tax_percent)
-            total_incl_tax = taxable
-            total_non_tax = taxable - tax_amount
-            sub_ex_tax = taxable - tax_amount
-        else:
-            tax_amount = taxable * tax_percent / Decimal(100)
-            total_incl_tax = taxable + tax_amount
-            total_non_tax = taxable
-            sub_ex_tax = taxable
-        service_charge = taxable * service_charge_pct / Decimal(100)
-
-        items_data = []
-        for it in o.items.all():
-            line_total = (it.price or Decimal(0)) * (it.qty or 0)
-            items_data.append({
-                "item": it,
-                "barcode": it.product.barcode if it.product_id else "",
-                "line_total": line_total,
-            })
-
-        rows.append({
-            "order": o,
-            "items": items_data,
-            "promotion_discount": Decimal(0),   # no promo tracking yet
-            "add_on_total": Decimal(0),         # no add-on tracking yet
-            "service_charge": service_charge,
-            "rounding_adj": Decimal(0),
-            "shipping_fee": Decimal(0),
-            "tax_amount": tax_amount,
-            "total_incl_tax": total_incl_tax,
-            "total_non_tax": total_non_tax,
-            "sub_ex_tax": sub_ex_tax,
-        })
+    rows = [
+        _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct)
+        for o in page_obj.object_list
+    ]
 
     context = {
         "active": "transactions",
@@ -502,6 +558,237 @@ def transactions(request):
     return render(request, "backoffice/transactions.html", context)
 
 
+# English column headers — same column order and semantics as the
+# SilomPOS "Sales by Bill" export so the file drops straight into the
+# workflows the shop already has built around that spreadsheet.
+_TRX_EXPORT_HEADERS = [
+    "No.",
+    "Date",                                      # date
+    "Paid At",                                   # paid-at datetime
+    "Bill No.",                                  # bill number
+    "Total Before Discount",                     # sub total (before discount)
+    "Item Discount",                             # item/line discount
+    "Bill Discount",                             # end-of-bill discount
+    "Net Total (after discount)",                # net total after discount
+    "Taxable Amount (after discount)",           # taxable value after discount
+    "Tax-Exempt Amount (after discount)",        # tax-exempt value after discount
+    "Service Charge",                            # service charge
+    "Shipping Fee",                              # shipping fee
+    "Total Before Tax",                          # value before tax
+    "Tax Amount",                                # tax value
+    "Rounding",                                  # rounding adjustment
+    "Grand Total",                               # exempt + before-tax + tax + rounding
+    "Customer Name",                             # customer name
+    "Table Name",                                # table name
+    "Coupon Code",                               # coupon code
+    "Coupon Type",                               # coupon type
+    "Document Status",                           # document status
+    "POS Number",                                # POS machine number
+    "Sales Channel",                             # sales channel
+    "Note",                                      # note
+]
+
+# Columns that carry money — summed into the Summary / Void Summary rows.
+# Indexes are 0-based into a data row built by ``_trx_export_row``.
+_TRX_MONEY_COLS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+
+def _trx_export_row(no, o, row):
+    """One SilomPOS-style data row for order ``o`` (``row`` is the dict from
+    :func:`_build_transaction_row`). Money columns are Decimals so the
+    summary rows can sum them; everything else is already a string."""
+    net = (o.subtotal or Decimal(0)) - (o.discount_amount or Decimal(0))
+    exempt = Decimal(0)
+    before_tax = row["sub_ex_tax"]
+    tax = row["tax_amount"]
+    rounding = row["rounding_adj"]
+    grand = exempt + before_tax + tax + rounding
+    created = timezone.localtime(o.created_at)
+    return [
+        no,
+        created.strftime("%d %b %Y"),
+        created.strftime("%d %b %Y %H:%M:%S"),
+        o.order_number,
+        o.subtotal or Decimal(0),       # รวมก่อนลด
+        o.discount_amount or Decimal(0),  # ส่วนลดรายการ (POS has no bill-level discount)
+        Decimal(0),                     # ส่วนลดท้ายบิล
+        net,                            # รวมสุทธิ
+        net,                            # taxable (no tax-exempt products yet)
+        exempt,                         # tax-exempt
+        row["service_charge"],          # ค่าบริการ
+        Decimal(0),                     # ค่าขนส่ง
+        before_tax,                     # รวมมูลค่าก่อนภาษี
+        tax,                            # มูลค่าภาษี
+        rounding,                       # ปัดเศษ
+        grand,                          # grand total
+        o.customer_name or "",          # ชื่อลูกค้า
+        "-",                            # ชื่อโต๊ะ
+        "",                             # รหัสคูปอง
+        "",                             # ประเภทคูปอง
+        "V" if o.status == "cancel" else "A",  # document status
+        "",                             # POS number (filled below)
+        "Storefront",                   # sales channel
+        "-",                            # note
+    ]
+
+
+@login_required
+def transactions_export(request):
+    """CSV download of the transactions list for the current filters.
+
+    Mirrors the SilomPOS "Sales by Bill" spreadsheet: a metadata header
+    block (shop, branch, date range, timezone), the column headers, one
+    row per bill, then Summary / Void Summary footer rows. Covers every
+    order in the date/branch window, not just the visible page."""
+    _branches, branch, dfrom, dto, qs = _transactions_qs(request)
+    tax_percent, tax_mode, service_charge_pct = _tax_settings()
+
+    settings_row = Settings.objects.first()
+    shop_name = settings_row.shop_name if settings_row else "Brave POS"
+    pos_number = (settings_row.pos_number if settings_row else "") or "001"
+    branch_name = branch.name if branch else "All branches"
+    tz_name = str(timezone.get_current_timezone())
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"transactions_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.write("﻿")  # BOM so Excel reads UTF-8 (Thai names) correctly
+
+    writer = csv.writer(response)
+
+    # ── Metadata header block ───────────────────────────────────────────
+    writer.writerow(["Sales by Bill Report"])
+    writer.writerow(["Shop Name", shop_name])
+    writer.writerow(["Branch", branch_name])
+    writer.writerow([])
+    writer.writerow(["From", dfrom.strftime("%d %B %Y"), "Timezone", tz_name])
+    writer.writerow(["To", dto.strftime("%d %B %Y"), "Timezone", tz_name])
+    writer.writerow([])
+    writer.writerow(_TRX_EXPORT_HEADERS)
+
+    def num(v):
+        return f"{(v or Decimal(0)):.2f}"
+
+    def fmt(cell):
+        return num(cell) if isinstance(cell, Decimal) else cell
+
+    valid_totals = [Decimal(0)] * len(_TRX_MONEY_COLS)
+    void_totals = [Decimal(0)] * len(_TRX_MONEY_COLS)
+    valid_count = void_count = 0
+
+    no = 0
+    for o in qs.iterator():
+        no += 1
+        row = _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct)
+        data = _trx_export_row(no, o, row)
+        data[21] = pos_number  # ขายเลขเครื่อง POS
+        writer.writerow([fmt(c) for c in data])
+
+        bucket = void_totals if o.status == "cancel" else valid_totals
+        for i, col in enumerate(_TRX_MONEY_COLS):
+            bucket[i] += data[col]
+        if o.status == "cancel":
+            void_count += 1
+        else:
+            valid_count += 1
+
+    def summary_row(label, count, totals):
+        cells = [""] * len(_TRX_EXPORT_HEADERS)
+        cells[2] = label
+        cells[3] = count
+        for i, col in enumerate(_TRX_MONEY_COLS):
+            cells[col] = num(totals[i])
+        return cells
+
+    writer.writerow([])
+    writer.writerow(summary_row("Summary", valid_count, valid_totals))
+    writer.writerow(summary_row("Void Summary", void_count, void_totals))
+
+    return response
+
+
+# Cash-like methods print the Thai "เงินสด" label and show a change line;
+# everything else prints its stored method string with no change.
+_RECEIPT_CASH_METHODS = {"cash", "เงินสด"}
+
+
+@login_required
+def receipt_print(request, order_number):
+    """Print-friendly 'Simplified Tax Invoice' slip for a single bill,
+    mirroring the in-app thermal receipt (ReceiptImage). Opened in a new tab
+    from the Transactions page; the page auto-opens the browser print dialog
+    so the user can Save as PDF or print to a thermal printer.
+
+    VAT is shown inclusive (the displayed prices already include tax), exactly
+    like the printed app receipt: value-before-VAT = total / (1 + rate)."""
+    order = get_object_or_404(
+        Order.objects.select_related("branch", "customer")
+        .prefetch_related("items", "items__product"),
+        order_number=order_number,
+    )
+    settings_row = Settings.objects.first()
+    tax_percent = settings_row.tax_percent if settings_row else Decimal("7")
+
+    total = order.total or Decimal(0)
+    rate = tax_percent / Decimal(100)
+    sub_before_vat = (total / (Decimal(1) + rate)) if rate else total
+    vat = total - sub_before_vat
+
+    items = []
+    item_count = 0
+    for it in order.items.all():
+        items.append({
+            "name": it.name,
+            "barcode": (it.product.barcode if it.product_id else "") or "",
+            "qty": it.qty or 0,
+            "price": it.price or Decimal(0),
+            "line_total": (it.price or Decimal(0)) * (it.qty or 0),
+        })
+        item_count += it.qty or 0
+    gross_subtotal = sum((i["line_total"] for i in items), Decimal(0))
+
+    # Queue number - mirror the app: last two digits of the invoice number,
+    # leading zeros stripped (PS000000076 -> "76").
+    queue = (order.order_number or "")[-2:].lstrip("0") or "1"
+
+    created = timezone.localtime(order.created_at)
+    # Thai Buddhist calendar year (Gregorian + 543), e.g. 2026 -> 2569.
+    thai_date = f"{created.strftime('%d/%m/')}{created.year + 543} {created.strftime('%H:%M')}"
+    short_code = f"#{created.strftime('%y%m%d')}-{order.id.hex[:8].upper()}"
+
+    method = order.payment_method or ""
+    is_cash = method.strip().lower() in _RECEIPT_CASH_METHODS
+
+    context = {
+        "shop": settings_row,
+        "order": order,
+        "branch_name": order.branch.name if order.branch_id else (
+            settings_row.branch if settings_row else ""),
+        "queue": queue,
+        "thai_date": thai_date,
+        "short_code": short_code,
+        "pos_number": (settings_row.pos_number if settings_row else "") or "001",
+        "items": items,
+        "item_count": item_count,
+        "gross_subtotal": gross_subtotal,
+        "discount_amount": order.discount_amount or Decimal(0),
+        "taxable_total": total,
+        "nontax_total": Decimal(0),
+        "sub_before_vat": sub_before_vat,
+        "vat": vat,
+        "tax_percent": tax_percent,
+        "total": total,
+        "payment_label": "เงินสด" if is_cash else (method or "เงินสด"),
+        "paid_amount": order.paid_amount or total,
+        "change": order.change or Decimal(0),
+        "is_cash": is_cash,
+    }
+    return render(request, "backoffice/receipt_print.html", context)
+
+
+
 # ─── Sales report by Date ───────────────────────────────────────────────
 def _profit_expr():
     """Per-line profit: (price - product.cost) * qty. Wrapped because the
@@ -512,11 +799,9 @@ def _profit_expr():
     )
 
 
-@login_required
-def report_daily(request):
-    """Daily totals — one row per calendar day in the filter range. Click a
-    row to drill down into per-bill detail (`report_daily_detail`)."""
-    branches, branch, dfrom, dto = _common_filters(request)
+def _report_daily_rows(branch, dfrom, dto):
+    """One aggregated row per calendar day in the range — shared by the page
+    and its CSV export so both stay in sync."""
     start, end = _date_window(dfrom, dto)
 
     orders = Order.objects.filter(
@@ -569,6 +854,15 @@ def report_daily(request):
             "grand_total": entry["total"] or Decimal(0),
             "bill_count": entry["bill_count"] or 0,
         })
+    return rows
+
+
+@login_required
+def report_daily(request):
+    """Daily totals — one row per calendar day in the filter range. Click a
+    row to drill down into per-bill detail (`report_daily_detail`)."""
+    branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_daily_rows(branch, dfrom, dto)
 
     context = {
         "active": "report_daily",
@@ -583,13 +877,52 @@ def report_daily(request):
 
 
 @login_required
-def report_daily_detail(request, date_str):
-    """Per-bill detail for a single day — drill-down from `report_daily`."""
-    branches, branch, _, _ = _common_filters(request)
-    try:
-        day = date.fromisoformat(date_str)
-    except ValueError:
-        return redirect("backoffice:report_daily")
+def report_daily_export(request):
+    """CSV of the daily totals (one row per day) for the current filters."""
+    _branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_daily_rows(branch, dfrom, dto)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"sales_by_date_summary_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    response, writer = _csv_response(filename)
+
+    _write_export_header(writer, "Sales report by Date", branch, dfrom, dto)
+    writer.writerow([
+        "Date", "Bills", "Sub Total", "Discount", "Tax Amount",
+        "Service Charge", "Profit", "Grand Total",
+    ])
+
+    totals = {k: Decimal(0) for k in
+              ("subtotal", "discount", "tax", "service", "profit", "grand")}
+    bill_total = 0
+    for r in rows:
+        writer.writerow([
+            r["date"].strftime("%d/%m/%Y"),
+            r["bill_count"],
+            _csv_num(r["subtotal"]), _csv_num(r["discount"]),
+            _csv_num(r["tax_amount"]), _csv_num(r["service_charge"]),
+            _csv_num(r["profit"]), _csv_num(r["grand_total"]),
+        ])
+        totals["subtotal"] += r["subtotal"]
+        totals["discount"] += r["discount"]
+        totals["tax"] += r["tax_amount"]
+        totals["service"] += r["service_charge"]
+        totals["profit"] += r["profit"]
+        totals["grand"] += r["grand_total"]
+        bill_total += r["bill_count"]
+
+    writer.writerow([
+        "Total", bill_total,
+        _csv_num(totals["subtotal"]), _csv_num(totals["discount"]),
+        _csv_num(totals["tax"]), _csv_num(totals["service"]),
+        _csv_num(totals["profit"]), _csv_num(totals["grand"]),
+    ])
+    return response
+
+
+def _report_daily_detail_rows(branch, day):
+    """Per-bill rows for a single day, shared by the detail page and its
+    CSV export so both stay in sync."""
     start, end = _date_window(day, day)
 
     orders = (
@@ -619,6 +952,19 @@ def report_daily_detail(request, date_str):
             "service_charge": Decimal(0),
             "rounding_adj": Decimal(0),
         })
+    return rows
+
+
+@login_required
+def report_daily_detail(request, date_str):
+    """Per-bill detail for a single day — drill-down from `report_daily`."""
+    branches, branch, _, _ = _common_filters(request)
+    try:
+        day = date.fromisoformat(date_str)
+    except ValueError:
+        return redirect("backoffice:report_daily")
+
+    rows = _report_daily_detail_rows(branch, day)
 
     context = {
         "active": "report_daily",
@@ -631,13 +977,152 @@ def report_daily_detail(request, date_str):
     return render(request, "backoffice/report_daily_detail.html", context)
 
 
-# ─── Sales report by Bill Detail ────────────────────────────────────────
-@login_required
-def report_sell(request):
-    """One row per line item across all bills in the range."""
-    branches, branch, dfrom, dto = _common_filters(request)
-    start, end = _date_window(dfrom, dto)
+# Payment-method columns for the daily export. The POS records one method
+# per bill as a free-form string (see frontend PAYMENT_METHODS); the first
+# five match the SilomPOS report layout, the rest are appended so nothing is
+# lumped together. Each tuple is (bucket key, column header).
+_PAYMENT_COLUMNS = [
+    ("cash", "Cash"),
+    ("credit", "Credit"),
+    ("promptpay", "Prompt Pay"),
+    ("custom", "Custom Pay"),
+    ("kbank", "KBank QR Code"),
+    ("beam", "Beam"),
+    ("easypay", "Easy Pay"),
+    ("edc", "EDC"),
+]
 
+_PAYMENT_BUCKETS = {
+    "cash": "cash",
+    "credit": "credit",
+    "promptpay": "promptpay",
+    "qr kbank": "kbank",
+    "custom": "custom",
+    "beam": "beam",
+    "easy pay": "easypay",
+    "edc": "edc",
+}
+
+
+def _payment_bucket(payment_method: str) -> str:
+    """Map a stored payment_method string to one of `_PAYMENT_COLUMNS`.
+    Methods carry an optional ` · detail` suffix (e.g. 'Credit · VISA',
+    'Custom · EDC Kbank') — only the part before the dot decides the column.
+    Anything unrecognised falls into Custom Pay."""
+    base = (payment_method or "").split("·")[0].strip().lower()
+    return _PAYMENT_BUCKETS.get(base, "custom")
+
+
+@login_required
+def report_daily_detail_export(request, date_str):
+    """CSV download of the per-bill detail for a single day, matching the
+    SilomPOS 'Sales report by date' layout: a header block (shop, branch,
+    date window), one row per bill with the payment-method split plus
+    cost/profit, and a totals row. Covers every bill in the date/branch
+    window, not just the on-screen page."""
+    _branches, branch, _, _ = _common_filters(request)
+    try:
+        day = date.fromisoformat(date_str)
+    except ValueError:
+        return redirect("backoffice:report_daily")
+
+    start, _end = _date_window(day, day)
+    orders = (
+        Order.objects.filter(created_at__gte=start, created_at__lte=_end)
+        .exclude(status="cancel")
+        .select_related("branch", "customer")
+        .prefetch_related("items", "items__product")
+        .order_by("created_at")
+    )
+    if branch:
+        orders = orders.filter(branch=branch)
+
+    settings_row = Settings.objects.first()
+    tax_percent = settings_row.tax_percent if settings_row else Decimal("7")
+    tax_mode = settings_row.tax_mode if settings_row else "exclusive"
+    pos_number = settings_row.pos_number if settings_row else ""
+
+    num = _csv_num
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    response, writer = _csv_response(f"sales_by_date_{fname_branch}_{day.isoformat()}.csv")
+
+    # Sales report by date (Thai title, matching SilomPOS)
+    _write_export_header(writer, "รายงานยอดขายสินค้าตามวัน", branch, day, day)
+
+    # ── Column headers ──
+    pay_headers = [label for _key, label in _PAYMENT_COLUMNS]
+    writer.writerow(
+        ["No.", "Date", "Time", "Invoice No", "Net Amount", "Total Discount",
+         "Tax", "Rounding Adj.", "Grand Total"]
+        + pay_headers
+        + ["Cost", "Profit", "Customer", "Staff", "Status", "POS Number"]
+    )
+
+    # ── Bill rows ──
+    totals = {k: Decimal(0) for k in
+              ("net", "discount", "tax", "rounding", "grand", "cost", "profit")}
+    totals_pay = {key: Decimal(0) for key, _label in _PAYMENT_COLUMNS}
+
+    for i, o in enumerate(orders, start=1):
+        sub = o.subtotal or Decimal(0)
+        disc = o.discount_amount or Decimal(0)
+        taxable = sub - disc
+        if tax_mode == "inclusive":
+            tax_amount = taxable * tax_percent / (Decimal(100) + tax_percent)
+        else:
+            tax_amount = taxable * tax_percent / Decimal(100)
+        grand = o.total or Decimal(0)
+        rounding_adj = Decimal(0)
+
+        cost = sum(
+            ((it.product.cost or Decimal(0)) * (it.qty or 0))
+            for it in o.items.all() if it.product_id
+        ) or Decimal(0)
+        profit = sub - cost
+
+        bucket = _payment_bucket(o.payment_method)
+        pay_cells = {key: (grand if key == bucket else Decimal(0))
+                     for key, _label in _PAYMENT_COLUMNS}
+
+        customer = o.customer_name or (o.customer.name if o.customer else "")
+        created = timezone.localtime(o.created_at)
+
+        writer.writerow(
+            [i, created.strftime("%d/%m/%Y"),
+             o.created_time or created.strftime("%H:%M"),
+             o.order_number, num(sub), num(disc), num(tax_amount),
+             num(rounding_adj), num(grand)]
+            + [num(pay_cells[key]) for key, _label in _PAYMENT_COLUMNS]
+            + [num(cost), num(profit), customer, o.staff,
+               "A" if o.status != "cancel" else "Void", pos_number]
+        )
+
+        totals["net"] += sub
+        totals["discount"] += disc
+        totals["tax"] += tax_amount
+        totals["rounding"] += rounding_adj
+        totals["grand"] += grand
+        totals["cost"] += cost
+        totals["profit"] += profit
+        for key in totals_pay:
+            totals_pay[key] += pay_cells[key]
+
+    # ── Totals row ──
+    writer.writerow(
+        ["", "", "", "", num(totals["net"]), num(totals["discount"]),
+         num(totals["tax"]), num(totals["rounding"]), num(totals["grand"])]
+        + [num(totals_pay[key]) for key, _label in _PAYMENT_COLUMNS]
+        + [num(totals["cost"]), num(totals["profit"]), "", "", "", ""]
+    )
+
+    return response
+
+
+# ─── Sales report by Bill Detail ────────────────────────────────────────
+def _report_sell_items(branch, dfrom, dto):
+    """Line items across all bills in the range — shared by the page (which
+    paginates it) and the CSV export (which streams every row)."""
+    start, end = _date_window(dfrom, dto)
     items = (
         OrderItem.objects.filter(
             order__created_at__gte=start,
@@ -649,21 +1134,32 @@ def report_sell(request):
     )
     if branch:
         items = items.filter(order__branch=branch)
+    return items
+
+
+def _sell_row(it):
+    """Derived columns for a single line item, shared by page and export."""
+    line_sub = (it.price or Decimal(0)) * (it.qty or 0)
+    return {
+        "item": it,
+        "barcode": it.product.barcode if it.product_id else "",
+        "add_on_total": Decimal(0),
+        "discount": Decimal(0),
+        "sub_total": line_sub,
+        "total": line_sub,
+    }
+
+
+@login_required
+def report_sell(request):
+    """One row per line item across all bills in the range."""
+    branches, branch, dfrom, dto = _common_filters(request)
+    items = _report_sell_items(branch, dfrom, dto)
 
     paginator = Paginator(items, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
 
-    rows = []
-    for it in page_obj.object_list:
-        line_sub = (it.price or Decimal(0)) * (it.qty or 0)
-        rows.append({
-            "item": it,
-            "barcode": it.product.barcode if it.product_id else "",
-            "add_on_total": Decimal(0),
-            "discount": Decimal(0),
-            "sub_total": line_sub,
-            "total": line_sub,
-        })
+    rows = [_sell_row(it) for it in page_obj.object_list]
 
     context = {
         "active": "report_sell",
@@ -679,12 +1175,56 @@ def report_sell(request):
     return render(request, "backoffice/report_sell.html", context)
 
 
-# ─── Sales report by Product (SKU) ──────────────────────────────────────
 @login_required
-def report_sku(request):
-    """Aggregated per product over the date range. Joined to current Product
-    row to get barcode, category and current stock balance."""
-    branches, branch, dfrom, dto = _common_filters(request)
+def report_sell_export(request):
+    """CSV of every bill line item in the range (not just the visible page)."""
+    _branches, branch, dfrom, dto = _common_filters(request)
+    items = _report_sell_items(branch, dfrom, dto)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"sales_by_bill_detail_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    response, writer = _csv_response(filename)
+
+    _write_export_header(writer, "Sales report by Bill Detail", branch, dfrom, dto)
+    writer.writerow([
+        "Date", "Receipt No.", "Barcode", "Product Name", "Quantity",
+        "Price / Unit", "Add-on Total", "Sub Total", "Discount", "Total",
+    ])
+
+    qty_total = 0
+    money_totals = {k: Decimal(0) for k in ("addon", "sub", "discount", "total")}
+    for it in items.iterator():
+        row = _sell_row(it)
+        writer.writerow([
+            timezone.localtime(it.order.created_at).strftime("%d/%m/%Y %H:%M:%S"),
+            it.order.order_number,
+            row["barcode"] or "-",
+            it.name,
+            it.qty or 0,
+            _csv_num(it.price),
+            _csv_num(row["add_on_total"]),
+            _csv_num(row["sub_total"]),
+            _csv_num(row["discount"]),
+            _csv_num(row["total"]),
+        ])
+        qty_total += it.qty or 0
+        money_totals["addon"] += row["add_on_total"]
+        money_totals["sub"] += row["sub_total"]
+        money_totals["discount"] += row["discount"]
+        money_totals["total"] += row["total"]
+
+    writer.writerow([
+        "Total", "", "", "", qty_total, "",
+        _csv_num(money_totals["addon"]), _csv_num(money_totals["sub"]),
+        _csv_num(money_totals["discount"]), _csv_num(money_totals["total"]),
+    ])
+    return response
+
+
+# ─── Sales report by Product (SKU) ──────────────────────────────────────
+def _report_sku_rows(branch, dfrom, dto):
+    """Per-product aggregation over the range — shared by the page (which
+    paginates) and the CSV export (which writes every product)."""
     start, end = _date_window(dfrom, dto)
 
     items = OrderItem.objects.filter(
@@ -721,6 +1261,15 @@ def report_sku(request):
             "cost": ((p.cost if p else Decimal(0)) * (r["quantity"] or 0)),
             "profit": r["profit"] or Decimal(0),
         })
+    return rows
+
+
+@login_required
+def report_sku(request):
+    """Aggregated per product over the date range. Joined to current Product
+    row to get barcode, category and current stock balance."""
+    branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_sku_rows(branch, dfrom, dto)
 
     paginator = Paginator(rows, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -739,25 +1288,90 @@ def report_sku(request):
     return render(request, "backoffice/report_sku.html", context)
 
 
-# ─── Inventory Summary ──────────────────────────────────────────────────
 @login_required
-def inventory_summary(request):
-    """Current on-hand balance per product. Sortable by Name / Barcode /
-    Category / OnhandQty (matching the SilomPOS sort options)."""
+def report_sku_export(request):
+    """CSV of the per-product sales aggregation for the current filters."""
+    _branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_sku_rows(branch, dfrom, dto)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"sales_by_product_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    response, writer = _csv_response(filename)
+
+    _write_export_header(writer, "Sales report by Product", branch, dfrom, dto)
+    writer.writerow([
+        "#", "Barcode", "Product Name", "Category", "Quantity",
+        "Balance", "Sales", "Cost", "Profit",
+    ])
+
+    qty_total = 0
+    totals = {k: Decimal(0) for k in ("sales", "cost", "profit")}
+    for i, r in enumerate(rows, start=1):
+        writer.writerow([
+            i, r["barcode"], r["name"], r["category"],
+            r["quantity"], r["balance"],
+            _csv_num(r["sales"]), _csv_num(r["cost"]), _csv_num(r["profit"]),
+        ])
+        qty_total += r["quantity"]
+        totals["sales"] += r["sales"]
+        totals["cost"] += r["cost"]
+        totals["profit"] += r["profit"]
+
+    writer.writerow([
+        "Total", "", "", "", qty_total, "",
+        _csv_num(totals["sales"]), _csv_num(totals["cost"]), _csv_num(totals["profit"]),
+    ])
+    return response
+
+
+# ─── Inventory Summary ──────────────────────────────────────────────────
+def _inventory_qs(request):
+    """Filtered/sorted product queryset shared by the page and the CSV
+    export so both honour the same branch / search / sort selection.
+
+    Search mirrors SilomPOS: a ``field`` selector chooses which column the
+    free-text ``q`` matches against (All Product searches name + barcode +
+    category at once)."""
     branches, branch, _, _ = _common_filters(request)
 
     qs = Product.objects.filter(active=True).select_related("category")
     if branch:
         qs = qs.filter(branch=branch)
 
+    field = request.GET.get("field", "all")
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        if field == "name":
+            qs = qs.filter(name__icontains=q)
+        elif field == "barcode":
+            qs = qs.filter(barcode__icontains=q)
+        elif field == "category":
+            qs = qs.filter(category__name__icontains=q)
+        else:  # all
+            qs = qs.filter(
+                Q(name__icontains=q)
+                | Q(barcode__icontains=q)
+                | Q(category__name__icontains=q)
+            )
+
     sort = request.GET.get("sort", "name")
     sort_map = {
         "name": "name",
         "barcode": "barcode",
         "category": "category__name",
-        "stock": "-stock",
+        "stock_min": "stock",   # OnhandQty → lowest on-hand first
+        "stock_max": "-stock",  # OnhandQty → highest on-hand first
     }
     qs = qs.order_by(sort_map.get(sort, "name"))
+    return branches, branch, field, q, sort, qs
+
+
+@login_required
+def inventory_summary(request):
+    """Current on-hand balance per product. Searchable by Name / Barcode /
+    Category and sortable by Name / Barcode / Category / OnhandQty (matching
+    the SilomPOS options)."""
+    branches, branch, field, q, sort, qs = _inventory_qs(request)
 
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -769,40 +1383,101 @@ def inventory_summary(request):
         "products": page_obj.object_list,
         "page_obj": page_obj,
         "paginator": paginator,
+        "field": field,
+        "q": q,
         "sort": sort,
-        "qs": _filter_qs(request, sort=sort if sort != "name" else None),
+        "qs": _filter_qs(
+            request,
+            sort=sort if sort != "name" else None,
+            field=field if field != "all" else None,
+            q=q or None,
+        ),
         "today": timezone.localdate(),
     }
     return render(request, "backoffice/inventory.html", context)
 
 
+@login_required
+def inventory_export(request):
+    """CSV download of the inventory summary for the current branch / search /
+    sort selection. Covers every matching product, not just the visible page."""
+    _branches, branch, _field, _q, _sort, qs = _inventory_qs(request)
+
+    settings_row = Settings.objects.first()
+    shop_name = settings_row.shop_name if settings_row else "Brave POS"
+    branch_name = branch.name if branch else "All branches"
+    today = timezone.localdate()
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"inventory_{fname_branch}_{today.isoformat()}.csv"
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.write("﻿")  # BOM so Excel reads UTF-8 (Thai names) correctly
+
+    writer = csv.writer(response)
+    writer.writerow(["Inventory Report"])
+    writer.writerow(["Shop Name", shop_name])
+    writer.writerow(["Branch", branch_name])
+    writer.writerow(["Date", today.strftime("%d %B %Y")])
+    writer.writerow([])
+    writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
+
+    for no, p in enumerate(qs.iterator(), start=1):
+        balance = "non-stock" if p.product_type == "S" else p.stock
+        writer.writerow([
+            no,
+            p.barcode or "",
+            p.name,
+            "ชิ้น",
+            p.category.name if p.category_id else "",
+            balance,
+        ])
+
+    return response
+
+
 # ─── Products ───────────────────────────────────────────────────────────
 @login_required
 def product_list(request):
-    """Product catalog grid/list. Filterable by category, sortable, paginated."""
+    """Product catalog grid/list. Searchable, sortable, paginated.
+
+    Search mirrors SilomPOS: a ``field`` selector chooses which column the
+    free-text ``q`` matches against (All Product searches name + barcode +
+    category at once)."""
     branches, branch, _, _ = _common_filters(request)
 
     qs = Product.objects.filter(active=True).select_related("category")
     if branch:
         qs = qs.filter(branch=branch)
 
-    cat_id = request.GET.get("category") or ""
-    if cat_id:
-        qs = qs.filter(category_id=cat_id)
+    field = request.GET.get("field", "all")
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        if field == "name":
+            qs = qs.filter(name__icontains=q)
+        elif field == "barcode":
+            qs = qs.filter(barcode__icontains=q)
+        elif field == "category":
+            qs = qs.filter(category__name__icontains=q)
+        elif field == "type":
+            qs = qs.filter(product_type__icontains=q)
+        else:  # all
+            qs = qs.filter(
+                Q(name__icontains=q)
+                | Q(barcode__icontains=q)
+                | Q(category__name__icontains=q)
+            )
 
     sort = request.GET.get("sort", "name")
     sort_map = {
         "name": "name",
         "newest": "-id",
         "category": "category__name",
-        "price": "-price",
+        "price_min": "price",   # Product price → lowest first
+        "price_max": "-price",  # Product price → highest first
     }
     qs = qs.order_by(sort_map.get(sort, "name"))
-
-    categories = Category.objects.filter(active=True)
-    if branch:
-        categories = categories.filter(Q(branch=branch) | Q(branch__isnull=True))
-    categories = list(categories.order_by("name"))
 
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -813,14 +1488,21 @@ def product_list(request):
         "active": "products",
         "branches": branches,
         "branch": branch,
-        "categories": categories,
-        "selected_category": cat_id,
+        "field": field,
+        "q": q,
         "products": page_obj.object_list,
         "page_obj": page_obj,
         "paginator": paginator,
         "sort": sort,
         "view": view,
-        "qs": _filter_qs(request, sort=sort, category=cat_id or None, view=view),
+        "hide_dates": True,
+        "qs": _filter_qs(
+            request,
+            sort=sort if sort != "name" else None,
+            field=field if field != "all" else None,
+            q=q or None,
+            view=view,
+        ),
     }
     return render(request, "backoffice/product_list.html", context)
 
@@ -830,6 +1512,13 @@ def _product_form_categories(branch):
     if branch:
         qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
     return list(qs.order_by("name"))
+
+
+def _product_form_units(branch):
+    qs = Unit.objects.filter(active=True)
+    if branch:
+        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    return list(qs.order_by("order", "name"))
 
 
 def _apply_product_form(product, post, branch):
@@ -848,6 +1537,9 @@ def _apply_product_form(product, post, branch):
     product.tax_type = post.get("tax_type") or "V"
     product.product_type = post.get("product_type") or "P"
     product.image_url = (post.get("image_url") or "").strip()
+    product.is_favorite = bool(post.get("is_favorite"))
+    unit_id = post.get("unit") or ""
+    product.unit_id = unit_id if unit_id else None
     return product
 
 
@@ -868,7 +1560,9 @@ def product_detail(request, product_id):
         "branch": branch,
         "product": product,
         "categories": _product_form_categories(product.branch or branch),
+        "units": _product_form_units(product.branch or branch),
         "mode": "edit",
+        "hide_dates": True,
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_form.html", context)
@@ -891,7 +1585,9 @@ def product_new(request):
         "branch": branch,
         "product": Product(branch=branch),
         "categories": _product_form_categories(branch),
+        "units": _product_form_units(branch),
         "mode": "new",
+        "hide_dates": True,
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_form.html", context)
@@ -914,6 +1610,8 @@ def product_bulk_add(request):
             p.price = Decimal(request.POST.getlist("price")[idx] or "0")
             cat = request.POST.getlist("category")[idx] or ""
             p.category_id = cat or None
+            unit = request.POST.getlist("unit")[idx] or ""
+            p.unit_id = unit or None
             ptype = request.POST.getlist("product_type")[idx] or "P"
             p.product_type = ptype
             p.save()
@@ -934,6 +1632,7 @@ def product_bulk_add(request):
         "rows_count": rows_count,
         "rows_range": range(rows_count),
         "categories": _product_form_categories(branch),
+        "units": _product_form_units(branch),
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_bulk_add.html", context)
@@ -958,10 +1657,13 @@ def product_bulk_edit(request):
                 continue
             p.barcode = (request.POST.getlist("barcode")[idx] or "").strip()
             p.name = (request.POST.getlist("name")[idx] or p.name).strip()
+            p.name_th = (request.POST.getlist("description")[idx] or "").strip()
             p.price = Decimal(request.POST.getlist("price")[idx] or "0")
             p.cost = Decimal(request.POST.getlist("cost")[idx] or "0")
             cat = request.POST.getlist("category")[idx] or ""
             p.category_id = cat or None
+            unit = request.POST.getlist("unit")[idx] or ""
+            p.unit_id = unit or None
             p.save()
         return redirect(reverse("backoffice:product_bulk_edit") + f"?{_filter_qs(request)}")
 
@@ -976,9 +1678,337 @@ def product_bulk_edit(request):
         "page_obj": page_obj,
         "paginator": paginator,
         "categories": _product_form_categories(branch),
+        "units": _product_form_units(branch),
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_bulk_edit.html", context)
+
+
+# ─── Categories ─────────────────────────────────────────────────────────
+def _apply_category_form(category, post, branch):
+    """Pull fields out of a POSTed category form onto a Category instance.
+    Shared by `category_new` and `category_detail`."""
+    category.branch = branch
+    category.name = (post.get("name") or "").strip()
+    category.name_th = (post.get("name_th") or "").strip()
+    category.color = (post.get("color") or "#00B14F").strip() or "#00B14F"
+    try:
+        category.order = int(post.get("order") or 0)
+    except ValueError:
+        category.order = 0
+    category.active = post.get("active") == "on"
+    return category
+
+
+@login_required
+def category_list(request):
+    """Category management grid for the selected branch — mirrors the
+    SilomPOS Category page (order #, name, colour, active) minus the
+    Grab/icon/cooking-priority columns."""
+    branches, branch, _, _ = _common_filters(request)
+
+    qs = Category.objects.all()
+    if branch:
+        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    qs = qs.order_by("order", "name")
+
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "categories": qs,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/category_list.html", context)
+
+
+@login_required
+def category_detail(request, category_id):
+    """View + edit a single category. POST saves and returns to the list."""
+    branches, branch, _, _ = _common_filters(request)
+    category = get_object_or_404(Category, id=category_id)
+
+    if request.method == "POST":
+        _apply_category_form(category, request.POST, category.branch or branch)
+        category.save()
+        return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "category": category,
+        "mode": "edit",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/category_form.html", context)
+
+
+@login_required
+def category_new(request):
+    """Add a single category. POST creates and returns to the list."""
+    branches, branch, _, _ = _common_filters(request)
+
+    if request.method == "POST":
+        category = Category()
+        _apply_category_form(category, request.POST, branch)
+        category.save()
+        return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "category": Category(branch=branch, active=True),
+        "mode": "new",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/category_form.html", context)
+
+
+@login_required
+def category_delete(request, category_id):
+    """Delete a category. Products keep working — the FK is SET_NULL, so any
+    products in this category just become uncategorised."""
+    category = get_object_or_404(Category, id=category_id)
+    if request.method == "POST":
+        category.delete()
+    return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
+
+
+# ─── Units ──────────────────────────────────────────────────────────────
+def _apply_unit_form(unit, post, branch):
+    """Pull fields out of a POSTed unit form onto a Unit instance.
+    Shared by `unit_new` and `unit_detail`."""
+    unit.branch = branch
+    unit.name = (post.get("name") or "").strip()
+    try:
+        unit.order = int(post.get("order") or 0)
+    except ValueError:
+        unit.order = 0
+    unit.active = post.get("active") == "on"
+    return unit
+
+
+@login_required
+def unit_list(request):
+    """Unit-of-measure management for the selected branch — mirrors the
+    SilomPOS Unit page (order #, name, last update, active)."""
+    branches, branch, _, _ = _common_filters(request)
+
+    qs = Unit.objects.all()
+    if branch:
+        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    qs = qs.order_by("order", "name")
+
+    context = {
+        "active": "units",
+        "branches": branches,
+        "branch": branch,
+        "units": qs,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/unit_list.html", context)
+
+
+@login_required
+def unit_detail(request, unit_id):
+    """View + edit a single unit. POST saves and returns to the list."""
+    branches, branch, _, _ = _common_filters(request)
+    unit = get_object_or_404(Unit, id=unit_id)
+
+    if request.method == "POST":
+        _apply_unit_form(unit, request.POST, unit.branch or branch)
+        unit.save()
+        return redirect(reverse("backoffice:unit_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "units",
+        "branches": branches,
+        "branch": branch,
+        "unit": unit,
+        "mode": "edit",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/unit_form.html", context)
+
+
+@login_required
+def unit_new(request):
+    """Add a single unit. POST creates and returns to the list."""
+    branches, branch, _, _ = _common_filters(request)
+
+    if request.method == "POST":
+        unit = Unit()
+        _apply_unit_form(unit, request.POST, branch)
+        unit.save()
+        return redirect(reverse("backoffice:unit_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "units",
+        "branches": branches,
+        "branch": branch,
+        "unit": Unit(branch=branch, active=True),
+        "mode": "new",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/unit_form.html", context)
+
+
+@login_required
+def unit_delete(request, unit_id):
+    """Delete a unit."""
+    unit = get_object_or_404(Unit, id=unit_id)
+    if request.method == "POST":
+        unit.delete()
+    return redirect(reverse("backoffice:unit_list") + f"?{_filter_qs(request)}")
+
+
+@login_required
+def unit_create_ajax(request):
+    """Create a unit on the fly from the product forms' inline 'add unit'
+    control. Returns JSON {id, name} so the dropdowns can append + select it
+    without a full page reload. Reuses an existing same-name unit if present
+    so repeated adds don't pile up duplicates."""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"error": "Unit name is required"}, status=400)
+
+    _branches, branch, _, _ = _common_filters(request)
+    unit = (
+        Unit.objects.filter(name__iexact=name)
+        .filter(Q(branch=branch) | Q(branch__isnull=True))
+        .first()
+    )
+    if unit is None:
+        unit = Unit.objects.create(name=name, branch=branch, active=True)
+    return JsonResponse({"id": str(unit.id), "name": unit.name})
+
+
+# ─── Staff (POS PIN logins) ─────────────────────────────────────────────
+# These manage the app-side `Staff` PIN logins, NOT the Django backoffice
+# admins (those are separate `auth_user` accounts via createsuperuser). Each
+# branch auto-gets one Admin + one Cashier on creation; this page lets you
+# rename them, reset PINs, toggle active, or add more.
+import uuid as _uuid
+
+
+def _default_pin_for(role: str) -> str:
+    return DEFAULT_ADMIN_PIN if role == "admin" else DEFAULT_CASHIER_PIN
+
+
+def _unique_staff_email(role: str, branch) -> str:
+    """Generate a unique, non-colliding email for a new staff row. The app
+    never uses it (PIN-only login) but the column is required + unique."""
+    slug = (branch.code or "").strip() if branch else ""
+    slug = slug or (str(branch.id)[:8] if branch else "shop")
+    base = f"{role}.{slug}"
+    email = f"{base}@rollingpinn.com"
+    while Staff.objects.filter(email=email).exists():
+        email = f"{base}.{_uuid.uuid4().hex[:6]}@rollingpinn.com"
+    return email
+
+
+@login_required
+def staff_list(request):
+    """POS staff (PIN logins) for the selected branch."""
+    branches, branch, _, _ = _common_filters(request)
+
+    staff = Staff.objects.all()
+    if branch:
+        staff = staff.filter(branches=branch)
+    staff = staff.order_by("role", "name")
+
+    context = {
+        "active": "staff",
+        "branches": branches,
+        "branch": branch,
+        "staff_members": staff,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/staff_list.html", context)
+
+
+@login_required
+def staff_detail(request, staff_id):
+    """View + edit a single staff member. A blank PIN field keeps the
+    current PIN; entering 4 digits resets it."""
+    branches, branch, _, _ = _common_filters(request)
+    member = get_object_or_404(Staff, id=staff_id)
+
+    if request.method == "POST":
+        member.name = (request.POST.get("name") or "").strip() or member.name
+        member.role = request.POST.get("role") or member.role
+        member.active = request.POST.get("active") == "on"
+        pin = (request.POST.get("pin") or "").strip()
+        if pin:
+            member.set_pin(pin)
+        member.save()
+        return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "staff",
+        "branches": branches,
+        "branch": branch,
+        "member": member,
+        "mode": "edit",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/staff_form.html", context)
+
+
+@login_required
+def staff_new(request):
+    """Add a staff member to the selected branch. PIN defaults to the shared
+    role default (admin 1234 / cashier 0000) when left blank."""
+    branches, branch, _, _ = _common_filters(request)
+
+    if request.method == "POST":
+        name = (request.POST.get("name") or "").strip()
+        role = request.POST.get("role") or "cashier"
+        pin = (request.POST.get("pin") or "").strip() or _default_pin_for(role)
+        member = Staff(
+            name=name or ("Admin" if role == "admin" else "Cashier"),
+            role=role,
+            email=_unique_staff_email(role, branch),
+            active=request.POST.get("active") == "on",
+        )
+        member.set_pin(pin)
+        member.set_password(_uuid.uuid4().hex)  # unused; PIN is the login
+        member.save()
+        if branch:
+            member.branches.add(branch)
+        return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "staff",
+        "branches": branches,
+        "branch": branch,
+        "member": Staff(role="cashier", active=True),
+        "mode": "new",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/staff_form.html", context)
+
+
+@login_required
+def staff_delete(request, staff_id):
+    """Remove a staff member (deletes the PIN login entirely)."""
+    member = get_object_or_404(Staff, id=staff_id)
+    if request.method == "POST":
+        member.delete()
+    return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
 
 # ─── Shops & Branches ───────────────────────────────────────────────────
@@ -1002,6 +2032,8 @@ def _apply_branch_form(b: Branch, post) -> Branch:
     b.address = (post.get("address") or "").strip()
     b.phone = (post.get("phone") or "").strip()
     b.logo_url = (post.get("logo_url") or "").strip()
+    b.open_time = (post.get("open_time") or "09:00").strip() or "09:00"
+    b.close_time = (post.get("close_time") or "22:00").strip() or "22:00"
     b.active = post.get("active") == "on"
     return b
 

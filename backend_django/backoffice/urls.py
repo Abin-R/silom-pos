@@ -25,15 +25,23 @@ urlpatterns = [
     path("", views.dashboard, name="home"),
     path("dashboard", views.dashboard, name="dashboard"),
     path("transactions", views.transactions, name="transactions"),
+    path("transactions/export", views.transactions_export, name="transactions_export"),
+    path("receipt/<str:order_number>/print", views.receipt_print, name="receipt_print"),
 
     # Sales reports
     path("report/daily", views.report_daily, name="report_daily"),
+    # `daily/export` must precede `daily/<date_str>` so it isn't captured as a date.
+    path("report/daily/export", views.report_daily_export, name="report_daily_export"),
     path("report/daily/<str:date_str>", views.report_daily_detail, name="report_daily_detail"),
+    path("report/daily/<str:date_str>/export", views.report_daily_detail_export, name="report_daily_detail_export"),
     path("report/sell", views.report_sell, name="report_sell"),
+    path("report/sell/export", views.report_sell_export, name="report_sell_export"),
     path("report/sku", views.report_sku, name="report_sku"),
+    path("report/sku/export", views.report_sku_export, name="report_sku_export"),
 
     # Inventory
     path("inventory", views.inventory_summary, name="inventory"),
+    path("inventory/export", views.inventory_export, name="inventory_export"),
 
     # Products
     path("products", views.product_list, name="product_list"),
@@ -41,6 +49,25 @@ urlpatterns = [
     path("products/bulk-add", views.product_bulk_add, name="product_bulk_add"),
     path("products/bulk-edit", views.product_bulk_edit, name="product_bulk_edit"),
     path("products/<uuid:product_id>", views.product_detail, name="product_detail"),
+
+    # Categories
+    path("categories", views.category_list, name="category_list"),
+    path("categories/new", views.category_new, name="category_new"),
+    path("categories/<uuid:category_id>", views.category_detail, name="category_detail"),
+    path("categories/<uuid:category_id>/delete", views.category_delete, name="category_delete"),
+
+    # Units
+    path("units", views.unit_list, name="unit_list"),
+    path("units/new", views.unit_new, name="unit_new"),
+    path("units/create-ajax", views.unit_create_ajax, name="unit_create_ajax"),
+    path("units/<uuid:unit_id>", views.unit_detail, name="unit_detail"),
+    path("units/<uuid:unit_id>/delete", views.unit_delete, name="unit_delete"),
+
+    # Staff (POS PIN logins)
+    path("staff", views.staff_list, name="staff_list"),
+    path("staff/new", views.staff_new, name="staff_new"),
+    path("staff/<uuid:staff_id>", views.staff_detail, name="staff_detail"),
+    path("staff/<uuid:staff_id>/delete", views.staff_delete, name="staff_delete"),
 
     # Shops & Branches
     path("branches", views.branch_list, name="branch_list"),

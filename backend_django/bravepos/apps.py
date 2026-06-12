@@ -8,3 +8,7 @@ class BraveposConfig(AppConfig):
     # This is the firewall against colliding with the other Django apps that
     # share the production Postgres database.
     label = 'bravepos'
+
+    def ready(self):
+        # Register signal receivers (per-branch staff provisioning, etc.).
+        from . import signals  # noqa: F401

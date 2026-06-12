@@ -28,9 +28,9 @@
           Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
         </div>
       </div>
-      <button class="btn btn-info text-white btn-sm" disabled>
+      <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:transactions_export' %}{% if qs %}?{{ qs }}{% endif %}">
         <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </button>
+      </a>
     </div>
 
     <div class="table-responsive">
@@ -134,9 +134,10 @@
                         <span class="currency">{{ o.change|floatformat:2|intcomma }}</span>
                       </div>
                     </div>
-                    <button class="btn btn-outline-info btn-sm w-100" disabled>
+                    <a class="btn btn-outline-info btn-sm w-100" target="_blank" rel="noopener"
+                       href="{% url 'backoffice:receipt_print' order_number=o.order_number %}">
                       <i class="bi bi-printer"></i> Print Simplified Tax Invoice
-                    </button>
+                    </a>
                   </div>
                 </div>
               </div>

@@ -1,0 +1,46 @@
+{# Inline "add new unit" for any <select class="unit-select"> on the page.
+   Selecting the "➕ Add new unit…" option prompts for a name, creates the
+   Unit via AJAX, appends it to every unit dropdown, and selects it — no
+   page reload. Shared by the product Add / Quick Add / Quick Edit forms. #}
+<script>
+(function () {
+  const url = "{% url 'backoffice:unit_create_ajax' %}";
+  const tokenEl = document.querySelector('input[name=csrfmiddlewaretoken]');
+  const token = tokenEl ? tokenEl.value : '';
+
+  function appendOption(sel, id, name) {
+    if (sel.querySelector('option[value="' + id + '"]')) return;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    const addOpt = sel.querySelector('option[value="__new__"]');
+    if (addOpt) sel.insertBefore(opt, addOpt); else sel.appendChild(opt);
+  }
+
+  document.querySelectorAll('select.unit-select').forEach(function (sel) {
+    sel.dataset.prev = sel.value;
+    sel.addEventListener('change', function () {
+      if (sel.value !== '__new__') { sel.dataset.prev = sel.value; return; }
+      const name = (window.prompt('New unit name') || '').trim();
+      if (!name) { sel.value = sel.dataset.prev || ''; return; }
+      fetch(url, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': token, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ name: name }),
+      })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r); })
+        .then(function (data) {
+          document.querySelectorAll('select.unit-select').forEach(function (s) {
+            appendOption(s, data.id, data.name);
+          });
+          sel.value = data.id;
+          sel.dataset.prev = data.id;
+        })
+        .catch(function () {
+          alert('Could not add unit.');
+          sel.value = sel.dataset.prev || '';
+        });
+    });
+  });
+})();
+</script>

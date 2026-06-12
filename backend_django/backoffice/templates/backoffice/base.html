@@ -18,6 +18,11 @@
       flex: 0 0 240px;
       transition: margin-left 0.25s ease, flex-basis 0.25s ease;
       padding: 0;
+      position: sticky;
+      top: 0;
+      align-self: flex-start;
+      height: 100vh;
+      overflow-y: auto;
     }
     .sidebar.collapsed { margin-left: -240px; }
     .sidebar .brand {
@@ -37,6 +42,14 @@
     .sidebar .group-label {
       color: #7f8c8d; font-size: 0.7rem; padding: 1rem 1.25rem 0.25rem;
       text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    /* Collapsible submenu (e.g. Product Management → Products / Categories / Units) */
+    .sidebar .nav-link .caret { margin-left: auto; transition: transform 0.2s ease; }
+    .sidebar .nav-link[aria-expanded="true"] .caret { transform: rotate(180deg); }
+    .sidebar .nav-link.has-sub { display: flex; align-items: center; }
+    .sidebar .submenu { list-style: none; padding: 0; margin: 0; }
+    .sidebar .submenu .nav-link {
+      padding-left: 2.85rem; font-size: 0.88rem;
     }
 
     .content-area { flex: 1; min-width: 0; }
@@ -64,17 +77,20 @@
       width: 32px; height: 32px; border-radius: 50%;
     }
     .topbar-actions .btn-link:hover { background: #f1f3f5; }
+    /* Date range picker now lives in the navbar (SilomPOS-style). */
+    .topbar-dates { width: auto; }
+    .topbar-dates .form-control-sm { min-width: 8.5rem; }
 
-    /* Filter bar — second row below the navbar, holds branch + dates. */
+    /* Filter bar — second row below the navbar, holds branch + submit. */
     .filterbar {
       background: #fff; border-bottom: 1px solid #e9ecef;
       padding: 0.6rem 1rem;
     }
     .filterbar form {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;
     }
-    .filterbar .form-select-sm { min-width: 12rem; max-width: 22rem; }
-    .filterbar .form-control-sm { min-width: 8.5rem; }
+    .filterbar .branch-group { flex: 1 1 auto; min-width: 0; }
+    .filterbar .branch-group .form-select-sm { min-width: 0; }
 
     main.content { padding: 1.25rem; }
     .card { border: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border-radius: 8px; }
@@ -82,13 +98,15 @@
     .stat-card.profit { border-left-color: #3498db; }
     .stat-card.discount { border-left-color: #e74c3c; }
     .stat-card .label { color: #7f8c8d; font-size: 0.85rem; }
-    .stat-card .value { font-size: 1.75rem; font-weight: 700; color: #2c3e50; }
+    .stat-card .value { font-size: 1.4rem; font-weight: 700; color: #2c3e50; }
     .stat-card .icon { font-size: 2.2rem; color: #ecf0f1; }
     .breakdown-row { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.92rem; }
     .breakdown-row.muted { color: #95a5a6; }
     .breakdown-row.negative { color: #e74c3c; }
     .breakdown-row.total { font-weight: 700; font-size: 1.05rem; border-top: 1px solid #ecf0f1; padding-top: 0.6rem; margin-top: 0.4rem; }
     .section-title { font-size: 1.05rem; font-weight: 600; color: #34495e; margin-bottom: 0.75rem; }
+    /* Keep donut charts compact (SilomPOS-sized) instead of filling the card. */
+    .chart-box { position: relative; height: 240px; }
     .table-sm > :not(caption) > * > * { padding: 0.4rem 0.5rem; }
     .currency { font-variant-numeric: tabular-nums; }
   </style>
@@ -125,11 +143,28 @@
         <li><a class="nav-link {% if active == 'inventory' %}active{% endif %}"
                href="{% url 'backoffice:inventory' %}"><i class="bi bi-box-seam"></i> Inventory Summary</a></li>
         <li><a class="nav-link disabled" href="#"><i class="bi bi-percent"></i> Tax</a></li>
-        <li><a class="nav-link disabled" href="#"><i class="bi bi-people"></i> Staff</a></li>
+        <li><a class="nav-link {% if active == 'staff' %}active{% endif %}"
+               href="{% url 'backoffice:staff_list' %}"><i class="bi bi-people"></i> Staff</a></li>
 
         <div class="group-label">Management</div>
-        <li><a class="nav-link {% if active == 'products' %}active{% endif %}"
-               href="{% url 'backoffice:product_list' %}"><i class="bi bi-tags"></i> Products</a></li>
+        <li>
+          <a class="nav-link has-sub {% if active == 'products' or active == 'categories' or active == 'units' %}active{% endif %}"
+             data-bs-toggle="collapse" href="#productMgmt" role="button"
+             aria-expanded="{% if active == 'products' or active == 'categories' or active == 'units' %}true{% else %}false{% endif %}"
+             aria-controls="productMgmt">
+            <i class="bi bi-box-seam"></i> Product Management
+            <i class="bi bi-chevron-down caret"></i>
+          </a>
+          <ul class="submenu collapse {% if active == 'products' or active == 'categories' or active == 'units' %}show{% endif %}"
+              id="productMgmt">
+            <li><a class="nav-link {% if active == 'products' %}active{% endif %}"
+                   href="{% url 'backoffice:product_list' %}"><i class="bi bi-tags"></i> Products</a></li>
+            <li><a class="nav-link {% if active == 'categories' %}active{% endif %}"
+                   href="{% url 'backoffice:category_list' %}"><i class="bi bi-folder"></i> Categories</a></li>
+            <li><a class="nav-link {% if active == 'units' %}active{% endif %}"
+                   href="{% url 'backoffice:unit_list' %}"><i class="bi bi-rulers"></i> Units</a></li>
+          </ul>
+        </li>
         <li><a class="nav-link {% if active == 'branches' %}active{% endif %}"
                href="{% url 'backoffice:branch_list' %}"><i class="bi bi-shop"></i> Shops &amp; Branches</a></li>
       </ul>
@@ -141,6 +176,18 @@
         <button type="button" id="sidebarToggle" class="hamburger" title="Toggle menu">
           <i class="bi bi-list"></i>
         </button>
+
+        {# ─── Date range picker (submits with the filterbar form) ─── #}
+        {% if not hide_dates %}
+        <div class="topbar-dates input-group input-group-sm">
+          <span class="input-group-text"><i class="bi bi-calendar3"></i></span>
+          <input type="date" name="from" value="{{ date_from }}" form="filterForm"
+                 class="form-control form-control-sm">
+          <span class="input-group-text">→</span>
+          <input type="date" name="to" value="{{ date_to }}" form="filterForm"
+                 class="form-control form-control-sm">
+        </div>
+        {% endif %}
 
         <div class="spacer"></div>
 
@@ -200,27 +247,20 @@
         </div>
       </div>
 
-      {# Filterbar: branch + dates. Pages set hide_dates=True to drop the pickers. #}
+      {# Filterbar: branch selector + submit; date pickers post via the same form. #}
       <div class="filterbar">
-        <form method="get">
-          <select name="branch" class="form-select form-select-sm">
-            {% for b in branches %}
-              <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
-            {% empty %}
-              <option value="">No branches available</option>
-            {% endfor %}
-          </select>
-          {% if not hide_dates %}
-          <div class="input-group input-group-sm" style="width: auto;">
-            <span class="input-group-text"><i class="bi bi-calendar3"></i></span>
-            <input type="date" name="from" value="{{ date_from }}" class="form-control form-control-sm">
-            <span class="input-group-text">→</span>
-            <input type="date" name="to" value="{{ date_to }}" class="form-control form-control-sm">
+        <form method="get" id="filterForm">
+          <div class="input-group input-group-sm branch-group">
+            <span class="input-group-text"><i class="bi bi-shop"></i></span>
+            <select name="branch" class="form-select form-select-sm">
+              {% for b in branches %}
+                <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
+              {% empty %}
+                <option value="">No branches available</option>
+              {% endfor %}
+            </select>
           </div>
-          {% endif %}
-          <button class="btn btn-success btn-sm px-3">
-            <i class="bi bi-arrow-right-circle"></i> Submit
-          </button>
+          <button class="btn btn-success btn-sm px-4">Submit</button>
         </form>
       </div>
 

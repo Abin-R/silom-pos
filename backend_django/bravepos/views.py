@@ -332,9 +332,10 @@ def verify_pin(request):
 def auth_branch_users(request):
     """List the staff who can sign in at a given branch.
 
-    Query: ?branch_id=<uuid>. Returns admins (global — can sign in anywhere)
-    plus cashiers explicitly assigned to that branch. Unauthenticated, since
-    the PIN-pad screen needs this before any session exists.
+    Query: ?branch_id=<uuid>. Returns the admins and cashiers assigned to
+    that branch (every branch gets its own Admin + Cashier on creation —
+    see bravepos.staff_provisioning). Unauthenticated, since the PIN-pad
+    screen needs this before any session exists.
     """
     branch_id = request.query_params.get('branch_id')
     if not branch_id:
@@ -344,7 +345,7 @@ def auth_branch_users(request):
     except (Branch.DoesNotExist, ValueError):
         return Response({'detail': 'Branch not found.'}, status=404)
 
-    admins = Staff.objects.filter(role='admin', active=True).order_by('name')
+    admins = Staff.objects.filter(role='admin', active=True, branches=branch).order_by('name')
     cashiers = Staff.objects.filter(role='cashier', active=True, branches=branch).order_by('name')
     users = [
         {'id': str(s.id), 'name': s.name, 'role': s.role}

@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "bravepos",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "requireFullScreen": true,
@@ -18,9 +17,7 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FFACEF"
-      },
-      "edgeToEdgeEnabled": true,
-      "usesCleartextTraffic": true
+      }
     },
     "web": {
       "bundler": "metro",
@@ -44,10 +41,14 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 29
+            "minSdkVersion": 29,
+            "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true

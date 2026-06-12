@@ -13,9 +13,9 @@
           Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
         </div>
       </div>
-      <button class="btn btn-info text-white btn-sm" disabled>
+      <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_sku_export' %}{% if qs %}?{{ qs }}{% endif %}">
         <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </button>
+      </a>
     </div>
 
     <div class="table-responsive">

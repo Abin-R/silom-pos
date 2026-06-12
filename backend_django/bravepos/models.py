@@ -113,6 +113,8 @@ class Branch(models.Model):
     tax_id = models.CharField(max_length=64, blank=True, default="")
     pos_id = models.CharField(max_length=64, blank=True, default="")
     logo_url = models.TextField(blank=True, default="")
+    open_time = models.CharField(max_length=8, default="09:00")
+    close_time = models.CharField(max_length=8, default="22:00")
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -145,6 +147,28 @@ class Category(models.Model):
         return self.name
 
 
+class Unit(models.Model):
+    """A unit of measure (e.g. BOX, Piece, KG, ชิ้น) a product is counted in.
+    Mirrors the SilomPOS Unit list — name + active flag, with a last-updated
+    timestamp shown in the management table."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="units",
+        null=True, blank=True,  # nullable: shared units aren't branch-scoped
+    )
+    name = models.CharField(max_length=64)
+    order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "name"]
+        indexes = [models.Index(fields=["branch"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
@@ -155,6 +179,10 @@ class Product(models.Model):
     name_th = models.CharField(max_length=200, blank=True, default="")
     category = models.ForeignKey(
         Category, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="products",
+    )
+    unit = models.ForeignKey(
+        Unit, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="products",
     )
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)

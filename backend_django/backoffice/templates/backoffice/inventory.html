@@ -11,10 +11,38 @@
         <h4 class="mb-1">Inventory Report</h4>
         <div class="text-muted small">Date {{ today|date:"d F Y" }}</div>
       </div>
-      <button class="btn btn-info text-white btn-sm" disabled>
+      <a class="btn btn-info text-white btn-sm"
+         href="{% url 'backoffice:inventory_export' %}?{{ qs }}">
         <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </button>
+      </a>
     </div>
+
+    {# Search row — field selector + free-text query, matches SilomPOS #}
+    <form method="get" class="row g-2 align-items-center mb-3">
+      <input type="hidden" name="branch" value="{{ branch.id }}">
+      <input type="hidden" name="from" value="{{ date_from }}">
+      <input type="hidden" name="to" value="{{ date_to }}">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <div class="col-md-3">
+        <select name="field" class="form-select form-select-sm">
+          <option value="all" {% if field == 'all' %}selected{% endif %}>All Product</option>
+          <option value="name" {% if field == 'name' %}selected{% endif %}>Product Name</option>
+          <option value="barcode" {% if field == 'barcode' %}selected{% endif %}>Barcode</option>
+          <option value="category" {% if field == 'category' %}selected{% endif %}>Category</option>
+        </select>
+      </div>
+      <div class="col-md-7">
+        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+               placeholder="Search products…">
+      </div>
+      <div class="col-md-2 d-grid">
+        <button type="submit" class="btn btn-success btn-sm">
+          <i class="bi bi-search"></i> Search
+        </button>
+      </div>
+    </form>
+
+    <div class="mb-2"><strong>{{ paginator.count }} Items</strong></div>
 
     {# Sort tabs — matches SilomPOS layout #}
     <div class="d-flex gap-2 mb-3 flex-wrap">
@@ -25,8 +53,16 @@
          href="?{{ qs }}{% if qs %}&{% endif %}sort=barcode">Barcode</a>
       <a class="btn btn-sm {% if sort == 'category' %}btn-success{% else %}btn-outline-secondary{% endif %}"
          href="?{{ qs }}{% if qs %}&{% endif %}sort=category">Category</a>
-      <a class="btn btn-sm {% if sort == 'stock' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-         href="?{{ qs }}{% if qs %}&{% endif %}sort=stock">OnhandQty</a>
+      <div class="dropdown">
+        <button class="btn btn-sm dropdown-toggle {% if sort == 'stock_min' or sort == 'stock_max' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                data-bs-toggle="dropdown" type="button">OnhandQty</button>
+        <ul class="dropdown-menu">
+          <li><a class="dropdown-item {% if sort == 'stock_min' %}active{% endif %}"
+                 href="?{{ qs }}{% if qs %}&{% endif %}sort=stock_min">Onhand Min</a></li>
+          <li><a class="dropdown-item {% if sort == 'stock_max' %}active{% endif %}"
+                 href="?{{ qs }}{% if qs %}&{% endif %}sort=stock_max">Onhand Max</a></li>
+        </ul>
+      </div>
     </div>
 
     <div class="table-responsive">

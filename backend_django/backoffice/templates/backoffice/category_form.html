@@ -1,0 +1,68 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}
+  {% if mode == 'new' %}Add Category{% else %}Edit {{ category.name }}{% endif %} — Bravepos
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">
+    {% if mode == 'new' %}Add Category{% else %}Edit category — {{ category.name }}{% endif %}
+  </h4>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:category_list' %}?{{ qs }}">
+    <i class="bi bi-arrow-left"></i> Back to list
+  </a>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="card">
+    <div class="card-body">
+      <div class="row g-3">
+
+        <div class="col-md-8">
+          <label class="form-label"><span class="text-danger">*</span> Category Name</label>
+          <input type="text" name="name" required class="form-control"
+                 value="{{ category.name }}" placeholder="e.g. Large Cookies">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Order</label>
+          <input type="number" name="order" class="form-control"
+                 value="{{ category.order }}">
+          <div class="form-text">Lower numbers show first.</div>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">Name (Thai)</label>
+          <input type="text" name="name_th" class="form-control"
+                 value="{{ category.name_th }}" placeholder="ชื่อหมวดหมู่ (optional)">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Background color</label>
+          <input type="color" name="color" class="form-control form-control-color"
+                 value="{{ category.color|default:'#00B14F' }}" style="width:100%;">
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Status</label>
+          <div class="form-check form-switch ps-5">
+            <input type="checkbox" name="active" id="cat-active"
+                   class="form-check-input"
+                   {% if category.active %}checked{% endif %}>
+            <label class="form-check-label" for="cat-active">Active</label>
+          </div>
+          <div class="form-text">Inactive categories stay in the system but
+            don't show in the POS menu.</div>
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-end gap-2 mt-4">
+        <a class="btn btn-outline-secondary" href="{% url 'backoffice:category_list' %}?{{ qs }}">Cancel</a>
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-check2"></i> {% if mode == 'new' %}Create category{% else %}Save changes{% endif %}
+        </button>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

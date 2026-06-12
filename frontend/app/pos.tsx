@@ -3728,7 +3728,7 @@ const styles = StyleSheet.create({
 
   // Selling gate (no open shift)
   shiftGate: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(241,245,249,0.92)",
     alignItems: "center",
     justifyContent: "center",

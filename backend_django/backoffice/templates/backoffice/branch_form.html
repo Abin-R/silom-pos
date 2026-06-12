@@ -85,6 +85,17 @@
                  value="{{ branch_obj.phone }}"
                  placeholder="Leave blank to inherit shop phone">
         </div>
+        <div class="col-md-3">
+          <label class="form-label">Open Time</label>
+          <input type="time" name="open_time" class="form-control"
+                 value="{{ branch_obj.open_time|default:'09:00' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Close Time</label>
+          <input type="time" name="close_time" class="form-control"
+                 value="{{ branch_obj.close_time|default:'22:00' }}">
+        </div>
+
         <div class="col-md-6">
           <label class="form-label">Status</label>
           <div class="form-check form-switch mt-2 ps-5">

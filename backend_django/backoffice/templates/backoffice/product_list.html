@@ -56,34 +56,39 @@
       </div>
     </div>
 
-    {# Filter row #}
+    {# Search row — field selector + free-text query, matches SilomPOS #}
     <form method="get" class="row g-2 align-items-center mb-3">
       <input type="hidden" name="branch" value="{{ branch.id }}">
-      <input type="hidden" name="from" value="{{ date_from }}">
-      <input type="hidden" name="to" value="{{ date_to }}">
       <input type="hidden" name="sort" value="{{ sort }}">
       <input type="hidden" name="view" value="{{ view }}">
       <div class="col-md-3">
-        <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
-          <option value="">All Product</option>
-          {% for c in categories %}
-            <option value="{{ c.id }}" {% if selected_category == c.id|stringformat:'s' %}selected{% endif %}>{{ c.name }}</option>
-          {% endfor %}
+        <select name="field" class="form-select form-select-sm">
+          <option value="all" {% if field == 'all' %}selected{% endif %}>All Product</option>
+          <option value="name" {% if field == 'name' %}selected{% endif %}>Product Name</option>
+          <option value="barcode" {% if field == 'barcode' %}selected{% endif %}>Barcode</option>
+          <option value="category" {% if field == 'category' %}selected{% endif %}>Category</option>
+          <option value="type" {% if field == 'type' %}selected{% endif %}>Product Type</option>
         </select>
       </div>
-      <div class="col-md-7"></div>
-      <div class="col-md-2 d-flex justify-content-end">
-        <div class="btn-group btn-group-sm" role="group">
-          <a class="btn {% if view == 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
-             href="?{{ qs }}{% if qs %}&{% endif %}view=list"><i class="bi bi-list"></i></a>
-          <a class="btn {% if view != 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
-             href="?{{ qs }}{% if qs %}&{% endif %}view=grid"><i class="bi bi-grid-3x3-gap-fill"></i></a>
-        </div>
+      <div class="col-md-7">
+        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+               placeholder="Search products…">
+      </div>
+      <div class="col-md-2 d-grid">
+        <button type="submit" class="btn btn-success btn-sm">
+          <i class="bi bi-search"></i> Search
+        </button>
       </div>
     </form>
 
     <div class="d-flex justify-content-between align-items-center mb-2">
       <div><strong>Product {{ paginator.count }} Items</strong></div>
+      <div class="btn-group btn-group-sm" role="group">
+        <a class="btn {% if view == 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+           href="?{{ qs }}{% if qs %}&{% endif %}view=list"><i class="bi bi-list"></i></a>
+        <a class="btn {% if view != 'list' %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+           href="?{{ qs }}{% if qs %}&{% endif %}view=grid"><i class="bi bi-grid-3x3-gap-fill"></i></a>
+      </div>
     </div>
 
     {# Sort tabs #}
@@ -95,8 +100,16 @@
          href="?{{ qs }}{% if qs %}&{% endif %}sort=newest">Newest</a>
       <a class="btn btn-sm {% if sort == 'category' %}btn-success{% else %}btn-outline-secondary{% endif %}"
          href="?{{ qs }}{% if qs %}&{% endif %}sort=category">Category</a>
-      <a class="btn btn-sm {% if sort == 'price' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-         href="?{{ qs }}{% if qs %}&{% endif %}sort=price">Product price</a>
+      <div class="dropdown">
+        <button class="btn btn-sm dropdown-toggle {% if sort == 'price_min' or sort == 'price_max' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                data-bs-toggle="dropdown" type="button">Product price</button>
+        <ul class="dropdown-menu">
+          <li><a class="dropdown-item {% if sort == 'price_min' %}active{% endif %}"
+                 href="?{{ qs }}{% if qs %}&{% endif %}sort=price_min">Min price</a></li>
+          <li><a class="dropdown-item {% if sort == 'price_max' %}active{% endif %}"
+                 href="?{{ qs }}{% if qs %}&{% endif %}sort=price_max">Max price</a></li>
+        </ul>
+      </div>
     </div>
 
     {% if view == 'list' %}
