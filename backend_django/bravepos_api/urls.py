@@ -7,20 +7,10 @@ The server-rendered backoffice lives under ``/backoffice/``.
 printed on every thermal receipt.  It is intentionally root-level (NOT
 under ``/backoffice/``) so it isn't gated by Django's auth login."""
 from django.urls import include, path
-from django.http import HttpResponse
 
 from backoffice import views as backoffice_views
 
-
-def sentry_debug(request):
-    """TEMPORARY — verifies Sentry captures backend errors. Raises on purpose;
-    Sentry should log a ZeroDivisionError. Remove this route once confirmed."""
-    1 / 0
-    return HttpResponse('unreachable')
-
-
 urlpatterns = [
-    path('sentry-debug/', sentry_debug),
     path('api/', include('bravepos.urls')),
     path('backoffice/', include('backoffice.urls')),
     path('receipt/<str:order_number>/', backoffice_views.customer_receipt, name='customer_receipt'),
