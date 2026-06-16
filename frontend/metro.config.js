@@ -9,11 +9,13 @@ if (!Array.prototype.toReversed) {
   });
 }
 
-const { getDefaultConfig } = require("expo/metro-config");
+// Sentry's wrapper around Expo's metro config — required so source maps are
+// generated/uploaded for readable stack traces. Drop-in for getDefaultConfig.
+const { getSentryExpoConfig } = require("@sentry/react-native/metro");
 const path = require('path');
 const { FileStore } = require('metro-cache');
 
-const config = getDefaultConfig(__dirname);
+const config = getSentryExpoConfig(__dirname);
 
 // Use a stable on-disk store (shared across web/android)
 const root = process.env.METRO_CACHE_ROOT || path.join(__dirname, '.metro-cache');

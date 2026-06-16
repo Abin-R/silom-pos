@@ -14,6 +14,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 
+# ── Sentry (error + performance monitoring) ─────────────────────────────────
+# Only initialises when SENTRY_DSN is set, so local dev stays quiet.  The
+# Django integration is auto-enabled, capturing unhandled 500s and request
+# transactions (performance).  Set SENTRY_DSN + SENTRY_ENV in the VM's .env.
+SENTRY_DSN = os.environ.get('SENTRY_DSN')
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get('SENTRY_ENV', 'production'),
+        # Performance: fraction of requests traced. 1.0 = every request while
+        # we're getting started; dial down (e.g. 0.2) once traffic grows.
+        traces_sample_rate=float(os.environ.get('SENTRY_TRACES_RATE', '1.0')),
+        # POS payloads can carry customer/order data — keep PII out of Sentry.
+        send_default_pii=False,
+    )
+
+
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY',
     'django-insecure-dev-only-CHANGE-IN-PRODUCTION',
