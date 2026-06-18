@@ -287,20 +287,47 @@
 {% block extra_scripts %}
 <script>
   (function () {
-    // Product image — browse a local file, preview it, and stash a data URL
-    // in the hidden image_url field so the existing save path persists it.
+    // Product image — browse a local file, downscale it to a thumbnail, and
+    // stash a compact data URL in the hidden image_url field so the existing
+    // save path persists it. We resize client-side because the raw data URL
+    // of a phone photo is several MB; posting that blows past Django's
+    // DATA_UPLOAD_MAX_MEMORY_SIZE (2.5 MB) and the request 400s before the
+    // view runs. A ~512px JPEG keeps the field to tens of KB.
     const file = document.getElementById('imgFile');
     const url = document.getElementById('imgUrl');
     const preview = document.getElementById('imgPreview');
+    const MAX_DIM = 512;       // longest edge, px
+    const JPEG_QUALITY = 0.8;
+    function downscale(dataUrl, done) {
+      const img = new Image();
+      img.onload = function () {
+        const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        try {
+          done(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
+        } catch (err) {
+          done(dataUrl);  // e.g. tainted canvas — fall back to the original
+        }
+      };
+      img.onerror = function () { done(dataUrl); };
+      img.src = dataUrl;
+    }
     if (file) {
       file.addEventListener('change', function () {
         const f = this.files && this.files[0];
         if (!f) return;
         const reader = new FileReader();
         reader.onload = function (e) {
-          url.value = e.target.result;
-          preview.src = e.target.result;
-          preview.style.display = '';
+          downscale(e.target.result, function (small) {
+            url.value = small;
+            preview.src = small;
+            preview.style.display = '';
+          });
         };
         reader.readAsDataURL(f);
       });

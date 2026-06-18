@@ -9,9 +9,11 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  RefreshControl,
   ActivityIndicator,
   Platform,
   useWindowDimensions,
+  Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -22,6 +24,7 @@ import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { SidebarDrawer } from "../components/SidebarDrawer";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import qrcode from "qrcode-generator";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -36,6 +39,22 @@ async function doLogout(): Promise<void> {
 
 // How often we poll the backend for Beam charge status while a QR is on screen.
 const BEAM_POLL_INTERVAL_MS = 3000;
+// Same cadence for polling the Omise payment-link charge status.
+const OMISE_POLL_INTERVAL_MS = 3000;
+
+// Render an arbitrary string (e.g. an Omise hosted-checkout URL) as a QR-code
+// data URI that <Image> can display.  Uses error-correction level "M" and
+// auto type number (0 = smallest that fits).
+function makeQrDataUrl(text: string): string | null {
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    return qr.createDataURL(6, 8);
+  } catch {
+    return null;
+  }
+}
 
 // ---- Types ----
 type Category = { id: string; name: string; name_th?: string; color: string; order: number };
@@ -122,6 +141,7 @@ export default function POS() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [parkedCount, setParkedCount] = useState(0);
   const [orderHubCount, setOrderHubCount] = useState(0);
 
@@ -191,9 +211,10 @@ export default function POS() {
     }
   };
 
-  // Load initial data
-  const reloadPosData = useCallback(async () => {
-    setLoading(true);
+  // Load initial data. `silent` skips the full-screen spinner (used by
+  // pull-to-refresh, which shows its own inline spinner instead).
+  const reloadPosData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [catsRes, prodsRes] = await Promise.all([
         apiFetch(`${API}/categories`),
@@ -206,10 +227,15 @@ export default function POS() {
     } catch (e) {
       console.error("Load failed", e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
     refreshBadges();
   }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await reloadPosData(true); } finally { setRefreshing(false); }
+  }, [reloadPosData]);
 
   useEffect(() => {
     reloadPosData();
@@ -294,7 +320,7 @@ export default function POS() {
   const handlePaySuccess = async (
     method: string,
     paid: number,
-    meta?: { beamChargeId?: string }
+    meta?: { beamChargeId?: string; omiseLinkId?: string; omiseChargeId?: string }
   ) => {
     try {
       const res = await apiFetch(`${API}/orders`, {
@@ -306,23 +332,32 @@ export default function POS() {
           discount_type: discountAmount > 0 ? "item" : "none",
           discount_value: 0,
           discount_amount: discountAmount,
+          // ``total`` is the goods total; the backend adds VAT bookkeeping and,
+          // for card payments, the processing fee + fee VAT to the grand total.
           total,
           payment_method: method,
           paid_amount: paid,
           change: Math.max(0, paid - total),
           source: "table",
+          staff: staff || "",
           customer_id: customer?.id,
           customer_name: customer?.name,
           beam_charge_id: meta?.beamChargeId || null,
+          omise_link_id: meta?.omiseLinkId || null,
+          omise_charge_id: meta?.omiseChargeId || null,
         }),
       });
       const order = await res.json();
+      // The server is authoritative for the grand total (it adds the card fee
+      // + VAT), so display its numbers rather than the local goods total.
+      const grandTotal = Number(order.total) || total;
+      const paidShown = Number(order.paid_amount) || paid;
       setShowPayment(false);
       setShowSuccess({
         order_number: order.order_number,
-        total,
-        paid,
-        change: Math.max(0, paid - total),
+        total: grandTotal,
+        paid: paidShown,
+        change: Math.max(0, paidShown - grandTotal),
         method,
       });
       refreshBadges();
@@ -350,10 +385,13 @@ export default function POS() {
               items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
               subtotal,
               discount_amount: discountAmount,
-              total,
+              vat_amount: Number(order.vat_amount) || 0,
+              processing_fee: Number(order.processing_fee) || 0,
+              processing_fee_vat: Number(order.processing_fee_vat) || 0,
+              total: grandTotal,
               payment_method: method,
-              paid_amount: paid,
-              change: Math.max(0, paid - total),
+              paid_amount: paidShown,
+              change: Math.max(0, paidShown - grandTotal),
               created_at_local: new Date().toLocaleString("en-GB"),
               staff: staff || "",
             },
@@ -587,6 +625,9 @@ export default function POS() {
             numColumns={gridCols}
             contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
             columnWrapperStyle={{ gap: 10 }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+            }
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
             ListEmptyComponent={
               <View style={styles.empty}>
@@ -987,7 +1028,7 @@ function CartSidebar({
           <View style={styles.custChip}>
             <View style={[styles.custDot, { backgroundColor: customer.color }]}>
               <Text style={styles.custInitial}>
-                {customer.name[0]?.toUpperCase()}
+                {customer.name?.[0]?.toUpperCase()}
               </Text>
             </View>
             <Text style={styles.custName} numberOfLines={1}>
@@ -1029,14 +1070,13 @@ function CartSidebar({
         <Text style={styles.payBtnText}>Pay</Text>
       </TouchableOpacity>
 
-      <View style={styles.cartListHeader}>
-        <Text style={styles.cartListTitle}>Store</Text>
-        <Text style={styles.cartListCount}>
-          {cart.length === 0
-            ? "No items"
-            : `${cart.length} Item${cart.length !== 1 ? "s" : ""} / ${cartCount} pcs.`}
-        </Text>
-      </View>
+      {cart.length > 0 && (
+        <View style={styles.cartListHeader}>
+          <Text style={styles.cartListCount}>
+            {`${cart.length} Item${cart.length !== 1 ? "s" : ""} / ${cartCount} pcs.`}
+          </Text>
+        </View>
+      )}
 
       <FlatList
         data={cart}
@@ -1095,20 +1135,13 @@ function CartSidebar({
         )}
       />
 
-      {/* Bottom pinned Store row — matches reference design */}
-      <View style={styles.cartFooterRow}>
-        <View style={styles.storePill}>
-          <Ionicons name="storefront" size={14} color="#FFFFFF" />
-        </View>
-        <Text style={styles.storeFooterText}>Store</Text>
-        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-        <View style={{ flex: 1 }} />
-        {cart.length > 0 && (
+      {cart.length > 0 && (
+        <View style={styles.cartFooterRow}>
           <TouchableOpacity onPress={onClear} style={styles.footerTrash} testID="clear-cart">
             <Ionicons name="trash-outline" size={18} color="#EF4444" />
           </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1117,6 +1150,7 @@ function CartSidebar({
 const PAYMENT_METHODS = {
   CASH: "Cash",
   BEAM: "Beam",
+  CARD_LINK: "Credit Card",
   EASY_PAY: "Easy Pay",
   CREDIT: "Credit",
   PROMPTPAY: "PromptPay",
@@ -1139,7 +1173,15 @@ function PaymentModal({
   itemsCount: number;
   cartCount: number;
   onClose: () => void;
-  onPay: (method: string, paid: number, meta?: { beamChargeId?: string }) => void;
+  onPay: (
+    method: string,
+    paid: number,
+    meta?: {
+      beamChargeId?: string;
+      omiseLinkId?: string;
+      omiseChargeId?: string;
+    },
+  ) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
@@ -1158,6 +1200,7 @@ function PaymentModal({
   const methods = [
     { key: PAYMENT_METHODS.CASH, icon: "cash-outline" as const },
     { key: PAYMENT_METHODS.BEAM, icon: "scan-outline" as const },
+    { key: PAYMENT_METHODS.CARD_LINK, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
     // { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
@@ -1181,6 +1224,18 @@ function PaymentModal({
   const [beamStatus, setBeamStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
   const [beamError, setBeamError] = useState<string | null>(null);
 
+  // Omise credit-card payment-link state (mirrors the Beam flow: generate a
+  // hosted-checkout link, render its URL as a QR, poll until the card charge
+  // succeeds).  ``omiseFinal`` is the grand total the customer is charged
+  // (goods + processing fee + fee VAT) so the success screen is accurate.
+  const [omiseLinkId, setOmiseLinkId] = useState<string | null>(null);
+  const [omiseQrImage, setOmiseQrImage] = useState<string | null>(null);
+  const [omiseStatus, setOmiseStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
+  const [omiseError, setOmiseError] = useState<string | null>(null);
+  const [omiseBreakdown, setOmiseBreakdown] = useState<{
+    goods: number; vat: number; fee: number; feeVat: number; total: number;
+  } | null>(null);
+
   // Reset Beam state to idle (used by modal-open cleanup, Cancel, and Retry).
   const resetBeam = useCallback(() => {
     setBeamStatus("idle");
@@ -1189,13 +1244,22 @@ function PaymentModal({
     setBeamError(null);
   }, []);
 
+  const resetOmise = useCallback(() => {
+    setOmiseStatus("idle");
+    setOmiseLinkId(null);
+    setOmiseQrImage(null);
+    setOmiseError(null);
+    setOmiseBreakdown(null);
+  }, []);
+
   useEffect(() => {
     if (visible) {
       setCustomPick(""); setOrderRef("");
       setCardLast4(""); setCardType(""); setBankPick("");
       resetBeam();
+      resetOmise();
     }
-  }, [visible, resetBeam]);
+  }, [visible, resetBeam, resetOmise]);
 
   const paid = amount ? parseFloat(amount) : total;
   const canPay = paid >= total;
@@ -1233,7 +1297,7 @@ function PaymentModal({
       }
       setBeamChargeId(data.charge_id);
       setBeamQrImage(data.qr_image || null);
-      setBeamStatus(data.status === "COMPLETED" ? "completed" : "pending");
+      setBeamStatus(data.status === "SUCCEEDED" || data.status === "COMPLETED" ? "completed" : "pending");
     } catch {
       setBeamStatus("failed");
       setBeamError("Cannot reach payment server");
@@ -1255,7 +1319,9 @@ function PaymentModal({
         const res = await apiFetch(`${API}/beam/charge/${beamChargeId}`);
         if (!res.ok) return;
         const data = await res.json();
-        if (data.status === "COMPLETED") {
+        // Beam reports a paid charge as "SUCCEEDED" (the charge.succeeded webhook /
+        // GET /charges/{id} status). Accept "COMPLETED" too for forward-compat.
+        if (data.status === "SUCCEEDED" || data.status === "COMPLETED") {
           setBeamStatus("completed");
           clearInterval(interval);
           onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
@@ -1269,6 +1335,69 @@ function PaymentModal({
     return () => clearInterval(interval);
   }, [beamStatus, beamChargeId]);
 
+  // Create an Omise payment Link for a credit-card charge.  The backend adds
+  // the 3.65% processing fee + 7% VAT on that fee on top of the goods total
+  // and returns the hosted-checkout URL we render as a QR.
+  const startOmiseLink = async (referenceId: string) => {
+    setOmiseStatus("loading");
+    setOmiseError(null);
+    try {
+      const res = await apiFetch(`${API}/omise/link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: total, title: `Order ${referenceId}`, description: `Order ${referenceId}` }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setOmiseStatus("failed");
+        setOmiseError(data.detail || "Failed to create payment link");
+        return;
+      }
+      setOmiseLinkId(data.link_id);
+      setOmiseQrImage(makeQrDataUrl(data.payment_uri));
+      setOmiseBreakdown({
+        goods: Number(data.goods_total) || total,
+        vat: Number(data.vat_amount) || 0,
+        fee: Number(data.processing_fee) || 0,
+        feeVat: Number(data.processing_fee_vat) || 0,
+        total: Number(data.amount_total) || total,
+      });
+      setOmiseStatus("pending");
+    } catch {
+      setOmiseStatus("failed");
+      setOmiseError("Cannot reach payment server");
+    }
+  };
+
+  // Poll the Omise link until a card charge succeeds (or fails).  On success
+  // the grand total (goods + fee + fee VAT) is what was charged.
+  const omiseBreakdownRef = useRef(omiseBreakdown);
+  useEffect(() => { omiseBreakdownRef.current = omiseBreakdown; }, [omiseBreakdown]);
+  useEffect(() => {
+    if (omiseStatus !== "pending" || !omiseLinkId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`${API}/omise/link/${omiseLinkId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "successful") {
+          setOmiseStatus("completed");
+          clearInterval(interval);
+          const charged = omiseBreakdownRef.current?.total ?? totalRef.current;
+          onPayRef.current(PAYMENT_METHODS.CARD_LINK, charged, {
+            omiseLinkId,
+            omiseChargeId: data.charge_id,
+          });
+        } else if (data.status === "failed") {
+          setOmiseStatus("failed");
+          setOmiseError("Card payment failed. Please try again.");
+          clearInterval(interval);
+        }
+      } catch { /* ignore transient errors */ }
+    }, OMISE_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [omiseStatus, omiseLinkId]);
+
   // Derived flags for the right-panel "Payment Confirm" button — extracted so
   // the JSX below stays readable.
   const isQrLikeMethod = method === PAYMENT_METHODS.QR_KBANK || method === PAYMENT_METHODS.PROMPTPAY || method === PAYMENT_METHODS.BEAM;
@@ -1277,13 +1406,26 @@ function PaymentModal({
   const isBeamBusy =
     method === PAYMENT_METHODS.BEAM &&
     (beamStatus === "loading" || beamStatus === "pending" || beamStatus === "completed");
-  const canConfirm = (isQrLikeMethod || isCustomReady || isCreditReady || canPay) && !isBeamBusy;
+  const isOmiseBusy =
+    method === PAYMENT_METHODS.CARD_LINK &&
+    (omiseStatus === "loading" || omiseStatus === "pending" || omiseStatus === "completed");
+  const isCardLink = method === PAYMENT_METHODS.CARD_LINK;
+  const canConfirm =
+    (isQrLikeMethod || isCustomReady || isCreditReady || isCardLink || canPay) &&
+    !isBeamBusy && !isOmiseBusy;
 
   const confirmLabel = (() => {
-    if (method !== PAYMENT_METHODS.BEAM) return "Payment Confirm";
-    if (beamStatus === "loading") return "Generating…";
-    if (beamStatus === "pending") return "Waiting for scan…";
-    return "Generate QR";
+    if (method === PAYMENT_METHODS.BEAM) {
+      if (beamStatus === "loading") return "Generating…";
+      if (beamStatus === "pending") return "Waiting for scan…";
+      return "Generate QR";
+    }
+    if (method === PAYMENT_METHODS.CARD_LINK) {
+      if (omiseStatus === "loading") return "Generating…";
+      if (omiseStatus === "pending") return "Waiting for payment…";
+      return "Generate Card QR";
+    }
+    return "Payment Confirm";
   })();
 
   const handleConfirmPayment = () => {
@@ -1291,6 +1433,13 @@ function PaymentModal({
       // Generate QR — use a temp reference ID; actual order is created when polling confirms
       const ref = `POS-${Date.now()}`;
       startBeamCharge(ref);
+      return;
+    }
+    if (method === PAYMENT_METHODS.CARD_LINK) {
+      // Create the Omise hosted-checkout link; the order is created when the
+      // polling effect confirms the card charge succeeded.
+      const ref = `POS-${Date.now()}`;
+      startOmiseLink(ref);
       return;
     }
     const finalMethod =
@@ -1508,6 +1657,94 @@ function PaymentModal({
                 )}
 
                 <Text style={styles.beamAmount}>{THB(total)}</Text>
+              </View>
+            ) : method === PAYMENT_METHODS.CARD_LINK ? (
+              <View style={styles.beamPane} testID="cardlink-pane">
+                {/* Header */}
+                <View style={styles.beamHeader}>
+                  <View style={styles.beamLogoBox}>
+                    <Ionicons name="card-outline" size={28} color="#00B14F" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.beamTitle}>Credit Card</Text>
+                    <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
+                  </View>
+                </View>
+
+                {omiseStatus === "idle" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Text style={styles.beamIdleText}>
+                      {'Tap "Generate Card QR" — the customer scans it to pay by card'}
+                    </Text>
+                  </View>
+                )}
+
+                {omiseStatus === "loading" && (
+                  <View style={styles.beamIdleBox}>
+                    <ActivityIndicator size="large" color="#00B14F" />
+                    <Text style={styles.beamIdleText}>Generating payment link…</Text>
+                  </View>
+                )}
+
+                {omiseStatus === "pending" && omiseQrImage && (
+                  <View style={styles.beamQrBox}>
+                    <Image
+                      source={{ uri: omiseQrImage }}
+                      style={styles.beamQrImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.beamWaiting}>
+                      <ActivityIndicator size="small" color="#00B14F" />
+                      <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.beamCancelBtn}
+                      onPress={resetOmise}
+                      testID="cardlink-cancel"
+                    >
+                      <Text style={styles.beamCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {omiseStatus === "failed" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{omiseError || "Payment failed"}</Text>
+                    <TouchableOpacity style={styles.beamRetryBtn} onPress={resetOmise}>
+                      <Text style={styles.beamRetryText}>Try Again</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* Fee + VAT breakdown so the cashier can explain the surcharge */}
+                {omiseBreakdown && (
+                  <View style={styles.feeBreakdown}>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabel}>Goods (VAT incl.)</Text>
+                      <Text style={styles.feeVal}>{THB(omiseBreakdown.goods)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabelMuted}>VAT 7% (incl.)</Text>
+                      <Text style={styles.feeValMuted}>{THB(omiseBreakdown.vat)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabel}>Processing fee 3.65%</Text>
+                      <Text style={styles.feeVal}>{THB(omiseBreakdown.fee)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabelMuted}>VAT 7% on fee</Text>
+                      <Text style={styles.feeValMuted}>{THB(omiseBreakdown.feeVat)}</Text>
+                    </View>
+                    <View style={[styles.feeRow, styles.feeRowTotal]}>
+                      <Text style={styles.feeTotalLabel}>Total charged</Text>
+                      <Text style={styles.feeTotalVal}>{THB(omiseBreakdown.total)}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {!omiseBreakdown && <Text style={styles.beamAmount}>{THB(total)}</Text>}
               </View>
             ) : method === PAYMENT_METHODS.EDC ? (
               <View style={styles.edcPane} testID="edc-pane">
@@ -1785,18 +2022,25 @@ function CartItemModal({
 }) {
   const [qty, setQty] = useState(1);
   const [disc, setDisc] = useState("");
+  const [discMode, setDiscMode] = useState<"thb" | "pct">("thb");
 
   useEffect(() => {
     if (item) {
       setQty(item.qty);
       setDisc(item.discount ? String(item.discount) : "");
+      setDiscMode("thb");
     }
   }, [item]);
 
   if (!item) return null;
 
-  const discNum = Math.max(0, parseFloat(disc) || 0);
-  const lineTotal = Math.max(0, item.price * qty - discNum);
+  const gross = item.price * qty;
+  const entered = Math.max(0, parseFloat(disc) || 0);
+  // Resolve the entered value into an absolute ฿ amount (the cart stores ฿).
+  const discAmount =
+    discMode === "pct" ? Math.min(gross, (gross * entered) / 100) : Math.min(gross, entered);
+  const discPct = gross > 0 ? (discAmount / gross) * 100 : 0;
+  const lineTotal = Math.max(0, gross - discAmount);
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
@@ -1836,17 +2080,51 @@ function CartItemModal({
           </View>
 
           <View style={styles.itemRow}>
-            <Text style={styles.itemRowLabel}>Discount (฿)</Text>
-            <TextInput
-              style={styles.itemDiscInput}
-              value={disc}
-              onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
-              keyboardType="decimal-pad"
-              placeholder="0.00"
-              placeholderTextColor="#CBD5E1"
-              testID="item-discount-input"
-            />
+            <Text style={styles.itemRowLabel}>Discount</Text>
+            <View style={styles.itemDiscControls}>
+              <View style={styles.discModeToggle}>
+                <TouchableOpacity
+                  style={[styles.discModeBtn, discMode === "thb" && styles.discModeBtnActive]}
+                  onPress={() => setDiscMode("thb")}
+                  testID="item-discount-mode-thb"
+                >
+                  <Text
+                    style={[styles.discModeText, discMode === "thb" && styles.discModeTextActive]}
+                  >
+                    ฿
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.discModeBtn, discMode === "pct" && styles.discModeBtnActive]}
+                  onPress={() => setDiscMode("pct")}
+                  testID="item-discount-mode-pct"
+                >
+                  <Text
+                    style={[styles.discModeText, discMode === "pct" && styles.discModeTextActive]}
+                  >
+                    %
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.itemDiscInput}
+                value={disc}
+                onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
+                keyboardType="decimal-pad"
+                placeholder={discMode === "pct" ? "0%" : "0.00"}
+                placeholderTextColor="#CBD5E1"
+                testID="item-discount-input"
+              />
+            </View>
           </View>
+
+          {discAmount > 0 && (
+            <View style={styles.itemDiscSummaryRow}>
+              <Text style={styles.itemDiscSummaryText}>
+                −{THB(discAmount)} ({discPct.toFixed(discPct % 1 === 0 ? 0 : 1)}%)
+              </Text>
+            </View>
+          )}
 
           <View style={styles.itemTotalRow}>
             <Text style={styles.itemRowLabel}>Line Total</Text>
@@ -1855,7 +2133,7 @@ function CartItemModal({
 
           <TouchableOpacity
             style={styles.doneBtn}
-            onPress={() => onSave(item.product_id, qty, discNum)}
+            onPress={() => onSave(item.product_id, qty, discAmount)}
             testID="item-modal-save"
           >
             <Text style={styles.doneBtnText}>Save</Text>
@@ -1906,13 +2184,29 @@ function CustomerModal({
 
   const addCustomer = async () => {
     if (!name.trim() || !phoneValid) return;
-    const res = await apiFetch(`${API}/customers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), phone: phone.trim() || null }),
-    });
-    const c = await res.json();
-    setCustomers((list) => [c, ...list]);
+    let c: Customer | null = null;
+    try {
+      const res = await apiFetch(`${API}/customers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), phone: phone.trim() || null }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(detail || `Server error (${res.status})`);
+      }
+      c = await res.json();
+    } catch (e: any) {
+      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+      return;
+    }
+    // Guard against a success response missing the required field — never select
+    // an object the cart can't render (it reads customer.name[0]).
+    if (!c || !c.name) {
+      Alert.alert("Couldn't save customer", "Unexpected response from server.");
+      return;
+    }
+    setCustomers((list) => [c!, ...list]);
     setName("");
     setPhone("");
     setShowAdd(false);
@@ -2822,30 +3116,20 @@ const styles = StyleSheet.create({
   payBtnText: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
   cartListHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
     marginBottom: 8,
   },
-  cartListTitle: { fontSize: 13, fontWeight: "700", color: "#0F172A" },
   cartListCount: { fontSize: 11, color: "#94A3B8" },
   cartFooterRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    justifyContent: "flex-end",
     paddingVertical: 10,
     paddingHorizontal: 6,
     borderTopWidth: 1,
     borderTopColor: "#E2E8F0",
     marginTop: 6,
   },
-  storePill: {
-    width: 26,
-    height: 26,
-    borderRadius: 6,
-    backgroundColor: "#00B14F",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  storeFooterText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
   footerTrash: {
     width: 34,
     height: 34,
@@ -2929,8 +3213,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   itemStepVal: { fontSize: 18, fontWeight: "700", minWidth: 28, textAlign: "center", color: "#0F172A" },
+  itemDiscControls: { flexDirection: "row", alignItems: "center", gap: 10 },
+  discModeToggle: {
+    flexDirection: "row",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  discModeBtn: {
+    width: 38,
+    height: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  discModeBtnActive: { backgroundColor: "#00B14F" },
+  discModeText: { fontSize: 16, fontWeight: "700", color: "#64748B" },
+  discModeTextActive: { color: "#FFFFFF" },
   itemDiscInput: {
-    minWidth: 110,
+    minWidth: 90,
     borderWidth: 1,
     borderColor: "#E2E8F0",
     borderRadius: 10,
@@ -2941,6 +3243,13 @@ const styles = StyleSheet.create({
     color: "#EF4444",
     textAlign: "right",
   },
+  itemDiscSummaryRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    marginTop: -4,
+    alignItems: "flex-end",
+  },
+  itemDiscSummaryText: { fontSize: 13, fontWeight: "700", color: "#EF4444" },
   itemTotalRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -4135,4 +4444,26 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   beamCancelText: { color: "#64748B", fontSize: 13 },
+
+  // Omise credit-card fee + VAT breakdown
+  feeBreakdown: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    gap: 4,
+  },
+  feeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  feeLabel: { fontSize: 13, color: "#334155" },
+  feeVal: { fontSize: 13, color: "#334155", fontWeight: "600" },
+  feeLabelMuted: { fontSize: 12, color: "#94A3B8", paddingLeft: 10 },
+  feeValMuted: { fontSize: 12, color: "#94A3B8" },
+  feeRowTotal: {
+    marginTop: 4,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  feeTotalLabel: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  feeTotalVal: { fontSize: 16, fontWeight: "800", color: "#00B14F" },
 });

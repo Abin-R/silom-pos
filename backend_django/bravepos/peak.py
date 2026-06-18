@@ -37,6 +37,8 @@ from typing import Any, Optional
 
 import httpx
 
+from django.db import transaction
+
 from .models import (
     Order,
     OrderItem,
@@ -296,14 +298,18 @@ def _create_peak_contact(form_data: dict) -> str:
     )
 
 
-def create_peak_receipt_for_order(order: Order) -> Optional[str]:
-    """End-to-end Peak receipt creation for a Brave POS order.
+def _document_link_from_response(peak_response: Optional[dict]) -> Optional[str]:
+    """Pull the ``documentLink`` out of a stored Peak queue payload, if any."""
+    receipts = (peak_response or {}).get("PeakReceipts", {}).get("receipts") or []
+    if receipts and receipts[0].get("documentLink"):
+        return receipts[0]["documentLink"]
+    return None
 
-    Returns the Peak ``documentLink`` (HTTPS URL) on success, or ``None``
-    if the receipt is still in the queue after our polling budget.  The
-    caller (usually a view) decides whether to redirect, show a 'still
-    processing' page, or schedule another poll.
-    """
+
+def _enqueue_peak_receipt(order: Order) -> str:
+    """Build the receipt payload and POST it to Peak's queue.  Returns the
+    ``queueId`` Peak hands back.  Performs no DB writes — the caller persists
+    the queue id under a row lock so we never enqueue the same order twice."""
     form = order.tax_invoice_data or {}
     peak_products, total_item_price = _build_peak_products(order)
     contact_id = _create_peak_contact(form)
@@ -311,6 +317,16 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
     amount = float(order.total or 0)
     total_discount = max(total_item_price - amount, 0)
     issued_date = order.created_at.astimezone().strftime("%Y%m%d")
+
+    # Per-branch Peak payment method.  A branch left on the default "BSV003"
+    # is sent as Peak's generic payment-method ``code``; a branch configured
+    # with a real chart-of-accounts code (e.g. "113105") is sent as an
+    # ``accountCode`` instead.
+    account_code = (getattr(order.branch, "peak_account_code", "") or "BSV003").strip() or "BSV003"
+    if account_code == "BSV003":
+        payment_method = {"code": "BSV003", "amount": amount}
+    else:
+        payment_method = {"accountCode": account_code, "amount": amount}
 
     receipt = {
         "contact": {"id": contact_id},
@@ -325,9 +341,8 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
             "paymentDate": issued_date,
             "payments": [
                 {
-                    "code": "BSV003",
-                    "amount": amount,
-                    "paymentMethod": {"code": "BSV003", "amount": amount},
+                    **payment_method,
+                    "paymentMethod": payment_method,
                 }
             ],
         },
@@ -339,20 +354,55 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
     queue_id = enqueue_resp.get("queueId")
     if not queue_id:
         raise RuntimeError(f"Peak did not return a queueId: {enqueue_resp!r}")
+    return queue_id
 
-    order.peak_queue_id = queue_id
-    order.save(update_fields=["peak_queue_id"])
 
-    # Poll until Peak materialises the receipt.  Total budget: 10 × 5s.
-    queue_res: dict = {}
+def _poll_peak_receipt(order: Order, queue_id: str) -> Optional[str]:
+    """Poll ``GET /receipts/queue`` until Peak materialises the receipt.
+    Persists the final payload on the order and returns its ``documentLink``,
+    or ``None`` if still processing after the polling budget (10 × 5s)."""
     for _ in range(10):
         queue_res = make_peak_request("/receipts/queue", "GET", {"queueId": queue_id})
         receipts = (queue_res.get("PeakReceipts") or {}).get("receipts") or []
         if receipts:
             order.peak_response = queue_res
-            order.save(update_fields=["peak_response"])
+            order.peak_queue_id = queue_id
+            order.save(update_fields=["peak_response", "peak_queue_id"])
             return receipts[0].get("documentLink")
         time.sleep(5)
-
-    # Still processing — caller can poll again later.
     return None
+
+
+def create_peak_receipt_for_order(order: Order) -> Optional[str]:
+    """End-to-end Peak receipt creation for a Brave POS order.
+
+    Idempotent: an order maps to at most ONE Peak receipt.  Concurrent polls
+    from the progress page — and re-scans of the receipt QR days later — must
+    never enqueue a second receipt.  We serialise the enqueue decision behind
+    a row lock and skip straight to polling whenever a queue id already exists.
+
+    Returns the Peak ``documentLink`` (HTTPS URL) on success, or ``None`` if
+    the receipt is still in the queue after our polling budget.  The caller
+    (usually a view) decides whether to redirect, show a 'still processing'
+    page, or schedule another poll.
+    """
+    # Claim-or-reuse the enqueue under a row lock.  The lock is held only for
+    # the build+enqueue, not the polling loop, so the row isn't pinned for the
+    # whole budget.  A second request blocks here, then finds the queue id
+    # already set and falls through to polling without re-enqueuing.
+    with transaction.atomic():
+        locked = Order.objects.select_for_update().get(pk=order.pk)
+
+        # Already finished on a prior attempt — hand back the stored link.
+        link = _document_link_from_response(locked.peak_response)
+        if link:
+            return link
+
+        queue_id = locked.peak_queue_id
+        if not queue_id:
+            queue_id = _enqueue_peak_receipt(locked)
+            locked.peak_queue_id = queue_id
+            locked.save(update_fields=["peak_queue_id"])
+
+    # Poll outside the lock so we don't hold the row for the whole budget.
+    return _poll_peak_receipt(order, queue_id)

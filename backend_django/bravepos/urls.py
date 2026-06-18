@@ -75,6 +75,10 @@ urlpatterns = [
     path('beam/charge', views.beam_charge_create),
     path('beam/charge/<str:charge_id>', views.beam_charge_status),
 
+    # Omise payment links (credit card)
+    path('omise/link', views.omise_link_create),
+    path('omise/link/<str:link_id>', views.omise_link_status),
+
     # Printer
     path('printers/detect', views.printer_detect),
     path('printers/status', views.printer_status),

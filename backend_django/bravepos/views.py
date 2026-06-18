@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import httpx
 from django.conf import settings as django_settings
@@ -619,10 +619,11 @@ def _get_or_create_settings() -> Settings:
 
 
 def _mask_api_key(data: dict) -> dict:
-    """Mirror the FastAPI mask: replace the Beam key with ••••<last4>."""
-    key = data.get('beam_api_key') or ''
-    if key and not key.startswith(BEAM_API_KEY_MASK_PREFIX) and len(key) > 4:
-        data['beam_api_key'] = BEAM_API_KEY_MASK_PREFIX + key[-4:]
+    """Mirror the FastAPI mask: replace secret keys with ••••<last4>."""
+    for field in ('beam_api_key', 'omise_secret_key'):
+        key = data.get(field) or ''
+        if key and not key.startswith(BEAM_API_KEY_MASK_PREFIX) and len(key) > 4:
+            data[field] = BEAM_API_KEY_MASK_PREFIX + key[-4:]
     return data
 
 
@@ -636,10 +637,11 @@ def settings_view(request):
     # PUT — update, but never overwrite the API key with a mask placeholder
     # echoed back from the UI (matches FastAPI semantics).
     payload = dict(request.data)
-    if 'beam_api_key' in payload:
-        val = payload['beam_api_key']
-        if not val or (isinstance(val, str) and val.startswith(BEAM_API_KEY_MASK_PREFIX)):
-            payload.pop('beam_api_key')
+    for field in ('beam_api_key', 'omise_secret_key'):
+        if field in payload:
+            val = payload[field]
+            if not val or (isinstance(val, str) and val.startswith(BEAM_API_KEY_MASK_PREFIX)):
+                payload.pop(field)
 
     ser = SettingsSerializer(obj, data=payload, partial=True)
     ser.is_valid(raise_exception=True)
@@ -727,6 +729,19 @@ def orders_list_create(request):
     requested_status = payload.get('status')
     initial_status = requested_status if requested_status in dict(Order.STATUS_CHOICES) else 'new'
 
+    # The client sends ``total`` as the *goods* total (subtotal − discount).
+    # We recompute tax + card fee server-side so it can't be tampered with and
+    # stays consistent with the Omise link the customer already paid.
+    payment_method = payload.get('payment_method', '') or ''
+    is_card = payment_method.startswith(CARD_METHOD_PREFIX)
+    goods_total = Decimal(str(payload.get('total', 0)))
+    charges = compute_order_charges(goods_total, is_card=is_card, settings=_get_or_create_settings())
+    grand_total = charges['total']
+    # Card charges are paid in full via Omise (no cash tendered / no change);
+    # other methods keep the cashier-entered tendered amount.
+    paid_amount = grand_total if is_card else Decimal(str(payload.get('paid_amount', 0)))
+    change = max(Decimal('0'), paid_amount - grand_total)
+
     with transaction.atomic():
         order = Order.objects.create(
             branch=branch,
@@ -735,19 +750,32 @@ def orders_list_create(request):
             discount_type=payload.get('discount_type', 'none'),
             discount_value=Decimal(str(payload.get('discount_value', 0))),
             discount_amount=Decimal(str(payload.get('discount_amount', 0))),
-            total=Decimal(str(payload.get('total', 0))),
-            payment_method=payload.get('payment_method', '') or '',
-            paid_amount=Decimal(str(payload.get('paid_amount', 0))),
-            change=Decimal(str(payload.get('change', 0))),
+            total=grand_total,
+            vat_amount=charges['vat_amount'],
+            processing_fee=charges['processing_fee'],
+            processing_fee_vat=charges['processing_fee_vat'],
+            payment_method=payment_method,
+            paid_amount=paid_amount,
+            change=change,
             status=initial_status,
             source=payload.get('source', 'table'),
             customer_id=payload.get('customer_id'),
             customer_name=payload.get('customer_name', '') or '',
             beam_charge_id=payload.get('beam_charge_id', '') or '',
+            omise_link_id=payload.get('omise_link_id', '') or '',
+            omise_charge_id=payload.get('omise_charge_id', '') or '',
             delivery_provider=payload.get('delivery_provider', '') or '',
             delivery_status=payload.get('delivery_status', '') or '',
             created_time=datetime.now().strftime('%H:%M'),
-            staff=payload.get('staff', '') or '',
+            # Stamp the cashier who rang up the sale.  Prefer the client-sent
+            # name but fall back to the authenticated session's staff so the
+            # field is never empty (the void/reprint copy reads it back from
+            # the DB, not the live POS session).
+            staff=(
+                payload.get('staff')
+                or (request.session_obj.staff.name if request.session_obj.staff else '')
+                or ''
+            ),
         )
         for it in items_data:
             pid = str(it.get('product_id')) if it.get('product_id') else ''
@@ -1526,6 +1554,159 @@ def beam_charge_status(request, charge_id):
         'status': data.get('status', 'PENDING'),
         'amount': (data.get('amount') or 0) / SATANG_PER_THB,
         'currency': data.get('currency', 'THB'),
+    })
+
+
+# ─── Tax + card-fee math ─────────────────────────────────────────────────────
+OMISE_API_URL = 'https://api.omise.co'
+OMISE_POST_TIMEOUT_S = 15.0
+OMISE_GET_TIMEOUT_S = 10.0
+# Payment methods whose label begins with this prefix are Omise card charges
+# and therefore carry the processing fee + fee VAT.
+CARD_METHOD_PREFIX = 'Credit Card'
+
+
+def _q2(value: Decimal) -> Decimal:
+    """Round a Decimal to 2 dp (satang) using banker-safe half-up."""
+    return Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def compute_order_charges(goods_total: Decimal, is_card: bool, settings: Settings) -> dict:
+    """Return the tax/fee breakdown for a goods total.
+
+    Prices are VAT-inclusive, so ``vat_amount`` is the tax already contained
+    in ``goods_total`` (goods × p/(100+p)).  Card orders additionally pass the
+    Omise processing fee — a flat percentage of the goods total — plus 7% VAT
+    on that fee to the customer.  ``total`` is the grand total charged.
+    """
+    p = Decimal(str(settings.tax_percent or 0))
+    goods_total = Decimal(str(goods_total or 0))
+    vat_amount = _q2(goods_total * p / (100 + p)) if p else Decimal('0.00')
+
+    fee = Decimal('0.00')
+    fee_vat = Decimal('0.00')
+    if is_card:
+        rate = Decimal(str(settings.omise_fee_percent or 0))
+        fee = _q2(goods_total * rate / 100)
+        fee_vat = _q2(fee * p / 100) if p else Decimal('0.00')
+
+    return {
+        'vat_amount': vat_amount,
+        'processing_fee': fee,
+        'processing_fee_vat': fee_vat,
+        'total': _q2(goods_total + fee + fee_vat),
+    }
+
+
+# ─── Omise Payment Links (credit card) ───────────────────────────────────────
+def _omise_headers() -> dict:
+    """Returns Basic-auth headers for Omise, or raises ValueError if unset.
+
+    Omise uses the secret key as the HTTP basic-auth username with an empty
+    password; the key prefix (skey_test_ vs skey_) selects test/live.
+    """
+    s = _get_or_create_settings()
+    if not s.omise_secret_key:
+        raise ValueError(
+            'Omise credentials not configured. Go to Settings → Payment to add '
+            'your Omise public + secret keys.'
+        )
+    token = base64.b64encode(f"{s.omise_secret_key}:".encode()).decode()
+    return {'Authorization': f'Basic {token}'}
+
+
+@api_view(['POST'])
+@require_session
+def omise_link_create(request):
+    """Create an Omise payment Link for a card charge and return its hosted URL.
+
+    ``amount`` in the request is the *goods* total; the backend adds the
+    processing fee + fee VAT so the customer is charged the grand total.  The
+    frontend renders ``payment_uri`` as a QR the customer scans to pay.
+    """
+    try:
+        headers = _omise_headers()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+
+    s = _get_or_create_settings()
+    goods_total = Decimal(str(request.data.get('amount', 0) or 0))
+    charges = compute_order_charges(goods_total, is_card=True, settings=s)
+    amount_satang = int((charges['total'] * SATANG_PER_THB).to_integral_value(ROUND_HALF_UP))
+
+    payload = {
+        'amount': amount_satang,
+        'currency': 'thb',
+        'title': request.data.get('title') or 'POS Order',
+        'description': request.data.get('description') or '',
+        # Single-use link — it cannot be paid twice.
+        'multiple': 'false',
+    }
+    try:
+        with httpx.Client(timeout=OMISE_POST_TIMEOUT_S) as client:
+            resp = client.post(f"{OMISE_API_URL}/links", data=payload, headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Omise API timed out. Please try again.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Omise API: {e}'}, status=502)
+
+    if resp.status_code in (401, 403):
+        return Response({'detail': 'Omise secret key is invalid or expired.'}, status=401)
+    if resp.status_code not in (200, 201):
+        return Response(
+            {'detail': f'Omise API error {resp.status_code}: {resp.text[:300]}'},
+            status=502,
+        )
+
+    data = resp.json()
+    link_id = data.get('id') or ''
+    payment_uri = data.get('payment_uri') or ''
+    if not link_id or not payment_uri:
+        return Response(
+            {'detail': 'Omise response did not include a link id / payment URI.'},
+            status=502,
+        )
+    return Response({
+        'link_id': link_id,
+        'payment_uri': payment_uri,
+        'goods_total': goods_total,
+        'vat_amount': charges['vat_amount'],
+        'processing_fee': charges['processing_fee'],
+        'processing_fee_vat': charges['processing_fee_vat'],
+        'amount_total': charges['total'],
+        'currency': 'THB',
+    })
+
+
+@api_view(['GET'])
+@require_session
+def omise_link_status(request, link_id):
+    """Poll an Omise Link for a successful charge."""
+    try:
+        headers = _omise_headers()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+    try:
+        with httpx.Client(timeout=OMISE_GET_TIMEOUT_S) as client:
+            resp = client.get(f"{OMISE_API_URL}/links/{link_id}", headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Omise API timed out.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Omise API: {e}'}, status=502)
+    if resp.status_code != 200:
+        return Response({'detail': f'Omise API error {resp.status_code}'}, status=502)
+
+    data = resp.json()
+    charge_list = (data.get('charges') or {}).get('data') or []
+    paid = next(
+        (c for c in charge_list if c.get('status') == 'successful' and c.get('paid')),
+        None,
+    )
+    failed = any(c.get('status') == 'failed' for c in charge_list)
+    return Response({
+        'link_id': link_id,
+        'status': 'successful' if paid else ('failed' if (failed and not paid) else 'pending'),
+        'charge_id': paid['id'] if paid else '',
     })
 
 

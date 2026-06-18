@@ -71,6 +71,12 @@ export type ReceiptOrder = {
   // customer can see what was taken off.
   subtotal?: number;
   discount_amount?: number;
+  // ``vat_amount`` is the 7% VAT already contained in the (VAT-inclusive)
+  // total.  ``processing_fee`` + ``processing_fee_vat`` are charged on top
+  // for Omise credit-card payments (0 for all other methods).
+  vat_amount?: number;
+  processing_fee?: number;
+  processing_fee_vat?: number;
   total: number;
   payment_method?: string;
   paid_amount?: number;
@@ -178,8 +184,19 @@ export function buildReceiptSections(order: ReceiptOrder, shop: ReceiptShop): Se
 
   // ─── Totals + payment ─────────────────────────────────────────────────
   sections.push({ type: 'divider' });
+  // Credit-card processing fee + its VAT, itemised so the customer sees the
+  // surcharge.  Zero for cash / QR, so the lines only appear for card sales.
+  const fee = Number(order.processing_fee) || 0;
+  const feeVat = Number(order.processing_fee_vat) || 0;
+  if (fee > 0) {
+    sections.push({ type: 'row', left: 'Card Fee 3.65%', right: thb(fee) });
+    if (feeVat > 0) sections.push({ type: 'row', left: 'VAT 7% on Fee', right: thb(feeVat) });
+  }
   const grandTotal = Number(order.total) || 0;
   sections.push({ type: 'row', left: 'Total', right: thb(grandTotal), bold: true });
+  // VAT already included in the total (prices are VAT-inclusive).
+  const vat = Number(order.vat_amount) || 0;
+  if (vat > 0) sections.push({ type: 'row', left: 'VAT 7% (incl.)', right: thb(vat) });
 
   const paid = Number(order.paid_amount ?? order.total) || 0;
   sections.push({ type: 'row', left: order.payment_method || 'Cash', right: thb(paid) });

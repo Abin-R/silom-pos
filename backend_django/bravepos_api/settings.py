@@ -152,6 +152,13 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # which silently drops the request body.
 APPEND_SLASH = False
 
+# Product images are stored as base64 data URLs in a normal form field (the
+# backoffice product form has no file-upload pipeline). The form now downscales
+# images client-side to ~tens of KB, but editing a product saved before that
+# change re-posts its original (possibly multi-MB) data URL. Lift the request
+# body cap from Django's 2.5 MB default so those edits don't 400.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024  # 15 MB
+
 # ── Auth (backoffice only) ──────────────────────────────────────────────────
 # The DRF-based POS API at /api/* uses its own PIN/token auth; these settings
 # only affect server-rendered /backoffice/* pages, which require a Django

@@ -9,6 +9,7 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  RefreshControl,
   ActivityIndicator,
   useWindowDimensions,
   Platform,
@@ -114,6 +115,7 @@ type Settings = {
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
   beam_merchant_id?: string; beam_api_key?: string; beam_sandbox?: boolean;
+  omise_public_key?: string; omise_secret_key?: string; omise_fee_percent?: number;
   printer_enabled?: boolean;
   printer_transport?: "disabled" | "file" | "network";
   printer_address?: string | null;
@@ -374,7 +376,7 @@ export default function Admin() {
           {section === "inventory" && <Inventory isWide={isWide} />}
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
-          {section === "drawer" && <Drawer isWide={isWide} />}
+          {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
           {section === "settings" && <SettingsView isWide={isWide} />}
         </View>
       </View>
@@ -1300,6 +1302,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
   const [stockModal, setStockModal] = useState<Product | null>(null);
   const [sortBy, setSortBy] = useState<"custom" | "name" | "inventory">("custom");
   const [search, setSearch] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -1311,6 +1314,11 @@ function Inventory({ isWide }: { isWide: boolean }) {
     if (!activeCat && c.length) setActiveCat(c[1]?.id || c[0].id);
   };
   useEffect(() => { load(); }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1436,6 +1444,9 @@ function Inventory({ isWide }: { isWide: boolean }) {
               data={filtered}
               keyExtractor={(i) => i.id}
               contentContainerStyle={{ padding: 14 }}
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+              }
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.invRow}
@@ -2289,11 +2300,25 @@ function Customers({ isWide }: { isWide: boolean }) {
 
   const save = async () => {
     if (!name.trim()) return;
-    const r = await apiFetch(`${API}/customers`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, phone: phone || null }),
-    });
-    const c = await r.json();
+    let c: any = null;
+    try {
+      const r = await apiFetch(`${API}/customers`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, phone: phone || null }),
+      });
+      if (!r.ok) {
+        const detail = await r.text().catch(() => "");
+        throw new Error(detail || `Server error (${r.status})`);
+      }
+      c = await r.json();
+    } catch (e: any) {
+      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+      return;
+    }
+    if (!c || !c.name) {
+      Alert.alert("Couldn't save customer", "Unexpected response from server.");
+      return;
+    }
     setList((l) => [c, ...l]);
     setSel(c); setName(""); setPhone(""); setAddOpen(false);
   };
@@ -2471,6 +2496,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
   const [edit, setEdit] = useState<Product | "new" | null>(null);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"custom" | "name">("custom");
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -2481,6 +2507,11 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
     if (!activeCat && c.length) setActiveCat(c[0].id);
   };
   useEffect(() => { load(); }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  };
 
   const filtered = useMemo(() => {
     let list = prods;
@@ -2632,6 +2663,9 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
           data={filtered}
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: 14 }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+          }
           renderItem={({ item }) => (
             <View style={styles.prodMgmtRow} testID={`prod-${item.id}`}>
               <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
@@ -2926,7 +2960,7 @@ type DrawerCat = {
   active?: boolean;
 };
 
-function Drawer({ isWide }: { isWide: boolean }) {
+function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
   const [current, setCurrent] = useState<ShiftType | null>(null);
   const [history, setHistory] = useState<ShiftType[]>([]);
   const [tab, setTab] = useState<"shift" | "history">("shift");
@@ -2934,7 +2968,7 @@ function Drawer({ isWide }: { isWide: boolean }) {
   const [closeDlg, setCloseDlg] = useState(false);
   const [moveDlg, setMoveDlg] = useState<"paid_in" | "paid_out" | null>(null);
   const [startCash, setStartCash] = useState("0");
-  const [actualCash, setActualCash] = useState("0");
+  const [actualCash, setActualCash] = useState("");
   const [moveAmt, setMoveAmt] = useState("");
   const [moveNote, setMoveNote] = useState("");
   const [moveCat, setMoveCat] = useState<string>("");
@@ -2976,16 +3010,21 @@ function Drawer({ isWide }: { isWide: boolean }) {
   const openShift = async () => {
     await apiFetch(`${API}/shifts/open`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ start_cash: parseFloat(startCash) || 0, opened_by: "Admin" }),
+      body: JSON.stringify({ start_cash: parseFloat(startCash) || 0, opened_by: staff }),
     });
     setOpenDlg(false); setStartCash("0"); load();
   };
   const closeShift = async () => {
+    const counted = parseFloat(actualCash);
+    if (actualCash.trim() === "" || isNaN(counted) || counted < 0) {
+      Alert.alert("Counted cash required", "Enter the actual amount counted in the drawer before closing.");
+      return;
+    }
     const res = await apiFetch(`${API}/shifts/close`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actual_in_drawer: parseFloat(actualCash) || 0, closed_by: "Admin" }),
+      body: JSON.stringify({ actual_in_drawer: counted, closed_by: staff }),
     });
-    setCloseDlg(false); setActualCash("0");
+    setCloseDlg(false); setActualCash("");
     // Print the close-shift summary (ใบสรุปปิดรอบการขาย) the moment the round
     // is closed, matching the reference POS. Print failures don't block the
     // close — the slip can be reprinted from History.
@@ -3705,6 +3744,62 @@ function SettingsView({ isWide }: { isWide: boolean }) {
                 </Text>
               </Field>
             </View>
+
+            {/* ── Omise Credit Card ── */}
+            {(() => {
+              const isMaskedOmise = s.omise_secret_key?.startsWith(BEAM_API_KEY_MASK_PREFIX) ?? false;
+              return (
+            <View style={styles.beamSettingsCard}>
+              <View style={styles.beamSettingsHeader}>
+                <View style={[styles.beamLogoBox, { backgroundColor: "#1A1F71" }]}>
+                  <Ionicons name="card" size={20} color="#FFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.beamSettingsTitle}>Credit Card (Omise)</Text>
+                  <Text style={styles.beamSettingsSub}>Card payment link · customer scans a QR to pay</Text>
+                </View>
+              </View>
+
+              <Field label="Public Key">
+                <TextInput
+                  style={styles.formInput}
+                  value={s.omise_public_key || ""}
+                  onChangeText={(v) => update({ omise_public_key: v })}
+                  placeholder="pkey_test_xxxxxxxxxxxxxxxx"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  testID="omise-public-key"
+                />
+              </Field>
+
+              <Field label="Secret Key">
+                <TextInput
+                  style={styles.formInput}
+                  value={isMaskedOmise ? "" : (s.omise_secret_key || "")}
+                  onChangeText={(v) => update({ omise_secret_key: v })}
+                  placeholder={isMaskedOmise ? "Key saved — enter new key to replace" : "skey_test_xxxxxxxxxxxxxxxx"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  testID="omise-secret-key"
+                />
+              </Field>
+
+              <Field label="Processing Fee %">
+                <TextInput
+                  style={styles.formInput}
+                  value={s.omise_fee_percent != null ? String(s.omise_fee_percent) : ""}
+                  onChangeText={(v) => update({ omise_fee_percent: parseFloat(v.replace(/[^0-9.]/g, "")) || 0 })}
+                  placeholder="3.65"
+                  keyboardType="decimal-pad"
+                  testID="omise-fee-percent"
+                />
+                <Text style={styles.beamSettingsHint}>
+                  Charged to the customer on card payments (percentage of the order total). 7% VAT is added on top of this fee. Test/live mode is set by the key prefix (skey_test_ vs skey_).
+                </Text>
+              </Field>
+            </View>
+              );
+            })()}
 
             <TouchableOpacity
               style={[styles.primaryBtn, saving && { opacity: 0.5 }]}

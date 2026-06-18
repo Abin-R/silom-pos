@@ -130,7 +130,16 @@ def create_tax_invoice(request, order_number: str):
     """Tax-invoice creation form for a given order.  The Save button
     POSTs the form to :func:`save_tax_invoice` which then hands off to
     the Peak flow.  Linked from the customer receipt landing page's
-    'Issue Full Tax Invoice' button."""
+    'Issue Full Tax Invoice' button.
+
+    If this order already has a Peak tax invoice (e.g. the customer scans
+    the QR a second time and presses the button again), skip the form and
+    redirect straight to the existing document — one order, one receipt."""
+    order = Order.objects.filter(order_number=order_number).first()
+    if order is not None:
+        link = _document_link_from_response(order.peak_response)
+        if link:
+            return HttpResponseRedirect(link)
     return render(request, "backoffice/create_tax_invoice.html", {
         "order_number": order_number,
     })
@@ -156,7 +165,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 
 from bravepos.models import Order
-from bravepos.peak import create_peak_receipt_for_order
+from bravepos.peak import create_peak_receipt_for_order, _document_link_from_response
 
 
 def _form_to_tax_invoice_data(post) -> dict:
@@ -228,9 +237,9 @@ def tax_invoice_process(request, order_number: str):
     # If we already have a document link from a previous attempt, short-
     # circuit and return it.  Lets the customer come back to the URL
     # later without re-creating the receipt in Peak.
-    existing = (order.peak_response or {}).get("PeakReceipts", {}).get("receipts") or []
-    if existing and existing[0].get("documentLink"):
-        return JsonResponse({"status": "ready", "url": existing[0]["documentLink"]})
+    link = _document_link_from_response(order.peak_response)
+    if link:
+        return JsonResponse({"status": "ready", "url": link})
 
     try:
         document_link = create_peak_receipt_for_order(order)
@@ -289,7 +298,15 @@ def dashboard(request):
     settings_row = Settings.objects.first()
     tax_percent = settings_row.tax_percent if settings_row else Decimal("7")
     taxable_base = subtotal - discount
-    if settings_row and settings_row.tax_mode == "inclusive":
+    # Prefer the VAT the POS stored per order (VAT-inclusive) so the summary
+    # matches the per-bill report; fall back to the settings calc for orders
+    # predating ``vat_amount``.
+    stored_vat = orders.aggregate(v=Sum("vat_amount"))["v"] or Decimal(0)
+    if stored_vat:
+        tax_amount = stored_vat
+        total_incl_tax = taxable_base
+        total_non_tax = taxable_base - tax_amount
+    elif settings_row and settings_row.tax_mode == "inclusive":
         # Total already includes tax — back it out.
         tax_amount = taxable_base * tax_percent / (Decimal(100) + tax_percent)
         total_incl_tax = taxable_base
@@ -487,7 +504,17 @@ def _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct):
     sub = o.subtotal or Decimal(0)
     disc = o.discount_amount or Decimal(0)
     taxable = sub - disc
-    if tax_mode == "inclusive":
+    # Prefer the VAT amount the POS computed and stored at sale time (always
+    # VAT-inclusive: goods × p/(100+p)) so the report reconciles exactly with
+    # the receipt.  Older orders predating ``vat_amount`` fall back to the
+    # settings-driven calculation.
+    stored_vat = o.vat_amount or Decimal(0)
+    if stored_vat:
+        tax_amount = stored_vat
+        total_incl_tax = taxable
+        total_non_tax = taxable - tax_amount
+        sub_ex_tax = taxable - tax_amount
+    elif tax_mode == "inclusive":
         tax_amount = taxable * tax_percent / (Decimal(100) + tax_percent)
         total_incl_tax = taxable
         total_non_tax = taxable - tax_amount
@@ -498,6 +525,9 @@ def _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct):
         total_non_tax = taxable
         sub_ex_tax = taxable
     service_charge = taxable * service_charge_pct / Decimal(100)
+    # Omise card surcharge (0 for other methods) — passed through so the
+    # detail panel / export can show it if needed.
+    processing_fee = (o.processing_fee or Decimal(0)) + (o.processing_fee_vat or Decimal(0))
 
     items_data = []
     for it in o.items.all():
@@ -516,6 +546,7 @@ def _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct):
         "service_charge": service_charge,
         "rounding_adj": Decimal(0),
         "shipping_fee": Decimal(0),
+        "processing_fee": processing_fee,
         "tax_amount": tax_amount,
         "total_incl_tax": total_incl_tax,
         "total_non_tax": total_non_tax,
@@ -834,6 +865,22 @@ def _report_daily_rows(branch, dfrom, dto):
     )
     profit_map = {p["date_only"]: (p["profit"] or Decimal(0)) for p in profit_by_day}
 
+    # Per-day payment method breakdown — one entry per (day, method).
+    pay_rows = (
+        orders.annotate(date_only=TruncDate("created_at"))
+        .values("date_only", "payment_method")
+        .annotate(amount=Sum("total"), n=Count("id"))
+        .order_by("-amount")
+    )
+    payments_map: dict = {}
+    for entry in pay_rows:
+        method = (entry["payment_method"] or "").strip() or "Unknown"
+        payments_map.setdefault(entry["date_only"], []).append({
+            "method": method.title(),
+            "amount": entry["amount"] or Decimal(0),
+            "n": entry["n"] or 0,
+        })
+
     rows = []
     for entry in daily:
         d = entry["date_only"]
@@ -853,6 +900,7 @@ def _report_daily_rows(branch, dfrom, dto):
             "profit": profit_map.get(d, Decimal(0)),
             "grand_total": entry["total"] or Decimal(0),
             "bill_count": entry["bill_count"] or 0,
+            "payments": payments_map.get(d, []),
         })
     return rows
 
@@ -2034,6 +2082,7 @@ def _apply_branch_form(b: Branch, post) -> Branch:
     b.logo_url = (post.get("logo_url") or "").strip()
     b.open_time = (post.get("open_time") or "09:00").strip() or "09:00"
     b.close_time = (post.get("close_time") or "22:00").strip() or "22:00"
+    b.peak_account_code = (post.get("peak_account_code") or "BSV003").strip() or "BSV003"
     b.active = post.get("active") == "on"
     return b
 

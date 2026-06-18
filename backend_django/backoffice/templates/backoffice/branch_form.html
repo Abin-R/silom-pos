@@ -80,6 +80,16 @@
         </div>
 
         <div class="col-md-6">
+          <label class="form-label">Peak Account Code</label>
+          <input type="text" name="peak_account_code" class="form-control"
+                 value="{{ branch_obj.peak_account_code|default:'BSV003' }}"
+                 placeholder="BSV003">
+          <div class="form-text">Payment account code sent to Peak on the tax
+            invoice. Leave as <code>BSV003</code> unless this branch has its own
+            chart-of-accounts code (e.g. 113105).</div>
+        </div>
+
+        <div class="col-md-6">
           <label class="form-label">Phone</label>
           <input type="text" name="phone" class="form-control"
                  value="{{ branch_obj.phone }}"

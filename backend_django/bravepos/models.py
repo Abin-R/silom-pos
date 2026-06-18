@@ -115,6 +115,12 @@ class Branch(models.Model):
     logo_url = models.TextField(blank=True, default="")
     open_time = models.CharField(max_length=8, default="09:00")
     close_time = models.CharField(max_length=8, default="22:00")
+    # Peak payment account code used when issuing the full tax invoice for
+    # this branch's orders.  The default "BSV003" is Peak's generic payment
+    # method code; a branch configured with a real chart-of-accounts code
+    # (e.g. "113105") is sent as an ``accountCode`` instead.  See
+    # ``peak.create_peak_receipt_for_order``.
+    peak_account_code = models.CharField(max_length=32, blank=True, default="BSV003")
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -287,6 +293,15 @@ class Settings(models.Model):
     beam_api_key = models.CharField(max_length=256, blank=True, default="")
     beam_sandbox = models.BooleanField(default=True)
 
+    # Omise gateway (credit-card payment links).  Omise has no separate base
+    # URL for test vs live — the key prefix (pkey_test_/skey_test_ vs
+    # pkey_/skey_) determines the environment, so there is no sandbox flag.
+    omise_public_key = models.CharField(max_length=128, blank=True, default="")
+    omise_secret_key = models.CharField(max_length=128, blank=True, default="")
+    # Processing fee passed on to the customer for card payments, as a
+    # percentage of the goods total (Omise Thailand's standard rate is 3.65%).
+    omise_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=3.65)
+
     # Printer
     printer_enabled = models.BooleanField(default=False)
     printer_transport = models.CharField(max_length=16, default="disabled")
@@ -337,6 +352,18 @@ class Order(models.Model):
     )
     customer_name = models.CharField(max_length=200, blank=True, default="")
     beam_charge_id = models.CharField(max_length=128, blank=True, default="")
+
+    # ── Tax + card processing fee ──────────────────────────────────────
+    # ``vat_amount`` is the 7% VAT *already contained* in the goods total
+    # (prices are VAT-inclusive): vat = goods × 7/107.  For Omise card
+    # payments the customer also covers the processing fee plus 7% VAT on
+    # that fee; ``total`` is the grand total actually charged
+    # (goods + processing_fee + processing_fee_vat).
+    vat_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    processing_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    processing_fee_vat = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    omise_link_id = models.CharField(max_length=128, blank=True, default="")
+    omise_charge_id = models.CharField(max_length=128, blank=True, default="")
     delivery_provider = models.CharField(max_length=64, blank=True, default="")
     delivery_status = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

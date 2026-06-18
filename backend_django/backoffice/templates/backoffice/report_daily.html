@@ -29,6 +29,7 @@
             <th class="text-end">Service Charge</th>
             <th class="text-end">Profit</th>
             <th class="text-end">Grand Total</th>
+            <th>Payment Type</th>
             <th></th>
           </tr>
         </thead>
@@ -42,6 +43,15 @@
             <td class="text-end currency">{{ row.service_charge|floatformat:2|intcomma }}</td>
             <td class="text-end currency">{{ row.profit|floatformat:2|intcomma }}</td>
             <td class="text-end currency fw-semibold">{{ row.grand_total|floatformat:2|intcomma }}</td>
+            <td>
+              {% for p in row.payments %}
+                <span class="badge bg-light text-dark border me-1 mb-1" style="font-weight:500;">
+                  {{ p.method }} <span class="text-success ms-1">฿{{ p.amount|floatformat:2|intcomma }}</span>
+                </span>
+              {% empty %}
+                <span class="text-muted small">—</span>
+              {% endfor %}
+            </td>
             <td class="text-end">
               <a class="btn btn-sm btn-outline-success"
                  href="{% url 'backoffice:report_daily_detail' date_str=row.date|date:'Y-m-d' %}?{{ qs }}">
@@ -50,7 +60,7 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="8" class="text-center text-muted py-4">No sales in range.</td></tr>
+          <tr><td colspan="9" class="text-center text-muted py-4">No sales in range.</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -20,7 +20,7 @@ class BranchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Branch
         fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id',
-                  'active', 'created_at', 'cashier_email']
+                  'peak_account_code', 'active', 'created_at', 'cashier_email']
         read_only_fields = ['created_at', 'cashier_email']
 
     def get_cashier_email(self, obj):
@@ -98,10 +98,12 @@ class OrderSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'items',
             'branch_id', 'branch_name',
             'subtotal', 'discount_type', 'discount_value', 'discount_amount', 'total',
+            'vat_amount', 'processing_fee', 'processing_fee_vat',
             'payment_method', 'paid_amount', 'change',
             'status', 'source',
             'customer_id', 'customer_name',
-            'beam_charge_id', 'delivery_provider', 'delivery_status',
+            'beam_charge_id', 'omise_link_id', 'omise_charge_id',
+            'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
             'voided_by', 'voided_at',
         ]
