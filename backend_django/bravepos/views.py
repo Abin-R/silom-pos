@@ -384,13 +384,15 @@ def auth_pin_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
+    # One active session per staff account — including the same branch.
+    # Two devices can share a branch, but not the same identity.
     existing = (
         BranchSession.objects
         .select_related('branch')
         .filter(staff=staff)
         .first()
     )
-    if existing and str(existing.branch_id) != str(branch.id):
+    if existing:
         return Response({
             'detail': (
                 f'This account is already signed in at '

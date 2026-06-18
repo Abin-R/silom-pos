@@ -878,7 +878,10 @@ export default function POS() {
         }}
         onLogout={async () => {
           setSidebarOpen(false);
-          await clearAuthToken();
+          // Full logout: backend session + in-memory token + AsyncStorage.
+          // Just clearing the in-memory token leaves AUTH_KEY on disk, so
+          // index.tsx's /auth/me check succeeds and bounces back to /pos.
+          await doLogout();
           router.replace("/");
         }}
       />
