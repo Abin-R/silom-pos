@@ -3543,10 +3543,24 @@ function SettingsView({ isWide }: { isWide: boolean }) {
   const save = async () => {
     if (!s) return;
     setSaving(true);
-    await apiFetch(`${API}/settings`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(s),
-    });
-    setSaving(false);
+    try {
+      const res = await apiFetch(`${API}/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(s),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        Alert.alert("Save failed", `Settings did not save (HTTP ${res.status}). ${detail.slice(0, 200)}`);
+        return;
+      }
+      // Refresh from the server response so saved (and masked) values are
+      // reflected immediately — confirms the write actually landed.
+      const saved = await res.json().catch(() => null);
+      if (saved) setS(saved);
+    } catch (e: any) {
+      Alert.alert("Save failed", e?.message || "Could not reach the server.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -3787,8 +3801,13 @@ function SettingsView({ isWide }: { isWide: boolean }) {
               <Field label="Processing Fee %">
                 <TextInput
                   style={styles.formInput}
-                  value={s.omise_fee_percent != null ? String(s.omise_fee_percent) : ""}
-                  onChangeText={(v) => update({ omise_fee_percent: parseFloat(v.replace(/[^0-9.]/g, "")) || 0 })}
+                  // Uncontrolled (defaultValue, not value) so a half-typed
+                  // decimal like "3." isn't reformatted away mid-keystroke.
+                  defaultValue={s.omise_fee_percent != null ? String(s.omise_fee_percent) : ""}
+                  onChangeText={(v) => {
+                    const n = parseFloat(v.replace(/[^0-9.]/g, ""));
+                    update({ omise_fee_percent: isNaN(n) ? 0 : n });
+                  }}
                   placeholder="3.65"
                   keyboardType="decimal-pad"
                   testID="omise-fee-percent"
