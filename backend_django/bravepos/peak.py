@@ -357,39 +357,43 @@ def _enqueue_peak_receipt(order: Order) -> str:
     return queue_id
 
 
-def _poll_peak_receipt(order: Order, queue_id: str) -> Optional[str]:
-    """Poll ``GET /receipts/queue`` until Peak materialises the receipt.
-    Persists the final payload on the order and returns its ``documentLink``,
-    or ``None`` if still processing after the polling budget (10 × 5s)."""
-    for _ in range(10):
-        queue_res = make_peak_request("/receipts/queue", "GET", {"queueId": queue_id})
-        receipts = (queue_res.get("PeakReceipts") or {}).get("receipts") or []
-        if receipts:
-            order.peak_response = queue_res
-            order.peak_queue_id = queue_id
-            order.save(update_fields=["peak_response", "peak_queue_id"])
-            return receipts[0].get("documentLink")
-        time.sleep(5)
+def _check_peak_receipt(order: Order, queue_id: str) -> Optional[str]:
+    """One ``GET /receipts/queue`` status check (no sleeping).  Persists the
+    final payload on the order and returns its ``documentLink`` if Peak has
+    materialised the receipt, or ``None`` if it's still processing."""
+    queue_res = make_peak_request("/receipts/queue", "GET", {"queueId": queue_id})
+    receipts = (queue_res.get("PeakReceipts") or {}).get("receipts") or []
+    if receipts:
+        order.peak_response = queue_res
+        order.peak_queue_id = queue_id
+        order.save(update_fields=["peak_response", "peak_queue_id"])
+        return receipts[0].get("documentLink")
     return None
 
 
 def create_peak_receipt_for_order(order: Order) -> Optional[str]:
-    """End-to-end Peak receipt creation for a Brave POS order.
+    """Advance the Peak receipt for an order by ONE step and return early.
 
-    Idempotent: an order maps to at most ONE Peak receipt.  Concurrent polls
-    from the progress page — and re-scans of the receipt QR days later — must
-    never enqueue a second receipt.  We serialise the enqueue decision behind
-    a row lock and skip straight to polling whenever a queue id already exists.
+    This is called once per poll from the customer-facing progress page.  It
+    deliberately does NOT block on a long polling loop — each call performs at
+    most a single Peak enqueue *or* a single status check, so the HTTP request
+    always finishes well under the gunicorn worker timeout.  A request that
+    blocked for ~50s (the old inline poll) was being killed at the 30s worker
+    timeout, returning a non-JSON 502 the progress page surfaced as the
+    generic "Could not create tax invoice" error.
 
-    Returns the Peak ``documentLink`` (HTTPS URL) on success, or ``None`` if
-    the receipt is still in the queue after our polling budget.  The caller
-    (usually a view) decides whether to redirect, show a 'still processing'
-    page, or schedule another poll.
+    Idempotent: an order maps to at most ONE Peak receipt.  Concurrent polls —
+    and re-scans of the receipt QR days later — must never enqueue a second
+    receipt.  The enqueue decision is serialised behind a row lock and we skip
+    straight to a status check whenever a queue id already exists.
+
+    Returns the Peak ``documentLink`` (HTTPS URL) once ready, or ``None`` while
+    the receipt is still processing (caller responds 202 and the page polls
+    again).
     """
-    # Claim-or-reuse the enqueue under a row lock.  The lock is held only for
-    # the build+enqueue, not the polling loop, so the row isn't pinned for the
-    # whole budget.  A second request blocks here, then finds the queue id
-    # already set and falls through to polling without re-enqueuing.
+    # Claim-or-reuse the enqueue under a short row lock.  A second request
+    # blocks here, then finds the queue id already set and falls through to a
+    # status check without re-enqueuing.
     with transaction.atomic():
         locked = Order.objects.select_for_update().get(pk=order.pk)
 
@@ -400,9 +404,13 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
 
         queue_id = locked.peak_queue_id
         if not queue_id:
+            # First poll for this order: enqueue, then return "processing"
+            # immediately.  Peak isn't ready in the same instant, and checking
+            # now would only lengthen this request — the next poll checks.
             queue_id = _enqueue_peak_receipt(locked)
             locked.peak_queue_id = queue_id
             locked.save(update_fields=["peak_queue_id"])
+            return None
 
-    # Poll outside the lock so we don't hold the row for the whole budget.
-    return _poll_peak_receipt(order, queue_id)
+    # Subsequent poll: a single quick status check, outside the lock.
+    return _check_peak_receipt(order, queue_id)
