@@ -197,9 +197,9 @@ def auth_login(request):
             'occupied_branch': existing_user_session.branch.name,
         }, status=409)
 
-    # Single-session-per-branch: drop any other session on this branch
-    # (different staff) before creating the new one.
-    BranchSession.objects.filter(branch=branch).delete()
+    # Multiple staff may be signed in to one branch at once (e.g. admin phone
+    # + cashier phone). The per-staff guard above already prevents the same
+    # account from holding two sessions, so just create this one.
     sess = BranchSession.objects.create(
         branch=branch,
         staff=staff,
@@ -257,10 +257,9 @@ def auth_switch_branch(request):
         })
 
     staff = sess.staff
-    # Drop any existing session on the target branch (same behavior as a fresh
-    # login), drop our current session, then create a new one bound to the
-    # target branch.
-    BranchSession.objects.filter(branch=branch).delete()
+    # Drop only our own current session (this admin can't hold two), then
+    # create a new one bound to the target branch. Other staff already signed
+    # in to that branch are left alone.
     sess.delete()
     new_sess = BranchSession.objects.create(
         branch=branch, staff=staff, token=BranchSession.new_token(),
@@ -358,9 +357,9 @@ def auth_branch_users(request):
 def auth_pin_login(request):
     """Body: { branch_id, staff_id, pin }.
 
-    PIN-pad equivalent of /auth/login. Same session semantics: one active
-    session per branch (any prior session on the branch is dropped) and one
-    active session per staff (reject if signed in elsewhere).
+    PIN-pad equivalent of /auth/login. Same session semantics: multiple staff
+    may be signed in to one branch at once, but a single staff account is
+    limited to one active session (reject if already signed in elsewhere).
     """
     branch_id = (request.data or {}).get('branch_id')
     staff_id = (request.data or {}).get('staff_id')
@@ -401,7 +400,6 @@ def auth_pin_login(request):
             'occupied_branch': existing.branch.name,
         }, status=409)
 
-    BranchSession.objects.filter(branch=branch).delete()
     sess = BranchSession.objects.create(
         branch=branch, staff=staff, token=BranchSession.new_token(),
     )

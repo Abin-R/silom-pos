@@ -68,15 +68,16 @@ class Staff(models.Model):
 
 
 class BranchSession(models.Model):
-    """The single active login for a branch.
+    """An active login at a branch.
 
-    Enforced as 1-row-per-branch by the unique constraint on ``branch``.
-    Logging in to a branch that's already taken DELETEs the old row then
-    INSERTs a new one — the kicked-out user's token stops authenticating.
+    Multiple staff (e.g. an admin phone + a cashier phone) can be signed in
+    to the same branch at once — one row per device/login.  A given *staff*
+    account is still limited to one active session at a time (enforced in the
+    login views), so the same identity can't be held on two devices.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    branch = models.OneToOneField(
-        "Branch", on_delete=models.CASCADE, related_name="current_session",
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="sessions",
     )
     staff = models.ForeignKey(
         Staff, on_delete=models.CASCADE, related_name="sessions",
