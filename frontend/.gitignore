@@ -25,6 +25,12 @@ expo-env.d.ts
 # local env (contains LAN/tunnel URLs that vary per machine)
 .env
 
+# .env.production IS tracked on purpose: it only holds EXPO_PUBLIC_* values
+# (prod backend URL + Sentry DSN) that ship inside the app anyway, so every
+# production build reports to Sentry regardless of which machine builds it.
+# The root .gitignore's `.env.*` rule would otherwise drop it.
+!.env.production
+
 # debug
 npm-debug.*
 yarn-debug.*
