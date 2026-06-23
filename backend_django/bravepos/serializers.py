@@ -102,7 +102,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'payment_method', 'paid_amount', 'change',
             'status', 'source',
             'customer_id', 'customer_name',
-            'beam_charge_id', 'omise_link_id', 'omise_charge_id',
+            'beam_charge_id', 'beam_link_id', 'omise_link_id', 'omise_charge_id',
             'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
             'voided_by', 'voided_at',

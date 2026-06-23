@@ -293,6 +293,10 @@ class Settings(models.Model):
     beam_merchant_id = models.CharField(max_length=128, blank=True, default="")
     beam_api_key = models.CharField(max_length=256, blank=True, default="")
     beam_sandbox = models.BooleanField(default=True)
+    # Processing fee passed on to the customer for Beam card payments, as a
+    # percentage of the goods total (kept separate from Omise's rate so each
+    # gateway can carry its own surcharge).
+    beam_card_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=3.65)
 
     # Omise gateway (credit-card payment links).  Omise has no separate base
     # URL for test vs live — the key prefix (pkey_test_/skey_test_ vs
@@ -353,6 +357,8 @@ class Order(models.Model):
     )
     customer_name = models.CharField(max_length=200, blank=True, default="")
     beam_charge_id = models.CharField(max_length=128, blank=True, default="")
+    # Beam credit-card payment link (mirrors the Omise link fields below).
+    beam_link_id = models.CharField(max_length=128, blank=True, default="")
 
     # ── Tax + card processing fee ──────────────────────────────────────
     # ``vat_amount`` is the 7% VAT *already contained* in the goods total

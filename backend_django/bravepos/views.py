@@ -733,12 +733,18 @@ def orders_list_create(request):
     # We recompute tax + card fee server-side so it can't be tampered with and
     # stays consistent with the Omise link the customer already paid.
     payment_method = payload.get('payment_method', '') or ''
-    is_card = payment_method.startswith(CARD_METHOD_PREFIX)
+    is_beam_card = payment_method == BEAM_CARD_METHOD
+    is_card = payment_method.startswith(CARD_METHOD_PREFIX) or is_beam_card
     goods_total = Decimal(str(payload.get('total', 0)))
-    charges = compute_order_charges(goods_total, is_card=is_card, settings=_get_or_create_settings())
+    s = _get_or_create_settings()
+    # Beam card carries its own surcharge; Omise card uses the Omise rate.
+    fee_percent = s.beam_card_fee_percent if is_beam_card else None
+    charges = compute_order_charges(
+        goods_total, is_card=is_card, settings=s, fee_percent=fee_percent,
+    )
     grand_total = charges['total']
-    # Card charges are paid in full via Omise (no cash tendered / no change);
-    # other methods keep the cashier-entered tendered amount.
+    # Card charges are paid in full via the gateway (no cash tendered / no
+    # change); other methods keep the cashier-entered tendered amount.
     paid_amount = grand_total if is_card else Decimal(str(payload.get('paid_amount', 0)))
     change = max(Decimal('0'), paid_amount - grand_total)
 
@@ -762,6 +768,7 @@ def orders_list_create(request):
             customer_id=payload.get('customer_id'),
             customer_name=payload.get('customer_name', '') or '',
             beam_charge_id=payload.get('beam_charge_id', '') or '',
+            beam_link_id=payload.get('beam_link_id', '') or '',
             omise_link_id=payload.get('omise_link_id', '') or '',
             omise_charge_id=payload.get('omise_charge_id', '') or '',
             delivery_provider=payload.get('delivery_provider', '') or '',
@@ -1557,6 +1564,124 @@ def beam_charge_status(request, charge_id):
     })
 
 
+# ─── Beam Payment Links (credit card) ────────────────────────────────────────
+# Mirrors the Omise link flow: create a card-only hosted-checkout link, render
+# its URL as a QR the customer scans, then poll until the link is paid.  Uses
+# the same Beam credentials as the QR charge flow (``_beam_credentials``).
+@api_view(['POST'])
+@require_session
+def beam_link_create(request):
+    """Create a Beam card payment Link and return its hosted-checkout URL.
+
+    ``amount`` in the request is the *goods* total; the backend adds the Beam
+    card processing fee + fee VAT so the customer is charged the grand total.
+    The frontend renders ``payment_uri`` as a QR the customer scans to pay.
+    """
+    try:
+        base, headers = _beam_credentials()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+
+    s = _get_or_create_settings()
+    goods_total = Decimal(str(request.data.get('amount', 0) or 0))
+    charges = compute_order_charges(
+        goods_total, is_card=True, settings=s, fee_percent=s.beam_card_fee_percent,
+    )
+    amount_satang = int((charges['total'] * SATANG_PER_THB).to_integral_value(ROUND_HALF_UP))
+    reference_id = request.data.get('reference_id') or request.data.get('reference', '')
+
+    payload = {
+        'order': {
+            'netAmount': amount_satang,
+            'currency': 'THB',
+            'referenceId': reference_id,
+        },
+        # Card only — this method is the card analogue of the QR PromptPay flow.
+        'linkSettings': {
+            'card': True,
+            'cardInstallments': False,
+            'eWallets': False,
+            'mobileBanking': False,
+            'qrPromptPay': False,
+        },
+    }
+    try:
+        with httpx.Client(timeout=BEAM_POST_TIMEOUT_S) as client:
+            resp = client.post(f"{base}/api/v1/payment-links", json=payload, headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Beam API timed out. Please try again.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
+
+    if resp.status_code == 401:
+        return Response({'detail': 'Beam API key is invalid or expired.'}, status=401)
+    if resp.status_code not in (200, 201):
+        return Response(
+            {'detail': f'Beam API error {resp.status_code}: {resp.text[:300]}'},
+            status=502,
+        )
+
+    data = resp.json()
+    link_id = data.get('paymentLinkId') or data.get('id') or ''
+    payment_uri = data.get('url') or data.get('paymentLinkUrl') or ''
+    if not link_id or not payment_uri:
+        return Response(
+            {'detail': 'Beam response did not include a payment link id / URL.'},
+            status=502,
+        )
+    return Response({
+        'link_id': link_id,
+        'payment_uri': payment_uri,
+        'goods_total': goods_total,
+        'vat_amount': charges['vat_amount'],
+        'processing_fee': charges['processing_fee'],
+        'processing_fee_vat': charges['processing_fee_vat'],
+        'amount_total': charges['total'],
+        'currency': 'THB',
+    })
+
+
+@api_view(['GET'])
+@require_session
+def beam_link_status(request, link_id):
+    """Poll a Beam payment Link for a paid card charge."""
+    try:
+        base, headers = _beam_credentials()
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=400)
+    try:
+        with httpx.Client(timeout=BEAM_GET_TIMEOUT_S) as client:
+            resp = client.get(f"{base}/api/v1/payment-links/{link_id}", headers=headers)
+    except httpx.TimeoutException:
+        return Response({'detail': 'Beam API timed out.'}, status=502)
+    except httpx.RequestError as e:
+        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
+    if resp.status_code != 200:
+        return Response({'detail': f'Beam API error {resp.status_code}'}, status=502)
+
+    data = resp.json()
+    # Link lifecycle: ACTIVE | PAID | EXPIRED | DISABLED | VOIDED | REFUNDED.
+    beam_status = (data.get('status') or '').upper()
+    if beam_status == 'PAID':
+        status = 'successful'
+    elif beam_status in ('EXPIRED', 'DISABLED', 'VOIDED'):
+        status = 'failed'
+    else:
+        status = 'pending'
+    charge = data.get('charge') or {}
+    charge_id = (
+        data.get('chargeId')
+        or charge.get('chargeId')
+        or charge.get('id')
+        or ''
+    )
+    return Response({
+        'link_id': link_id,
+        'status': status,
+        'charge_id': charge_id,
+    })
+
+
 # ─── Tax + card-fee math ─────────────────────────────────────────────────────
 OMISE_API_URL = 'https://api.omise.co'
 OMISE_POST_TIMEOUT_S = 15.0
@@ -1564,6 +1689,9 @@ OMISE_GET_TIMEOUT_S = 10.0
 # Payment methods whose label begins with this prefix are Omise card charges
 # and therefore carry the processing fee + fee VAT.
 CARD_METHOD_PREFIX = 'Credit Card'
+# Beam credit-card payment-link method label — also a card charge, but its
+# surcharge comes from ``beam_card_fee_percent`` rather than the Omise rate.
+BEAM_CARD_METHOD = 'Beam Card'
 
 
 def _q2(value: Decimal) -> Decimal:
@@ -1571,13 +1699,20 @@ def _q2(value: Decimal) -> Decimal:
     return Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-def compute_order_charges(goods_total: Decimal, is_card: bool, settings: Settings) -> dict:
+def compute_order_charges(
+    goods_total: Decimal,
+    is_card: bool,
+    settings: Settings,
+    fee_percent=None,
+) -> dict:
     """Return the tax/fee breakdown for a goods total.
 
     Prices are VAT-inclusive, so ``vat_amount`` is the tax already contained
-    in ``goods_total`` (goods × p/(100+p)).  Card orders additionally pass the
-    Omise processing fee — a flat percentage of the goods total — plus 7% VAT
-    on that fee to the customer.  ``total`` is the grand total charged.
+    in ``goods_total`` (goods × p/(100+p)).  Card orders additionally pass a
+    processing fee — a flat percentage of the goods total — plus 7% VAT on that
+    fee to the customer.  ``fee_percent`` overrides the rate (used by Beam card,
+    which carries its own surcharge); when ``None`` the Omise rate is used.
+    ``total`` is the grand total charged.
     """
     p = Decimal(str(settings.tax_percent or 0))
     goods_total = Decimal(str(goods_total or 0))
@@ -1586,7 +1721,8 @@ def compute_order_charges(goods_total: Decimal, is_card: bool, settings: Setting
     fee = Decimal('0.00')
     fee_vat = Decimal('0.00')
     if is_card:
-        rate = Decimal(str(settings.omise_fee_percent or 0))
+        rate_src = fee_percent if fee_percent is not None else settings.omise_fee_percent
+        rate = Decimal(str(rate_src or 0))
         fee = _q2(goods_total * rate / 100)
         fee_vat = _q2(fee * p / 100) if p else Decimal('0.00')
 

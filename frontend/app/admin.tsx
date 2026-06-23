@@ -115,6 +115,7 @@ type Settings = {
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
   beam_merchant_id?: string; beam_api_key?: string; beam_sandbox?: boolean;
+  beam_card_fee_percent?: number;
   omise_public_key?: string; omise_secret_key?: string; omise_fee_percent?: number;
   printer_enabled?: boolean;
   printer_transport?: "disabled" | "file" | "network";
@@ -3707,8 +3708,8 @@ function SettingsView({ isWide }: { isWide: boolean }) {
                   <Ionicons name="qr-code" size={20} color="#FFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.beamSettingsTitle}>Beam QR Payment</Text>
-                  <Text style={styles.beamSettingsSub}>PromptPay QR via Beam Checkout</Text>
+                  <Text style={styles.beamSettingsTitle}>Beam Payment</Text>
+                  <Text style={styles.beamSettingsSub}>PromptPay QR + credit card via Beam Checkout</Text>
                 </View>
               </View>
 
@@ -3755,6 +3756,25 @@ function SettingsView({ isWide }: { isWide: boolean }) {
                 </View>
                 <Text style={styles.beamSettingsHint}>
                   Use Test mode with Beam Playground credentials. Switch to Production when you are ready to accept real payments.
+                </Text>
+              </Field>
+
+              <Field label="Card Processing Fee %">
+                <TextInput
+                  style={styles.formInput}
+                  // Uncontrolled (defaultValue) so a half-typed decimal like
+                  // "3." isn't reformatted away mid-keystroke.
+                  defaultValue={s.beam_card_fee_percent != null ? String(s.beam_card_fee_percent) : ""}
+                  onChangeText={(v) => {
+                    const n = parseFloat(v.replace(/[^0-9.]/g, ""));
+                    update({ beam_card_fee_percent: isNaN(n) ? 0 : n });
+                  }}
+                  placeholder="3.65"
+                  keyboardType="decimal-pad"
+                  testID="beam-card-fee-percent"
+                />
+                <Text style={styles.beamSettingsHint}>
+                  Charged to the customer on the "Beam Card" payment method (percentage of the order total). 7% VAT is added on top of this fee. Test/live mode follows the Mode setting above.
                 </Text>
               </Field>
             </View>

@@ -320,7 +320,7 @@ export default function POS() {
   const handlePaySuccess = async (
     method: string,
     paid: number,
-    meta?: { beamChargeId?: string; omiseLinkId?: string; omiseChargeId?: string }
+    meta?: { beamChargeId?: string; beamLinkId?: string; omiseLinkId?: string; omiseChargeId?: string }
   ) => {
     try {
       const res = await apiFetch(`${API}/orders`, {
@@ -343,6 +343,7 @@ export default function POS() {
           customer_id: customer?.id,
           customer_name: customer?.name,
           beam_charge_id: meta?.beamChargeId || null,
+          beam_link_id: meta?.beamLinkId || null,
           omise_link_id: meta?.omiseLinkId || null,
           omise_charge_id: meta?.omiseChargeId || null,
         }),
@@ -1154,6 +1155,7 @@ const PAYMENT_METHODS = {
   CASH: "Cash",
   BEAM: "Beam",
   CARD_LINK: "Credit Card",
+  BEAM_CARD: "Beam Card",
   EASY_PAY: "Easy Pay",
   CREDIT: "Credit",
   PROMPTPAY: "PromptPay",
@@ -1181,6 +1183,7 @@ function PaymentModal({
     paid: number,
     meta?: {
       beamChargeId?: string;
+      beamLinkId?: string;
       omiseLinkId?: string;
       omiseChargeId?: string;
     },
@@ -1204,6 +1207,7 @@ function PaymentModal({
     { key: PAYMENT_METHODS.CASH, icon: "cash-outline" as const },
     { key: PAYMENT_METHODS.BEAM, icon: "scan-outline" as const },
     { key: PAYMENT_METHODS.CARD_LINK, icon: "card-outline" as const },
+    { key: PAYMENT_METHODS.BEAM_CARD, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
     // { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
@@ -1239,6 +1243,16 @@ function PaymentModal({
     goods: number; vat: number; fee: number; feeVat: number; total: number;
   } | null>(null);
 
+  // Beam credit-card payment-link state (same flow as Omise, but via Beam's
+  // payment-link API and the Beam card surcharge).
+  const [beamCardLinkId, setBeamCardLinkId] = useState<string | null>(null);
+  const [beamCardQrImage, setBeamCardQrImage] = useState<string | null>(null);
+  const [beamCardStatus, setBeamCardStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
+  const [beamCardError, setBeamCardError] = useState<string | null>(null);
+  const [beamCardBreakdown, setBeamCardBreakdown] = useState<{
+    goods: number; vat: number; fee: number; feeVat: number; total: number;
+  } | null>(null);
+
   // Reset Beam state to idle (used by modal-open cleanup, Cancel, and Retry).
   const resetBeam = useCallback(() => {
     setBeamStatus("idle");
@@ -1255,14 +1269,23 @@ function PaymentModal({
     setOmiseBreakdown(null);
   }, []);
 
+  const resetBeamCard = useCallback(() => {
+    setBeamCardStatus("idle");
+    setBeamCardLinkId(null);
+    setBeamCardQrImage(null);
+    setBeamCardError(null);
+    setBeamCardBreakdown(null);
+  }, []);
+
   useEffect(() => {
     if (visible) {
       setCustomPick(""); setOrderRef("");
       setCardLast4(""); setCardType(""); setBankPick("");
       resetBeam();
       resetOmise();
+      resetBeamCard();
     }
-  }, [visible, resetBeam, resetOmise]);
+  }, [visible, resetBeam, resetOmise, resetBeamCard]);
 
   const paid = amount ? parseFloat(amount) : total;
   const canPay = paid >= total;
@@ -1401,6 +1424,68 @@ function PaymentModal({
     return () => clearInterval(interval);
   }, [omiseStatus, omiseLinkId]);
 
+  // Create a Beam card payment Link.  Same shape as the Omise flow: the backend
+  // adds the Beam card fee + 7% VAT on top of the goods total and returns a
+  // hosted-checkout URL we render as a QR.
+  const startBeamCardLink = async (referenceId: string) => {
+    setBeamCardStatus("loading");
+    setBeamCardError(null);
+    try {
+      const res = await apiFetch(`${API}/beam/payment-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}` }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBeamCardStatus("failed");
+        setBeamCardError(data.detail || "Failed to create payment link");
+        return;
+      }
+      setBeamCardLinkId(data.link_id);
+      setBeamCardQrImage(makeQrDataUrl(data.payment_uri));
+      setBeamCardBreakdown({
+        goods: Number(data.goods_total) || total,
+        vat: Number(data.vat_amount) || 0,
+        fee: Number(data.processing_fee) || 0,
+        feeVat: Number(data.processing_fee_vat) || 0,
+        total: Number(data.amount_total) || total,
+      });
+      setBeamCardStatus("pending");
+    } catch {
+      setBeamCardStatus("failed");
+      setBeamCardError("Cannot reach payment server");
+    }
+  };
+
+  // Poll the Beam payment link until the card charge succeeds (or fails).
+  const beamCardBreakdownRef = useRef(beamCardBreakdown);
+  useEffect(() => { beamCardBreakdownRef.current = beamCardBreakdown; }, [beamCardBreakdown]);
+  useEffect(() => {
+    if (beamCardStatus !== "pending" || !beamCardLinkId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`${API}/beam/payment-link/${beamCardLinkId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "successful") {
+          setBeamCardStatus("completed");
+          clearInterval(interval);
+          const charged = beamCardBreakdownRef.current?.total ?? totalRef.current;
+          onPayRef.current(PAYMENT_METHODS.BEAM_CARD, charged, {
+            beamLinkId: beamCardLinkId,
+            beamChargeId: data.charge_id,
+          });
+        } else if (data.status === "failed") {
+          setBeamCardStatus("failed");
+          setBeamCardError("Card payment failed. Please try again.");
+          clearInterval(interval);
+        }
+      } catch { /* ignore transient errors */ }
+    }, BEAM_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [beamCardStatus, beamCardLinkId]);
+
   // Derived flags for the right-panel "Payment Confirm" button — extracted so
   // the JSX below stays readable.
   const isQrLikeMethod = method === PAYMENT_METHODS.QR_KBANK || method === PAYMENT_METHODS.PROMPTPAY || method === PAYMENT_METHODS.BEAM;
@@ -1412,10 +1497,14 @@ function PaymentModal({
   const isOmiseBusy =
     method === PAYMENT_METHODS.CARD_LINK &&
     (omiseStatus === "loading" || omiseStatus === "pending" || omiseStatus === "completed");
+  const isBeamCardBusy =
+    method === PAYMENT_METHODS.BEAM_CARD &&
+    (beamCardStatus === "loading" || beamCardStatus === "pending" || beamCardStatus === "completed");
   const isCardLink = method === PAYMENT_METHODS.CARD_LINK;
+  const isBeamCard = method === PAYMENT_METHODS.BEAM_CARD;
   const canConfirm =
-    (isQrLikeMethod || isCustomReady || isCreditReady || isCardLink || canPay) &&
-    !isBeamBusy && !isOmiseBusy;
+    (isQrLikeMethod || isCustomReady || isCreditReady || isCardLink || isBeamCard || canPay) &&
+    !isBeamBusy && !isOmiseBusy && !isBeamCardBusy;
 
   const confirmLabel = (() => {
     if (method === PAYMENT_METHODS.BEAM) {
@@ -1426,6 +1515,11 @@ function PaymentModal({
     if (method === PAYMENT_METHODS.CARD_LINK) {
       if (omiseStatus === "loading") return "Generating…";
       if (omiseStatus === "pending") return "Waiting for payment…";
+      return "Generate Card QR";
+    }
+    if (method === PAYMENT_METHODS.BEAM_CARD) {
+      if (beamCardStatus === "loading") return "Generating…";
+      if (beamCardStatus === "pending") return "Waiting for payment…";
       return "Generate Card QR";
     }
     return "Payment Confirm";
@@ -1443,6 +1537,13 @@ function PaymentModal({
       // polling effect confirms the card charge succeeded.
       const ref = `POS-${Date.now()}`;
       startOmiseLink(ref);
+      return;
+    }
+    if (method === PAYMENT_METHODS.BEAM_CARD) {
+      // Create the Beam card payment link; the order is created when the
+      // polling effect confirms the card charge succeeded.
+      const ref = `POS-${Date.now()}`;
+      startBeamCardLink(ref);
       return;
     }
     const finalMethod =
@@ -1748,6 +1849,94 @@ function PaymentModal({
                 )}
 
                 {!omiseBreakdown && <Text style={styles.beamAmount}>{THB(total)}</Text>}
+              </View>
+            ) : method === PAYMENT_METHODS.BEAM_CARD ? (
+              <View style={styles.beamPane} testID="beamcard-pane">
+                {/* Header */}
+                <View style={styles.beamHeader}>
+                  <View style={styles.beamLogoBox}>
+                    <Ionicons name="card-outline" size={28} color="#00B14F" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.beamTitle}>Beam Card</Text>
+                    <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
+                  </View>
+                </View>
+
+                {beamCardStatus === "idle" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Text style={styles.beamIdleText}>
+                      {'Tap "Generate Card QR" — the customer scans it to pay by card'}
+                    </Text>
+                  </View>
+                )}
+
+                {beamCardStatus === "loading" && (
+                  <View style={styles.beamIdleBox}>
+                    <ActivityIndicator size="large" color="#00B14F" />
+                    <Text style={styles.beamIdleText}>Generating payment link…</Text>
+                  </View>
+                )}
+
+                {beamCardStatus === "pending" && beamCardQrImage && (
+                  <View style={styles.beamQrBox}>
+                    <Image
+                      source={{ uri: beamCardQrImage }}
+                      style={styles.beamQrImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.beamWaiting}>
+                      <ActivityIndicator size="small" color="#00B14F" />
+                      <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.beamCancelBtn}
+                      onPress={resetBeamCard}
+                      testID="beamcard-cancel"
+                    >
+                      <Text style={styles.beamCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {beamCardStatus === "failed" && (
+                  <View style={styles.beamIdleBox}>
+                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamCardError || "Payment failed"}</Text>
+                    <TouchableOpacity style={styles.beamRetryBtn} onPress={resetBeamCard}>
+                      <Text style={styles.beamRetryText}>Try Again</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* Fee + VAT breakdown so the cashier can explain the surcharge */}
+                {beamCardBreakdown && (
+                  <View style={styles.feeBreakdown}>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabel}>Goods (VAT incl.)</Text>
+                      <Text style={styles.feeVal}>{THB(beamCardBreakdown.goods)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabelMuted}>VAT 7% (incl.)</Text>
+                      <Text style={styles.feeValMuted}>{THB(beamCardBreakdown.vat)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabel}>Processing fee</Text>
+                      <Text style={styles.feeVal}>{THB(beamCardBreakdown.fee)}</Text>
+                    </View>
+                    <View style={styles.feeRow}>
+                      <Text style={styles.feeLabelMuted}>VAT 7% on fee</Text>
+                      <Text style={styles.feeValMuted}>{THB(beamCardBreakdown.feeVat)}</Text>
+                    </View>
+                    <View style={[styles.feeRow, styles.feeRowTotal]}>
+                      <Text style={styles.feeTotalLabel}>Total charged</Text>
+                      <Text style={styles.feeTotalVal}>{THB(beamCardBreakdown.total)}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {!beamCardBreakdown && <Text style={styles.beamAmount}>{THB(total)}</Text>}
               </View>
             ) : method === PAYMENT_METHODS.EDC ? (
               <View style={styles.edcPane} testID="edc-pane">

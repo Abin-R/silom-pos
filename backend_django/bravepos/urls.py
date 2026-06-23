@@ -74,6 +74,9 @@ urlpatterns = [
     # Beam payment
     path('beam/charge', views.beam_charge_create),
     path('beam/charge/<str:charge_id>', views.beam_charge_status),
+    # Beam payment links (credit card)
+    path('beam/payment-link', views.beam_link_create),
+    path('beam/payment-link/<str:link_id>', views.beam_link_status),
 
     # Omise payment links (credit card)
     path('omise/link', views.omise_link_create),
