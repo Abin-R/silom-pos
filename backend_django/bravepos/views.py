@@ -1589,21 +1589,26 @@ def beam_link_create(request):
     )
     amount_satang = int((charges['total'] * SATANG_PER_THB).to_integral_value(ROUND_HALF_UP))
     reference_id = request.data.get('reference_id') or request.data.get('reference', '')
+    description = request.data.get('description') or f"Order {reference_id}"
 
     payload = {
         'order': {
             'netAmount': amount_satang,
             'currency': 'THB',
             'referenceId': reference_id,
+            'description': description,
         },
         # Card only — this method is the card analogue of the QR PromptPay flow.
+        # Each method is an object with an ``isEnabled`` flag (Beam's schema).
         'linkSettings': {
-            'card': True,
-            'cardInstallments': False,
-            'eWallets': False,
-            'mobileBanking': False,
-            'qrPromptPay': False,
+            'card': {'isEnabled': True},
+            'cardInstallments': {'isEnabled': False},
+            'buyNowPayLater': {'isEnabled': False},
+            'eWallets': {'isEnabled': False},
+            'mobileBanking': {'isEnabled': False},
+            'qrPromptPay': {'isEnabled': False},
         },
+        'redirectUrl': 'https://pos.rollingpinn.com',
     }
     try:
         with httpx.Client(timeout=BEAM_POST_TIMEOUT_S) as client:
