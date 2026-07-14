@@ -161,8 +161,15 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024  # 15 MB
 
 # ── Auth (backoffice only) ──────────────────────────────────────────────────
 # The DRF-based POS API at /api/* uses its own PIN/token auth; these settings
-# only affect server-rendered /backoffice/* pages, which require a Django
-# admin/staff login.
+# only affect server-rendered /backoffice/* pages, which require a login.
+#
+# Auth backend: `bravepos.Staff` via `backoffice.auth_backend.StaffBackend`,
+# NOT the shared `auth_user` table. The Postgres box is shared with `home`
+# and `instamator_app`; their seed scripts kept rewriting our admin row in
+# `auth_user`, breaking login. `bravepos_staff` is app-owned and stable.
+AUTHENTICATION_BACKENDS = [
+    'backoffice.auth_backend.StaffBackend',
+]
 LOGIN_URL = '/backoffice/login/'
 LOGIN_REDIRECT_URL = '/backoffice/'
 LOGOUT_REDIRECT_URL = '/backoffice/login/'

@@ -57,6 +57,39 @@ class Staff(models.Model):
     def check_password(self, plain: str) -> bool:
         return check_password(plain, self.password_hash)
 
+    # ── Django auth duck-typing ──
+    # The backoffice's `django.contrib.auth` machinery expects `request.user`
+    # to look like Django's User. We stay off the shared `auth_user` table
+    # (see [[reference-bravepos-deploy]] — Postgres is shared with `home`
+    # and `instamator_app`, which rewrite that table). Instead the custom
+    # `backoffice.auth_backend.StaffBackend` returns Staff instances, and
+    # the properties below let @login_required / templates treat them as
+    # regular users.
+    is_authenticated = True
+    is_anonymous = False
+
+    @property
+    def is_active(self):
+        return self.active
+
+    @property
+    def is_staff(self):
+        return True
+
+    @property
+    def is_superuser(self):
+        return self.role == "admin"
+
+    def get_username(self):
+        return self.email
+
+    def get_session_auth_hash(self):
+        from django.utils.crypto import salted_hmac
+        return salted_hmac(
+            "backoffice.auth.Staff.get_session_auth_hash",
+            self.password_hash or "",
+        ).hexdigest()
+
     # ── PIN helpers (4-digit numeric, hashed at rest) ──
     def set_pin(self, plain: str) -> None:
         self.pin_hash = make_password(plain)
