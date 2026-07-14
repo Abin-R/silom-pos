@@ -67,7 +67,11 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Custom Staff-aware auth middleware. Django's default
+    # AuthenticationMiddleware hydrates request.user by int-coercing the
+    # session's PK, which blows up on our UUID-keyed Staff. See
+    # backoffice/middleware.py for the reasoning.
+    'backoffice.middleware.StaffAuthMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
