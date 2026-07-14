@@ -11,6 +11,7 @@ class BackofficeConfig(AppConfig):
         # but our Staff model has no last_login column — so login POSTs 500 after a
         # successful auth. Disconnect the receiver; per-session activity is already
         # tracked via BranchSession, which is a more useful audit trail anyway.
+        # Django registers this receiver in AuthConfig.ready() with
+        # dispatch_uid="update_last_login" — must pass the same uid to disconnect.
         from django.contrib.auth.signals import user_logged_in
-        from django.contrib.auth.models import update_last_login
-        user_logged_in.disconnect(update_last_login)
+        user_logged_in.disconnect(dispatch_uid="update_last_login")
