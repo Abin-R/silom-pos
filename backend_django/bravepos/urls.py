@@ -82,6 +82,10 @@ urlpatterns = [
     path('omise/link', views.omise_link_create),
     path('omise/link/<str:link_id>', views.omise_link_status),
 
+    # Self-orders (POS side).  The customer-facing half is public and lives at
+    # the URL root — see bravepos_api/urls.py.
+    path('self-orders/pending', views.self_orders_pending),
+
     # Printer
     path('printers/detect', views.printer_detect),
     path('printers/status', views.printer_status),

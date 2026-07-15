@@ -183,4 +183,13 @@ BRAVEPOS = {
     # External payment gateway
     'BEAM_PLAYGROUND_URL': 'https://playground.api.beamcheckout.com',
     'BEAM_PRODUCTION_URL': 'https://api.beamcheckout.com',
+
+    # Public origin this server is reachable at, used to build the absolute
+    # URLs we hand to third parties: the self-order QR a customer scans, and
+    # the redirectUrl Beam bounces their browser back to after a card payment.
+    # Must be overridable — in local dev the customer's phone has to reach this
+    # box, not the production host.
+    'PUBLIC_BASE_URL': os.environ.get(
+        'PUBLIC_BASE_URL', 'https://pos.rollingpinn.com',
+    ).rstrip('/'),
 }

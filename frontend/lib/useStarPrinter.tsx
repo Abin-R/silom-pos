@@ -14,6 +14,15 @@
 //
 // Auto-retry queue + reprint() are kept the same as before so power
 // outages still result in receipts arriving when the printer returns.
+//
+// Prints are SERIALISED through a FIFO job list.  This used to be a single
+// `pending` slot, which meant a second printReceipt() while one was in
+// flight silently overwrote the first: the clobbered job was never printed,
+// never enqueued for retry, and its promise never resolved.  Rare when the
+// only caller was a cashier tapping Pay, but self-ordering auto-prints on a
+// timer and can hand us two receipts at once — so the slot had to become a
+// queue.  Only the head of the list is captured at any time; there is one
+// hidden overlay and one receiptRef, so concurrent captures are not possible.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, NativeModules } from "react-native";
@@ -40,7 +49,18 @@ const LAYOUT_SETTLE_MS = 300;     // wait for Sarabun glyphs to shape
 
 export function useStarPrinter() {
   const receiptRef = useRef<View>(null);
-  const [pending, setPending] = useState<PendingPrint | null>(null);
+
+  // FIFO of prints awaiting capture.  jobs[0] is the one being worked on.
+  // Appending never changes jobs[0]'s identity, so enqueuing a new print
+  // can't restart the in-flight capture effect.
+  const [jobs, setJobs] = useState<PendingPrint[]>([]);
+  const active = jobs[0] ?? null;
+
+  // Mirror of `jobs` for the drainer, which must read the current length
+  // from inside a long-lived interval without re-creating that interval
+  // on every job change.
+  const jobsRef = useRef<PendingPrint[]>([]);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
 
   // Promise that resolves when the brand logo inside ReceiptImage finishes
   // decoding.  We reset it per-print so each capture waits on its own load
@@ -50,10 +70,11 @@ export function useStarPrinter() {
   // (e.g. cached image, or RN platform quirk) so prints can't hang.
   const logoReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
 
-  // ─── Capture + send when a print is pending ────────────────────────
+  // ─── Capture + send the job at the head of the queue ───────────────
   useEffect(() => {
-    if (!pending) return;
+    if (!active) return;
     let cancelled = false;
+    let settled = false;
 
     // Fresh logo-ready promise for this print.  Resolved by the Image's
     // onLoadEnd callback inside ReceiptOverlay below.
@@ -93,7 +114,7 @@ export function useStarPrinter() {
           });
           if (cancelled) return;
           const res = await BravePosPrinter.printImage(
-            pending.config.identifier,
+            active.config.identifier,
             base64,
             RECEIPT_WIDTH,
           );
@@ -108,52 +129,65 @@ export function useStarPrinter() {
       // Queue persistence: success removes; first-time failure enqueues;
       // retry-from-queue failure bumps the attempts counter.
       try {
-        if (result.ok && pending.queueId) {
-          await queue.removeJob(pending.queueId);
-        } else if (!result.ok && !pending.queueId) {
-          await queue.enqueue(pending.config, pending.order, pending.shop, result.error);
-        } else if (!result.ok && pending.queueId) {
-          await queue.recordAttempt(pending.queueId, result.error);
+        if (result.ok && active.queueId) {
+          await queue.removeJob(active.queueId);
+        } else if (!result.ok && !active.queueId) {
+          await queue.enqueue(active.config, active.order, active.shop, result.error);
+        } else if (!result.ok && active.queueId) {
+          await queue.recordAttempt(active.queueId, result.error);
         }
       } catch {/* AsyncStorage failures shouldn't block resolve */}
 
       // Release the in-flight claim so another drainer can retry on the
       // next tick (failure path) or so the slot is freed up for cleanup
       // (success path — removeJob already cleared it but this is safe).
-      // MUST run regardless of result so a failed retry doesn't stick
-      // the job in "claimed" state forever.
-      if (pending.queueId) queue.release(pending.queueId);
+      settled = true;
+      if (active.queueId) queue.release(active.queueId);
 
-      pending.resolve(result);
-      setPending(null);
+      active.resolve(result);
+      setJobs((prev) => prev.slice(1));   // pop the head; the next job runs
     };
 
     run();
-    return () => { cancelled = true; };
-  }, [pending]);
+
+    return () => {
+      cancelled = true;
+      // Tearing down before the job settled (screen unmounted mid-capture).
+      // Hand the claim back, or printerQueue's module-level inFlight Set
+      // holds it forever and nextDueJob skips the job until app restart.
+      // The AsyncStorage record survives, so it retries on the next mount.
+      if (!settled && active.queueId) queue.release(active.queueId);
+    };
+  }, [active]);
 
   // ─── Auto-retry queue drainer ─────────────────────────────────────
+  // Only pulls from the persisted retry queue when nothing is already in
+  // flight, so live prints (a cashier tapping Pay) always take priority.
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setInterval> | null = null;
 
     const tryDrain = async () => {
-      if (stopped || pending) return;
+      if (stopped || jobsRef.current.length > 0) return;
       const job = await queue.nextDueJob(QUEUE_POLL_MS);
-      if (!job || stopped) return;
-      setPending({
+      if (!job) return;
+      // nextDueJob has already *claimed* the job in the inFlight Set.  If we
+      // bail now without releasing it, that claim leaks for the process
+      // lifetime and the receipt never retries.
+      if (stopped) { queue.release(job.id); return; }
+      setJobs((prev) => [...prev, {
         config: job.config,
         order: job.order,
         shop: job.shop,
         queueId: job.id,
         resolve: () => {/* queue path — caller already returned */},
-      });
+      }]);
     };
 
     tryDrain();
     timer = setInterval(tryDrain, QUEUE_POLL_MS);
     return () => { stopped = true; if (timer) clearInterval(timer); };
-  }, [pending]);
+  }, []);
 
   // ─── Public API ────────────────────────────────────────────────────
   const printReceipt = useCallback(
@@ -167,7 +201,9 @@ export function useStarPrinter() {
           resolve({ ok: false, error: "No printer identifier configured" });
           return;
         }
-        setPending({ config, order, shop, resolve });
+        // Append — never overwrite.  Two receipts handed to us at once must
+        // both print.
+        setJobs((prev) => [...prev, { config, order, shop, resolve }]);
       }),
     [],
   );
@@ -184,7 +220,7 @@ export function useStarPrinter() {
   // view-shot to capture.  Position-absolute + off-screen + opacity 0
   // + pointerEvents=none → never visible, never receives touches.
   const ReceiptOverlay = useCallback(() => {
-    if (!pending) return null;
+    if (!active) return null;
     return (
       <View
         pointerEvents="none"
@@ -196,14 +232,17 @@ export function useStarPrinter() {
         }}
       >
         <ReceiptImage
+          // Remount per job so a queued receipt never captures the previous
+          // one's laid-out view (and so onLogoReady fires again for each).
+          key={active.order.order_number ?? active.queueId}
           ref={receiptRef}
-          order={pending.order}
-          shop={pending.shop}
+          order={active.order}
+          shop={active.shop}
           onLogoReady={() => logoReadyRef.current?.resolve()}
         />
       </View>
     );
-  }, [pending]);
+  }, [active]);
 
   return { printReceipt, reprint, ReceiptOverlay };
 }

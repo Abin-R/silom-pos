@@ -1,0 +1,196 @@
+{% extends "selforder/base.html" %}
+{% comment %}
+Payment + confirmation, in one page and three states:
+
+  choose  → PromptPay or card (card costs more; the fee is shown, not hidden)
+  paying  → QR on screen, or bounced out to Beam's hosted checkout
+  done    → queue number + link to the real receipt page
+
+This page is ALSO Beam's redirectUrl for the card flow, so a customer returning
+from the hosted checkout lands straight back here and the poll picks up the
+result.  The poll is what confirms payment — but it is not the only thing that
+can (the POS and the cron sweeper poll too), so closing this tab after paying
+cannot lose the order.
+{% endcomment %}
+
+{% block title %}ชำระเงิน — The Rolling Pinn{% endblock %}
+
+{% block head %}
+<style>
+  .method { display:flex; align-items:center; gap:.9rem; width:100%; text-align:left;
+            padding:1rem; border:1px solid #eee; border-radius:16px; background:#fff; margin-bottom:.75rem; }
+  .method:active { background:#fafafa; }
+  .method .ico { font-size:1.6rem; width:2.2rem; text-align:center; }
+  .method .lbl { flex:1; font-weight:600; }
+  .method .amt { font-weight:700; white-space:nowrap; }
+  .method .sub { display:block; font-weight:400; font-size:.8rem; color:var(--on-pink-soft); }
+  .qrbox { text-align:center; padding:1rem; }
+  .qrbox img { width:100%; max-width:280px; border-radius:12px; }
+  .queue-no { font-size:4rem; font-weight:700; color:var(--brand-red); line-height:1; }
+  .rows { width:100%; font-size:.95rem; }
+  .rows td { padding:.2rem 0; }
+  .rows td:last-child { text-align:right; font-weight:600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card-soft p-4">
+
+  {# ── Choose a method ── #}
+  <div id="state-choose">
+    <h2 class="h6 mb-3">เลือกวิธีชำระเงิน / Choose payment</h2>
+
+    <button class="method" data-method="qr">
+      <span class="ico">📱</span>
+      <span class="lbl">พร้อมเพย์ / PromptPay
+        <span class="sub">สแกนจ่ายในแอปธนาคาร</span>
+      </span>
+      <span class="amt">฿{{ quote_qr.total|floatformat:2 }}</span>
+    </button>
+
+    <button class="method" data-method="card">
+      <span class="ico">💳</span>
+      <span class="lbl">บัตรเครดิต / Card
+        <span class="sub">+ ค่าธรรมเนียม ฿{{ quote_card.processing_fee|floatformat:2 }}</span>
+      </span>
+      <span class="amt">฿{{ quote_card.total|floatformat:2 }}</span>
+    </button>
+
+    <hr class="my-3">
+    <table class="rows">
+      {% for it in draft.items %}
+        <tr><td>{{ it.name }} × {{ it.qty }}</td><td>฿{{ it.price|floatformat:2 }}</td></tr>
+      {% endfor %}
+      <tr><td class="muted">ยอดรวมสินค้า</td><td>฿{{ draft.goods_total|floatformat:2 }}</td></tr>
+    </table>
+    <p class="muted small mt-2 mb-0">ราคารวม VAT 7% แล้ว</p>
+  </div>
+
+  {# ── Awaiting payment ── #}
+  <div id="state-paying" hidden>
+    <div class="qrbox">
+      <img id="qr" alt="PromptPay QR" hidden>
+      <div id="redirecting" hidden>
+        <div class="spinner-border text-danger" role="status"></div>
+        <p class="mt-3 mb-0">กำลังพาไปหน้าชำระเงิน…<br><span class="muted small">Taking you to checkout…</span></p>
+      </div>
+    </div>
+    <p class="text-center mb-1">รอการชำระเงิน… / Waiting for payment…</p>
+    <p class="text-center muted small mb-0">อย่าปิดหน้านี้จนกว่าจะสำเร็จ</p>
+  </div>
+
+  {# ── Paid ── #}
+  <div id="state-done" hidden class="text-center">
+    <div class="muted">คิวของคุณ / Your queue number</div>
+    <div class="queue-no" id="queue-no">—</div>
+    <p class="mt-3 mb-1">ชำระเงินสำเร็จ ✓</p>
+    <p class="muted small">กรุณารอเรียกคิว — ใบเสร็จกำลังพิมพ์ที่เคาน์เตอร์</p>
+    <a id="receipt-link" class="btn btn-brand w-100 mt-2" href="#">ดูใบเสร็จ / View receipt</a>
+  </div>
+
+  {# ── Failed / expired ── #}
+  <div id="state-failed" hidden class="text-center">
+    <div style="font-size:2.5rem">⚠️</div>
+    <p class="mt-2 mb-1">การชำระเงินไม่สำเร็จ</p>
+    <p class="muted small mb-0">Payment didn’t go through. Please order at the counter.</p>
+  </div>
+
+  <div id="err" class="alert alert-danger mt-3 mb-0" hidden></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PAY_URL = "{{ pay_url }}";
+  const STATUS_URL = "{{ status_url }}";
+  const POLL_MS = 3000;
+
+  const show = (id) => {
+    for (const s of ["choose", "paying", "done", "failed"]) {
+      document.getElementById("state-" + s).hidden = (s !== id);
+    }
+  };
+  const fail = (msg) => {
+    const e = document.getElementById("err");
+    e.textContent = msg;
+    e.hidden = false;
+  };
+
+  let polling = null;
+
+  async function poll() {
+    try {
+      const res = await fetch(STATUS_URL, { cache: "no-store" });
+      const data = await res.json();
+
+      if (data.status === "paid") {
+        clearInterval(polling);
+        document.getElementById("queue-no").textContent = data.queue_number ?? "—";
+        document.getElementById("receipt-link").href = data.receipt_url;
+        show("done");
+      } else if (data.status === "failed" || data.status === "expired") {
+        clearInterval(polling);
+        show("failed");
+      }
+      // 'pending' → keep polling. A gateway hiccup also lands here, on purpose:
+      // the cron sweeper will confirm the payment even if this tab gives up.
+    } catch { /* transient network — try again on the next tick */ }
+  }
+
+  function startPolling() {
+    if (polling) return;
+    poll();
+    polling = setInterval(poll, POLL_MS);
+  }
+
+  document.querySelectorAll("[data-method]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll("[data-method]").forEach((b) => (b.disabled = true));
+      try {
+        const res = await fetch(PAY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ method: btn.dataset.method }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not start payment.");
+
+        show("paying");
+        if (data.method === "qr" && data.qr_image) {
+          const img = document.getElementById("qr");
+          img.src = data.qr_image.startsWith("data:")
+            ? data.qr_image
+            : "data:image/png;base64," + data.qr_image;
+          img.hidden = false;
+          startPolling();
+        } else if (data.method === "card" && data.payment_uri) {
+          document.getElementById("redirecting").hidden = false;
+          // Poll before leaving: if the customer bounces straight back without
+          // paying, the poll is already running when they land.
+          startPolling();
+          window.location.href = data.payment_uri;
+        } else {
+          throw new Error("The payment provider didn’t return anything to pay with.");
+        }
+      } catch (e) {
+        fail(e.message);
+        document.querySelectorAll("[data-method]").forEach((b) => (b.disabled = false));
+      }
+    });
+  });
+
+  // Returning from Beam's hosted checkout (card), or reloading a page whose
+  // payment is already under way — either way, find out where we stand.
+  {% if draft.beam_charge_id or draft.beam_link_id %}
+    show("paying");
+    {% if draft.qr_image_cache %}
+      const img = document.getElementById("qr");
+      img.src = "{{ draft.qr_image_cache }}".startsWith("data:")
+        ? "{{ draft.qr_image_cache }}"
+        : "data:image/png;base64,{{ draft.qr_image_cache }}";
+      img.hidden = false;
+    {% endif %}
+    startPolling();
+  {% endif %}
+</script>
+{% endblock %}

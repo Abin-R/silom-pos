@@ -101,13 +101,19 @@ class OrderSerializer(serializers.ModelSerializer):
             'vat_amount', 'processing_fee', 'processing_fee_vat',
             'payment_method', 'paid_amount', 'change',
             'status', 'source',
+            # The number the customer is called by. Server-assigned per branch
+            # per day; the receipt used to derive it from the last two digits of
+            # the global order_number, which collided across branches.
+            'queue_number',
             'customer_id', 'customer_name',
             'beam_charge_id', 'beam_link_id', 'omise_link_id', 'omise_charge_id',
             'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
             'voided_by', 'voided_at',
         ]
-        read_only_fields = ['order_number', 'created_at', 'voided_by', 'voided_at']
+        read_only_fields = [
+            'order_number', 'queue_number', 'created_at', 'voided_by', 'voided_at',
+        ]
 
 
 class ParkedOrderSerializer(serializers.ModelSerializer):

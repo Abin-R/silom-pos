@@ -7,12 +7,10 @@ the migration.
 """
 from __future__ import annotations
 
-import base64
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
-import httpx
 from django.conf import settings as django_settings
 from django.db import transaction
 from django.db.models import Q
@@ -22,10 +20,13 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from . import gateways
+from .orders import create_order_from_items
+from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
     Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
-    ParkedOrder, Product, Settings, Shift, ShiftMovement, Staff, StockMovement,
-    StockDocument, StockDocumentItem,
+    ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
+    StockMovement, StockDocument, StockDocumentItem,
 )
 from .serializers import (
     BranchSerializer,
@@ -613,9 +614,10 @@ class BranchViewSet(viewsets.ModelViewSet):
 BEAM_API_KEY_MASK_PREFIX = '••••'
 
 
-def _get_or_create_settings() -> Settings:
-    obj, _ = Settings.objects.get_or_create(id='shop')
-    return obj
+# The Settings singleton accessor now lives in gateways.py (the payment layer
+# needs it for credentials + fee rates, and importing it back from views would
+# be circular).  Kept under the old name so the ~20 call sites below don't churn.
+_get_or_create_settings = get_shop_settings
 
 
 def _mask_api_key(data: dict) -> dict:
@@ -649,21 +651,6 @@ def settings_view(request):
     return Response(_mask_api_key(dict(SettingsSerializer(obj).data)))
 
 
-# ─── Order numbering ─────────────────────────────────────────────────────────
-def _next_order_number() -> str:
-    """``PS`` + 9-digit running number, matching the FastAPI format."""
-    last = (
-        Order.objects
-        .order_by('-order_number')
-        .values_list('order_number', flat=True)
-        .first()
-    )
-    n = 1
-    if last and last.startswith('PS') and last[2:].isdigit():
-        n = int(last[2:]) + 1
-    return f'PS{n:09d}'
-
-
 # ─── Orders ──────────────────────────────────────────────────────────────────
 @api_view(['GET', 'POST'])
 @require_session
@@ -683,142 +670,49 @@ def orders_list_create(request):
     payload = dict(request.data)
     items_data = payload.pop('items', []) or []
 
-    # Snapshot category info from products for items missing it (parity with FastAPI).
-    # All lookups are scoped to the caller's branch so an order can only reference
-    # products that live at that branch.
-    product_ids = [it.get('product_id') for it in items_data if it.get('product_id')]
-    cats_by_pid: dict[str, tuple[str | None, str]] = {}
-    if product_ids:
-        for p in Product.objects.filter(id__in=product_ids, branch=branch).select_related('category'):
-            cats_by_pid[str(p.id)] = (
-                str(p.category_id) if p.category_id else None,
-                p.category.name if p.category else 'Other',
-            )
-
-    # Look up products once so we can both snapshot categories AND decrement
-    # stock.  We lock only the Product rows (`of=('self',)`) because joining
-    # the nullable Category for the same lock breaks on Postgres ("FOR UPDATE
-    # cannot be applied to the nullable side of an outer join").  Categories
-    # are looked up separately right after.
-    products_by_id: dict[str, Product] = {}
-    if product_ids:
-        with transaction.atomic():
-            for p in (
-                Product.objects
-                .select_for_update(of=('self',))
-                .filter(id__in=product_ids, branch=branch)
-            ):
-                products_by_id[str(p.id)] = p
-        # Lookup category names in one cheap query (no lock needed).
-        cat_ids = {p.category_id for p in products_by_id.values() if p.category_id}
-        cat_name_by_id = (
-            {str(c.id): c.name for c in Category.objects.filter(id__in=cat_ids)}
-            if cat_ids else {}
-        )
-        for pid_str, p in products_by_id.items():
-            cats_by_pid[pid_str] = (
-                str(p.category_id) if p.category_id else None,
-                cat_name_by_id.get(str(p.category_id) or '', 'Other'),
-            )
-
     # Silom-style workflow: after payment, the order lands in the "New Order"
     # kanban column so kitchen staff can pick it up and progress it through
     # Preparing → Completed manually.  Callers can still send an explicit
-    # status (e.g. "completed" for an over-the-counter walk-in) to skip the
-    # queue.
+    # status (e.g. "completed" for an over-the-counter walk-in) to skip the queue.
     requested_status = payload.get('status')
     initial_status = requested_status if requested_status in dict(Order.STATUS_CHOICES) else 'new'
 
-    # The client sends ``total`` as the *goods* total (subtotal − discount).
-    # We recompute tax + card fee server-side so it can't be tampered with and
-    # stays consistent with the Omise link the customer already paid.
-    payment_method = payload.get('payment_method', '') or ''
-    is_beam_card = payment_method == BEAM_CARD_METHOD
-    is_card = payment_method.startswith(CARD_METHOD_PREFIX) or is_beam_card
-    goods_total = Decimal(str(payload.get('total', 0)))
-    s = _get_or_create_settings()
-    # Beam card carries its own surcharge; Omise card uses the Omise rate.
-    fee_percent = s.beam_card_fee_percent if is_beam_card else None
-    charges = compute_order_charges(
-        goods_total, is_card=is_card, settings=s, fee_percent=fee_percent,
+    order = create_order_from_items(
+        branch=branch,
+        items=items_data,
+        payment_method=payload.get('payment_method', '') or '',
+        # The client sends ``total`` as the *goods* total (subtotal − discount);
+        # VAT and the card fee are recomputed server-side so they can't be
+        # tampered with and stay consistent with the payment link already paid.
+        goods_total=Decimal(str(payload.get('total', 0))),
+        charges=None,
+        subtotal=Decimal(str(payload.get('subtotal', 0))),
+        discount_type=payload.get('discount_type', 'none'),
+        discount_value=Decimal(str(payload.get('discount_value', 0))),
+        discount_amount=Decimal(str(payload.get('discount_amount', 0))),
+        paid_amount=Decimal(str(payload.get('paid_amount', 0))),
+        status=initial_status,
+        source=payload.get('source', 'table'),
+        # Stamp the cashier who rang up the sale.  Prefer the client-sent name
+        # but fall back to the authenticated session's staff so the field is
+        # never empty (the void/reprint copy reads it back from the DB, not the
+        # live POS session).
+        staff=(
+            payload.get('staff')
+            or (request.session_obj.staff.name if request.session_obj.staff else '')
+            or ''
+        ),
+        customer_id=payload.get('customer_id'),
+        customer_name=payload.get('customer_name', '') or '',
+        gateway_ids={
+            'beam_charge_id': payload.get('beam_charge_id'),
+            'beam_link_id': payload.get('beam_link_id'),
+            'omise_link_id': payload.get('omise_link_id'),
+            'omise_charge_id': payload.get('omise_charge_id'),
+        },
+        delivery_provider=payload.get('delivery_provider', '') or '',
+        delivery_status=payload.get('delivery_status', '') or '',
     )
-    grand_total = charges['total']
-    # Card charges are paid in full via the gateway (no cash tendered / no
-    # change); other methods keep the cashier-entered tendered amount.
-    paid_amount = grand_total if is_card else Decimal(str(payload.get('paid_amount', 0)))
-    change = max(Decimal('0'), paid_amount - grand_total)
-
-    with transaction.atomic():
-        order = Order.objects.create(
-            branch=branch,
-            order_number=_next_order_number(),
-            subtotal=Decimal(str(payload.get('subtotal', 0))),
-            discount_type=payload.get('discount_type', 'none'),
-            discount_value=Decimal(str(payload.get('discount_value', 0))),
-            discount_amount=Decimal(str(payload.get('discount_amount', 0))),
-            total=grand_total,
-            vat_amount=charges['vat_amount'],
-            processing_fee=charges['processing_fee'],
-            processing_fee_vat=charges['processing_fee_vat'],
-            payment_method=payment_method,
-            paid_amount=paid_amount,
-            change=change,
-            status=initial_status,
-            source=payload.get('source', 'table'),
-            customer_id=payload.get('customer_id'),
-            customer_name=payload.get('customer_name', '') or '',
-            beam_charge_id=payload.get('beam_charge_id', '') or '',
-            beam_link_id=payload.get('beam_link_id', '') or '',
-            omise_link_id=payload.get('omise_link_id', '') or '',
-            omise_charge_id=payload.get('omise_charge_id', '') or '',
-            delivery_provider=payload.get('delivery_provider', '') or '',
-            delivery_status=payload.get('delivery_status', '') or '',
-            created_time=datetime.now().strftime('%H:%M'),
-            # Stamp the cashier who rang up the sale.  Prefer the client-sent
-            # name but fall back to the authenticated session's staff so the
-            # field is never empty (the void/reprint copy reads it back from
-            # the DB, not the live POS session).
-            staff=(
-                payload.get('staff')
-                or (request.session_obj.staff.name if request.session_obj.staff else '')
-                or ''
-            ),
-        )
-        for it in items_data:
-            pid = str(it.get('product_id')) if it.get('product_id') else ''
-            cat_id, cat_name = cats_by_pid.get(
-                pid,
-                (it.get('category_id'), it.get('category_name', '')),
-            )
-            qty = int(it.get('qty', 1))
-            OrderItem.objects.create(
-                order=order,
-                product_id=it.get('product_id'),
-                name=it.get('name', ''),
-                price=Decimal(str(it.get('price', 0))),
-                qty=qty,
-                discount=Decimal(str(it.get('discount', 0) or 0)),
-                category_id=cat_id,
-                category_name=cat_name or '',
-            )
-
-            # Decrement product stock + log a StockMovement for the audit
-            # trail.  Stock can go negative — matches the existing demo data
-            # (Sexy Back Cookie shipped with stock=-32) and avoids blocking
-            # the order if the cashier wants to oversell.
-            prod = products_by_id.get(pid)
-            if prod:
-                prod.stock = (prod.stock or 0) - qty
-                prod.save(update_fields=['stock'])
-                StockMovement.objects.create(
-                    branch=branch,
-                    product=prod,
-                    product_name=prod.name,
-                    type='out',
-                    qty=qty,
-                    note=f'Order {order.order_number}',
-                    document_no=order.order_number,
-                )
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -983,10 +877,11 @@ def shift_close(request):
     if not s:
         return Response({'detail': 'No open shift'}, status=400)
     from django.db.models import Sum
+    # Same order set the summary slip uses — prefers the stamped shift FK so a
+    # sale confirmed just after the round closed still counts against it.
     cash_total = (
-        Order.objects
-        .filter(branch=branch, created_at__gte=s.opened_at,
-                payment_method__in=['Easy Pay', 'Cash'])
+        shift_orders(s)
+        .filter(payment_method__in=CASH_METHODS)
         .aggregate(t=Sum('total'))['t'] or Decimal('0')
     )
     expected = (s.start_cash or 0) + cash_total + (s.total_paid_in or 0) - (s.total_paid_out or 0)
@@ -1004,19 +899,35 @@ def shift_close(request):
 CASH_METHODS = ['Cash', 'Easy Pay']
 
 
+def shift_orders(shift):
+    """Every Order belonging to ``shift``.
+
+    Prefers the ``shift`` FK, which is stamped at creation.  The old
+    time-window-only query silently dropped any order that landed *outside*
+    opened_at..closed_at — which a self-order can, because it is confirmed when
+    the gateway says so, not when the cashier is looking: pay at 22:01, close
+    the round at 22:02, confirm at 22:03, and the sale appeared in no round at all.
+
+    Orders created before the FK existed have ``shift IS NULL``, so they still
+    fall back to the window and historical summaries don't change.
+    """
+    window = Q(shift__isnull=True, created_at__gte=shift.opened_at)
+    if shift.closed_at:
+        window &= Q(created_at__lte=shift.closed_at)
+    return Order.objects.filter(
+        Q(branch=shift.branch) & (Q(shift=shift) | window)
+    )
+
+
 def _shift_summary(shift):
     """Aggregate everything the close-shift slip (ใบสรุปปิดรอบการขาย) prints.
 
-    Computed from the orders created within the shift's open window for its
-    branch.  Returns plain JSON-able types (strings/floats) so it can be
-    embedded in a Response and rendered straight onto the printed image.
+    Returns plain JSON-able types (strings/floats) so it can be embedded in a
+    Response and rendered straight onto the printed image.
     """
     from django.db.models import Count, Sum
 
-    branch = shift.branch
-    orders = Order.objects.filter(branch=branch, created_at__gte=shift.opened_at)
-    if shift.closed_at:
-        orders = orders.filter(created_at__lte=shift.closed_at)
+    orders = shift_orders(shift)
 
     sold = orders.exclude(status='cancel')
     cancelled = orders.filter(status='cancel')
@@ -1452,402 +1363,144 @@ def stock_document_detail(request, doc_id):
     return Response(StockDocumentSerializer(doc).data)
 
 
-# ─── Beam Payment ────────────────────────────────────────────────────────────
-SATANG_PER_THB = 100
-BEAM_POST_TIMEOUT_S = 15.0
-BEAM_GET_TIMEOUT_S = 10.0
-
-
-def _beam_credentials() -> tuple[str, dict]:
-    """Returns (base_url, headers) or raises a tuple-error suitable for Response."""
-    s = _get_or_create_settings()
-    if not s.beam_merchant_id or not s.beam_api_key:
-        raise ValueError(
-            'Beam credentials not configured. Go to Settings → Payment to add '
-            'your Merchant ID and API Key.'
-        )
-    base = (
-        django_settings.BRAVEPOS['BEAM_PLAYGROUND_URL']
-        if s.beam_sandbox
-        else django_settings.BRAVEPOS['BEAM_PRODUCTION_URL']
-    )
-    token = base64.b64encode(f"{s.beam_merchant_id}:{s.beam_api_key}".encode()).decode()
-    return base, {'Authorization': f'Basic {token}'}
-
-
-def _extract_qr_data(data: dict) -> tuple[str | None, str | None]:
-    qr_image, qr_string = None, None
-    if data.get('actionRequired') == 'ENCODED_IMAGE':
-        e = data.get('encodedImage', {})
-        qr_image = e.get('imageBase64Encoded') or e.get('image')
-        qr_string = e.get('rawData') or e.get('qrString')
-    elif data.get('qrCode'):
-        qr_image = data['qrCode']
-    return qr_image, qr_string
+# ─── Payments (Beam + Omise) ─────────────────────────────────────────────────
+# Thin HTTP wrappers.  All gateway logic — credentials, the HTTP calls, the
+# VAT/fee math — lives in ``gateways.py`` so the public self-ordering views can
+# reuse it without a session.  These endpoints exist for the POS (a cashier at
+# the till) and stay @require_session.
+#
+# The two status vocabularies below are NOT accidental and must not be
+# "harmonised": ``beam_charge_status`` returns Beam's raw string (SUCCEEDED /
+# COMPLETED) while ``beam_link_status`` returns a normalised one (successful /
+# failed / pending).  pos.tsx hard-codes both; changing either breaks checkout.
+def _gateway_response(fn, *args, **kwargs):
+    """Run a gateway call, mapping its exceptions onto DRF responses."""
+    try:
+        return fn(*args, **kwargs), None
+    except GatewayConfigError as e:
+        return None, Response({'detail': str(e)}, status=400)
+    except GatewayError as e:
+        return None, Response({'detail': e.detail}, status=e.status)
 
 
 @api_view(['POST'])
 @require_session
 def beam_charge_create(request):
-    try:
-        base, headers = _beam_credentials()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-
-    amount = float(request.data.get('amount', 0) or 0)
     reference_id = request.data.get('reference_id') or request.data.get('reference', '')
-    description = request.data.get('description') or f"Order {reference_id}"
-
-    payload = {
-        'amount': int(round(amount * SATANG_PER_THB)),
-        'currency': 'THB',
-        'referenceId': reference_id,
-        'description': description,
-        'paymentMethod': {'paymentMethodType': 'QR_PROMPT_PAY', 'qrPromptPay': {}},
-    }
-    try:
-        with httpx.Client(timeout=BEAM_POST_TIMEOUT_S) as client:
-            resp = client.post(f"{base}/api/v1/charges", json=payload, headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Beam API timed out. Please try again.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
-
-    if resp.status_code == 401:
-        return Response({'detail': 'Beam API key is invalid or expired.'}, status=401)
-    if resp.status_code not in (200, 201):
-        return Response(
-            {'detail': f'Beam API error {resp.status_code}: {resp.text[:300]}'},
-            status=502,
-        )
-
-    data = resp.json()
-    charge_id = data.get('chargeId') or data.get('id') or data.get('charge_id') or ''
-    if not charge_id:
-        return Response(
-            {'detail': 'Beam response did not include a charge id; cannot poll status.'},
-            status=502,
-        )
-    qr_image, qr_string = _extract_qr_data(data)
+    res, err = _gateway_response(
+        gateways.beam_create_promptpay_charge,
+        amount=Decimal(str(request.data.get('amount', 0) or 0)),
+        reference_id=reference_id,
+        description=request.data.get('description') or '',
+    )
+    if err:
+        return err
     return Response({
-        'charge_id': charge_id,
-        'status': data.get('status', 'PENDING'),
-        'qr_image': qr_image,
-        'qr_string': qr_string,
-        'amount': amount,
-        'currency': 'THB',
+        'charge_id': res['charge_id'],
+        'status': res['status'],
+        'qr_image': res['qr_image'],
+        'qr_string': res['qr_string'],
+        'amount': res['amount'],
+        'currency': res['currency'],
     })
 
 
 @api_view(['GET'])
 @require_session
 def beam_charge_status(request, charge_id):
-    try:
-        base, headers = _beam_credentials()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-    try:
-        with httpx.Client(timeout=BEAM_GET_TIMEOUT_S) as client:
-            resp = client.get(f"{base}/api/v1/charges/{charge_id}", headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Beam API timed out.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
-    if resp.status_code != 200:
-        return Response({'detail': f'Beam API error {resp.status_code}'}, status=502)
-    data = resp.json()
+    res, err = _gateway_response(gateways.beam_get_charge, charge_id)
+    if err:
+        return err
     return Response({
-        'charge_id': data.get('chargeId') or data.get('id') or charge_id,
-        'status': data.get('status', 'PENDING'),
-        'amount': (data.get('amount') or 0) / SATANG_PER_THB,
-        'currency': data.get('currency', 'THB'),
+        'charge_id': res['charge_id'],
+        'status': res['status'],
+        'amount': res['amount'],
+        'currency': res['currency'],
     })
 
 
-# ─── Beam Payment Links (credit card) ────────────────────────────────────────
-# Mirrors the Omise link flow: create a card-only hosted-checkout link, render
-# its URL as a QR the customer scans, then poll until the link is paid.  Uses
-# the same Beam credentials as the QR charge flow (``_beam_credentials``).
 @api_view(['POST'])
 @require_session
 def beam_link_create(request):
     """Create a Beam card payment Link and return its hosted-checkout URL.
 
-    ``amount`` in the request is the *goods* total; the backend adds the Beam
-    card processing fee + fee VAT so the customer is charged the grand total.
-    The frontend renders ``payment_uri`` as a QR the customer scans to pay.
+    ``amount`` is the *goods* total; the backend adds the card processing fee +
+    fee VAT so the customer is charged the grand total.  The POS renders
+    ``payment_uri`` as a QR the customer scans to pay.
     """
-    try:
-        base, headers = _beam_credentials()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-
-    s = _get_or_create_settings()
-    goods_total = Decimal(str(request.data.get('amount', 0) or 0))
-    charges = compute_order_charges(
-        goods_total, is_card=True, settings=s, fee_percent=s.beam_card_fee_percent,
-    )
-    amount_satang = int((charges['total'] * SATANG_PER_THB).to_integral_value(ROUND_HALF_UP))
     reference_id = request.data.get('reference_id') or request.data.get('reference', '')
-    description = request.data.get('description') or f"Order {reference_id}"
-
-    payload = {
-        'order': {
-            'netAmount': amount_satang,
-            'currency': 'THB',
-            'referenceId': reference_id,
-            'description': description,
-        },
-        # Card only — this method is the card analogue of the QR PromptPay flow.
-        # Each method is an object with an ``isEnabled`` flag (Beam's schema).
-        'linkSettings': {
-            'card': {'isEnabled': True},
-            'cardInstallments': {'isEnabled': False},
-            'buyNowPayLater': {'isEnabled': False},
-            'eWallets': {'isEnabled': False},
-            'mobileBanking': {'isEnabled': False},
-            'qrPromptPay': {'isEnabled': False},
-        },
-        'redirectUrl': 'https://pos.rollingpinn.com',
-    }
-    try:
-        with httpx.Client(timeout=BEAM_POST_TIMEOUT_S) as client:
-            resp = client.post(f"{base}/api/v1/payment-links", json=payload, headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Beam API timed out. Please try again.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
-
-    if resp.status_code == 401:
-        return Response({'detail': 'Beam API key is invalid or expired.'}, status=401)
-    if resp.status_code not in (200, 201):
-        return Response(
-            {'detail': f'Beam API error {resp.status_code}: {resp.text[:300]}'},
-            status=502,
-        )
-
-    data = resp.json()
-    link_id = data.get('paymentLinkId') or data.get('id') or ''
-    payment_uri = data.get('url') or data.get('paymentLinkUrl') or ''
-    if not link_id or not payment_uri:
-        return Response(
-            {'detail': 'Beam response did not include a payment link id / URL.'},
-            status=502,
-        )
+    res, err = _gateway_response(
+        gateways.beam_create_card_link,
+        goods_total=Decimal(str(request.data.get('amount', 0) or 0)),
+        reference_id=reference_id,
+        description=request.data.get('description') or '',
+        # Cashier flow: the customer pays on a device at the counter and the
+        # cashier is watching the POS, so bouncing the browser at the POS host
+        # is fine.  Self-ordering overrides this with the customer's own
+        # status page.
+        redirect_url=None,
+    )
+    if err:
+        return err
     return Response({
-        'link_id': link_id,
-        'payment_uri': payment_uri,
-        'goods_total': goods_total,
-        'vat_amount': charges['vat_amount'],
-        'processing_fee': charges['processing_fee'],
-        'processing_fee_vat': charges['processing_fee_vat'],
-        'amount_total': charges['total'],
-        'currency': 'THB',
+        'link_id': res['link_id'],
+        'payment_uri': res['payment_uri'],
+        'goods_total': res['goods_total'],
+        'vat_amount': res['vat_amount'],
+        'processing_fee': res['processing_fee'],
+        'processing_fee_vat': res['processing_fee_vat'],
+        'amount_total': res['amount_total'],
+        'currency': res['currency'],
     })
 
 
 @api_view(['GET'])
 @require_session
 def beam_link_status(request, link_id):
-    """Poll a Beam payment Link for a paid card charge."""
-    try:
-        base, headers = _beam_credentials()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-    try:
-        with httpx.Client(timeout=BEAM_GET_TIMEOUT_S) as client:
-            resp = client.get(f"{base}/api/v1/payment-links/{link_id}", headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Beam API timed out.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Beam API: {e}'}, status=502)
-    if resp.status_code != 200:
-        return Response({'detail': f'Beam API error {resp.status_code}'}, status=502)
-
-    data = resp.json()
-    # Link lifecycle: ACTIVE | PAID | EXPIRED | DISABLED | VOIDED | REFUNDED.
-    beam_status = (data.get('status') or '').upper()
-    if beam_status == 'PAID':
-        status = 'successful'
-    elif beam_status in ('EXPIRED', 'DISABLED', 'VOIDED'):
-        status = 'failed'
-    else:
-        status = 'pending'
-    charge = data.get('charge') or {}
-    charge_id = (
-        data.get('chargeId')
-        or charge.get('chargeId')
-        or charge.get('id')
-        or ''
-    )
+    res, err = _gateway_response(gateways.beam_get_link, link_id)
+    if err:
+        return err
     return Response({
-        'link_id': link_id,
-        'status': status,
-        'charge_id': charge_id,
+        'link_id': res['link_id'],
+        'status': res['status'],
+        'charge_id': res['charge_id'],
     })
-
-
-# ─── Tax + card-fee math ─────────────────────────────────────────────────────
-OMISE_API_URL = 'https://api.omise.co'
-OMISE_POST_TIMEOUT_S = 15.0
-OMISE_GET_TIMEOUT_S = 10.0
-# Payment methods whose label begins with this prefix are Omise card charges
-# and therefore carry the processing fee + fee VAT.
-CARD_METHOD_PREFIX = 'Credit Card'
-# Beam credit-card payment-link method label — also a card charge, but its
-# surcharge comes from ``beam_card_fee_percent`` rather than the Omise rate.
-BEAM_CARD_METHOD = 'Beam Card'
-
-
-def _q2(value: Decimal) -> Decimal:
-    """Round a Decimal to 2 dp (satang) using banker-safe half-up."""
-    return Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-
-def compute_order_charges(
-    goods_total: Decimal,
-    is_card: bool,
-    settings: Settings,
-    fee_percent=None,
-) -> dict:
-    """Return the tax/fee breakdown for a goods total.
-
-    Prices are VAT-inclusive, so ``vat_amount`` is the tax already contained
-    in ``goods_total`` (goods × p/(100+p)).  Card orders additionally pass a
-    processing fee — a flat percentage of the goods total — plus 7% VAT on that
-    fee to the customer.  ``fee_percent`` overrides the rate (used by Beam card,
-    which carries its own surcharge); when ``None`` the Omise rate is used.
-    ``total`` is the grand total charged.
-    """
-    p = Decimal(str(settings.tax_percent or 0))
-    goods_total = Decimal(str(goods_total or 0))
-    vat_amount = _q2(goods_total * p / (100 + p)) if p else Decimal('0.00')
-
-    fee = Decimal('0.00')
-    fee_vat = Decimal('0.00')
-    if is_card:
-        rate_src = fee_percent if fee_percent is not None else settings.omise_fee_percent
-        rate = Decimal(str(rate_src or 0))
-        fee = _q2(goods_total * rate / 100)
-        fee_vat = _q2(fee * p / 100) if p else Decimal('0.00')
-
-    return {
-        'vat_amount': vat_amount,
-        'processing_fee': fee,
-        'processing_fee_vat': fee_vat,
-        'total': _q2(goods_total + fee + fee_vat),
-    }
-
-
-# ─── Omise Payment Links (credit card) ───────────────────────────────────────
-def _omise_headers() -> dict:
-    """Returns Basic-auth headers for Omise, or raises ValueError if unset.
-
-    Omise uses the secret key as the HTTP basic-auth username with an empty
-    password; the key prefix (skey_test_ vs skey_) selects test/live.
-    """
-    s = _get_or_create_settings()
-    if not s.omise_secret_key:
-        raise ValueError(
-            'Omise credentials not configured. Go to Settings → Payment to add '
-            'your Omise public + secret keys.'
-        )
-    token = base64.b64encode(f"{s.omise_secret_key}:".encode()).decode()
-    return {'Authorization': f'Basic {token}'}
 
 
 @api_view(['POST'])
 @require_session
 def omise_link_create(request):
-    """Create an Omise payment Link for a card charge and return its hosted URL.
-
-    ``amount`` in the request is the *goods* total; the backend adds the
-    processing fee + fee VAT so the customer is charged the grand total.  The
-    frontend renders ``payment_uri`` as a QR the customer scans to pay.
-    """
-    try:
-        headers = _omise_headers()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-
-    s = _get_or_create_settings()
-    goods_total = Decimal(str(request.data.get('amount', 0) or 0))
-    charges = compute_order_charges(goods_total, is_card=True, settings=s)
-    amount_satang = int((charges['total'] * SATANG_PER_THB).to_integral_value(ROUND_HALF_UP))
-
-    payload = {
-        'amount': amount_satang,
-        'currency': 'thb',
-        'title': request.data.get('title') or 'POS Order',
-        'description': request.data.get('description') or '',
-        # Single-use link — it cannot be paid twice.
-        'multiple': 'false',
-    }
-    try:
-        with httpx.Client(timeout=OMISE_POST_TIMEOUT_S) as client:
-            resp = client.post(f"{OMISE_API_URL}/links", data=payload, headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Omise API timed out. Please try again.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Omise API: {e}'}, status=502)
-
-    if resp.status_code in (401, 403):
-        return Response({'detail': 'Omise secret key is invalid or expired.'}, status=401)
-    if resp.status_code not in (200, 201):
-        return Response(
-            {'detail': f'Omise API error {resp.status_code}: {resp.text[:300]}'},
-            status=502,
-        )
-
-    data = resp.json()
-    link_id = data.get('id') or ''
-    payment_uri = data.get('payment_uri') or ''
-    if not link_id or not payment_uri:
-        return Response(
-            {'detail': 'Omise response did not include a link id / payment URI.'},
-            status=502,
-        )
+    """Create an Omise payment Link for a card charge and return its hosted URL."""
+    res, err = _gateway_response(
+        gateways.omise_create_link,
+        goods_total=Decimal(str(request.data.get('amount', 0) or 0)),
+        title=request.data.get('title') or '',
+        description=request.data.get('description') or '',
+    )
+    if err:
+        return err
     return Response({
-        'link_id': link_id,
-        'payment_uri': payment_uri,
-        'goods_total': goods_total,
-        'vat_amount': charges['vat_amount'],
-        'processing_fee': charges['processing_fee'],
-        'processing_fee_vat': charges['processing_fee_vat'],
-        'amount_total': charges['total'],
-        'currency': 'THB',
+        'link_id': res['link_id'],
+        'payment_uri': res['payment_uri'],
+        'goods_total': res['goods_total'],
+        'vat_amount': res['vat_amount'],
+        'processing_fee': res['processing_fee'],
+        'processing_fee_vat': res['processing_fee_vat'],
+        'amount_total': res['amount_total'],
+        'currency': res['currency'],
     })
 
 
 @api_view(['GET'])
 @require_session
 def omise_link_status(request, link_id):
-    """Poll an Omise Link for a successful charge."""
-    try:
-        headers = _omise_headers()
-    except ValueError as e:
-        return Response({'detail': str(e)}, status=400)
-    try:
-        with httpx.Client(timeout=OMISE_GET_TIMEOUT_S) as client:
-            resp = client.get(f"{OMISE_API_URL}/links/{link_id}", headers=headers)
-    except httpx.TimeoutException:
-        return Response({'detail': 'Omise API timed out.'}, status=502)
-    except httpx.RequestError as e:
-        return Response({'detail': f'Cannot reach Omise API: {e}'}, status=502)
-    if resp.status_code != 200:
-        return Response({'detail': f'Omise API error {resp.status_code}'}, status=502)
-
-    data = resp.json()
-    charge_list = (data.get('charges') or {}).get('data') or []
-    paid = next(
-        (c for c in charge_list if c.get('status') == 'successful' and c.get('paid')),
-        None,
-    )
-    failed = any(c.get('status') == 'failed' for c in charge_list)
+    res, err = _gateway_response(gateways.omise_get_link, link_id)
+    if err:
+        return err
     return Response({
-        'link_id': link_id,
-        'status': 'successful' if paid else ('failed' if (failed and not paid) else 'pending'),
-        'charge_id': paid['id'] if paid else '',
+        'link_id': res['link_id'],
+        'status': res['status'],
+        'charge_id': res['charge_id'],
     })
 
 
@@ -2073,3 +1726,65 @@ def print_receipt(request, order_id):
     except printer_mod.PrinterError as e:
         return Response({'detail': str(e)}, status=502)
     return Response({'ok': True})
+
+
+# ─── Self-orders (POS side) ──────────────────────────────────────────────────
+# The receipt for a self-order prints on the POS tablet, because printing is
+# client-side (the Epson native module lives in the Expo app; the server-side
+# print path here is a vestigial stub).  So the tablet has to *ask* for work.
+#
+# A branch can have several tablets, and printerQueue's in-flight Set only
+# dedupes within one JS runtime — so two tablets polling this endpoint would
+# both be handed the same order and both print it.  The claim is therefore
+# server-side: a tablet wins a row with a conditional UPDATE and only prints
+# what it won.
+
+# How long a tablet's claim is honoured before another may steal it.  Covers a
+# tablet that fetched a job then died (crash, battery, Wi-Fi) — without a lease
+# that receipt would never print.
+PRINT_CLAIM_LEASE_S = 90
+
+
+@api_view(['GET'])
+@require_session
+def self_orders_pending(request):
+    """Paid self-orders this tablet should print.
+
+    Claims each row it returns.  Claiming *is* the acknowledgement — we
+    deliberately do not wait for the tablet to confirm the paper came out.
+    Acking after the fact would mean a dropped connection re-serves the row and
+    prints a **second receipt with the same queue number**, which is a dispute
+    with a customer standing at the counter.  A missing receipt is recoverable
+    (Reprint already exists in admin); a duplicate is not.
+    """
+    branch = request.session_obj.branch
+    now = djtz.now()
+    lease_cutoff = now - timedelta(seconds=PRINT_CLAIM_LEASE_S)
+    claimant = str(request.session_obj.id)
+
+    claimable = (
+        SelfOrder.objects
+        .filter(branch=branch, status='paid', printed_at__isnull=True)
+        .filter(Q(print_claimed_at__isnull=True) | Q(print_claimed_at__lt=lease_cutoff))
+        .values_list('id', flat=True)
+    )
+
+    claimed_ids = []
+    for so_id in list(claimable):
+        # Conditional UPDATE: only one caller can flip a given row, so only one
+        # tablet is ever told to print it.  rowcount is the arbiter.
+        won = (
+            SelfOrder.objects
+            .filter(pk=so_id, status='paid', printed_at__isnull=True)
+            .filter(Q(print_claimed_at__isnull=True) | Q(print_claimed_at__lt=lease_cutoff))
+            .update(print_claimed_at=now, print_claimed_by=claimant, printed_at=now)
+        )
+        if won:
+            claimed_ids.append(so_id)
+
+    orders = (
+        Order.objects
+        .filter(self_order__id__in=claimed_ids)
+        .prefetch_related('items')
+    )
+    return Response(OrderSerializer(orders, many=True).data)

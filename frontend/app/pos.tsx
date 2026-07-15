@@ -20,10 +20,12 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { useStarPrinter } from "../lib/useStarPrinter";
+import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { SidebarDrawer } from "../components/SidebarDrawer";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -108,6 +110,14 @@ export default function POS() {
   const [activeBranchName, setActiveBranchName] = useState<string>("");
   const [authLoaded, setAuthLoaded] = useState(false);
   const isAdmin = role === "admin";
+
+  // Customers ordering on their own phones can't print their own slip — the
+  // printer is here.  Poll for orders they've paid for and print them.  Reuses
+  // the printReceipt above rather than mounting a second useStarPrinter, which
+  // would give view-shot two hidden overlays to fight over.  Mounted only here,
+  // never in admin.tsx: both screens can be mounted at once, and that would
+  // double every receipt.  Waits for auth — the endpoint is session-scoped.
+  useSelfOrderPrinting(printReceipt, activeBranchName, authLoaded);
 
   useEffect(() => {
     (async () => {
@@ -348,6 +358,13 @@ export default function POS() {
           omise_charge_id: meta?.omiseChargeId || null,
         }),
       });
+      if (!res.ok) {
+        // Reached only after the customer has paid, so a failed save means
+        // money taken with no order recorded.  Throwing routes it to the catch
+        // below, which tells both Sentry and the cashier — previously res.json()
+        // ran regardless and the success modal showed an undefined order number.
+        throw new Error(`Order save failed (HTTP ${res.status})`);
+      }
       const order = await res.json();
       // The server is authoritative for the grand total (it adds the card fee
       // + VAT), so display its numbers rather than the local goods total.
@@ -383,6 +400,11 @@ export default function POS() {
             cfg,
             {
               order_number: order.order_number,
+              // Server-assigned, per branch per day.  Previously the receipt
+              // derived this itself from the last two digits of the *global*
+              // order number, which collided across branches and wrapped every
+              // 100 sales — and it's the number the customer gets called by.
+              queue_number: order.queue_number ?? undefined,
               items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
               subtotal,
               discount_amount: discountAmount,
@@ -407,7 +429,28 @@ export default function POS() {
         }
       })();
     } catch (e) {
-      console.error("checkout fail", e);
+      // The sale already happened — cash is in the drawer or the card/QR charge
+      // is captured — but the order never made it to the backend.  console.error
+      // is invisible on a tablet, so this used to lose the order silently.
+      Sentry.captureException(e, {
+        level: "fatal",
+        tags: { flow: "checkout", payment_method: method },
+        extra: {
+          paid,
+          goods_total: total,
+          item_count: cart.length,
+          branch: activeBranchName,
+          staff: staff || "",
+          ...meta,
+        },
+      });
+      // Keep the cart intact: the cashier can retry the save once the network
+      // is back, and clearing it would destroy the only record of the sale.
+      Alert.alert(
+        "Order NOT saved",
+        "The payment went through but the order could not be saved to the server.\n\n" +
+          "Do NOT take payment again. Write this order down, then tell an admin.",
+      );
     }
   };
 

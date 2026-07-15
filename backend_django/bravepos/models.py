@@ -410,6 +410,26 @@ class Order(models.Model):
     created_time = models.CharField(max_length=8, blank=True, default="")  # "HH:MM"
     staff = models.CharField(max_length=120, blank=True, default="")
 
+    # ── Shift attribution ──────────────────────────────────────────────
+    # Stamped at creation so an order always belongs to exactly one round.
+    # ``_shift_summary`` used to window purely on ``created_at`` between the
+    # shift's opened_at/closed_at, which silently *drops* an order that lands
+    # after the cashier closed the round — a self-order paid at 22:01 and
+    # confirmed at 22:03, after a 22:02 close, appeared in neither round's
+    # totals.  The summary now prefers this FK and only falls back to the
+    # time window for orders created before the field existed (hence null=True).
+    shift = models.ForeignKey(
+        "Shift", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="orders",
+    )
+
+    # Per-branch, per-day number the customer is called by.  Previously derived
+    # on the client as the last two digits of the *global* order_number
+    # sequence (ReceiptImage.tsx), which collided across branches and repeated
+    # every 100 orders.  Null for orders created before this field existed —
+    # the receipt falls back to the old derivation for those.
+    queue_number = models.IntegerField(null=True, blank=True)
+
     # ── Void / cancel audit ────────────────────────────────────────────
     # Set when a cashier voids a completed bill from the Transactions
     # screen.  ``voided_by`` snapshots the staff name (history-safe like
@@ -475,6 +495,106 @@ class ParkedOrder(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["branch"])]
+
+
+# ─── Customer self-ordering ──────────────────────────────────────────────────
+class SelfOrder(models.Model):
+    """A cart a customer built on their own phone, before it becomes a sale.
+
+    Deliberately NOT an ``Order``.  An Order row is a real sale — every
+    dashboard, report, kanban and shift query in the codebase assumes so.  An
+    unpaid or abandoned self-order must not pollute those, so the draft lives
+    here and is *promoted* into an Order only once the gateway confirms
+    payment.  Same reasoning (and same JSON-items shape) as ``ParkedOrder``.
+
+    ``items`` are priced SERVER-SIDE from the Product table at /start/ and
+    frozen here.  The customer's browser is untrusted, so its prices are never
+    read; and freezing means a menu price change mid-checkout can't alter what
+    they were quoted.  The money fields are frozen for the same reason: the fee
+    and VAT percentages live in the editable ``Settings`` singleton, and a
+    self-order's build→pay window is minutes (vs. seconds at the till), so
+    recomputing at promotion time could make Order.total disagree with the
+    satang the gateway actually captured.
+    """
+    STATUS_CHOICES = [
+        ("pending", "Pending"),    # created, not yet paid
+        ("paid", "Paid"),          # gateway confirmed → promoted to an Order
+        ("failed", "Failed"),      # gateway said expired/voided/refunded
+        ("expired", "Expired"),    # never paid; aged out by the sweeper
+    ]
+    METHOD_QR = "Beam QR"
+    METHOD_CARD = "Beam Card"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # The bearer secret for the whole flow — whoever holds it owns the cart.
+    # Deliberately NOT the order_number: that is a guessable running sequence
+    # (PS000000123) and is already public on the receipt page.
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="self_orders",
+    )
+    items = models.JSONField(default=list)
+
+    # Frozen money.  goods_total is VAT-inclusive; vat_amount is the 7/107
+    # already contained in it.  processing_fee (+ its VAT) is added only for
+    # card, so `total` differs by method — which is why it is only final once
+    # the customer has picked one at /pay/.
+    goods_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    vat_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    processing_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    processing_fee_vat = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    payment_method = models.CharField(max_length=64, blank=True, default="")
+    beam_charge_id = models.CharField(max_length=128, blank=True, default="")
+    beam_link_id = models.CharField(max_length=128, blank=True, default="")
+
+    # Beam hands back the QR image / checkout URL exactly once, when the charge
+    # or link is *created* — the status endpoint doesn't repeat them.  Cached
+    # here so a customer who reloads the payment page (or comes back to it) is
+    # shown the same QR instead of us minting a second charge for the same cart.
+    qr_image_cache = models.TextField(blank=True, default="")
+    payment_uri_cache = models.TextField(blank=True, default="")
+
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
+
+    # The sale this draft became.  OneToOne is a DB-level backstop against
+    # double promotion: two pollers (the customer's phone and the POS) can race
+    # on the same token, and the unique constraint makes a second Order for the
+    # same draft impossible even if the row lock were somehow bypassed.
+    order = models.OneToOneField(
+        "Order", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="self_order",
+    )
+
+    # ── Print claim ────────────────────────────────────────────────────
+    # The receipt prints on the POS tablet, not the server, and a branch can
+    # have several tablets.  printerQueue's in-flight Set only dedupes within
+    # one JS runtime, so the claim has to be server-side: a tablet wins the row
+    # with a conditional UPDATE and only prints what it won.  ``print_claimed_at``
+    # doubles as a lease — a stale claim (dead tablet) becomes stealable.
+    print_claimed_at = models.DateTimeField(null=True, blank=True)
+    print_claimed_by = models.CharField(max_length=64, blank=True, default="")
+    printed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["branch", "status"]),
+            models.Index(fields=["status", "created_at"]),  # the sweeper's scan
+        ]
+
+    def __str__(self):
+        return f"SelfOrder {self.token[:8]}… ({self.status})"
+
+    @staticmethod
+    def new_token() -> str:
+        return secrets.token_urlsafe(32)
 
 
 # ─── Shifts ──────────────────────────────────────────────────────────────────
