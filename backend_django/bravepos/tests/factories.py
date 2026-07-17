@@ -57,9 +57,9 @@ class StubGateway:
         self.created_links = []
         self._patches = []
 
-    # — Beam PromptPay —
-    def _create_charge(self, amount, reference_id, description=''):
-        self.created_charges.append({'amount': amount, 'reference_id': reference_id})
+    # — Beam PromptPay —  (accept branch: gateway calls are now branch-aware)
+    def _create_charge(self, amount, reference_id, description='', branch=None):
+        self.created_charges.append({'amount': amount, 'reference_id': reference_id, 'branch': branch})
         return {
             'charge_id': f'chg_{len(self.created_charges)}',
             'status': 'PENDING',
@@ -70,7 +70,7 @@ class StubGateway:
             'raw': {},
         }
 
-    def _get_charge(self, charge_id):
+    def _get_charge(self, charge_id, branch=None):
         status = self.charge_status or ('SUCCEEDED' if self.paid else 'PENDING')
         return {
             'charge_id': charge_id, 'status': status,
@@ -78,7 +78,7 @@ class StubGateway:
         }
 
     # — Beam card link —
-    def _create_link(self, goods_total, reference_id, description='', redirect_url=None):
+    def _create_link(self, goods_total, reference_id, description='', redirect_url=None, branch=None):
         from bravepos.gateways import compute_order_charges, get_shop_settings
         s = get_shop_settings()
         charges = compute_order_charges(
@@ -99,7 +99,7 @@ class StubGateway:
             'raw': {},
         }
 
-    def _get_link(self, link_id):
+    def _get_link(self, link_id, branch=None):
         status = self.link_status or ('successful' if self.paid else 'pending')
         return {
             'link_id': link_id, 'status': status, 'charge_id': 'chg_x',

@@ -25,7 +25,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { setAuthToken } from "../lib/api";
+import { setAuthToken, setSentryContext } from "../lib/api";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const BRANCH_KEY = "bravepos:selected-branch:v1";
@@ -202,6 +202,14 @@ export default function Login() {
       setAuthToken(body.token);
 
       const role = body.staff?.role || "cashier";
+      // Tag every later error report with who was on the till and where, so an
+      // alert identifies the tablet instead of just saying something broke.
+      setSentryContext({
+        staffId: body.staff?.id,
+        staffName: body.staff?.name,
+        role,
+        branchName: branch.name,
+      });
       router.replace({
         pathname: "/pos",
         params: {

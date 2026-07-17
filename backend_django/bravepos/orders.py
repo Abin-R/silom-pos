@@ -23,6 +23,10 @@ from .gateways import (
 )
 from .models import Branch, Order, OrderItem, Product, Shift, StockMovement
 
+# Sentinel so a caller can pass ``shift=None`` to mean "no shift" and be
+# distinguished from "caller didn't say — look up the currently-open one".
+_UNSET = object()
+
 
 # ─── Order numbering ─────────────────────────────────────────────────────────
 # How many times to re-derive an order number when another writer takes it
@@ -89,6 +93,7 @@ def create_order_from_items(
     delivery_provider: str = '',
     delivery_status: str = '',
     trust_item_prices: bool = True,
+    shift=_UNSET,
 ) -> Order:
     """Create an Order + its items, decrement stock, log the movements.
 
@@ -146,10 +151,13 @@ def create_order_from_items(
     paid_amount = grand_total if is_card else Decimal(str(paid_amount))
     change = max(Decimal('0'), paid_amount - grand_total)
 
-    # The shift this sale belongs to.  Stamped now rather than inferred later
-    # from created_at, because a self-order can be confirmed *after* the cashier
-    # closed the round — a purely time-windowed summary drops it from both.
-    shift = Shift.objects.filter(branch=branch, status='open').first()
+    # The shift this sale belongs to, stamped explicitly so a summary never has
+    # to infer it from created_at.  The till doesn't pass one → use the branch's
+    # currently-open shift (a cashier is always inside one).  A self-order passes
+    # the shift it was *placed* in, which may already be closed by the time the
+    # payment is confirmed — that is the whole reason this is a parameter.
+    if shift is _UNSET:
+        shift = Shift.objects.filter(branch=branch, status='open').first()
 
     last_error: Exception | None = None
     for _attempt in range(ORDER_NUMBER_MAX_RETRIES):

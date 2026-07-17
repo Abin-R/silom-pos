@@ -1392,6 +1392,9 @@ def beam_charge_create(request):
         amount=Decimal(str(request.data.get('amount', 0) or 0)),
         reference_id=reference_id,
         description=request.data.get('description') or '',
+        # Route into this branch's own Beam account if it has one; falls back to
+        # the shop account otherwise, so single-account shops are unaffected.
+        branch=request.session_obj.branch,
     )
     if err:
         return err
@@ -1408,7 +1411,7 @@ def beam_charge_create(request):
 @api_view(['GET'])
 @require_session
 def beam_charge_status(request, charge_id):
-    res, err = _gateway_response(gateways.beam_get_charge, charge_id)
+    res, err = _gateway_response(gateways.beam_get_charge, charge_id, branch=request.session_obj.branch)
     if err:
         return err
     return Response({
@@ -1439,6 +1442,7 @@ def beam_link_create(request):
         # is fine.  Self-ordering overrides this with the customer's own
         # status page.
         redirect_url=None,
+        branch=request.session_obj.branch,
     )
     if err:
         return err
@@ -1457,7 +1461,7 @@ def beam_link_create(request):
 @api_view(['GET'])
 @require_session
 def beam_link_status(request, link_id):
-    res, err = _gateway_response(gateways.beam_get_link, link_id)
+    res, err = _gateway_response(gateways.beam_get_link, link_id, branch=request.session_obj.branch)
     if err:
         return err
     return Response({
@@ -1476,6 +1480,7 @@ def omise_link_create(request):
         goods_total=Decimal(str(request.data.get('amount', 0) or 0)),
         title=request.data.get('title') or '',
         description=request.data.get('description') or '',
+        branch=request.session_obj.branch,
     )
     if err:
         return err
@@ -1494,7 +1499,7 @@ def omise_link_create(request):
 @api_view(['GET'])
 @require_session
 def omise_link_status(request, link_id):
-    res, err = _gateway_response(gateways.omise_get_link, link_id)
+    res, err = _gateway_response(gateways.omise_get_link, link_id, branch=request.session_obj.branch)
     if err:
         return err
     return Response({
@@ -1504,10 +1509,23 @@ def omise_link_status(request, link_id):
     })
 
 
-# ─── Seed (demo data, idempotent) ────────────────────────────────────────────
+# ─── Seed (demo data) ────────────────────────────────────────────────────────
 @api_view(['POST'])
 def seed_data(_request):
-    """Wipe + reseed the bravepos_* tables only.  Never touches other apps."""
+    """Wipe + reseed the bravepos_* tables (demo/dev only).
+
+    DANGER: this DELETES every product, order, shift, staff and branch row.
+    It is public (no auth), so it is gated behind an explicit env flag —
+    otherwise anything that can reach this server (e.g. a LAN-exposed dev box
+    pointed at the production DB) could erase the whole shop.  Set
+    ``BRAVEPOS_ALLOW_SEED=1`` in the environment to enable it deliberately.
+    """
+    import os
+    if os.environ.get('BRAVEPOS_ALLOW_SEED') != '1':
+        return Response(
+            {'detail': 'Seeding is disabled. Set BRAVEPOS_ALLOW_SEED=1 to enable.'},
+            status=403,
+        )
     # Order matters because of FKs — children first.
     OrderItem.objects.all().delete()
     Order.objects.all().delete()

@@ -8,10 +8,20 @@ from __future__ import annotations
 
 import threading
 from decimal import Decimal
+from unittest import skipUnless
 
-from django.db import connections
+from django.db import connection, connections
 from django.test import Client, TestCase, TransactionTestCase
 from django.utils import timezone as djtz
+
+# The race tests rely on real SELECT ... FOR UPDATE row locking, which SQLite
+# does not implement (it silently ignores it).  Skip them on non-Postgres
+# backends so a SQLite run reports them as skipped rather than passing without
+# actually exercising the lock — run them against Postgres to verify Phase 0.
+REQUIRES_ROW_LOCKS = skipUnless(
+    connection.vendor == 'postgresql',
+    'concurrency tests require PostgreSQL row locking (SELECT ... FOR UPDATE)',
+)
 
 from bravepos import selforder
 from bravepos.gateways import compute_order_charges
@@ -120,12 +130,16 @@ class PublicEndpointTests(TestCase):
         self.assertEqual(draft.goods_total, Decimal('200.00'))
         self.assertEqual(Decimal(str(draft.items[0]['price'])), Decimal('100.00'))
 
-    def test_menu_never_leaks_cost_or_stock(self):
+    def test_menu_never_leaks_cost(self):
+        """Stock IS shown to customers (sold-out / low-stock nudges, like a food
+        app).  Cost — the margin — must never reach a customer's phone."""
         menu = selforder.menu_for(self.branch)
         self.assertTrue(menu)
         for item in menu:
             self.assertNotIn('cost', item)
-            self.assertNotIn('stock', item)
+            # Inventory is intentionally surfaced.
+            self.assertIn('stock', item)
+            self.assertIn('sold_out', item)
 
     def test_closed_branch_refuses_orders(self):
         """No open shift means nobody is at the till to see the order or the slip."""
@@ -145,6 +159,61 @@ class PublicEndpointTests(TestCase):
             content_type='application/json',
         )
         self.assertEqual(res.status_code, 400)
+
+
+# ─── Branch-level payment credentials ────────────────────────────────────────
+class BranchPaymentConfigTests(TestCase):
+    """Each branch can run its own Beam/Omise account; the shop singleton is the
+    fallback so existing single-account shops are unaffected."""
+
+    def setUp(self):
+        self.shop = make_shop()
+        self.shop.beam_merchant_id = 'SHOP-MERCHANT'
+        self.shop.beam_api_key = 'shop-key'
+        self.shop.beam_card_fee_percent = Decimal('3.65')
+        self.shop.save()
+        self.branch = make_branch()
+
+    def test_branch_without_optin_falls_back_to_shop(self):
+        from bravepos.gateways import resolve_payment_config
+        cfg = resolve_payment_config(self.branch)
+        self.assertEqual(cfg.source, 'shop')
+        self.assertEqual(cfg.beam_merchant_id, 'SHOP-MERCHANT')
+
+    def test_no_branch_resolves_to_shop(self):
+        from bravepos.gateways import resolve_payment_config
+        self.assertEqual(resolve_payment_config(None).beam_merchant_id, 'SHOP-MERCHANT')
+
+    def test_opted_in_branch_uses_its_own_keys_and_fee(self):
+        from bravepos.gateways import resolve_payment_config
+        self.branch.payment_own = True
+        self.branch.beam_merchant_id = 'BRANCH-MERCHANT'
+        self.branch.beam_api_key = 'branch-key'
+        self.branch.beam_card_fee_percent = Decimal('2.00')
+        self.branch.save()
+
+        cfg = resolve_payment_config(self.branch)
+        self.assertEqual(cfg.source, 'branch')
+        self.assertEqual(cfg.beam_merchant_id, 'BRANCH-MERCHANT')
+        self.assertEqual(cfg.beam_card_fee_percent, Decimal('2.00'))
+        # VAT is always shop-wide, even for an opted-in branch.
+        self.assertEqual(cfg.tax_percent, self.shop.tax_percent)
+
+    def test_self_order_charge_routes_to_branch_account(self):
+        """A self-order at an opted-in branch charges that branch's Beam account."""
+        open_shift(self.branch)
+        p = make_product(self.branch, price='100.00')
+        self.branch.payment_own = True
+        self.branch.beam_merchant_id = 'BRANCH-MERCHANT'
+        self.branch.beam_api_key = 'branch-key'
+        self.branch.save()
+
+        with StubGateway() as gw:
+            d = selforder.create_draft(self.branch, [{'product_id': str(p.id), 'qty': 1}])
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+
+        # The stub records the branch each charge was created for.
+        self.assertEqual(gw.created_charges[0]['branch'], self.branch)
 
 
 # ─── Payment idempotency ─────────────────────────────────────────────────────
@@ -305,6 +374,7 @@ class ShiftAttributionTests(TestCase):
 
 
 # ─── Concurrency: the reason Phase 0 exists ──────────────────────────────────
+@REQUIRES_ROW_LOCKS
 class ConcurrencyTests(TransactionTestCase):
     reset_sequences = True
 

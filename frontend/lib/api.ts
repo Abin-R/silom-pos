@@ -6,10 +6,28 @@
 //      login screen.  The active screen still needs to handle the failed
 //      response (return null / show retry), but at least the session is
 //      gone instead of looping with a dead token.
+//   4. Reports every failed call to Sentry.  Callers each handle failure
+//      their own way (empty list, retry banner, silent catch), so this is
+//      the only place that sees ALL of them — without it a 500 or a dropped
+//      wifi connection leaves no trace anywhere off the tablet.
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Sentry from "@sentry/react-native";
 
 const ROOT = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
+
+/**
+ * Path with the API root, query string and record ids stripped, e.g.
+ * `https://…/api/orders/42/status?x=1` → `/orders/:id/status`.  Sentry groups
+ * issues by message, so without collapsing the ids every order id would open
+ * its own issue and bury the pattern.
+ */
+function routeOf(path: string): string {
+  const bare = (path.startsWith("http") ? path.replace(ROOT, "") : path).split("?")[0];
+  return bare
+    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "/:uuid")
+    .replace(/\/\d+/g, "/:id");
+}
 
 let cachedToken: string | null | undefined = undefined;
 
@@ -43,18 +61,66 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     headers["Content-Type"] = "application/json";
   }
   const url = path.startsWith("http") ? path : `${ROOT}${path.startsWith("/") ? path : `/${path}`}`;
-  const res = await fetch(url, { ...init, headers });
+  const method = (init.method ?? "GET").toUpperCase();
+  const route = routeOf(path);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers });
+  } catch (e) {
+    // fetch() only rejects on a network-level failure — wifi dropped, DNS
+    // dead, server unreachable.  An HTTP 500 resolves normally and is handled
+    // below.  This branch is the only signal that a tablet went offline.
+    Sentry.captureException(e, {
+      level: "error",
+      tags: { api_route: route, api_method: method, api_status: "network" },
+    });
+    throw e;
+  }
+
   if (res.status === 401) {
     // Token rejected (only happens with a stale/forged token — the "block on
     // second login" flow means valid sessions don't get yanked out from under
     // an active user).  Drop the cached copy so the next mount of / starts
     // fresh; screens that handle a 401 response will fall back to empty data.
+    // Expected control flow, not an error — deliberately not reported.
     cachedToken = null;
     try {
       await AsyncStorage.removeItem(AUTH_KEY);
     } catch {}
+    return res;
+  }
+
+  if (!res.ok) {
+    // Read from a clone so the caller's res.json()/res.text() still works.
+    const body = await res.clone().text().catch(() => "");
+    Sentry.captureException(new Error(`API ${method} ${route} → ${res.status}`), {
+      level: res.status >= 500 ? "error" : "warning",
+      tags: { api_route: route, api_method: method, api_status: String(res.status) },
+      extra: { url, body: body.slice(0, 500) },
+    });
   }
   return res;
+}
+
+/**
+ * Stamp reports with who/where, so an alert says "Cashier Ploy at Silom, order
+ * save failed" instead of just "an error happened somewhere".  Called on login;
+ * Sentry keeps this on the scope for every later event from this tablet.
+ */
+export function setSentryContext(ctx: {
+  staffId?: string | number;
+  staffName?: string;
+  role?: string;
+  branchName?: string;
+}): void {
+  Sentry.setUser(
+    ctx.staffId != null || ctx.staffName
+      ? { id: ctx.staffId != null ? String(ctx.staffId) : undefined, username: ctx.staffName }
+      : null,
+  );
+  Sentry.setTag("branch", ctx.branchName ?? "unknown");
+  Sentry.setTag("role", ctx.role ?? "unknown");
 }
 
 export const API_ROOT = ROOT;

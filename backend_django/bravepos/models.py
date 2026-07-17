@@ -155,6 +155,26 @@ class Branch(models.Model):
     # (e.g. "113105") is sent as an ``accountCode`` instead.  See
     # ``peak.create_peak_receipt_for_order``.
     peak_account_code = models.CharField(max_length=32, blank=True, default="BSV003")
+
+    # ── Per-branch payment credentials ─────────────────────────────────
+    # Each branch can run its own Beam/Omise account.  This is an *override*,
+    # not a replacement: while ``payment_own`` is False (the default for every
+    # existing branch) all payment flows keep reading the shop-wide ``Settings``
+    # singleton exactly as before, so turning this on for one branch changes
+    # nothing for the others — and flipping it back off is an instant rollback.
+    # Resolution lives in ``gateways.resolve_payment_config``.
+    #
+    # Secrets never leave the backoffice: BranchSerializer (the public /branches
+    # feed the login screen reads) does NOT expose these fields.
+    payment_own = models.BooleanField(default=False)
+    beam_merchant_id = models.CharField(max_length=128, blank=True, default="")
+    beam_api_key = models.CharField(max_length=256, blank=True, default="")
+    beam_sandbox = models.BooleanField(default=True)
+    beam_card_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=3.65)
+    omise_public_key = models.CharField(max_length=128, blank=True, default="")
+    omise_secret_key = models.CharField(max_length=128, blank=True, default="")
+    omise_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=3.65)
+
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -1,73 +1,73 @@
 {% comment %}
-Shared shell for the customer self-ordering pages.  Deliberately mirrors
-backoffice/customer_receipt.html — same brand tokens, same Sarabun/Thai setup,
-same CDN deps — so the page a customer sees before paying looks like the receipt
-page they see after.  There is no STATIC_ROOT/staticfiles pipeline in this
-project, hence CDN links rather than local assets.
+Shared shell for the customer self-ordering pages.  Light app surface with
+brand-red accents (the receipt page stays pink; the ordering app is its own,
+food-delivery-style surface).  No STATIC_ROOT pipeline in this project, so the
+one webfont is loaded from a CDN; everything else is inline.
 {% endcomment %}
 <!DOCTYPE html>
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
   <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#d61222">
   <title>{% block title %}สั่งอาหาร — The Rolling Pinn{% endblock %}</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --brand-pink: #ffacef;
       --brand-red: #d61222;
       --brand-red-dark: #a40d1a;
-      --on-pink-soft: rgba(0, 0, 0, 0.55);
-      --card-radius: 22px;
+      --brand-pink: #ffacef;
+      --ink: #1c1c1e;
+      --ink-2: #6b6b70;
+      --ink-3: #9a9aa0;
+      --line: #ececef;
+      --bg: #f4f4f6;
+      --card: #ffffff;
+      --ok: #1a9c5b;
+      --shadow: 0 2px 10px rgba(0,0,0,.05);
+      --shadow-lg: 0 -10px 34px rgba(0,0,0,.14);
     }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
     body {
-      background: var(--brand-pink);
-      min-height: 100vh;
-      font-family: "Sarabun", -apple-system, BlinkMacSystemFont, sans-serif;
-      /* Room for the fixed cart bar so the last menu row is never trapped
-         underneath it. */
-      padding-bottom: 7rem;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Sarabun", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px; line-height: 1.35;
+      -webkit-font-smoothing: antialiased;
     }
-    .shell { max-width: 480px; margin: 0 auto; padding: 1rem; }
-    .card-soft {
-      border: 0;
-      border-radius: var(--card-radius);
-      background: #fff;
-      box-shadow: 0 14px 48px rgba(164, 13, 26, 0.15);
+    .app { max-width: 520px; margin: 0 auto; min-height: 100vh; background: var(--bg); position: relative; }
+    button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+    img { display: block; max-width: 100%; }
+    a { color: inherit; text-decoration: none; }
+
+    .appbar {
+      position: sticky; top: 0; z-index: 40;
+      background: var(--brand-red); color: #fff;
+      padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px 14px;
+      display: flex; align-items: center; gap: 12px;
     }
-    .brand {
-      font-size: 1.6rem;
-      font-weight: 700;
-      color: var(--brand-red);
-      letter-spacing: -0.01em;
-      margin: 0;
+    .appbar .back { font-size: 22px; line-height: 1; margin: -2px 2px 0 -4px; }
+    .appbar .title { font-weight: 800; font-size: 18px; letter-spacing: -.01em; }
+    .appbar .sub { font-size: 12px; opacity: .85; font-weight: 500; margin-top: 1px; }
+
+    .btn-primary {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; background: var(--brand-red); color: #fff;
+      font-weight: 700; font-size: 16px; padding: 15px; border-radius: 14px;
+      transition: transform .06s ease, background .15s ease;
     }
-    .btn-brand {
-      background: var(--brand-red);
-      border-color: var(--brand-red);
-      color: #fff;
-      font-weight: 600;
-      border-radius: 14px;
-      padding: 0.9rem 1.25rem;
-    }
-    .btn-brand:hover, .btn-brand:focus { background: var(--brand-red-dark); border-color: var(--brand-red-dark); color: #fff; }
-    .btn-brand:disabled { opacity: 0.55; }
-    .muted { color: var(--on-pink-soft); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btn-primary:active { transform: scale(.985); background: var(--brand-red-dark); }
+    .btn-primary:disabled { opacity: .5; }
+    .muted { color: var(--ink-2); }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
-  <div class="shell">
-    <header class="text-center py-3">
-      <h1 class="brand">The Rolling Pinn</h1>
-      <div class="muted small">{{ branch.name }}</div>
-    </header>
+  <div class="app">
     {% block content %}{% endblock %}
   </div>
   {% block scripts %}{% endblock %}

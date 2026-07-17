@@ -72,6 +72,52 @@ def get_shop_settings() -> Settings:
     return obj
 
 
+# ─── Payment config resolution (shop-wide, with per-branch override) ──────────
+class PaymentConfig:
+    """The effective payment settings for a given branch.
+
+    Duck-types the attributes both the credential helpers AND
+    ``compute_order_charges`` read off a ``Settings`` object, so it can be passed
+    wherever a ``Settings`` used to be.
+
+    ``tax_percent`` is always the shop-wide value (VAT is a company-level rate).
+    The gateway credentials and fee percentages come from the *branch* when that
+    branch has opted in (``payment_own``), otherwise from the shop singleton.
+    """
+
+    __slots__ = (
+        'tax_percent',
+        'beam_merchant_id', 'beam_api_key', 'beam_sandbox', 'beam_card_fee_percent',
+        'omise_public_key', 'omise_secret_key', 'omise_fee_percent',
+        'source',
+    )
+
+    def __init__(self, shop: Settings, branch=None):
+        # VAT is always the shop rate.
+        self.tax_percent = shop.tax_percent
+
+        use_branch = bool(branch is not None and getattr(branch, 'payment_own', False))
+        src = branch if use_branch else shop
+        self.source = 'branch' if use_branch else 'shop'
+
+        self.beam_merchant_id = src.beam_merchant_id
+        self.beam_api_key = src.beam_api_key
+        self.beam_sandbox = src.beam_sandbox
+        self.beam_card_fee_percent = src.beam_card_fee_percent
+        self.omise_public_key = src.omise_public_key
+        self.omise_secret_key = src.omise_secret_key
+        self.omise_fee_percent = src.omise_fee_percent
+
+
+def resolve_payment_config(branch=None) -> PaymentConfig:
+    """Effective payment config for ``branch`` (or shop-wide if ``branch`` is None).
+
+    A branch that hasn't opted in (the default) transparently uses the shop
+    singleton, so existing single-account shops behave exactly as before.
+    """
+    return PaymentConfig(get_shop_settings(), branch)
+
+
 # ─── Tax + card-fee math ─────────────────────────────────────────────────────
 def _q2(value: Decimal) -> Decimal:
     return Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -118,19 +164,23 @@ def to_satang(amount: Decimal) -> int:
 
 
 # ─── Beam ────────────────────────────────────────────────────────────────────
-def _beam_credentials() -> tuple[str, dict]:
-    s = get_shop_settings()
-    if not s.beam_merchant_id or not s.beam_api_key:
+def _beam_credentials(cfg: PaymentConfig) -> tuple[str, dict]:
+    if not cfg.beam_merchant_id or not cfg.beam_api_key:
+        where = (
+            'this branch (Backoffice → Branch → Payment)'
+            if cfg.source == 'branch'
+            else 'Settings → Payment'
+        )
         raise GatewayConfigError(
-            'Beam credentials not configured. Go to Settings → Payment to add '
-            'your Merchant ID and API Key.'
+            f'Beam credentials not configured. Add the Merchant ID and API Key '
+            f'in {where}.'
         )
     base = (
         django_settings.BRAVEPOS['BEAM_PLAYGROUND_URL']
-        if s.beam_sandbox
+        if cfg.beam_sandbox
         else django_settings.BRAVEPOS['BEAM_PRODUCTION_URL']
     )
-    token = base64.b64encode(f"{s.beam_merchant_id}:{s.beam_api_key}".encode()).decode()
+    token = base64.b64encode(f"{cfg.beam_merchant_id}:{cfg.beam_api_key}".encode()).decode()
     return base, {'Authorization': f'Basic {token}'}
 
 
@@ -145,8 +195,8 @@ def _extract_qr_data(data: dict) -> tuple[str | None, str | None]:
     return qr_image, qr_string
 
 
-def _beam_request(method: str, path: str, *, json=None, timeout: float) -> dict:
-    base, headers = _beam_credentials()
+def _beam_request(method: str, path: str, *, cfg: PaymentConfig, json=None, timeout: float) -> dict:
+    base, headers = _beam_credentials(cfg)
     url = f"{base}{path}"
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -164,10 +214,15 @@ def _beam_request(method: str, path: str, *, json=None, timeout: float) -> dict:
 
 
 def beam_create_promptpay_charge(
-    amount: Decimal, reference_id: str, description: str = '',
+    amount: Decimal, reference_id: str, description: str = '', branch=None,
 ) -> dict:
     """PromptPay QR charge.  ``amount`` is captured verbatim — PromptPay carries
-    no processing fee, so this is the goods total with nothing added."""
+    no processing fee, so this is the goods total with nothing added.
+
+    ``branch`` selects whose Beam account to charge into: the branch's own if it
+    has opted in, otherwise the shop's.  ``None`` = shop-wide (the POS default).
+    """
+    cfg = resolve_payment_config(branch)
     payload = {
         'amount': to_satang(amount),
         'currency': 'THB',
@@ -175,7 +230,7 @@ def beam_create_promptpay_charge(
         'description': description or f"Order {reference_id}",
         'paymentMethod': {'paymentMethodType': 'QR_PROMPT_PAY', 'qrPromptPay': {}},
     }
-    data = _beam_request('POST', '/api/v1/charges', json=payload, timeout=BEAM_POST_TIMEOUT_S)
+    data = _beam_request('POST', '/api/v1/charges', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S)
 
     charge_id = data.get('chargeId') or data.get('id') or data.get('charge_id') or ''
     if not charge_id:
@@ -194,9 +249,10 @@ def beam_create_promptpay_charge(
     }
 
 
-def beam_get_charge(charge_id: str) -> dict:
+def beam_get_charge(charge_id: str, branch=None) -> dict:
+    cfg = resolve_payment_config(branch)
     data = _beam_request(
-        'GET', f'/api/v1/charges/{charge_id}', timeout=BEAM_GET_TIMEOUT_S,
+        'GET', f'/api/v1/charges/{charge_id}', cfg=cfg, timeout=BEAM_GET_TIMEOUT_S,
     )
     return {
         'charge_id': data.get('chargeId') or data.get('id') or charge_id,
@@ -212,6 +268,7 @@ def beam_create_card_link(
     reference_id: str,
     description: str = '',
     redirect_url: str | None = None,
+    branch=None,
 ) -> dict:
     """Card hosted-checkout link.  ``goods_total`` is the pre-fee total; the
     customer is charged goods + card fee + VAT on the fee.
@@ -220,11 +277,13 @@ def beam_create_card_link(
     done.  It used to be hardcoded to the POS host, which is right for a cashier
     (the customer never sees it) and wrong for self-ordering — a customer must
     land back on their own order-status page.
+
+    ``branch`` selects whose Beam account + card fee rate apply.
     """
-    s = get_shop_settings()
+    cfg = resolve_payment_config(branch)
     goods_total = Decimal(str(goods_total or 0))
     charges = compute_order_charges(
-        goods_total, is_card=True, settings=s, fee_percent=s.beam_card_fee_percent,
+        goods_total, is_card=True, settings=cfg, fee_percent=cfg.beam_card_fee_percent,
     )
 
     payload = {
@@ -249,7 +308,7 @@ def beam_create_card_link(
         ),
     }
     data = _beam_request(
-        'POST', '/api/v1/payment-links', json=payload, timeout=BEAM_POST_TIMEOUT_S,
+        'POST', '/api/v1/payment-links', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S,
     )
 
     link_id = data.get('paymentLinkId') or data.get('id') or ''
@@ -271,7 +330,7 @@ def beam_create_card_link(
     }
 
 
-def beam_get_link(link_id: str) -> dict:
+def beam_get_link(link_id: str, branch=None) -> dict:
     """Poll a Beam payment link.
 
     Returns a *normalised* status (successful | failed | pending) — unlike
@@ -281,8 +340,9 @@ def beam_get_link(link_id: str) -> dict:
     Also returns ``amount`` and ``raw`` so a caller promoting a draft into a
     real sale can check what the gateway actually captured.
     """
+    cfg = resolve_payment_config(branch)
     data = _beam_request(
-        'GET', f'/api/v1/payment-links/{link_id}', timeout=BEAM_GET_TIMEOUT_S,
+        'GET', f'/api/v1/payment-links/{link_id}', cfg=cfg, timeout=BEAM_GET_TIMEOUT_S,
     )
 
     # Link lifecycle: ACTIVE | PAID | EXPIRED | DISABLED | VOIDED | REFUNDED.
@@ -316,26 +376,30 @@ def beam_get_link(link_id: str) -> dict:
 
 
 # ─── Omise ───────────────────────────────────────────────────────────────────
-def _omise_headers() -> dict:
+def _omise_headers(cfg: PaymentConfig) -> dict:
     """Omise uses the secret key as the basic-auth username with an empty
     password; the key prefix (skey_test_ vs skey_) selects test/live."""
-    s = get_shop_settings()
-    if not s.omise_secret_key:
-        raise GatewayConfigError(
-            'Omise credentials not configured. Go to Settings → Payment to add '
-            'your Omise public + secret keys.'
+    if not cfg.omise_secret_key:
+        where = (
+            'this branch (Backoffice → Branch → Payment)'
+            if cfg.source == 'branch'
+            else 'Settings → Payment'
         )
-    token = base64.b64encode(f"{s.omise_secret_key}:".encode()).decode()
+        raise GatewayConfigError(
+            f'Omise credentials not configured. Add your Omise public + secret '
+            f'keys in {where}.'
+        )
+    token = base64.b64encode(f"{cfg.omise_secret_key}:".encode()).decode()
     return {'Authorization': f'Basic {token}'}
 
 
 def omise_create_link(
-    goods_total: Decimal, title: str = '', description: str = '',
+    goods_total: Decimal, title: str = '', description: str = '', branch=None,
 ) -> dict:
-    headers = _omise_headers()
-    s = get_shop_settings()
+    cfg = resolve_payment_config(branch)
+    headers = _omise_headers(cfg)
     goods_total = Decimal(str(goods_total or 0))
-    charges = compute_order_charges(goods_total, is_card=True, settings=s)
+    charges = compute_order_charges(goods_total, is_card=True, settings=cfg)
 
     payload = {
         'amount': to_satang(charges['total']),
@@ -378,8 +442,8 @@ def omise_create_link(
     }
 
 
-def omise_get_link(link_id: str) -> dict:
-    headers = _omise_headers()
+def omise_get_link(link_id: str, branch=None) -> dict:
+    headers = _omise_headers(resolve_payment_config(branch))
     try:
         with httpx.Client(timeout=OMISE_GET_TIMEOUT_S) as client:
             resp = client.get(f"{OMISE_API_URL}/links/{link_id}", headers=headers)

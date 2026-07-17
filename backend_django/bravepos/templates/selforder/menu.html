@@ -1,58 +1,174 @@
 {% extends "selforder/base.html" %}
 {% comment %}
-The menu a customer sees after scanning the branch QR.  Cart lives in
-JS/localStorage only — the server is told about it exactly once, at /start/,
-and re-prices every line from the DB at that point.  Nothing this page computes
-is trusted for money; the totals here are a preview.
+Food-delivery-style menu (think Swiggy / KFC kiosk): sticky category pills,
+image cards with sold-out + low-stock states, and a slide-up cart sheet.
+
+The cart is JS-only.  The server is told about it exactly once, at /start/, and
+re-prices every line from the DB there — nothing this page computes is trusted
+for money; the totals shown here are a preview.
 {% endcomment %}
 
 {% block title %}สั่งอาหาร — {{ branch.name }}{% endblock %}
 
 {% block head %}
 <style>
-  .cat-title { font-weight: 700; color: var(--brand-red-dark); margin: 1.25rem 0 0.5rem; font-size: 1rem; }
-  .item-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border-bottom: 1px solid #f1f1f1; }
-  .item-row:last-child { border-bottom: 0; }
-  .item-name { flex: 1; min-width: 0; font-weight: 600; }
-  .item-name small { display: block; font-weight: 400; color: var(--on-pink-soft); }
-  .item-price { font-weight: 600; white-space: nowrap; }
-  .qty { display: flex; align-items: center; gap: 0.35rem; }
-  .qty button {
-    width: 34px; height: 34px; border-radius: 10px; border: 1px solid #e3e3e3;
-    background: #fff; font-weight: 700; line-height: 1;
+  body { padding-bottom: 96px; }
+
+  /* Category pills */
+  .pills {
+    position: sticky; top: 62px; z-index: 30;
+    display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
+    padding: 12px 16px; background: var(--bg);
+    box-shadow: 0 1px 0 var(--line);
   }
-  .qty button:active { background: #f5f5f5; }
-  .qty .n { min-width: 1.25rem; text-align: center; font-weight: 700; }
+  .pills::-webkit-scrollbar { display: none; }
+  .pill {
+    flex: 0 0 auto; padding: 8px 15px; border-radius: 999px;
+    background: #fff; border: 1px solid var(--line);
+    font-weight: 600; font-size: 13.5px; color: var(--ink-2);
+    transition: all .15s ease;
+  }
+  .pill.active { background: var(--brand-red); border-color: var(--brand-red); color: #fff; }
+
+  .section { padding: 6px 16px 0; scroll-margin-top: 112px; }
+  .section h2 { font-size: 16px; font-weight: 800; margin: 16px 2px 8px; }
+
+  /* Product card */
+  .card {
+    display: flex; gap: 12px; background: var(--card); border-radius: 16px;
+    padding: 12px; margin-bottom: 10px; box-shadow: var(--shadow);
+    position: relative;
+  }
+  .card .thumb {
+    flex: 0 0 92px; width: 92px; height: 92px; border-radius: 12px;
+    object-fit: cover; background: #f0f0f2;
+  }
+  .card .thumb.ph {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px;
+    background: linear-gradient(135deg, #ffe3fb 0%, #ffd0d4 100%);
+  }
+  .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .card .name { font-weight: 700; font-size: 15.5px; }
+  .card .name-th { color: var(--ink-2); font-size: 13px; font-weight: 500; }
+  .card .badge {
+    display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700;
+    color: #b26b00; background: #fff3e0; padding: 2px 8px; border-radius: 6px;
+  }
+  .card .foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; }
+  .card .price { font-weight: 800; font-size: 16px; }
+
+  /* Add / stepper */
+  .add {
+    background: #fff; color: var(--brand-red); border: 1.5px solid var(--brand-red);
+    font-weight: 800; font-size: 14px; padding: 8px 20px; border-radius: 11px;
+    letter-spacing: .02em;
+  }
+  .add:active { background: #fff0f1; }
+  .stepper { display: flex; align-items: center; gap: 0; border: 1.5px solid var(--brand-red); border-radius: 11px; overflow: hidden; }
+  .stepper button { width: 38px; height: 36px; color: var(--brand-red); font-size: 20px; font-weight: 700; line-height: 1; }
+  .stepper button:active { background: #fff0f1; }
+  .stepper .n { min-width: 26px; text-align: center; font-weight: 800; color: var(--brand-red); }
+
+  /* Sold out */
+  .card.sold { opacity: .55; }
+  .card.sold .thumb { filter: grayscale(1); }
+  .sold-tag {
+    position: absolute; top: 12px; left: 12px;
+    background: rgba(28,28,30,.8); color: #fff; font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 6px;
+  }
+
+  /* Sticky cart bar */
   .cartbar {
-    position: fixed; left: 0; right: 0; bottom: 0;
-    padding: 0.85rem 1rem calc(0.85rem + env(safe-area-inset-bottom));
-    background: #fff; box-shadow: 0 -8px 32px rgba(0,0,0,0.12);
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+    max-width: 520px; margin: 0 auto;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    transform: translateY(140%); transition: transform .25s cubic-bezier(.3,.7,.3,1);
   }
-  .cartbar .inner { max-width: 480px; margin: 0 auto; display: flex; align-items: center; gap: 0.75rem; }
+  .cartbar.show { transform: translateY(0); }
+  .cartbar .inner {
+    background: var(--brand-red); color: #fff; border-radius: 16px;
+    padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 10px 30px rgba(214,18,34,.4);
+  }
+  .cartbar .count { font-weight: 700; font-size: 13px; opacity: .9; }
+  .cartbar .total { font-weight: 800; font-size: 18px; }
+  .cartbar .go { margin-left: auto; font-weight: 800; display: flex; align-items: center; gap: 6px; }
+
+  /* Cart sheet */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .25s ease; z-index: 50; }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 51;
+    max-width: 520px; margin: 0 auto; background: #fff;
+    border-radius: 22px 22px 0 0; box-shadow: var(--shadow-lg);
+    transform: translateY(100%); transition: transform .28s cubic-bezier(.3,.7,.3,1);
+    max-height: 82vh; display: flex; flex-direction: column;
+  }
+  .sheet.show { transform: translateY(0); }
+  .sheet .grab { width: 40px; height: 4px; background: #ddd; border-radius: 4px; margin: 10px auto 4px; }
+  .sheet .head { padding: 6px 18px 12px; display: flex; align-items: center; }
+  .sheet .head h3 { font-size: 17px; font-weight: 800; margin: 0; }
+  .sheet .head .clear { margin-left: auto; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+  .sheet .lines { overflow-y: auto; padding: 0 18px; }
+  .line { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .line .l-name { flex: 1; min-width: 0; font-weight: 600; }
+  .line .l-name small { display: block; color: var(--ink-2); font-weight: 500; }
+  .line .l-price { font-weight: 700; white-space: nowrap; }
+  .sheet .foot { padding: 14px 18px calc(16px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
+  .sheet .sum { display: flex; justify-content: space-between; margin-bottom: 12px; }
+  .sheet .sum .big { font-weight: 800; font-size: 20px; }
+
+  .empty { text-align: center; padding: 80px 24px; color: var(--ink-2); }
+  .empty .em { font-size: 52px; }
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="appbar">
+  <div>
+    <div class="title">{{ branch.name }}</div>
+    <div class="sub">สั่งอาหารเอง · Order &amp; pay from your phone</div>
+  </div>
+</div>
+
 {% if not open_now %}
-  <div class="card-soft p-4 text-center">
-    <div style="font-size:2.5rem">🌙</div>
-    <h2 class="h5 mt-2 mb-1">ร้านปิดรับออร์เดอร์แล้ว</h2>
-    <p class="muted mb-0">This branch isn’t taking orders right now.<br>Please order at the counter.</p>
+  <div class="empty">
+    <div class="em">🌙</div>
+    <h2 style="margin:.5rem 0 .25rem">ร้านปิดรับออร์เดอร์แล้ว</h2>
+    <p class="muted" style="margin:0">This branch isn’t taking orders right now.<br>Please order at the counter.</p>
   </div>
 {% else %}
-  <div class="card-soft p-0 overflow-hidden" id="menu"></div>
+  <div class="pills" id="pills"></div>
+  <div id="menu"></div>
 
-  <div class="cartbar" id="cartbar" hidden>
-    <div class="inner">
-      <div class="flex-grow-1">
-        <div class="muted small" id="cart-count">0 รายการ</div>
-        <div class="fw-bold fs-5" id="cart-total">฿0.00</div>
+  <div class="cartbar" id="cartbar">
+    <div class="inner" id="open-cart">
+      <div>
+        <div class="count" id="cart-count">0 items</div>
+        <div class="total" id="cart-total">฿0.00</div>
       </div>
-      <button class="btn btn-brand" id="checkout">ชำระเงิน / Pay</button>
+      <div class="go">ดูตะกร้า · View cart <span style="font-size:18px">›</span></div>
     </div>
   </div>
 
-  <p class="text-center muted small mt-3 mb-0">ราคารวม VAT 7% แล้ว</p>
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="sheet">
+    <div class="grab"></div>
+    <div class="head">
+      <h3>ตะกร้าของคุณ · Your order</h3>
+      <button class="clear" id="clear">ล้าง</button>
+    </div>
+    <div class="lines" id="cart-lines"></div>
+    <div class="foot">
+      <div class="sum">
+        <span class="muted">ยอดรวม (รวม VAT 7%)</span>
+        <span class="big" id="sheet-total">฿0.00</span>
+      </div>
+      <button class="btn-primary" id="checkout">ชำระเงิน · Checkout</button>
+    </div>
+  </div>
 {% endif %}
 {% endblock %}
 
@@ -64,79 +180,175 @@ is trusted for money; the totals here are a preview.
   const cart = new Map();   // product_id -> qty
 
   const baht = (n) => "฿" + n.toFixed(2);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  function render() {
-    const byCat = new Map();
-    for (const p of MENU) {
-      if (!byCat.has(p.category_name)) byCat.set(p.category_name, []);
-      byCat.get(p.category_name).push(p);
-    }
-    const el = document.getElementById("menu");
-    el.innerHTML = "";
-    for (const [cat, items] of byCat) {
-      const h = document.createElement("div");
-      h.className = "cat-title px-3";
-      h.textContent = cat;
-      el.appendChild(h);
-      for (const p of items) {
-        const qty = cart.get(p.id) || 0;
-        const row = document.createElement("div");
-        row.className = "item-row";
-        row.innerHTML = `
-          <div class="item-name">${escapeHtml(p.name)}${p.name_th ? `<small>${escapeHtml(p.name_th)}</small>` : ""}</div>
-          <div class="item-price">${baht(p.price)}</div>
-          <div class="qty">
-            <button data-dec="${p.id}" ${qty ? "" : "hidden"}>−</button>
-            <span class="n" ${qty ? "" : "hidden"}>${qty}</span>
-            <button data-inc="${p.id}">+</button>
-          </div>`;
-        el.appendChild(row);
-      }
-    }
-    updateBar();
+  // A food emoji per category name so image-less items still look intentional.
+  function emojiFor(cat) {
+    const c = (cat || "").toLowerCase();
+    if (/coffee|espresso|latte|เครื่องดื่ม|กาแฟ/.test(c)) return "☕";
+    if (/bakery|cake|croissant|เบเกอรี่|ขนม/.test(c)) return "🥐";
+    if (/tea|ชา/.test(c)) return "🍵";
+    if (/juice|drink|น้ำ/.test(c)) return "🥤";
+    if (/rice|food|อาหาร|ข้าว/.test(c)) return "🍚";
+    return "🍽️";
   }
 
-  function updateBar() {
-    let count = 0, total = 0;
+  const byCat = new Map();
+  for (const p of MENU) {
+    if (!byCat.has(p.category_name)) byCat.set(p.category_name, []);
+    byCat.get(p.category_name).push(p);
+  }
+  const cats = [...byCat.keys()];
+
+  function catId(c) { return "cat-" + c.replace(/\W+/g, "-"); }
+
+  function renderPills() {
+    const el = document.getElementById("pills");
+    el.innerHTML = "";
+    cats.forEach((c, i) => {
+      const b = document.createElement("button");
+      b.className = "pill" + (i === 0 ? " active" : "");
+      b.textContent = c;
+      b.onclick = () => document.getElementById(catId(c)).scrollIntoView({ behavior: "smooth", block: "start" });
+      b.dataset.cat = c;
+      el.appendChild(b);
+    });
+  }
+
+  function renderMenu() {
+    const root = document.getElementById("menu");
+    root.innerHTML = "";
+    for (const c of cats) {
+      const sec = document.createElement("div");
+      sec.className = "section";
+      sec.id = catId(c);
+      sec.innerHTML = `<h2>${esc(c)}</h2>`;
+      for (const p of byCat.get(c)) sec.appendChild(cardFor(p));
+      root.appendChild(sec);
+    }
+  }
+
+  function cardFor(p) {
+    const card = document.createElement("div");
+    card.className = "card" + (p.sold_out ? " sold" : "");
+    const thumb = p.image_url
+      ? `<img class="thumb" src="${esc(p.image_url)}" alt="">`
+      : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`;
+    const badge = p.low_stock ? `<span class="badge">เหลือ ${p.stock} ชิ้น</span>` : "";
+    card.innerHTML = `
+      ${p.sold_out ? '<span class="sold-tag">หมด · Sold out</span>' : ""}
+      ${thumb}
+      <div class="body">
+        <div>
+          <div class="name">${esc(p.name)}</div>
+          ${p.name_th ? `<div class="name-th">${esc(p.name_th)}</div>` : ""}
+          ${badge}
+        </div>
+        <div class="foot">
+          <div class="price">${baht(p.price)}</div>
+          <div class="ctl" data-ctl="${p.id}"></div>
+        </div>
+      </div>`;
+    renderCtl(card.querySelector(`[data-ctl="${p.id}"]`), p);
+    return card;
+  }
+
+  function renderCtl(host, p) {
+    const qty = cart.get(p.id) || 0;
+    if (p.sold_out) { host.innerHTML = `<span class="muted" style="font-weight:700">—</span>`; return; }
+    if (!qty) {
+      host.innerHTML = `<button class="add">เพิ่ม · ADD</button>`;
+      host.querySelector(".add").onclick = () => { setQty(p, 1); };
+    } else {
+      const max = p.stock || 999;
+      host.innerHTML = `
+        <div class="stepper">
+          <button data-d="-1">−</button>
+          <span class="n">${qty}</span>
+          <button data-d="1" ${qty >= max ? "disabled" : ""}>+</button>
+        </div>`;
+      host.querySelector('[data-d="-1"]').onclick = () => setQty(p, qty - 1);
+      host.querySelector('[data-d="1"]').onclick = () => setQty(p, qty + 1);
+    }
+  }
+
+  function setQty(p, n) {
+    const max = p.stock || 999;
+    n = Math.max(0, Math.min(n, max));
+    if (n === 0) cart.delete(p.id); else cart.set(p.id, n);
+    // Re-render just this product's control + the cart chrome.
+    const host = document.querySelector(`[data-ctl="${p.id}"]`);
+    if (host) renderCtl(host, p);
+    syncCart();
+  }
+
+  function cartArray() {
+    const out = [];
     for (const [id, qty] of cart) {
       const p = MENU.find((x) => x.id === id);
-      if (!p) continue;
-      count += qty;
-      total += p.price * qty;
+      if (p) out.push({ p, qty });
     }
-    const bar = document.getElementById("cartbar");
-    bar.hidden = count === 0;
-    document.getElementById("cart-count").textContent = `${count} รายการ`;
+    return out;
+  }
+
+  function syncCart() {
+    const items = cartArray();
+    const count = items.reduce((n, i) => n + i.qty, 0);
+    const total = items.reduce((s, i) => s + i.p.price * i.qty, 0);
+    document.getElementById("cartbar").classList.toggle("show", count > 0);
+    document.getElementById("cart-count").textContent = count + (count === 1 ? " item" : " items");
     document.getElementById("cart-total").textContent = baht(total);
+    document.getElementById("sheet-total").textContent = baht(total);
+    if (count === 0) closeSheet();
+    renderLines(items, total);
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => (
-      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-    ));
-  }
-
-  document.addEventListener("click", (e) => {
-    const inc = e.target.closest("[data-inc]");
-    const dec = e.target.closest("[data-dec]");
-    if (inc) {
-      const id = inc.dataset.inc;
-      cart.set(id, (cart.get(id) || 0) + 1);
-      render();
-    } else if (dec) {
-      const id = dec.dataset.dec;
-      const n = (cart.get(id) || 0) - 1;
-      if (n <= 0) cart.delete(id); else cart.set(id, n);
-      render();
+  function renderLines(items, total) {
+    const el = document.getElementById("cart-lines");
+    el.innerHTML = "";
+    for (const { p, qty } of items) {
+      const row = document.createElement("div");
+      row.className = "line";
+      row.innerHTML = `
+        <div class="l-name">${esc(p.name)}<small>${baht(p.price)} each</small></div>
+        <div class="stepper">
+          <button data-d="-1">−</button>
+          <span class="n">${qty}</span>
+          <button data-d="1" ${qty >= (p.stock || 999) ? "disabled" : ""}>+</button>
+        </div>
+        <div class="l-price">${baht(p.price * qty)}</div>`;
+      row.querySelector('[data-d="-1"]').onclick = () => setQty(p, qty - 1);
+      row.querySelector('[data-d="1"]').onclick = () => setQty(p, qty + 1);
+      el.appendChild(row);
     }
-  });
+  }
 
-  document.getElementById("checkout").addEventListener("click", async (e) => {
+  // Sheet open/close
+  const sheet = document.getElementById("sheet");
+  const scrim = document.getElementById("scrim");
+  function openSheet() { sheet.classList.add("show"); scrim.classList.add("show"); }
+  function closeSheet() { sheet.classList.remove("show"); scrim.classList.remove("show"); }
+  document.getElementById("open-cart").onclick = openSheet;
+  scrim.onclick = closeSheet;
+  document.getElementById("clear").onclick = () => { cart.clear(); renderMenu(); syncCart(); };
+
+  // Scroll-spy: highlight the pill for the section in view.
+  const spy = () => {
+    let active = cats[0];
+    for (const c of cats) {
+      const sec = document.getElementById(catId(c));
+      if (sec && sec.getBoundingClientRect().top <= 130) active = c;
+    }
+    document.querySelectorAll(".pill").forEach((b) => b.classList.toggle("active", b.dataset.cat === active));
+  };
+  window.addEventListener("scroll", spy, { passive: true });
+
+  document.getElementById("checkout").onclick = async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true;
-    btn.textContent = "กำลังดำเนินการ…";
+    btn.disabled = true; btn.textContent = "กำลังดำเนินการ…";
     try {
-      const items = [...cart].map(([product_id, qty]) => ({ product_id, qty }));
+      const items = cartArray().map(({ p, qty }) => ({ product_id: p.id, qty }));
       const res = await fetch(START_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -147,12 +359,13 @@ is trusted for money; the totals here are a preview.
       window.location.href = data.pay_url;
     } catch (err) {
       alert(err.message);
-      btn.disabled = false;
-      btn.textContent = "ชำระเงิน / Pay";
+      btn.disabled = false; btn.textContent = "ชำระเงิน · Checkout";
     }
-  });
+  };
 
-  render();
+  renderPills();
+  renderMenu();
+  syncCart();
 </script>
 {% endif %}
 {% endblock %}

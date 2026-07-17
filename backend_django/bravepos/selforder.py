@@ -22,6 +22,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone as djtz
 
 from . import gateways
@@ -30,6 +31,23 @@ from .models import Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
 
 logger = logging.getLogger("bravepos")
+
+
+def _placed_in_shift(draft: SelfOrder):
+    """The shift open at the branch when this draft was created.
+
+    A self-order is confirmed by a poll that can land minutes after payment —
+    possibly after the cashier has closed the round.  Attributing it to the
+    round it was *placed* in (rather than whatever is open at confirmation, or
+    nothing) keeps it on exactly one shift summary.
+    """
+    when = draft.created_at
+    return (
+        Shift.objects.filter(branch=draft.branch, opened_at__lte=when)
+        .filter(Q(closed_at__isnull=True) | Q(closed_at__gte=when))
+        .order_by('-opened_at')
+        .first()
+    )
 
 # Abuse limits.  There is no Redis and no CACHES block in settings, so a real
 # token-bucket throttle would silently degrade to per-worker LocMemCache and be
@@ -56,11 +74,17 @@ def branch_is_open(branch) -> bool:
     return Shift.objects.filter(branch=branch, status='open').exists()
 
 
-def menu_for(branch) -> list[dict]:
-    """The public menu.
+# Below this on-hand level a product shows a "only N left" nudge (Swiggy-style).
+LOW_STOCK_THRESHOLD = 5
 
-    Hand-rolled rather than reusing ProductSerializer, which exposes ``cost``
-    and ``stock`` — margin data that must not ship to a customer's phone.
+
+def menu_for(branch) -> list[dict]:
+    """The public menu for one branch — every active product it stocks.
+
+    Hand-rolled rather than reusing ProductSerializer so we control exactly what
+    reaches a customer's phone: ``stock``/``sold_out`` are surfaced (so the page
+    can grey out and block sold-out items, like a food-delivery app), but
+    ``cost`` — the margin — is deliberately never included.
     """
     products = (
         Product.objects
@@ -68,8 +92,10 @@ def menu_for(branch) -> list[dict]:
         .select_related('category')
         .order_by('sort_order', 'name')
     )
-    return [
-        {
+    out = []
+    for p in products:
+        stock = int(p.stock or 0)
+        out.append({
             'id': str(p.id),
             'name': p.name,
             'name_th': p.name_th or '',
@@ -77,9 +103,13 @@ def menu_for(branch) -> list[dict]:
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
             'image_url': p.image_url or p.image_base64 or '',
-        }
-        for p in products
-    ]
+            # Inventory the customer is allowed to see. Service products (stock
+            # not tracked) and anything with stock on hand are orderable.
+            'stock': stock,
+            'sold_out': stock <= 0 and p.product_type == 'P',
+            'low_stock': 0 < stock <= LOW_STOCK_THRESHOLD and p.product_type == 'P',
+        })
+    return out
 
 
 def price_cart(branch, raw_items: list[dict]) -> tuple[list[dict], Decimal]:
@@ -148,9 +178,11 @@ def create_draft(branch, raw_items: list[dict]) -> SelfOrder:
     items, goods_total = price_cart(branch, raw_items)
 
     # Only the goods side can be fixed now — the fee (and therefore the grand
-    # total) depends on a payment method the customer hasn't picked yet.
-    s = gateways.get_shop_settings()
-    charges = compute_order_charges(goods_total, is_card=False, settings=s)
+    # total) depends on a payment method the customer hasn't picked yet.  VAT
+    # is shop-wide, so the branch config vs shop makes no difference here, but
+    # use the branch config for consistency with quote()/start_payment().
+    cfg = gateways.resolve_payment_config(branch)
+    charges = compute_order_charges(goods_total, is_card=False, settings=cfg)
 
     return SelfOrder.objects.create(
         token=SelfOrder.new_token(),
@@ -167,13 +199,13 @@ def quote(draft: SelfOrder, method: str) -> dict:
 
     PromptPay is the goods total. Card adds the processing fee + VAT on the fee.
     """
-    s = gateways.get_shop_settings()
+    cfg = gateways.resolve_payment_config(draft.branch)
     is_card = method == 'card'
     return compute_order_charges(
         draft.goods_total,
         is_card=is_card,
-        settings=s,
-        fee_percent=s.beam_card_fee_percent if is_card else None,
+        settings=cfg,
+        fee_percent=cfg.beam_card_fee_percent if is_card else None,
     )
 
 
@@ -216,6 +248,7 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
             amount=draft.goods_total,
             reference_id=reference_id,
             description=description,
+            branch=draft.branch,
         )
         charges = quote(draft, 'qr')
         with transaction.atomic():
@@ -245,6 +278,7 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
         reference_id=reference_id,
         description=description,
         redirect_url=redirect_url,
+        branch=draft.branch,
     )
     with transaction.atomic():
         draft.payment_method = BEAM_CARD_METHOD
@@ -273,7 +307,7 @@ def gateway_status(draft: SelfOrder) -> str:
     'paid', and it always costs an outbound HTTP call.
     """
     if draft.beam_charge_id:
-        res = gateways.beam_get_charge(draft.beam_charge_id)
+        res = gateways.beam_get_charge(draft.beam_charge_id, branch=draft.branch)
         raw = (res['status'] or '').upper()
         if raw in gateways.BEAM_CHARGE_SUCCESS:
             return 'successful'
@@ -281,7 +315,7 @@ def gateway_status(draft: SelfOrder) -> str:
             return 'failed'
         return 'pending'
     if draft.beam_link_id:
-        return gateways.beam_get_link(draft.beam_link_id)['status']
+        return gateways.beam_get_link(draft.beam_link_id, branch=draft.branch)['status']
     return 'pending'
 
 
@@ -320,6 +354,12 @@ def promote(draft: SelfOrder) -> Order | None:
             branch=locked.branch,
             items=locked.items,
             payment_method=locked.payment_method,
+            # Attribute the sale to the round it was PLACED in, not the one open
+            # when the payment confirmation lands — those differ when a customer
+            # pays just before the cashier closes the round and the sweeper
+            # confirms just after.  Falls back to the time window in
+            # ``shift_orders`` if the draft predated any shift.
+            shift=_placed_in_shift(locked),
             # Frozen — the customer was quoted this and the gateway already
             # captured it. Recomputing could disagree if an admin edited the fee
             # or VAT rate while the customer was paying.
