@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>Flowchart ระบบ Brave POS</title>
+<style>
+  @page { size: A4 portrait; margin: 0; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Noto Sans Thai", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  svg { width: 190mm; height: auto; display: block; }
+  .lbl { font-family: "Noto Sans Thai", sans-serif; font-weight: 600; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 800 940" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3f3f46"/>
+    </marker>
+  </defs>
+
+  <!-- ================= CONNECTORS ================= -->
+  <g stroke="#3f3f46" stroke-width="1.6" fill="none">
+    <!-- title -> start -->
+    <line x1="400" y1="73"  x2="400" y2="105" marker-end="url(#arrow)"/>
+    <!-- start -> setup -->
+    <line x1="400" y1="153" x2="400" y2="185" marker-end="url(#arrow)"/>
+    <!-- setup -> products -->
+    <line x1="400" y1="233" x2="400" y2="264" marker-end="url(#arrow)"/>
+    <!-- products -> sell -->
+    <line x1="400" y1="314" x2="400" y2="345" marker-end="url(#arrow)"/>
+    <!-- sell -> record -->
+    <line x1="400" y1="393" x2="400" y2="424" marker-end="url(#arrow)"/>
+    <!-- record -> receipt -->
+    <line x1="400" y1="474" x2="400" y2="519" marker-end="url(#arrow)"/>
+
+    <!-- receipt branch: left down to merge -->
+    <path d="M280,545 H250 V720 H390"/>
+    <!-- receipt branch: right to full tax invoice -->
+    <path d="M520,545 H620 V599" marker-end="url(#arrow)"/>
+    <!-- full tax invoice down to merge -->
+    <path d="M620,661 V720 H410"/>
+
+    <!-- merge -> report -->
+    <line x1="400" y1="731" x2="400" y2="769" marker-end="url(#arrow)"/>
+    <!-- report -> end -->
+    <line x1="400" y1="819" x2="400" y2="850" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- merge junction -->
+  <circle cx="400" cy="720" r="10" fill="#ffffff" stroke="#3f3f46" stroke-width="1.6"/>
+
+  <!-- ================= NODES ================= -->
+  <!-- Title -->
+  <rect x="240" y="23" width="320" height="50" rx="12" fill="#22a45d"/>
+  <text class="lbl" x="400" y="48" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="18" font-weight="700">Flowchart ระบบ Brave POS</text>
+
+  <!-- Start pill -->
+  <rect x="325" y="107" width="150" height="46" rx="23" fill="#f5a623"/>
+  <text class="lbl" x="400" y="130" text-anchor="middle" dominant-baseline="central" fill="#5a3a06" font-size="16">เริ่มต้น</text>
+
+  <!-- Setup (green) -->
+  <rect x="300" y="187" width="200" height="46" rx="4" fill="#7cb342"/>
+  <text class="lbl" x="400" y="210" text-anchor="middle" dominant-baseline="central" fill="#173a0a" font-size="15">ตั้งค่าร้านค้า</text>
+
+  <!-- Products (parallelogram) -->
+  <polygon points="262,314 274,266 550,266 538,314" fill="#e3dc86"/>
+  <text class="lbl" x="404" y="291" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="15">เพิ่มสินค้า / จัดการสต๊อก</text>
+
+  <!-- Sell (green) -->
+  <rect x="300" y="347" width="200" height="46" rx="4" fill="#7cb342"/>
+  <text class="lbl" x="400" y="370" text-anchor="middle" dominant-baseline="central" fill="#173a0a" font-size="15">ขายสินค้า</text>
+
+  <!-- Record & sync (parallelogram) -->
+  <polygon points="230,474 242,426 582,426 570,474" fill="#e3dc86"/>
+  <text class="lbl" x="406" y="451" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="15">บันทึกข้อมูลการขาย &amp; ซิงค์ขึ้นคลาวด์</text>
+
+  <!-- Receipt (parallelogram) -->
+  <polygon points="288,569 300,521 512,521 500,569" fill="#e3dc86"/>
+  <text class="lbl" x="400" y="546" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="15">ออกใบเสร็จรับเงิน</text>
+
+  <!-- Full tax invoice (parallelogram, right, 2 lines) -->
+  <polygon points="500,662 512,599 748,599 736,662" fill="#e3dc86"/>
+  <text class="lbl" x="624" y="622" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="14">ออกใบเสร็จรับเงินและ</text>
+  <text class="lbl" x="624" y="642" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="14">ใบกำกับภาษีเต็มรูปแบบ</text>
+
+  <!-- Report (parallelogram) -->
+  <polygon points="250,819 262,771 550,771 538,819" fill="#e3dc86"/>
+  <text class="lbl" x="400" y="795" text-anchor="middle" dominant-baseline="central" fill="#5b4a12" font-size="15">รายงานยอดขาย &amp; วิเคราะห์ข้อมูล</text>
+
+  <!-- End pill -->
+  <rect x="325" y="850" width="150" height="46" rx="23" fill="#f5a623"/>
+  <text class="lbl" x="400" y="873" text-anchor="middle" dominant-baseline="central" fill="#5a3a06" font-size="16">สิ้นสุด</text>
+</svg>
+</body>
+</html>

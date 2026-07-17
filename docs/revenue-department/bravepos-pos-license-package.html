@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>BravePOS — เอกสารเตรียมการยื่น ภ.พ.06</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Noto Sans Thai", "Noto Sans", sans-serif;
+    color: #1a1a1a; font-size: 10.5pt; line-height: 1.55; margin: 0;
+  }
+  h1,h2,h3 { font-weight: 700; line-height: 1.25; color: #0f5132; }
+  .en { color: #555; font-weight: 400; font-size: 0.86em; }
+  .muted { color: #666; }
+  .page-break { page-break-before: always; }
+  .avoid-break { page-break-inside: avoid; }
+
+  /* Cover */
+  .cover { min-height: 250mm; display: flex; flex-direction: column; justify-content: center; }
+  .cover .brand { font-size: 13pt; letter-spacing: 3px; color: #0f5132; font-weight: 700; }
+  .cover h1 { font-size: 26pt; margin: 14px 0 6px; color: #111; }
+  .cover .sub { font-size: 13pt; color: #0f5132; font-weight: 600; }
+  .cover .sub-en { font-size: 10.5pt; color: #666; margin-top: 4px; }
+  .cover .rule { height: 4px; width: 90px; background: #16a34a; margin: 22px 0; border-radius: 3px; }
+  .cover .meta { margin-top: 40px; font-size: 10pt; color: #444; }
+  .cover .meta div { margin: 3px 0; }
+  .draft {
+    margin-top: 30px; border: 1.5px solid #d97706; background: #fffbeb;
+    color: #92400e; padding: 12px 14px; border-radius: 8px; font-size: 9.5pt;
+  }
+
+  h2.section {
+    font-size: 14pt; margin: 26px 0 4px; padding-bottom: 6px;
+    border-bottom: 2px solid #16a34a;
+  }
+  h2.section .en { display: block; font-size: 9pt; margin-top: 2px; }
+  h3 { font-size: 11.5pt; margin: 16px 0 4px; color: #15803d; }
+  p { margin: 6px 0; }
+  ul, ol { margin: 6px 0 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.3pt; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #ecfdf5; color: #065f46; font-weight: 700; }
+  td.center, th.center { text-align: center; }
+
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 8pt; font-weight: 700; white-space: nowrap; }
+  .live { background: #dcfce7; color: #166534; }
+  .partial { background: #fef9c3; color: #854d0e; }
+  .todo { background: #fee2e2; color: #991b1b; }
+
+  /* Flowchart */
+  .flow { display: flex; flex-direction: column; align-items: center; gap: 0; margin: 14px 0; }
+  .node {
+    width: 78%; text-align: center; padding: 9px 12px; border-radius: 8px;
+    font-size: 9.6pt; font-weight: 600;
+  }
+  .node .en { display:block; font-weight: 400; }
+  .n-start { background: #f59e0b; color: #fff; border-radius: 22px; width: 46%; }
+  .n-proc { background: #86efac; color: #14532d; }
+  .n-data { background: #fde68a; color: #713f12; transform: skewX(-12deg); }
+  .n-data > span { display: inline-block; transform: skewX(12deg); }
+  .n-io  { background: #fde68a; color: #713f12; }
+  .arrow { width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid #64748b; margin: 5px 0; }
+
+  .callout { background: #f0fdf4; border-left: 4px solid #16a34a; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; font-size: 9.6pt; }
+  .warn { background: #fef2f2; border-left: 4px solid #dc2626; }
+
+  /* Receipt sample */
+  .receipt {
+    width: 72mm; margin: 6px auto; border: 1px dashed #999; padding: 10px 12px;
+    font-family: "Noto Sans Thai", monospace; font-size: 8.4pt; line-height: 1.45; background: #fff;
+  }
+  .receipt .c { text-align: center; }
+  .receipt .b { font-weight: 700; }
+  .receipt hr { border: none; border-top: 1px dashed #999; margin: 5px 0; }
+  .receipt .row { display: flex; justify-content: space-between; }
+  .receipt .qrbox { width: 26mm; height: 26mm; margin: 6px auto; border: 1px solid #333; display:flex; align-items:center; justify-content:center; font-size:7pt; color:#666; text-align:center; }
+
+  .zrep { border: 1px solid #94a3b8; border-radius: 6px; padding: 12px 16px; font-family: "Noto Sans Thai", monospace; font-size: 9pt; max-width: 120mm; margin: 8px auto; }
+  .zrep .row { display: flex; justify-content: space-between; margin: 2px 0; }
+  .zrep hr { border: none; border-top: 1px solid #cbd5e1; margin: 6px 0; }
+  .zrep .gt { background: #ecfdf5; padding: 4px 6px; border-radius: 4px; font-weight: 700; }
+
+  .foot { position: running(footer); }
+  small { font-size: 8.5pt; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<section class="cover">
+  <div class="brand">BRAVEPOS</div>
+  <h1>เอกสารเตรียมการยื่นขออนุมัติ<br>ใช้เครื่องบันทึกการเก็บเงิน (POS)</h1>
+  <div class="sub">เพื่อออกใบกำกับภาษีอย่างย่อ ตามมาตรา 86/6 แห่งประมวลรัษฎากร — แบบ ภ.พ.06</div>
+  <div class="sub-en">Preparation dossier for Revenue Department approval of a point-of-sale machine to issue abbreviated tax invoices (Form Phor.Phor.06)</div>
+  <div class="rule"></div>
+  <div class="meta">
+    <div><b>ระบบ / System:</b> BravePOS (Django backend + Android/tablet POS)</div>
+    <div><b>ผู้ประกอบการ / Operator:</b> ____________________________ (กรอกชื่อนิติบุคคล)</div>
+    <div><b>เลขประจำตัวผู้เสียภาษี / TIN:</b> ____________________________</div>
+    <div><b>สถานประกอบการ / Branch:</b> ____________________________</div>
+    <div><b>Backend:</b> pos.rollingpinn.com</div>
+    <div><b>วันที่จัดทำ / Prepared:</b> 15 กรกฎาคม 2569 (2026)</div>
+  </div>
+  <div class="draft">
+    <b>หมายเหตุ — เอกสารร่างเพื่อเตรียมการภายใน / DRAFT — internal preparation document.</b>
+    เอกสารนี้จัดทำเพื่อใช้ประกอบการหารือกับสำนักงานบัญชี/สรรพากรพื้นที่ และวางแผนพัฒนาระบบ
+    ยังมิใช่เอกสารยื่นจริง สถานะการทำงานของแต่ละฟังก์ชันระบุไว้ตามจริง (มีอยู่แล้ว / บางส่วน / ต้องพัฒนา)
+    ตัวอย่างรายงานการขายประจำวัน (Z) เป็น <b>รูปแบบที่เสนอ</b> ซึ่งยังต้องพัฒนาให้ครบก่อนใช้งานจริง
+    <br><span class="en">This is a draft for planning and for review with your accountant / the Area Revenue Office — not the final filing.
+    Each capability is marked with its true build status. The daily sales (Z) report shown is a <b>proposed format that is not yet implemented</b>.</span>
+  </div>
+</section>
+
+<!-- ============ 1. LEGAL BASIS ============ -->
+<section class="page-break">
+  <h2 class="section">1. หลักการและฐานทางกฎหมาย <span class="en">Purpose &amp; legal basis</span></h2>
+  <p>ผู้ประกอบการจดทะเบียนภาษีมูลค่าเพิ่มที่ประกอบกิจการค้าปลีก สามารถออก
+  <b>ใบกำกับภาษีอย่างย่อ</b> ผ่าน <b>เครื่องบันทึกการเก็บเงิน (POS)</b> ได้ ต่อเมื่อได้รับ
+  <b>อนุมัติจากอธิบดีกรมสรรพากร</b> ก่อน โดยยื่นแบบ <b>ภ.พ.06</b> ต่อสำนักงานสรรพากรพื้นที่
+  ที่สถานประกอบการตั้งอยู่ (มาตรา 86/6 แห่งประมวลรัษฎากร)</p>
+  <div class="callout warn">
+    <b>ข้อควรระวัง:</b> ห้ามออกใบกำกับภาษีอย่างย่อจากเครื่องก่อนได้รับอนุมัติ เนื่องจากลำดับเลขที่เอกสาร
+    ต้องสอดคล้องกับวันที่ได้รับอนุมัติ ระยะเวลาพิจารณาโดยทั่วไปประมาณ 30–45 วันทำการ
+    <span class="en"><br>Do not issue abbreviated tax invoices from the machine before approval — the document-number sequence must align with the approval date. Review typically takes 30–45 business days.</span>
+  </div>
+  <p class="muted"><small>อ้างอิง: กรมสรรพากร — หลักเกณฑ์การใช้เครื่องบันทึกการเก็บเงิน (rd.go.th/44309.html), แบบ ภ.พ.06 (rd.go.th), ประมวลรัษฎากร มาตรา 86/6.</small></p>
+</section>
+
+<!-- ============ 2. DOCUMENT CHECKLIST ============ -->
+<section>
+  <h2 class="section">2. รายการเอกสารที่ต้องยื่น <span class="en">Document checklist for the ภ.พ.06 submission</span></h2>
+  <p>ยื่น <b>แยกเป็นรายสถานประกอบการ (per branch)</b> พร้อมเอกสารแนบดังนี้:</p>
+  <table>
+    <thead><tr><th class="center" style="width:6%">#</th><th style="width:44%">เอกสาร / Document</th><th style="width:32%">คำอธิบาย</th><th class="center" style="width:18%">สถานะจัดทำ</th></tr></thead>
+    <tbody>
+      <tr><td class="center">1</td><td><b>ภ.พ.06</b> — คำขออนุมัติใช้เครื่องบันทึกการเก็บเงิน<br><span class="en">Application to use the POS machine</span></td><td>แบบฟอร์มกรมสรรพากร กรอกรายสถานประกอบการ</td><td class="center"><span class="tag todo">ต้องกรอก</span></td></tr>
+      <tr><td class="center">2</td><td>รายละเอียดเครื่อง POS (ยี่ห้อ/รุ่น/หมายเลขเครื่อง)<br><span class="en">Machine spec sheet per device</span></td><td>แท็บเล็ต Android + เครื่องพิมพ์ (Epson/Star) แต่ละเครื่อง</td><td class="center"><span class="tag partial">รวบรวม</span></td></tr>
+      <tr><td class="center">3</td><td>คุณสมบัติของระบบซอฟต์แวร์<br><span class="en">Software capability statement</span></td><td>ดู §4 ของเอกสารนี้</td><td class="center"><span class="tag live">§4</span></td></tr>
+      <tr><td class="center">4</td><td>ผังการทำงานของระบบ (Flowchart)<br><span class="en">System flowchart</span></td><td>ดู §3 — เทียบเท่าผัง Silom POS ที่ใช้อ้างอิง</td><td class="center"><span class="tag live">§3</span></td></tr>
+      <tr><td class="center">5</td><td>ผังการติดตั้ง/เชื่อมต่ออุปกรณ์และระบบเครือข่าย<br><span class="en">Equipment layout, connection &amp; network diagram</span></td><td>ดู §5</td><td class="center"><span class="tag live">§5</span></td></tr>
+      <tr><td class="center">6</td><td>รายละเอียดด้านความปลอดภัยของระบบ<br><span class="en">Security specification</span></td><td>ดู §6</td><td class="center"><span class="tag partial">§6</span></td></tr>
+      <tr><td class="center">7</td><td>ตัวอย่างใบกำกับภาษีอย่างย่อ + รายงานการขายประจำวัน<br><span class="en">Sample abbreviated tax invoice + daily sales report</span></td><td>ดู §7 และ §8</td><td class="center"><span class="tag partial">§7–8</span></td></tr>
+      <tr><td class="center">8</td><td><b>ค.ก.4 ก</b> — แบบตรวจสภาพเครื่อง<br><span class="en">Machine inspection checklist</span></td><td>เจ้าหน้าที่สรรพากรจัดทำ/ตรวจ ณ สถานประกอบการ</td><td class="center"><span class="tag todo">สรรพากร</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 3. FLOWCHART ============ -->
+<section class="page-break">
+  <h2 class="section">3. ผังการทำงานของระบบ BravePOS <span class="en">System flowchart</span></h2>
+  <p>ผังนี้เทียบเท่ากับผัง Silom POS ที่ใช้อ้างอิง โดยปรับให้ตรงกับการทำงานจริงของ BravePOS
+  (ค้าปลีกหน้าร้าน — ไม่รวมการสั่งอาหารด้วยตนเองของลูกค้า)</p>
+  <div class="flow avoid-break">
+    <div class="node n-start">เริ่มต้น <span class="en">Start</span></div>
+    <div class="arrow"></div>
+    <div class="node n-proc">ตั้งค่าร้านค้า / สาขา <span class="en">Store &amp; branch setup (VAT %, TIN, POS no.)</span></div>
+    <div class="arrow"></div>
+    <div class="node n-data"><span>เพิ่มสินค้า / จัดการสต๊อก <span class="en">Products &amp; stock</span></span></div>
+    <div class="arrow"></div>
+    <div class="node n-proc">ขายสินค้า (เปิดรอบ/กะ → รับชำระ) <span class="en">Sell — open shift, take payment</span></div>
+    <div class="arrow"></div>
+    <div class="node n-data"><span>บันทึกการขายแบบถาวร &amp; ซิงค์ขึ้นคลาวด์ <span class="en">Persist sale (append-only) &amp; sync to cloud</span></span></div>
+    <div class="arrow"></div>
+    <div class="node n-io">ออกใบเสร็จรับเงิน / ใบกำกับภาษีอย่างย่อ <span class="en">Issue receipt / abbreviated tax invoice</span></div>
+    <div class="arrow"></div>
+    <div class="node n-io">(ทางเลือก) ออกใบกำกับภาษีเต็มรูปแบบ ผ่าน QR → Peak <span class="en">Optional full tax invoice via QR → Peak</span></div>
+    <div class="arrow"></div>
+    <div class="node n-proc">ปิดรอบการขายประจำวัน → ออกรายงาน Z (มี VAT + ยอดสะสม GT) <span class="en">Daily close → numbered Z report (VAT + grand total)</span></div>
+    <div class="arrow"></div>
+    <div class="node n-data"><span>รายงานยอดขาย &amp; วิเคราะห์ข้อมูล <span class="en">Sales reports &amp; analytics</span></span></div>
+    <div class="arrow"></div>
+    <div class="node n-start">สิ้นสุด <span class="en">End</span></div>
+  </div>
+</section>
+
+<!-- ============ 4. CAPABILITY ============ -->
+<section class="page-break">
+  <h2 class="section">4. คุณสมบัติของระบบ (เทียบมาตรา 86/6) <span class="en">Software capability vs. required invoice fields</span></h2>
+  <p>ใบกำกับภาษีอย่างย่อต้องมีรายการครบตามมาตรา 86/6 ตารางด้านล่างแสดงสถานะจริงในระบบ BravePOS</p>
+  <table>
+    <thead><tr><th style="width:52%">รายการที่กฎหมายกำหนด / Required item</th><th style="width:30%">การรองรับใน BravePOS</th><th class="center" style="width:18%">สถานะ</th></tr></thead>
+    <tbody>
+      <tr><td>คำว่า "ใบกำกับภาษีอย่างย่อ"</td><td>พิมพ์บนหัวใบเสร็จ "ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ"</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>ชื่อ / ชื่อย่อ ผู้ประกอบการ</td><td>ชื่อบริษัท + สาขา จากการตั้งค่า</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>เลขประจำตัวผู้เสียภาษีของผู้ขาย (TIN)</td><td>"เลขประจำตัวผู้เสียภาษี" บนใบเสร็จ</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>หมายเลขเครื่อง POS ที่ได้รับอนุมัติ</td><td>พิมพ์ "POS ID / POS #" — <b>ต้องผูกกับเลขเครื่องที่สรรพากรออกให้</b></td><td class="center"><span class="tag partial">ปรับให้ผูกเลขอนุมัติ</span></td></tr>
+      <tr><td>เลขที่/ลำดับของเอกสาร (running no.)</td><td>เลขที่ใบเสร็จ <code>PS + 9 หลัก</code> เรียงลำดับ ไม่ซ้ำ</td><td class="center"><span class="tag partial">ปัจจุบัน global — ควรแยกรายเครื่อง</span></td></tr>
+      <tr><td>วัน เดือน ปี ที่ออกใบกำกับภาษี</td><td>พิมพ์วันที่/เวลา (รองรับปี พ.ศ. ในเวอร์ชันเว็บ)</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>ชื่อ ชนิด ประเภท ปริมาณ ของสินค้า/บริการ</td><td>รายการสินค้า จำนวน ราคา (snapshot กันแก้ย้อนหลัง)</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>ราคาสินค้า <b>ที่รวมภาษีมูลค่าเพิ่มแล้ว</b></td><td>ยอดรวม + ข้อความ "ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว"</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>แยกแสดงมูลค่าก่อน VAT และจำนวน VAT 7%</td><td>บรรทัด "มูลค่าสินค้าก่อน Vat" และ "ภาษี 7%" (VAT-inclusive: goods×7/107)</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">การคำนวณ VAT ใช้ฐานราคารวมภาษี (inclusive): <code>vat = ยอดสินค้า × 7 / 107</code> อัตราปรับได้จากการตั้งค่าร้าน (ค่าเริ่มต้น 7%).</div>
+</section>
+
+<!-- ============ 5. NETWORK ============ -->
+<section>
+  <h2 class="section">5. ผังการเชื่อมต่ออุปกรณ์และเครือข่าย <span class="en">Equipment &amp; network diagram</span></h2>
+  <table>
+    <thead><tr><th style="width:30%">อุปกรณ์ / Node</th><th>รายละเอียด</th></tr></thead>
+    <tbody>
+      <tr><td><b>เครื่อง POS (แท็บเล็ต Android)</b></td><td>ติดตั้งแอป BravePOS — เป็น "เครื่อง" ที่ยื่นขอเลขจากสรรพากร (อุปกรณ์ที่มี CPU และติดตั้งซอฟต์แวร์ POS)</td></tr>
+      <tr><td>เครื่องพิมพ์ใบเสร็จ</td><td>Epson TM-T82X / Star TSP143 (USB/บลูทูธ) — พิมพ์ใบเสร็จเป็นรูปภาพ 80 มม. รองรับภาษาไทย</td></tr>
+      <tr><td>ระบบเครือข่าย</td><td>อินเทอร์เน็ต (Wi-Fi/4G) → HTTPS ไปยัง Backend</td></tr>
+      <tr><td><b>Backend (คลาวด์)</b></td><td>Django + ฐานข้อมูล ที่ pos.rollingpinn.com (Azure VM) — บันทึกการขายกลาง, ซิงค์, รายงาน</td></tr>
+      <tr><td>เกตเวย์ชำระเงิน</td><td>Beam / Omise — PromptPay QR &amp; บัตร (สำหรับการรับชำระ ไม่เกี่ยวกับการออกเลขใบกำกับภาษี)</td></tr>
+      <tr><td>ใบกำกับภาษีเต็มรูปแบบ (ทางเลือก)</td><td>ลูกค้าสแกน QR บนใบเสร็จ → บริการ Peak ออกใบกำกับภาษีเต็มรูปแบบ</td></tr>
+    </tbody>
+  </table>
+  <div class="flow avoid-break" style="margin-top:14px">
+    <div class="node n-proc" style="width:60%">แท็บเล็ต POS (BravePOS) + เครื่องพิมพ์ <span class="en">POS tablet + printer</span></div>
+    <div class="arrow"></div>
+    <div class="node n-data" style="width:40%"><span>HTTPS / อินเทอร์เน็ต</span></div>
+    <div class="arrow"></div>
+    <div class="node n-proc" style="width:60%">Backend Django — ฐานข้อมูลการขายกลาง <span class="en">Central sales database</span></div>
+  </div>
+</section>
+
+<!-- ============ 6. SECURITY ============ -->
+<section class="page-break">
+  <h2 class="section">6. ข้อกำหนดด้านความปลอดภัยและความถูกต้องของข้อมูล <span class="en">Security &amp; data-integrity specification</span></h2>
+  <p>ส่วนนี้คือหัวใจของมาตรฐาน POS ของสรรพากร — ข้อมูลการขายต้องบันทึกครบถ้วน แก้ไข/ลบไม่ได้ และตรวจสอบย้อนหลังได้
+  ตารางแสดงมาตรการควบคุมพร้อม <b>สถานะจริง</b> ของระบบ</p>
+  <table>
+    <thead><tr><th style="width:26%">มาตรการควบคุม / Control</th><th style="width:56%">รายละเอียด</th><th class="center" style="width:18%">สถานะ</th></tr></thead>
+    <tbody>
+      <tr><td>การบันทึกการขายเป็นศูนย์กลางเดียว</td><td>ทุกการขายผ่านฟังก์ชันเดียว (atomic transaction + row lock) กันเลขซ้ำ/แข่งกันบันทึก</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>เลขที่เอกสารเรียงลำดับ ไม่ซ้ำ</td><td>เลข <code>PS+9 หลัก</code> unique constraint + retry — ควรแยกลำดับ "รายเครื่องที่อนุมัติ"</td><td class="center"><span class="tag partial">บางส่วน</span></td></tr>
+      <tr><td>Snapshot รายการสินค้า</td><td>ชื่อ/ราคา/หมวดหมู่ ถูกคัดลอกลงบิล การแก้ไขสินค้าภายหลังไม่กระทบบิลเดิม</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>บันทึกแก้ไข/ลบไม่ได้ (Immutable / append-only)</td><td>เมื่อออกบิลแล้วต้องแก้ไข/ลบไม่ได้; ต้องมี <code>updated_at</code> และห้าม overwrite</td><td class="center"><span class="tag todo">ต้องพัฒนา</span></td></tr>
+      <tr><td>การยกเลิกบิล (Void) เก็บถาวร</td><td>Void ต้องเป็นรายการกลับบัญชีที่ <b>เก็บบิลเดิมไว้</b> พร้อมผู้ทำ/เวลา — ปัจจุบัน stamp ลบได้เมื่อ un-cancel</td><td class="center"><span class="tag todo">ต้องแก้</span></td></tr>
+      <tr><td>ตัวนับยอดขายสะสม (Grand Total / GT)</td><td>ตัวนับยอดขายสะสมที่เพิ่มขึ้นอย่างเดียว รีเซ็ตไม่ได้ พิมพ์บนรายงาน Z ทุกครั้ง</td><td class="center"><span class="tag todo">ยังไม่มี</span></td></tr>
+      <tr><td>รายงานปิดยอดประจำวัน (Z) เก็บถาวร + เลขลำดับ Z</td><td>ปัจจุบัน "สรุปปิดรอบ" คำนวณสด ไม่เก็บ snapshot ไม่มีเลข Z และไม่มียอด VAT</td><td class="center"><span class="tag todo">ต้องพัฒนา</span></td></tr>
+      <tr><td>ป้องกันตัวตน/ลายเซ็นข้อมูล (tamper-evidence)</td><td>ควรมี hash ต่อบิลผูกกับบิลก่อนหน้า (hash chain) เพื่อจับการแก้ไขเงียบ</td><td class="center"><span class="tag todo">ยังไม่มี</span></td></tr>
+      <tr><td>ปิดช่องลบข้อมูลทั้งหมด</td><td>endpoint <code>seed_data</code> ที่ลบออเดอร์ทั้งหมด <b>ต้องปิด/ถอดออกในเครื่องที่อนุมัติแล้ว</b></td><td class="center"><span class="tag todo">ต้องถอด</span></td></tr>
+      <tr><td>ควบคุมสิทธิ์การเข้าถึง (Access control)</td><td>ล็อกอินระดับ backoffice + PIN พนักงานรายสาขา (Admin/Cashier); จำกัดสิทธิ์ void/refund</td><td class="center"><span class="tag partial">บางส่วน</span></td></tr>
+      <tr><td>สำรอง/ซิงค์ข้อมูลขึ้นคลาวด์</td><td>บันทึกขึ้น Backend ทันที; ข้อมูลไม่อยู่บนเครื่องอย่างเดียว</td><td class="center"><span class="tag live">มีอยู่แล้ว</span></td></tr>
+      <tr><td>บันทึกร่องรอยการใช้งาน (Audit log)</td><td>มี created_at ทั่วระบบ, log การเรียก API ภายนอก; ยังไม่มี audit log ระดับบิลครบถ้วน</td><td class="center"><span class="tag partial">บางส่วน</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn"><b>สรุปช่องว่างสำคัญ (blockers):</b> ตัวนับยอดสะสม GT · รายงาน Z แบบเก็บถาวรมีเลขลำดับและ VAT · บิลแก้ไข/ลบไม่ได้และ void เก็บถาวร · ถอด endpoint ลบข้อมูล · แยกลำดับเลขที่รายเครื่องอนุมัติ. รายการเหล่านี้ต้องพัฒนาให้เสร็จก่อนยื่นจริง.</div>
+</section>
+
+<!-- ============ 7. SAMPLE INVOICE ============ -->
+<section class="page-break">
+  <h2 class="section">7. ตัวอย่างใบกำกับภาษีอย่างย่อ <span class="en">Sample abbreviated tax invoice</span></h2>
+  <p class="muted"><small>ตัวอย่างรูปแบบใบเสร็จปัจจุบันของ BravePOS (ข้อมูลสมมติ)</small></p>
+  <div class="receipt">
+    <div class="c b">บริษัท ____________ จำกัด</div>
+    <div class="c">สาขา: สีลม</div>
+    <div class="c">123 ถนนสีลม กรุงเทพฯ 10500</div>
+    <div class="c">โทร. 0X-XXX-XXXX</div>
+    <div class="c">เลขประจำตัวผู้เสียภาษี: 0-0000-00000-00-0</div>
+    <div class="c">POS ID: (เลขเครื่องที่สรรพากรอนุมัติ)</div>
+    <hr>
+    <div class="c b">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>
+    <hr>
+    <div class="row"><span>Invoice #: PS000012345</span><span>POS #01</span></div>
+    <div class="row"><span>วันที่: 15/07/2569</span><span>10:42</span></div>
+    <div class="row"><span>พนักงาน: สมชาย</span><span>คิวที่ 7</span></div>
+    <hr>
+    <div class="row"><span>1 x กาแฟลาเต้</span><span>90.00</span></div>
+    <div class="row"><span>2 x ครัวซองต์</span><span>130.00</span></div>
+    <hr>
+    <div class="row"><span>รวมเป็นเงิน</span><span>220.00</span></div>
+    <div class="row"><span>มูลค่าสินค้าก่อน Vat</span><span>205.61</span></div>
+    <div class="row"><span>คิดเป็นมูลค่าภาษี 7%</span><span>14.39</span></div>
+    <div class="row b"><span>ยอดสุทธิ</span><span>220.00</span></div>
+    <hr>
+    <div class="row"><span>เงินสด</span><span>500.00</span></div>
+    <div class="row"><span>เงินทอน</span><span>280.00</span></div>
+    <div class="qrbox">QR<br>ขอใบกำกับภาษี<br>เต็มรูปแบบ</div>
+    <div class="c">ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว</div>
+    <div class="c">ขอบคุณที่ใช้บริการ</div>
+    <div class="c muted">Powered by BravePOS</div>
+  </div>
+</section>
+
+<!-- ============ 8. SAMPLE Z ============ -->
+<section class="page-break">
+  <h2 class="section">8. ตัวอย่างรายงานการขายประจำวัน (Z) — <span style="color:#b45309">รูปแบบที่เสนอ</span> <span class="en">Proposed daily sales (Z) report — NOT yet implemented</span></h2>
+  <div class="callout warn"><b>ยังไม่มีในระบบ:</b> เลขลำดับ Z, ยอดสะสม GT, และยอด VAT ในรายงานปิดรอบ เป็นรายการที่ต้องพัฒนา — ตัวอย่างนี้แสดง "เป้าหมาย" ของรูปแบบที่ถูกต้อง มิใช่ผลลัพธ์ที่ระบบออกได้ในปัจจุบัน</div>
+  <div class="zrep">
+    <div class="c b">รายงานสรุปการขายประจำวัน (Z REPORT)</div>
+    <div class="c">บริษัท ____________ จำกัด — สาขาสีลม</div>
+    <div class="c">เลขเครื่อง POS: (เลขอนุมัติ) &nbsp;·&nbsp; POS #01</div>
+    <hr>
+    <div class="row"><span>เลขที่รายงาน Z (Z No.)</span><span>Z-000128</span></div>
+    <div class="row"><span>วันที่ปิดรอบ</span><span>15/07/2569 22:00</span></div>
+    <div class="row"><span>เลขบิลแรก / บิลสุดท้าย</span><span>PS000012310 – PS000012381</span></div>
+    <div class="row"><span>จำนวนบิล</span><span>72</span></div>
+    <hr>
+    <div class="row"><span>ยอดขายรวม (รวม VAT)</span><span>18,540.00</span></div>
+    <div class="row"><span>มูลค่าก่อน VAT</span><span>17,327.10</span></div>
+    <div class="row"><span>ภาษีมูลค่าเพิ่ม 7%</span><span>1,212.90</span></div>
+    <div class="row"><span>ส่วนลดรวม</span><span>640.00</span></div>
+    <div class="row"><span>บิลยกเลิก (จำนวน / ยอด)</span><span>2 / 310.00</span></div>
+    <hr>
+    <div class="row"><span>เงินสด</span><span>9,240.00</span></div>
+    <div class="row"><span>PromptPay / QR</span><span>7,100.00</span></div>
+    <div class="row"><span>บัตร</span><span>2,200.00</span></div>
+    <hr>
+    <div class="row gt"><span>ยอดขายสะสม (GRAND TOTAL / GT)</span><span>2,451,880.00</span></div>
+  </div>
+  <p class="muted"><small>GT = ยอดขายสะสมตั้งแต่เริ่มใช้เครื่อง เพิ่มขึ้นอย่างเดียว รีเซ็ตไม่ได้ ใช้ตรวจสอบความต่อเนื่องของยอดขายข้ามวัน</small></p>
+</section>
+
+<!-- ============ 9. READINESS ============ -->
+<section class="page-break">
+  <h2 class="section">9. สรุปสถานะความพร้อมและแผนพัฒนา <span class="en">Readiness summary &amp; build plan</span></h2>
+  <table>
+    <thead><tr><th class="center" style="width:8%">ลำดับ</th><th style="width:52%">งานที่ต้องทำก่อนยื่น</th><th class="center" style="width:14%">ความสำคัญ</th><th class="center" style="width:26%">สถานะ</th></tr></thead>
+    <tbody>
+      <tr><td class="center">A</td><td>ตัวนับยอดสะสม GT + รายงาน Z เก็บถาวรมีเลขลำดับและยอด VAT</td><td class="center b" style="color:#b91c1c">สูงสุด</td><td class="center"><span class="tag todo">ต้องพัฒนา</span></td></tr>
+      <tr><td class="center">B</td><td>บิลแก้ไข/ลบไม่ได้ + void เก็บถาวร + hash chain กันแก้ไข</td><td class="center b" style="color:#b91c1c">สูงสุด</td><td class="center"><span class="tag todo">ต้องพัฒนา</span></td></tr>
+      <tr><td class="center">C</td><td>ถอด/ล็อก endpoint ลบข้อมูล (seed_data) ในเครื่องที่อนุมัติ</td><td class="center b" style="color:#b91c1c">สูง</td><td class="center"><span class="tag todo">ต้องแก้</span></td></tr>
+      <tr><td class="center">D</td><td>ผูกเลขเครื่อง POS + ลำดับเลขที่ใบเสร็จ กับเลขที่สรรพากรอนุมัติ (รายเครื่อง)</td><td class="center">สูง</td><td class="center"><span class="tag partial">ปรับ</span></td></tr>
+      <tr><td class="center">E</td><td>ทะเบียนรายงานภาษีขาย (VAT output) + ส่งออกสำหรับยื่น</td><td class="center">กลาง</td><td class="center"><span class="tag partial">ปรับ</span></td></tr>
+      <tr><td class="center">F</td><td>จำกัดสิทธิ์ void/refund + audit log ระดับบิล</td><td class="center">กลาง</td><td class="center"><span class="tag partial">บางส่วน</span></td></tr>
+      <tr><td class="center">G</td><td>รวบรวมสเปกเครื่อง + วาดผังติดตั้ง/เครือข่ายจริง + กรอก ภ.พ.06</td><td class="center">งานเอกสาร</td><td class="center"><span class="tag partial">รวบรวม</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>ลำดับแนะนำ:</b> ทำ A–C (fiscal integrity) ให้เสร็จก่อน เพราะเป็นเงื่อนไขที่สรรพากรตรวจจริง จากนั้น D–F แล้วจึงจัดชุดเอกสาร G เพื่อยื่น ภ.พ.06.</div>
+  <p class="muted" style="margin-top:20px"><small>จัดทำโดยทีมพัฒนา BravePOS เพื่อใช้เตรียมการภายในและหารือกับสำนักงานบัญชี/สรรพากรพื้นที่ · 15 ก.ค. 2569</small></p>
+</section>
+
+</body>
+</html>

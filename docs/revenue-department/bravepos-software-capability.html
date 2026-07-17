@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>คุณสมบัติโปรแกรม Brave POS</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 16mm 15mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: "Noto Sans Thai", sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.6; margin: 0; }
+
+  /* brand stripe echoing the reference doc's top bar */
+  .stripe { display: flex; height: 7px; width: 100%; margin-bottom: 4px; }
+  .stripe span { flex: 1; }
+  .stripe .s1 { background: #0f5132; }
+  .stripe .s2 { background: #16a34a; }
+  .stripe .s3 { background: #86efac; }
+  .stripe .s4 { background: #f59e0b; }
+  .stripe .s5 { background: #9ca3af; }
+
+  h1,h2,h3 { line-height: 1.25; }
+  .section { page-break-before: always; }
+  .section:first-of-type { page-break-before: avoid; }
+
+  .sec-h { font-size: 16pt; font-weight: 700; color: #0f5132; margin: 6px 0 2px; }
+  .sec-h .en { display: block; font-size: 9.5pt; color: #6b7280; font-weight: 400; letter-spacing: .3px; }
+  .lead { color: #374151; margin: 8px 0 12px; }
+  p { margin: 7px 0; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  b, strong { color: #111827; }
+  .muted { color: #6b7280; }
+  code { background: #f1f5f9; padding: 0 4px; border-radius: 3px; font-size: .88em; color: #0f5132; }
+
+  h3.sub { font-size: 12pt; color: #15803d; margin: 16px 0 4px; }
+
+  /* screenshot placeholder frame */
+  .shot { border: 2px dashed #86c34a; background: #f6fbf4; border-radius: 10px; padding: 26px 18px;
+    text-align: center; margin: 14px 0 6px; page-break-inside: avoid; }
+  .shot .icon { font-size: 22pt; }
+  .shot .t { font-weight: 700; color: #15803d; margin-top: 6px; }
+  .shot .d { color: #6b7280; font-size: 9.5pt; margin-top: 2px; }
+  .cap { text-align: center; color: #6b7280; font-size: 9.5pt; margin: 4px 0 0; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.6pt; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #ecfdf5; color: #065f46; font-weight: 700; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; background: #fff; page-break-inside: avoid; }
+  .card .h { font-weight: 700; color: #15803d; font-size: 10.5pt; margin-bottom: 3px; }
+  .card .b { font-size: 9.6pt; color: #374151; }
+
+  .note { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 9.8pt; margin: 10px 0; }
+  .callout { background: #f0fdf4; border-left: 4px solid #16a34a; padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 9.8pt; margin: 10px 0; }
+
+  /* device diagram */
+  .diagram { display: flex; flex-direction: column; align-items: center; gap: 0; margin: 12px 0; }
+  .dnode { border-radius: 10px; padding: 10px 16px; text-align: center; font-weight: 600; font-size: 10pt; min-width: 60%; }
+  .dnode .en { display: block; font-weight: 400; font-size: 8.6pt; opacity: .85; }
+  .d-dev { background: #7cb342; color: #143a08; }
+  .d-net { background: #fde68a; color: #6b4e0a; min-width: 42%; }
+  .d-cloud { background: #0f5132; color: #eafff2; }
+  .d-side { background: #e5e7eb; color: #374151; }
+  .darrow { width:0; height:0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid #6b7280; margin: 5px 0; }
+  .drow { display: flex; gap: 12px; justify-content: center; width: 100%; }
+
+  /* receipt */
+  .receipt { width: 70mm; margin: 8px auto; border: 1px dashed #999; padding: 10px 12px; font-size: 8.4pt; line-height: 1.45; }
+  .receipt .c { text-align: center; }
+  .receipt .b { font-weight: 700; }
+  .receipt hr { border: none; border-top: 1px dashed #999; margin: 5px 0; }
+  .receipt .row { display: flex; justify-content: space-between; }
+
+  /* cover */
+  .cover { min-height: 252mm; display: flex; flex-direction: column; }
+  .cover .top { flex: 0; }
+  .cover .hero { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .brandline { font-size: 13pt; letter-spacing: 4px; color: #16a34a; font-weight: 700; }
+  .cover h1 { font-size: 30pt; color: #111827; margin: 10px 0 4px; font-weight: 800; }
+  .cover .ver { font-size: 12pt; color: #0f5132; font-weight: 600; }
+  .cover .rule { height: 4px; width: 90px; background: #16a34a; border-radius: 3px; margin: 20px 0; }
+  .cover .who { color: #374151; font-size: 10.5pt; }
+  .cover .who div { margin: 3px 0; }
+  .mock-device { margin: 26px 0; display: flex; justify-content: center; }
+  .tablet { width: 300px; height: 200px; border: 10px solid #1f2937; border-radius: 16px; background: linear-gradient(135deg,#ecfdf5,#d1fae5); position: relative; }
+  .tablet .grid { position:absolute; inset: 14px; display: grid; grid-template-columns: repeat(4,1fr); grid-template-rows: repeat(3,1fr); gap:6px; }
+  .tablet .grid span { border-radius: 5px; }
+  .g-green { background:#7cb342; } .g-amber{ background:#f59e0b; } .g-red{ background:#ef4444; } .g-white{ background:#ffffff; border:1px solid #d1fae5; }
+  .printer { width: 70px; height: 84px; background:#e5e7eb; border-radius:8px; align-self:flex-end; margin-left:14px; position:relative; border:1px solid #cbd5e1;}
+  .printer:after{ content:""; position:absolute; top:20px; left:8px; right:8px; height:6px; background:#9ca3af; border-radius:2px;}
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<section class="cover">
+  <div class="top"><div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div></div>
+  <div class="hero">
+    <div class="brandline">BRAVE POS</div>
+    <h1>คุณสมบัติโปรแกรม<br>Brave POS</h1>
+    <div class="ver">Software Capability Statement · standard version</div>
+    <div class="ver muted" style="font-size:10.5pt;font-weight:400;margin-top:2px;">เวอร์ชัน 1.0 · 15 กรกฎาคม 2569 (2026)</div>
+    <div class="rule"></div>
+
+    <div class="mock-device">
+      <div class="tablet"><div class="grid">
+        <span class="g-green"></span><span class="g-amber"></span><span class="g-red"></span><span class="g-green"></span>
+        <span class="g-white"></span><span class="g-green"></span><span class="g-white"></span><span class="g-white"></span>
+        <span class="g-green"></span><span class="g-white"></span><span class="g-white"></span><span class="g-green"></span>
+      </div></div>
+      <div class="printer"></div>
+    </div>
+
+    <div class="who">
+      <div><b>ระบบ / System:</b> Brave POS — แอปบนแท็บเล็ต Android + ระบบหลังบ้าน Django (คลาวด์)</div>
+      <div><b>ผู้ประกอบการ / Operator:</b> ____________________________</div>
+      <div><b>เลขประจำตัวผู้เสียภาษี / TIN:</b> ____________________________</div>
+      <div><b>ระบบหลังบ้าน / Backend:</b> pos.rollingpinn.com</div>
+    </div>
+    <div class="note" style="margin-top:22px;">
+      เอกสารนี้อธิบายคุณสมบัติการทำงานจริงของโปรแกรม Brave POS เพื่อประกอบการยื่นขออนุมัติใช้เครื่องบันทึกการเก็บเงิน (ภ.พ.06)
+      กรอบภาพที่มีเส้นประคือ<b>ตำแหน่งสำหรับใส่ภาพหน้าจอจริงจากแอป</b>
+      <span class="en" style="display:block;color:#6b7280;font-size:9pt;">Dashed frames mark where to paste real in-app screenshots before submission.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 1. OVERVIEW ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">ภาพรวม <span class="en">Overview</span></div>
+  <p class="lead">Brave POS เป็นโปรแกรมบันทึกการรับชำระ ณ จุดขาย ทำงานบน<b>แท็บเล็ต Android</b>
+  โดยเชื่อมต่อกับ<b>ระบบหลังบ้านบนคลาวด์ (Django)</b> ที่ <code>pos.rollingpinn.com</code> เป็นหลัก</p>
+
+  <p>รองรับการเชื่อมต่ออุปกรณ์ช่วยขาย ได้แก่ <b>เครื่องพิมพ์ใบเสร็จความร้อน</b> (Epson TM-T82X / Star TSP143)
+  ผ่าน USB หรือ Bluetooth โดยพิมพ์ใบเสร็จ<b>เป็นรูปภาพ</b>เพื่อรองรับภาษาไทยได้สมบูรณ์ และเชื่อมต่อ
+  <b>เกตเวย์ชำระเงิน</b> (Beam / Omise) สำหรับ PromptPay QR และบัตรเครดิต</p>
+
+  <div class="note">
+    <b>ลักษณะการทำงานแบบออนไลน์ (Cloud-first):</b> ทุกการขายจะถูกบันทึกขึ้นระบบหลังบ้านทันทีหลังรับชำระ
+    ข้อมูลไม่ได้เก็บบนเครื่องเพียงลำพัง จึงต้องเชื่อมต่ออินเทอร์เน็ตขณะใช้งาน
+    (กรณีเครื่องพิมพ์ไม่พร้อม ระบบมีคิวพิมพ์ใบเสร็จอัตโนมัติเพื่อพิมพ์ซ้ำภายหลัง)
+  </div>
+
+  <h3 class="sub">ผังการเชื่อมต่ออุปกรณ์ <span class="muted" style="font-weight:400;font-size:10pt;">Device connection diagram</span></h3>
+  <div class="diagram">
+    <div class="drow">
+      <div class="dnode d-dev">แท็บเล็ต Android — Brave POS<span class="en">POS tablet (sales app)</span></div>
+      <div class="dnode d-side" style="min-width:auto;">เครื่องพิมพ์ใบเสร็จ<span class="en">USB / Bluetooth</span></div>
+    </div>
+    <div class="darrow"></div>
+    <div class="dnode d-net">อินเทอร์เน็ต · HTTPS<span class="en">Internet</span></div>
+    <div class="darrow"></div>
+    <div class="dnode d-cloud">ระบบหลังบ้าน Django + ฐานข้อมูล (คลาวด์)<span class="en">Central backend &amp; database — pos.rollingpinn.com</span></div>
+    <div class="darrow"></div>
+    <div class="drow">
+      <div class="dnode d-side">เกตเวย์ชำระเงิน Beam / Omise<span class="en">PromptPay QR &amp; card</span></div>
+      <div class="dnode d-side">Peak — ใบกำกับภาษีเต็มรูปแบบ<span class="en">Full tax invoice</span></div>
+    </div>
+  </div>
+  <p class="cap">ภาพแสดงตัวอย่างการเชื่อมต่อของอุปกรณ์</p>
+</section>
+
+<!-- ================= 2. MENU / KEY FEATURES ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">คุณลักษณะการทำงานที่สำคัญ <span class="en">Key features &amp; navigation</span></div>
+  <p class="lead">การเรียกใช้งานส่วนต่างๆ ทำผ่าน<b>เมนูด้านข้าง (Sidebar)</b> โดยกดปุ่มเมนูมุมซ้ายบน
+  เมนูหลักประกอบด้วย 8 ส่วน ดังนี้</p>
+  <div class="grid2">
+    <div class="card"><div class="h">ขายหน้าร้าน (Shop)</div><div class="b">หน้าจอขายสินค้าและรับชำระเงิน</div></div>
+    <div class="card"><div class="h">รายการขาย (Transactions)</div><div class="b">ดูบิล พิมพ์ซ้ำ และยกเลิกการขาย</div></div>
+    <div class="card"><div class="h">รายงาน (Reports)</div><div class="b">แดชบอร์ดยอดขาย กำไร และสินค้าขายดี</div></div>
+    <div class="card"><div class="h">คลังสินค้า (Inventory)</div><div class="b">รับเข้า จ่ายออก ปรับปรุง และตรวจนับ</div></div>
+    <div class="card"><div class="h">ลูกค้า (Customers)</div><div class="b">ข้อมูลลูกค้าและการผูกกับบิล</div></div>
+    <div class="card"><div class="h">สินค้า (Products)</div><div class="b">เพิ่ม/แก้ไขสินค้า (เพิ่ม-ลบ เฉพาะผู้ดูแล)</div></div>
+    <div class="card"><div class="h">ลิ้นชัก/รอบขาย (Drawer)</div><div class="b">เปิด-ปิดรอบ นับเงิน และรายการเงินเข้า-ออก</div></div>
+    <div class="card"><div class="h">ตั้งค่า (Settings)</div><div class="b">ร้านค้า ภาษี เครื่องพิมพ์ และการชำระเงิน</div></div>
+  </div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — เมนูด้านข้าง (Sidebar)</div><div class="d">แสดงหน้าขายพร้อมเมนูหลัก 8 รายการที่เปิดออกมา</div></div>
+  <p class="cap">รูปแสดงการเปิดเมนูหลัก</p>
+</section>
+
+<!-- ================= 3. USERS & ROLES ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">ระบบผู้ใช้งานและการกำหนดสิทธิ์ <span class="en">Users &amp; role-based access</span></div>
+  <p class="lead">เข้าสู่ระบบด้วย<b>รหัส PIN 4 หลัก</b> โดยเลือกสาขา → เลือกชื่อพนักงาน → ใส่ PIN
+  ระบบรองรับผู้ใช้ 2 บทบาทต่อสาขา</p>
+  <table>
+    <thead><tr><th style="width:22%">บทบาท</th><th>สิทธิ์การใช้งาน</th></tr></thead>
+    <tbody>
+      <tr><td><b>ผู้ดูแล (Admin)</b></td><td>ใช้งานได้ทุกส่วน รวมถึง<b>เพิ่ม/แก้ไข/ลบสินค้า</b> ตั้งค่าร้าน และจัดการรอบขาย</td></tr>
+      <tr><td><b>แคชเชียร์ (Cashier)</b></td><td>ขายและรับชำระ ดูรายงาน คลังสินค้า และรายการขายได้ทั้งหมด แต่<b>ไม่สามารถเพิ่ม/ลบสินค้า</b>ได้</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">การกำหนดสิทธิ์บังคับใช้ทั้งฝั่งแอปและฝั่งเซิร์ฟเวอร์ (คำสั่งที่ต้องเป็นผู้ดูแลจะถูกปฏิเสธด้วยรหัส 403)
+  และแต่ละสาขาจะมีเซสชันเข้าใช้งานที่ยังใช้งานอยู่ได้ครั้งละหนึ่งเซสชัน ส่วนบัญชีพนักงาน/PIN จัดการผ่านระบบหลังบ้านบนเว็บ</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — หน้าล็อกอิน PIN</div><div class="d">ตัวเลือกสาขา รายชื่อพนักงาน และแป้น PIN 4 หลัก</div></div>
+  <p class="cap">รูปแสดงหน้าจอก่อนเข้าใช้งานโปรแกรม</p>
+</section>
+
+<!-- ================= 4. FRONT SALES ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">งานขายหน้าร้าน <span class="en">Front-of-house sales</span></div>
+  <p class="lead">หน้าขายแสดง<b>ตารางสินค้าแยกตามหมวดหมู่</b> พร้อมช่อง<b>ค้นหาด้วยชื่อสินค้า</b> และตะกร้าสินค้าด้านข้าง
+  การขายจะเริ่มได้เมื่อ<b>เปิดรอบการขาย (กะ)</b> แล้ว รองรับการทำงานดังนี้</p>
+  <ul>
+    <li><b>ส่วนลดรายการสินค้า (item discount):</b> ใส่ส่วนลดเป็น<b>จำนวนเงิน (บาท)</b> ต่อรายการ (สูงสุดไม่เกินมูลค่ารายการ)</li>
+    <li><b>พักบิลและเรียกคืน (Park &amp; recall):</b> พักบิลไว้เพื่อรับชำระภายหลัง พร้อมป้ายแจ้งจำนวนบิลที่พักไว้</li>
+    <li><b>หมายเลขคิว (Queue number):</b> ระบบออกเลขคิวให้อัตโนมัติต่อสาขาต่อวัน สำหรับเรียกลูกค้ารับสินค้า</li>
+    <li><b>ผูกข้อมูลลูกค้า:</b> เลือกลูกค้าเพื่อผูกกับบิลได้</li>
+  </ul>
+  <div class="note">หมายเหตุตามจริง: ระบบใช้<b>ส่วนลดระดับรายการเท่านั้น</b> (ยังไม่มีส่วนลดท้ายบิล) และช่องสแกนบาร์โค้ดบนหน้าขาย
+  เป็นการค้นหาด้วยชื่อสินค้าเป็นหลัก การเปิดลิ้นชักเก็บเงินทำงานพร้อมการพิมพ์ใบเสร็จ</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — หน้าพร้อมขาย</div><div class="d">ตารางสินค้า หมวดหมู่ ตะกร้า และยอดรวม</div></div>
+  <p class="cap">รูปแสดงหน้าจอพร้อมขาย</p>
+
+  <h3 class="sub">การทำส่วนลด <span class="muted" style="font-weight:400;font-size:10pt;">Discount</span></h3>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — ใส่ส่วนลดรายการ</div><div class="d">แป้นตัวเลขสำหรับส่วนลดเป็นจำนวนเงินต่อรายการ</div></div>
+  <p class="cap">รูปแสดงหน้าจอขณะทำส่วนลด</p>
+</section>
+
+<!-- ================= 5. PAYMENT ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">การรับชำระเงิน <span class="en">Payment</span></div>
+  <p class="lead">หน้าชำระเงินรองรับวิธีชำระหลายประเภทในบิลเดียว โดยแสดงยอดสุทธิ แป้นใส่จำนวนเงิน และปุ่มจำนวนเงินด่วน</p>
+  <div class="grid2">
+    <div class="card"><div class="h">เงินสด (Cash)</div><div class="b">คำนวณ<b>เงินทอน</b>อัตโนมัติจากยอดที่รับมา</div></div>
+    <div class="card"><div class="h">PromptPay / QR (Beam)</div><div class="b">สร้าง QR แล้วตรวจสอบสถานะการชำระอัตโนมัติ</div></div>
+    <div class="card"><div class="h">บัตรเครดิต (Omise)</div><div class="b">ลิงก์ชำระบัตร ตรวจสอบสถานะจนสำเร็จ</div></div>
+    <div class="card"><div class="h">บัตร (Beam Card)</div><div class="b">รับชำระผ่านบัตรผ่าน Beam</div></div>
+  </div>
+  <div class="note">การชำระด้วยบัตรจะมี<b>ค่าธรรมเนียมการชำระ + ภาษีมูลค่าเพิ่ม 7% ของค่าธรรมเนียม</b> ตามที่ตั้งค่าไว้
+  ราคาสินค้าเป็นแบบ<b>รวมภาษีมูลค่าเพิ่มแล้ว</b> (VAT = ยอดสินค้า × 7/107)</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — การชำระเงิน</div><div class="d">เลือกวิธีชำระ ใส่จำนวนเงิน และยืนยันการชำระ</div></div>
+  <p class="cap">รูปแสดงหน้าจอขณะรับชำระเงิน</p>
+</section>
+
+<!-- ================= 6. BILL MANAGEMENT + RECEIPT ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">การจัดการบิลและใบเสร็จ <span class="en">Bills &amp; receipts</span></div>
+  <p class="lead">ใช้จัดการบิลจากหน้า<b>รายการขาย (Transactions)</b> ได้แก่</p>
+  <ul>
+    <li><b>ออกใบเสร็จ/ใบกำกับภาษีอย่างย่อ:</b> พิมพ์ใบเสร็จอัตโนมัติเมื่อรับชำระ พร้อมเลขประจำตัวผู้เสียภาษี เลขเครื่อง (POS) และแยกภาษี 7%</li>
+    <li><b>พิมพ์ซ้ำ (Reprint):</b> พิมพ์ใบเสร็จของบิลเดิมซ้ำได้</li>
+    <li><b>ยกเลิกการขาย (Void):</b> ยกเลิกบิล พร้อมบันทึก<b>ผู้ยกเลิกและเวลา</b> และพิมพ์สำเนาบิลที่ยกเลิก</li>
+    <li><b>ใบกำกับภาษีเต็มรูปแบบ:</b> ลูกค้าสแกน QR บนใบเสร็จเพื่อขอใบกำกับภาษีเต็มรูปแบบ (ออกผ่านบริการ Peak)</li>
+  </ul>
+  <div class="grid2" style="align-items:start;">
+    <div>
+      <div class="receipt">
+        <div class="c b">บริษัท ____________ จำกัด</div>
+        <div class="c">สาขา: สีลม · โทร. 0X-XXX-XXXX</div>
+        <div class="c">เลขประจำตัวผู้เสียภาษี: 0-0000-00000-00-0</div>
+        <div class="c">POS ID: (เลขเครื่องที่อนุมัติ)</div>
+        <hr>
+        <div class="c b">ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>
+        <hr>
+        <div class="row"><span>Invoice #: PS000012345</span><span>คิว 7</span></div>
+        <div class="row"><span>วันที่ 15/07/2569</span><span>10:42</span></div>
+        <hr>
+        <div class="row"><span>1 x กาแฟลาเต้</span><span>90.00</span></div>
+        <div class="row"><span>2 x ครัวซองต์</span><span>130.00</span></div>
+        <hr>
+        <div class="row"><span>รวมเป็นเงิน</span><span>220.00</span></div>
+        <div class="row"><span>มูลค่าก่อน Vat</span><span>205.61</span></div>
+        <div class="row"><span>ภาษี 7%</span><span>14.39</span></div>
+        <div class="row"><span>เงินสด / เงินทอน</span><span>500 / 280</span></div>
+        <div class="c" style="margin-top:6px;">ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว</div>
+        <div class="c muted">Powered by Brave POS</div>
+      </div>
+      <p class="cap">ตัวอย่างใบกำกับภาษีอย่างย่อ</p>
+    </div>
+    <div>
+      <div class="shot" style="padding:40px 14px;"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — รายการขาย</div><div class="d">รายละเอียดบิล ปุ่มพิมพ์ซ้ำ และยกเลิกการขาย</div></div>
+      <p class="cap">รูปแสดงข้อมูลบิลเพื่อจัดการ/พิมพ์ซ้ำ</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7. PRODUCT MANAGEMENT ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">การจัดการสินค้า <span class="en">Product management</span></div>
+  <p class="lead">รองรับสินค้าหลายประเภทและการกำหนดประเภทภาษี (จัดการเต็มรูปแบบผ่านระบบหลังบ้านบนเว็บ ส่วนบนแอปแก้ไขข้อมูลหลักได้)</p>
+  <table>
+    <thead><tr><th style="width:30%">รายการ</th><th>รายละเอียด</th></tr></thead>
+    <tbody>
+      <tr><td><b>ประเภทสินค้า</b></td><td>สินค้าทั่วไป (P — ตัดสต๊อก), สินค้าบริการ (S — ไม่ตัดสต๊อก), สินค้ามีส่วนประกอบ (BOM)</td></tr>
+      <tr><td><b>ประเภทภาษี</b></td><td>สินค้ามีภาษี (V = VAT) และสินค้าได้รับยกเว้นภาษี (N = Non-VAT)</td></tr>
+      <tr><td><b>ข้อมูลสินค้า</b></td><td>ชื่อ, บาร์โค้ด/PLU, หมวดหมู่, หน่วยนับ, ต้นทุน, ราคาขาย, รูปภาพ, ตั้งเป็นสินค้ายอดนิยม</td></tr>
+      <tr><td><b>หมวดหมู่ / หน่วยนับ</b></td><td>เพิ่ม-แก้ไขได้เต็มรูปแบบผ่านระบบหลังบ้าน</td></tr>
+    </tbody>
+  </table>
+  <div class="note">บนแอปแท็บเล็ตแก้ไขข้อมูลหลัก (ชื่อ ราคา ต้นทุน สต๊อก หมวดหมู่ รูป) ส่วนการกำหนด<b>ประเภทภาษี ประเภทสินค้า บาร์โค้ด และหน่วยนับ</b>
+  ทำผ่านระบบหลังบ้านบนเว็บ · การเพิ่ม/ลบสินค้าจำกัดเฉพาะผู้ดูแล</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — จัดการ/แก้ไขสินค้า</div><div class="d">ฟอร์มข้อมูลสินค้าและประเภทภาษี</div></div>
+  <p class="cap">รูปแสดงหน้าจัดการข้อมูลสินค้า</p>
+</section>
+
+<!-- ================= 8. INVENTORY ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">งานสินค้าคงคลัง <span class="en">Inventory</span></div>
+  <p class="lead">ประกอบด้วย 5 ส่วน สำหรับควบคุมยอดคงเหลือและความเคลื่อนไหวของสินค้า</p>
+  <div class="grid2">
+    <div class="card"><div class="h">1. ความเคลื่อนไหวสินค้า</div><div class="b">ดูยอดคงเหลือและประวัติการรับเข้า-จ่ายออก-ปรับปรุง</div></div>
+    <div class="card"><div class="h">2. รับสินค้าเข้า (Stock-In)</div><div class="b">บันทึกรับสินค้าเข้าพร้อมต้นทุน จำนวน และส่วนลด</div></div>
+    <div class="card"><div class="h">3. จ่ายสินค้าออก (Stock-Out)</div><div class="b">บันทึกการจ่าย/เบิกสินค้าออก</div></div>
+    <div class="card"><div class="h">4. ปรับปรุงยอดคงคลัง (Adjust)</div><div class="b">ปรับยอดคงเหลือให้ตรงกับที่นับได้จริง</div></div>
+    <div class="card"><div class="h">5. ตรวจนับสินค้า (Check)</div><div class="b">สร้างเอกสารตรวจนับ (ไม่กระทบยอดจนกว่าจะปรับปรุง)</div></div>
+    <div class="card"><div class="h">เลขที่เอกสาร</div><div class="b">ระบบออกเลขที่เอกสารตามประเภทให้อัตโนมัติ</div></div>
+  </div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — งานคลังสินค้า</div><div class="d">แท็บรับเข้า/จ่ายออก/ปรับปรุง/ตรวจนับ และความเคลื่อนไหว</div></div>
+  <p class="cap">รูปแสดงหน้าบันทึกงานคลังสินค้า</p>
+</section>
+
+<!-- ================= 9. REPORTS ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">กระดานสรุปผลและรายงาน <span class="en">Dashboard &amp; reports</span></div>
+  <p class="lead">แดชบอร์ดในแอปแสดง<b>ยอดขาย กำไร จำนวนบิล เฉลี่ยต่อบิล</b> กราฟแนวโน้มยอดขาย และ<b>สินค้า/หมวดหมู่ขายดี 5 อันดับ</b>
+  พร้อมเลือกช่วงเวลาได้</p>
+  <h3 class="sub">รายงานบนระบบหลังบ้าน (ส่งออก CSV ได้)</h3>
+  <table>
+    <thead><tr><th style="width:34%">รายงาน</th><th>เนื้อหา</th></tr></thead>
+    <tbody>
+      <tr><td>รายงานยอดขายประจำวัน</td><td>ยอดต่อวัน: รวมก่อนลด ส่วนลด ภาษี และยอดสุทธิ (พร้อมรายละเอียดรายบิล)</td></tr>
+      <tr><td>รายงานการขายสินค้า</td><td>ยอดขายแยกตามรายการสินค้า</td></tr>
+      <tr><td>รายงานสรุปจำนวนขายสินค้า (SKU)</td><td>จำนวนขาย คงเหลือ และยอดขายต่อ SKU</td></tr>
+      <tr><td>รายการขาย (Transactions)</td><td>รายบิลพร้อมแยกวิธีการชำระเงิน</td></tr>
+      <tr><td>สรุปสินค้าคงคลัง</td><td>ยอดคงเหลือและมูลค่าคงคลัง</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>ใบสรุปปิดรอบการขาย (Shift close):</b> พิมพ์สรุปเมื่อปิดรอบ — เลขบิลแรก/สุดท้าย จำนวนบิล ยอดขาย ส่วนลด บิลยกเลิก
+  แยกตามวิธีชำระ และการนับเงินในลิ้นชัก (ไฟล์ส่งออกเป็น CSV รองรับภาษาไทย)</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — แดชบอร์ดสรุปผล</div><div class="d">การ์ด KPI กราฟยอดขาย และสินค้า/หมวดขายดี</div></div>
+  <p class="cap">รูปแสดงหน้ากระดานสรุปผล</p>
+</section>
+
+<!-- ================= 10. SHIFT / DRAWER ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">การเปิด-ปิดรอบการขายและลิ้นชักเงินสด <span class="en">Shift &amp; cash drawer</span></div>
+  <p class="lead">การขายทำงานเป็น<b>รอบ (กะ)</b> เพื่อควบคุมเงินสดและตรวจสอบยอด</p>
+  <ul>
+    <li><b>เปิดรอบ:</b> ระบุเงินตั้งต้นในลิ้นชักก่อนเริ่มขาย</li>
+    <li><b>เงินเข้า-ออกระหว่างรอบ (Paid-In / Paid-Out):</b> บันทึกพร้อมเหตุผลที่กำหนดไว้</li>
+    <li><b>ปิดรอบ:</b> นับเงินจริง เทียบกับยอดที่ระบบคำนวณ และแสดง<b>ผลต่าง (variance)</b> พร้อมพิมพ์ใบสรุปปิดรอบ</li>
+  </ul>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — เปิด/ปิดรอบและนับเงิน</div><div class="d">ยอดเงินตั้งต้น รายการเงินเข้า-ออก และสรุปปิดรอบ</div></div>
+  <p class="cap">รูปแสดงหน้าจัดการรอบการขาย</p>
+</section>
+
+<!-- ================= 11. CLOUD DATA ================= -->
+<section class="section">
+  <div class="stripe"><span class="s1"></span><span class="s2"></span><span class="s3"></span><span class="s4"></span><span class="s5"></span></div>
+  <div class="sec-h">การจัดเก็บข้อมูลบนคลาวด์ <span class="en">Cloud data &amp; durability</span></div>
+  <p class="lead">Brave POS จัดเก็บข้อมูลการขายและสินค้าไว้ที่<b>ฐานข้อมูลกลางบนคลาวด์</b> ทุกการขายบันทึกขึ้นระบบหลังบ้านทันทีหลังรับชำระ</p>
+  <ul>
+    <li>ข้อมูลไม่ได้อยู่บนเครื่องแท็บเล็ตเพียงลำพัง — ความมั่นคงของข้อมูลมาจากฐานข้อมูลกลาง</li>
+    <li>บนเครื่องเก็บเฉพาะ<b>โทเคนเข้าสู่ระบบ</b> และ<b>คิวพิมพ์ใบเสร็จ</b> (กรณีเครื่องพิมพ์ไม่พร้อม จะพิมพ์ซ้ำอัตโนมัติภายหลัง)</li>
+    <li>ระบบมีการติดตามข้อผิดพลาดและประสิทธิภาพ (Sentry) ทั้งฝั่งแอปและระบบหลังบ้าน</li>
+  </ul>
+  <div class="note"><b>หมายเหตุด้านความถูกต้องของข้อมูล:</b> เพื่อให้ครบตามมาตรฐานเครื่องบันทึกการเก็บเงินของสรรพากร
+  รายการที่ต้องพัฒนาเพิ่ม (เช่น ตัวนับยอดขายสะสม/GT, รายงานปิดรอบ Z ที่มีเลขลำดับและยอด VAT แบบเก็บถาวร,
+  การบันทึกที่แก้ไข/ลบไม่ได้) ได้สรุปไว้ในเอกสาร <b>"เอกสารเตรียมการยื่น ภ.พ.06"</b> แยกต่างหาก</div>
+  <div class="shot"><div class="icon">📸</div><div class="t">ภาพหน้าจอ — สถานะการเชื่อมต่อ/ซิงค์</div><div class="d">แสดงการบันทึกขึ้นคลาวด์และคิวพิมพ์ใบเสร็จ</div></div>
+  <p class="cap">รูปแสดงการทำงานด้านข้อมูลบนคลาวด์</p>
+
+  <p class="muted" style="margin-top:24px;font-size:9.5pt;">จัดทำโดยทีมพัฒนา Brave POS · เวอร์ชัน 1.0 · 15 กรกฎาคม 2569 — คุณสมบัติทั้งหมดอธิบายตามการทำงานจริงของโปรแกรม</p>
+</section>
+
+</body>
+</html>
