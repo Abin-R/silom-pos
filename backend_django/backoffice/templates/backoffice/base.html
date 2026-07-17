@@ -136,6 +136,8 @@
                href="{% url 'backoffice:report_sell' %}"><i class="bi bi-list-ul"></i> Sales by Bill Detail</a></li>
         <li><a class="nav-link {% if active == 'report_sku' %}active{% endif %}"
                href="{% url 'backoffice:report_sku' %}"><i class="bi bi-tag-fill"></i> Sales by Product</a></li>
+        <li><a class="nav-link {% if active == 'report_tax' %}active{% endif %}"
+               href="{% url 'backoffice:report_tax' %}"><i class="bi bi-journal-text"></i> Tax Report (ภาษีขาย)</a></li>
         <li><a class="nav-link {% if active == 'inventory' %}active{% endif %}"
                href="{% url 'backoffice:inventory' %}"><i class="bi bi-box-seam"></i> Inventory Summary</a></li>
         <li><a class="nav-link {% if active == 'staff' %}active{% endif %}"
