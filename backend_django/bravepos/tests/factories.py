@@ -24,8 +24,12 @@ def make_shop(tax_percent=7, beam_fee=Decimal('3.65')) -> Settings:
     return s
 
 
-def make_branch(name='Silom') -> Branch:
-    return Branch.objects.create(name=name, active=True)
+def make_branch(name='Silom', self_order_enabled=True) -> Branch:
+    # Tests default to self-ordering ON so they exercise the live path; the
+    # gating test flips it off explicitly.
+    return Branch.objects.create(
+        name=name, active=True, self_order_enabled=self_order_enabled,
+    )
 
 
 def open_shift(branch) -> Shift:

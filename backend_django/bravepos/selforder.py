@@ -64,14 +64,24 @@ class SelfOrderError(Exception):
     """Bad request from the customer's browser (surfaced as a 400)."""
 
 
-def branch_is_open(branch) -> bool:
-    """Self-ordering is gated on an open shift.
+def self_order_enabled(branch) -> bool:
+    """The per-branch feature flag.  Deploying the code enables NO branch; each
+    is turned on explicitly.  This — not the UUID in the URL — is what keeps a
+    branch (e.g. biohouse) closed, because /api/branches leaks branch ids."""
+    return bool(getattr(branch, 'self_order_enabled', False))
 
-    Doubles as the closed-shop gate: no shift open means no one is at the till,
-    so nobody would see the order or the printed slip.  Without it a customer
-    could scan a leftover QR at 2am and pay into the void.
+
+def branch_is_open(branch) -> bool:
+    """Whether a customer can order from this branch right now.
+
+    Two gates: the branch must be (1) opted into self-ordering, and (2) have an
+    open shift — no open shift means nobody is at the till to see the order or
+    the printed slip, so a customer could otherwise scan a leftover QR at 2am
+    and pay into the void.
     """
-    return Shift.objects.filter(branch=branch, status='open').exists()
+    return self_order_enabled(branch) and Shift.objects.filter(
+        branch=branch, status='open',
+    ).exists()
 
 
 # Below this on-hand level a product shows a "only N left" nudge (Swiggy-style).

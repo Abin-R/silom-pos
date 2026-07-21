@@ -160,6 +160,21 @@ class PublicEndpointTests(TestCase):
         )
         self.assertEqual(res.status_code, 400)
 
+    def test_disabled_branch_is_closed_even_with_open_shift(self):
+        """The feature flag — not the URL — is what keeps a branch closed.
+        A branch with self_order_enabled=False must refuse orders even though it
+        has an open shift and a valid (public) UUID."""
+        self.branch.self_order_enabled = False
+        self.branch.save()
+        # Menu page still resolves (200) but must not accept an order.
+        res = self.c.post(
+            f'/order/{self.branch.id}/start/',
+            data={'items': [{'product_id': str(self.p.id), 'qty': 1}]},
+            content_type='application/json',
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(SelfOrder.objects.count(), 0)
+
 
 # ─── Branch-level payment credentials ────────────────────────────────────────
 class BranchPaymentConfigTests(TestCase):

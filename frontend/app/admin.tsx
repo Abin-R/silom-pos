@@ -16,7 +16,9 @@ import {
   Switch,
   Alert,
   Linking,
+  Share,
 } from "react-native";
+import qrcode from "qrcode-generator";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -45,7 +47,22 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
 const BACKOFFICE_URL = `${process.env.EXPO_PUBLIC_BACKEND_URL}/backoffice/`;
+// The customer self-ordering site is served at the host root: /order/<branchId>/.
+const SELF_ORDER_BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/order`;
 const AUTH_KEY = "bravepos:auth:v1";
+
+// Render a string as a QR-code PNG data URI for <Image>. Mirrors pos.tsx's
+// helper (error-correction "M", auto type/size).
+function makeQrDataUrl(text: string): string | null {
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    return qr.createDataURL(6, 8);
+  } catch {
+    return null;
+  }
+}
 
 async function doLogout(): Promise<void> {
   try {
@@ -378,7 +395,13 @@ export default function Admin() {
           {section === "customers" && <Customers isWide={isWide} />}
           {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
           {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
-          {section === "settings" && <SettingsView isWide={isWide} />}
+          {section === "settings" && (
+            <SettingsView
+              isWide={isWide}
+              branchId={activeBranchId}
+              branchName={activeBranchName}
+            />
+          )}
         </View>
       </View>
       {/* Off-screen receipt render target — view-shot captures this. */}
@@ -3507,13 +3530,124 @@ function ShiftHistory({
 // =================== OLD DRAWER (removed below, see new one above) ===================
 
 // =================== SETTINGS ===================
-function SettingsView({ isWide }: { isWide: boolean }) {
+// Shows THIS tablet's branch self-ordering link + QR so staff can display it
+// for customers to scan.  The URL is derived from the backend host + the active
+// branch id, so each branch/tablet shows its own — no configuration needed.
+function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchName: string }) {
+  const url = branchId ? `${SELF_ORDER_BASE}/${branchId}/` : "";
+  const qr = useMemo(() => (url ? makeQrDataUrl(url) : null), [url]);
+
+  const share = useCallback(async () => {
+    if (!url) return;
+    try {
+      await Share.share({ message: url });
+    } catch {
+      /* user dismissed the share sheet */
+    }
+  }, [url]);
+
+  if (!branchId) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+        <Text style={styles.h2}>Self-Order QR</Text>
+        <Text style={{ color: "#64748B", marginTop: 8 }}>
+          No active branch on this device. Log in to a branch to see its QR.
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 16, alignItems: "center" }}>
+      <Text style={[styles.h2, { alignSelf: "flex-start" }]}>Self-Order QR</Text>
+      <Text style={{ color: "#475569", alignSelf: "flex-start", marginTop: -6 }}>
+        Customers scan this to order &amp; pay from their phone for{" "}
+        <Text style={{ fontWeight: "700" }}>{branchName || "this branch"}</Text>.
+      </Text>
+
+      <View
+        style={{
+          backgroundColor: "#fff",
+          borderRadius: 20,
+          padding: 20,
+          marginTop: 8,
+          alignItems: "center",
+          borderWidth: 1,
+          borderColor: "#EEE",
+          shadowColor: "#000",
+          shadowOpacity: 0.06,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 2,
+        }}
+      >
+        {qr ? (
+          <Image source={{ uri: qr }} style={{ width: 240, height: 240 }} resizeMode="contain" />
+        ) : (
+          <View style={{ width: 240, height: 240, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: "#94A3B8" }}>Couldn’t render QR</Text>
+          </View>
+        )}
+        <Text style={{ fontWeight: "800", fontSize: 16, marginTop: 12, color: "#0F172A" }}>
+          {branchName || "Self Order"}
+        </Text>
+      </View>
+
+      <View
+        style={{
+          backgroundColor: "#F8FAFC",
+          borderRadius: 12,
+          padding: 12,
+          width: "100%",
+          maxWidth: 360,
+          borderWidth: 1,
+          borderColor: "#E2E8F0",
+        }}
+      >
+        <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>Link</Text>
+        <Text selectable style={{ color: "#0F172A", fontSize: 13 }}>{url}</Text>
+      </View>
+
+      <View style={{ flexDirection: "row", gap: 12, marginTop: 4 }}>
+        <TouchableOpacity
+          onPress={share}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 8,
+            backgroundColor: "#D61222", paddingVertical: 12, paddingHorizontal: 22,
+            borderRadius: 12,
+          }}
+        >
+          <Ionicons name="share-outline" size={18} color="#fff" />
+          <Text style={{ color: "#fff", fontWeight: "700" }}>Share link</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => Linking.openURL(url)}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 8,
+            backgroundColor: "#fff", paddingVertical: 12, paddingHorizontal: 22,
+            borderRadius: 12, borderWidth: 1.5, borderColor: "#D61222",
+          }}
+        >
+          <Ionicons name="open-outline" size={18} color="#D61222" />
+          <Text style={{ color: "#D61222", fontWeight: "700" }}>Open</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={{ color: "#94A3B8", fontSize: 12, textAlign: "center", maxWidth: 340, marginTop: 4 }}>
+        Print this and place it on the table or counter. Each branch shows its own link automatically.
+      </Text>
+    </ScrollView>
+  );
+}
+
+function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branchId: string; branchName: string }) {
   const sections: { name: string; icon: any; color: string }[] = [
     { name: "Shop", icon: "home", color: "#EF4444" },
     { name: "Floor plan", icon: "grid", color: "#3B82F6" },
     { name: "Language", icon: "language", color: "#8B5CF6" },
     { name: "Receipt", icon: "receipt", color: "#EF4444" },
     { name: "Payment", icon: "card", color: "#F59E0B" },
+    { name: "Self-Order QR", icon: "qr-code", color: "#D61222" },
     { name: "Drawer", icon: "calculator", color: "#06B6D4" },
     { name: "Sales channels", icon: "link", color: "#EC4899" },
     { name: "Printers", icon: "print", color: "#10B981" },
@@ -3599,7 +3733,9 @@ function SettingsView({ isWide }: { isWide: boolean }) {
             <Text style={styles.backText}>Settings</Text>
           </TouchableOpacity>
         )}
-        {active === "Shop" && s ? (
+        {active === "Self-Order QR" ? (
+          <SelfOrderQrView branchId={branchId} branchName={branchName} />
+        ) : active === "Shop" && s ? (
           <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
             <Text style={styles.h2}>Shop</Text>
             <Field label="Shop Name">

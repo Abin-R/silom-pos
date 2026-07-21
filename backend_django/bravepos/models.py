@@ -166,6 +166,13 @@ class Branch(models.Model):
     #
     # Secrets never leave the backoffice: BranchSerializer (the public /branches
     # feed the login screen reads) does NOT expose these fields.
+    # Per-branch on/off switch for customer self-ordering — the feature flag for
+    # a staged rollout AND the instant kill switch.  Default False, so deploying
+    # the code exposes NO branch (biohouse included) until it is turned on here.
+    # ``/api/branches`` is public and leaks branch ids, so this flag — not URL
+    # obscurity — is what keeps self-ordering closed on a branch.
+    self_order_enabled = models.BooleanField(default=False)
+
     payment_own = models.BooleanField(default=False)
     beam_merchant_id = models.CharField(max_length=128, blank=True, default="")
     beam_api_key = models.CharField(max_length=256, blank=True, default="")
