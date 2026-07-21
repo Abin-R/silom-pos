@@ -37,6 +37,8 @@ urlpatterns = [
     path("report/sell", views.report_sell, name="report_sell"),
     path("report/sell/export", views.report_sell_export, name="report_sell_export"),
     path("report/sku", views.report_sku, name="report_sku"),
+    path("report/tax", views.report_tax, name="report_tax"),
+    path("report/tax/export", views.report_tax_export, name="report_tax_export"),
     path("report/sku/export", views.report_sku_export, name="report_sku_export"),
 
     # Inventory

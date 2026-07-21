@@ -1,0 +1,97 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+
+{% block title %}Tax Report (ภาษีขาย) — Brave POS{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* Print: hide the chrome so the page prints as the RD-format report. */
+  @media print {
+    .sidebar, .topbar, .filterbar, .no-print { display: none !important; }
+    .content-area { margin-left: 0 !important; }
+    .card { border: 0; box-shadow: none; }
+  }
+  .rd-header .label { color: #6c757d; min-width: 15rem; display: inline-block; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h4 class="mb-1">รายงานภาษีขาย</h4>
+        <div class="text-muted small">
+          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
+        </div>
+      </div>
+      <div class="no-print">
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+          <i class="bi bi-printer"></i> Print
+        </button>
+        <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_tax_export' %}{% if qs %}?{{ qs }}{% endif %}">
+          <i class="bi bi-file-earmark-spreadsheet"></i> Export
+        </a>
+      </div>
+    </div>
+
+    {# ── Taxpayer identity block (RD-prescribed header) ── #}
+    <div class="rd-header small mb-3">
+      <div><span class="label">ชื่อผู้ประกอบการ</span>{{ header.company_name }}</div>
+      <div><span class="label">เลขประจำตัวผู้เสียภาษี</span>{{ header.tax_id }}</div>
+      <div><span class="label">สถานประกอบการ</span>{% if branch %}สาขา {{ branch.name }}{% else %}ทุกสาขา{% endif %}</div>
+      <div><span class="label">เลขรหัสประจำเครื่อง (POS ID)</span>{{ header.pos_id }}</div>
+      <div><span class="label">อัตราภาษีมูลค่าเพิ่ม</span>{{ header.tax_percent|floatformat:"-2" }}% (ราคารวมภาษี)</div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>วัน เดือน ปี</th>
+            <th>เลขที่ใบกำกับภาษีอย่างย่อ</th>
+            <th class="text-end">จำนวนฉบับ</th>
+            <th class="text-end">มูลค่าสินค้า/บริการ</th>
+            <th class="text-end">ภาษีมูลค่าเพิ่ม</th>
+            <th class="text-end">รวม</th>
+            <th>หมายเหตุ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.date|date:"d/m/Y" }}</td>
+            <td class="currency">{{ row.inv_from }}{% if row.inv_to != row.inv_from %} – {{ row.inv_to }}{% endif %}</td>
+            <td class="text-end">{{ row.bill_count }}</td>
+            <td class="text-end currency">{{ row.value|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ row.vat|floatformat:2|intcomma }}</td>
+            <td class="text-end currency fw-semibold">{{ row.total|floatformat:2|intcomma }}</td>
+            <td class="small {% if row.voided %}text-danger{% else %}text-muted{% endif %}">
+              {% if row.voided %}ยกเลิก: {{ row.voided|join:", " }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7" class="text-center text-muted py-4">No tax invoices in range.</td></tr>
+          {% endfor %}
+        </tbody>
+        {% if rows %}
+        <tfoot class="table-light fw-semibold">
+          <tr>
+            <td>รวมทั้งสิ้น</td>
+            <td></td>
+            <td class="text-end">{{ totals.bills }}</td>
+            <td class="text-end currency">{{ totals.value|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ totals.vat|floatformat:2|intcomma }}</td>
+            <td class="text-end currency">{{ totals.total|floatformat:2|intcomma }}</td>
+            <td></td>
+          </tr>
+        </tfoot>
+        {% endif %}
+      </table>
+    </div>
+    <div class="text-muted small mt-2">
+      {{ rows|length }} day{{ rows|length|pluralize }}. มูลค่าคำนวณจากยอดรวมที่ชำระ (รวมภาษีมูลค่าเพิ่ม) — ภาษี = ยอดรวม × {{ header.tax_percent|floatformat:"-2" }} / (100 + {{ header.tax_percent|floatformat:"-2" }})
+    </div>
+  </div>
+</div>
+{% endblock %}

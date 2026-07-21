@@ -13,7 +13,7 @@ from decimal import Decimal
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import HttpResponse
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum, Q
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Max, Min, Sum, Q
 from django.db.models.functions import Coalesce, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -1163,6 +1163,184 @@ def report_daily_detail_export(request, date_str):
         + [num(totals["cost"]), num(totals["profit"]), "", "", "", ""]
     )
 
+    return response
+
+
+# ─── Output tax report (รายงานภาษีขาย) ──────────────────────────────────
+def _report_tax_rows(branch, dfrom, dto):
+    """One row per calendar day in the Revenue Department's output-tax-report
+    layout: date, abbreviated-tax-invoice number range, sales value ex-VAT and
+    the VAT amount.
+
+    Amounts derive from ``total`` — the VAT-inclusive figure the customer
+    actually paid and the one the receipt's own VAT line is computed from — so
+    the report always reconciles with the issued ใบกำกับภาษีอย่างย่อ
+    (including card processing fees, which ``subtotal`` misses).  Voided bills
+    are excluded from the money columns but their invoice numbers are listed
+    in the remarks column: the PS sequence is continuous, so a cancelled
+    invoice must stay visibly accounted for.
+    """
+    start, end = _date_window(dfrom, dto)
+
+    base = Order.objects.filter(created_at__gte=start, created_at__lte=end)
+    if branch:
+        base = base.filter(branch=branch)
+
+    settings_row = Settings.objects.first()
+    tax_percent = settings_row.tax_percent if settings_row else Decimal("7")
+
+    # min()/max() over order_number is safe because the PS numbers are fixed
+    # width ("PS" + zero-padded 9 digits) — string order == numeric order.
+    daily = (
+        base.exclude(status="cancel")
+        .annotate(date_only=TruncDate("created_at"))
+        .values("date_only")
+        .annotate(
+            total=Sum("total"),
+            bill_count=Count("id"),
+            inv_from=Min("order_number"),
+            inv_to=Max("order_number"),
+        )
+        .order_by("date_only")
+    )
+
+    voided_map: dict = {}
+    for d, number in (
+        base.filter(status="cancel")
+        .annotate(date_only=TruncDate("created_at"))
+        .values_list("date_only", "order_number")
+        .order_by("order_number")
+    ):
+        voided_map.setdefault(d, []).append(number)
+
+    rows = []
+    for entry in daily:
+        d = entry["date_only"]
+        total = entry["total"] or Decimal(0)
+        # ``total`` is VAT-inclusive regardless of tax_mode (an
+        # exclusive-mode bill has the VAT added into total at payment time),
+        # so the ex-VAT base is always total × 100 / (100 + rate).
+        vat = total * tax_percent / (Decimal(100) + tax_percent)
+        rows.append({
+            "date": d,
+            "inv_from": entry["inv_from"],
+            "inv_to": entry["inv_to"],
+            "bill_count": entry["bill_count"] or 0,
+            "value": total - vat,
+            "vat": vat,
+            "total": total,
+            "voided": voided_map.pop(d, []),
+        })
+
+    # A day where *every* bill was voided still needs a row, or its invoice
+    # numbers would silently vanish from the sequence.
+    for d, numbers in voided_map.items():
+        rows.append({
+            "date": d,
+            "inv_from": numbers[0],
+            "inv_to": numbers[-1],
+            "bill_count": 0,
+            "value": Decimal(0),
+            "vat": Decimal(0),
+            "total": Decimal(0),
+            "voided": numbers,
+        })
+
+    rows.sort(key=lambda r: r["date"])
+    return rows
+
+
+def _report_tax_header(branch):
+    """Taxpayer identity block the RD format requires above the table.
+    Branch-level tax_id/pos_id override the shop-wide Settings values."""
+    settings_row = Settings.objects.first()
+    return {
+        "company_name": (
+            (settings_row.company_name or settings_row.shop_name)
+            if settings_row else ""
+        ),
+        "tax_id": (
+            (branch.tax_id if branch and branch.tax_id else None)
+            or (settings_row.tax_id if settings_row else "")
+        ),
+        "pos_id": (
+            (branch.pos_id if branch and branch.pos_id else None)
+            or (settings_row.pos_id if settings_row else "")
+        ),
+        "tax_percent": settings_row.tax_percent if settings_row else Decimal("7"),
+    }
+
+
+def _report_tax_totals(rows):
+    totals = {"value": Decimal(0), "vat": Decimal(0), "total": Decimal(0), "bills": 0}
+    for r in rows:
+        totals["value"] += r["value"]
+        totals["vat"] += r["vat"]
+        totals["total"] += r["total"]
+        totals["bills"] += r["bill_count"]
+    return totals
+
+
+@login_required
+def report_tax(request):
+    """รายงานภาษีขาย — the output tax report in the Director-General's
+    prescribed layout, one row per day of abbreviated tax invoices."""
+    branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_tax_rows(branch, dfrom, dto)
+
+    context = {
+        "active": "report_tax",
+        "branches": branches,
+        "branch": branch,
+        "date_from": dfrom.isoformat(),
+        "date_to": dto.isoformat(),
+        "rows": rows,
+        "totals": _report_tax_totals(rows),
+        "header": _report_tax_header(branch),
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/report_tax.html", context)
+
+
+@login_required
+def report_tax_export(request):
+    """CSV of the output tax report for the current filters."""
+    _branches, branch, dfrom, dto = _common_filters(request)
+    rows = _report_tax_rows(branch, dfrom, dto)
+    header = _report_tax_header(branch)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    filename = f"tax_report_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    response, writer = _csv_response(filename)
+
+    _write_export_header(writer, "รายงานภาษีขาย (Output Tax Report)", branch, dfrom, dto)
+    writer.writerow(["ชื่อผู้ประกอบการ", header["company_name"]])
+    writer.writerow(["เลขประจำตัวผู้เสียภาษี", header["tax_id"]])
+    writer.writerow(["เลขรหัสประจำเครื่อง (POS ID)", header["pos_id"]])
+    writer.writerow([])
+    writer.writerow([
+        "วัน เดือน ปี", "เลขที่ใบกำกับภาษี (จาก)", "เลขที่ใบกำกับภาษี (ถึง)",
+        "จำนวนฉบับ", "มูลค่าสินค้า/บริการ", "จำนวนเงินภาษีมูลค่าเพิ่ม",
+        "รวม", "หมายเหตุ",
+    ])
+
+    for r in rows:
+        remark = (
+            "ยกเลิก: " + ", ".join(r["voided"]) if r["voided"] else ""
+        )
+        writer.writerow([
+            r["date"].strftime("%d/%m/%Y"),
+            r["inv_from"], r["inv_to"], r["bill_count"],
+            _csv_num(r["value"]), _csv_num(r["vat"]), _csv_num(r["total"]),
+            remark,
+        ])
+
+    totals = _report_tax_totals(rows)
+    writer.writerow([
+        "รวมทั้งสิ้น", "", "", totals["bills"],
+        _csv_num(totals["value"]), _csv_num(totals["vat"]),
+        _csv_num(totals["total"]), "",
+    ])
     return response
 
 
