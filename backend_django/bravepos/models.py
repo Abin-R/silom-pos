@@ -327,7 +327,10 @@ class Settings(models.Model):
     shop_name = models.CharField(max_length=200, default="Brave POS")
     business_type = models.CharField(max_length=64, default="Restaurant")
     tax_id = models.CharField(max_length=64, blank=True, default="")
-    pos_id = models.CharField(max_length=64, default="001")
+    # Blank until the Revenue Department issues an approved POS machine number.
+    # Mirrors Branch.pos_id (also blank by default) so the app shows nothing
+    # rather than a placeholder "001" before RD approval.
+    pos_id = models.CharField(max_length=64, blank=True, default="")
     branch = models.CharField(max_length=120, default="Main")
     pos_number = models.CharField(max_length=16, default="001")
     open_time = models.CharField(max_length=8, default="09:00")
