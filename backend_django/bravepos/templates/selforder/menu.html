@@ -151,8 +151,7 @@ for money; the totals shown here are a preview.
 {% else %}
   <div class="pills" id="pills"></div>
   <div id="menu"></div>
-  {# Lets the last (possibly short) category scroll up to the top when its
-     pill is tapped — sized in JS to just fill the remaining viewport. #}
+  {% comment %}Sized in JS so the last (short) category can scroll to the top.{% endcomment %}
   <div id="scroll-pad" aria-hidden="true"></div>
 
   <div class="cartbar" id="cartbar">
@@ -346,8 +345,36 @@ for money; the totals shown here are a preview.
   document.getElementById("open-cart").onclick = openSheet;
   scrim.onclick = closeSheet;
   document.getElementById("sheet-close").onclick = closeSheet;
-  document.getElementById("grab").onclick = closeSheet;
   document.getElementById("clear").onclick = () => { cart.clear(); renderMenu(); sizeScrollPad(); syncCart(); };
+
+  // Swipe the sheet down to dismiss.  Drag is bound to the handle + header
+  // only, so it never fights the scrollable item list below.
+  (function enableSheetDrag() {
+    let startY = 0, dy = 0, dragging = false;
+    const zones = [document.getElementById("grab"), sheet.querySelector(".head")];
+    const onStart = (e) => {
+      dragging = true; startY = e.touches[0].clientY; dy = 0;
+      sheet.style.transition = "none";
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      dy = Math.max(0, e.touches[0].clientY - startY);   // downward only
+      sheet.style.transform = "translateY(" + dy + "px)";
+    };
+    const onEnd = () => {
+      if (!dragging) return;
+      dragging = false;
+      sheet.style.transition = "";
+      sheet.style.transform = "";
+      if (dy > 80) closeSheet();   // dragged far enough → dismiss
+    };
+    zones.forEach((z) => {
+      z.addEventListener("touchstart", onStart, { passive: true });
+      z.addEventListener("touchmove", onMove, { passive: true });
+      z.addEventListener("touchend", onEnd);
+      z.addEventListener("touchcancel", onEnd);
+    });
+  })();
 
   // Give the last category enough room below it to scroll up to the top when
   // its pill is tapped (otherwise a short final section can't reach the top).
