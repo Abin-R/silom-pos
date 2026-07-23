@@ -178,7 +178,9 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
       ))}
       <Text style={s.companyCenter}>{sh.phone}</Text>
       <Text style={s.companyCenter}>เลขประจำตัวผู้เสียภาษี: {sh.tax_id}</Text>
-      <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text>
+      {/* POS ID hidden until the Revenue Department issues an approved machine
+          number. Re-enable this line once the RD application is approved. */}
+      {/* <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text> */}
 
       <Text style={s.receiptType}>ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</Text>
 
