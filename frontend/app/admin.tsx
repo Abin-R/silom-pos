@@ -4245,6 +4245,15 @@ function PrintersSection({
     await saveLocalPrinterConfig(next);
   }, [localCfg]);
 
+  // Per-device receipt print width.  Lower it if this printer clips the right
+  // edge; undefined = full 576 (default, e.g. biohouse).
+  const setPrintWidth = useCallback(async (w: number | undefined) => {
+    if (!localCfg) return;
+    const next = { ...localCfg, printWidth: w };
+    setLocalCfg(next);
+    await saveLocalPrinterConfig(next);
+  }, [localCfg]);
+
   const runLocalTest = useCallback(async () => {
     if (!localCfg) return;
     setLocalTesting(true);
@@ -4467,6 +4476,42 @@ function PrintersSection({
             <Text style={styles.secondaryBtnText}>Add by IP</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Receipt width — fixes right-edge clipping on printers whose head is
+            narrower than the default 576 dots.  Lower it and Test Print until
+            the whole receipt fits. */}
+        {localCfg?.identifier && (
+          <View style={{ marginTop: 14 }}>
+            <Text style={styles.formLabel}>Receipt width</Text>
+            <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 8 }}>
+              If the right side of the receipt is cut off, pick a smaller width, then Test Print. Keep lowering until it fits.
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+              {[
+                { label: "Full", v: undefined as number | undefined },
+                { label: "560", v: 560 },
+                { label: "512", v: 512 },
+                { label: "480", v: 480 },
+                { label: "448", v: 448 },
+              ].map((opt) => {
+                const isActive = (localCfg.printWidth ?? 576) === (opt.v ?? 576);
+                return (
+                  <TouchableOpacity
+                    key={opt.label}
+                    onPress={() => setPrintWidth(opt.v)}
+                    style={[
+                      styles.secondaryBtn,
+                      isActive && { borderColor: "#10B981", backgroundColor: "#F0FDF4" },
+                    ]}
+                    testID={`printwidth-${opt.label}`}
+                  >
+                    <Text style={styles.secondaryBtnText}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
 
         {localFound.length > 0 && (
           <View style={{ gap: 6, marginTop: 8 }}>

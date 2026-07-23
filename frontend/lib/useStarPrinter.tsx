@@ -103,20 +103,27 @@ export function useStarPrinter() {
         } else if (!BravePosPrinter || typeof BravePosPrinter.printImage !== "function") {
           result = { ok: false, error: "Native printImage method not linked (rebuild needed)" };
         } else {
+          // Per-device print width.  The receipt view is laid out at
+          // RECEIPT_WIDTH (576); capturing at a smaller width scales the whole
+          // thing down proportionally so it fits a printer with a narrower head
+          // (the native module prints 1px→1dot with no scaling, so an
+          // over-wide bitmap clips on the right).  Defaults to 576 → unchanged
+          // for printers that already fit.
+          const printW = active.config.printWidth || RECEIPT_WIDTH;
           const base64 = await captureRef(receiptRef, {
             format: "png",
             quality: 1,
             result: "base64",
-            // CRITICAL: forces the PNG to be exactly RECEIPT_WIDTH pixels
-            // wide regardless of device density.  Without this the PNG is
-            // device-pixel-wide → 1152px on 2x → printer clips right edge.
-            width: RECEIPT_WIDTH,
+            // Force the PNG to be exactly printW pixels wide regardless of
+            // device density (otherwise it's device-pixel-wide → e.g. 1152px
+            // on a 2x screen → clips).
+            width: printW,
           });
           if (cancelled) return;
           const res = await BravePosPrinter.printImage(
             active.config.identifier,
             base64,
-            RECEIPT_WIDTH,
+            printW,
           );
           result = res.ok ? { ok: true } : { ok: false, error: res.error || "Print failed" };
         }
