@@ -107,10 +107,18 @@ for money; the totals shown here are a preview.
     max-height: 82vh; display: flex; flex-direction: column;
   }
   .sheet.show { transform: translateY(0); }
-  .sheet .grab { width: 40px; height: 4px; background: #ddd; border-radius: 4px; margin: 10px auto 4px; }
-  .sheet .head { padding: 6px 18px 12px; display: flex; align-items: center; }
+  /* Tappable drag handle (also closes the sheet). */
+  .sheet .grab { display: block; width: 44px; height: 5px; background: #d8d8dc; border-radius: 4px; margin: 10px auto 4px; padding: 0; }
+  .sheet .head { padding: 6px 16px 12px; display: flex; align-items: center; gap: 10px; }
   .sheet .head h3 { font-size: 17px; font-weight: 800; margin: 0; }
   .sheet .head .clear { margin-left: auto; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+  .sheet .head .sheet-close {
+    width: 32px; height: 32px; border-radius: 999px; background: #f1f1f4;
+    color: var(--ink-2); font-size: 15px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sheet .head .sheet-close:active { background: #e5e5ea; }
+  #scroll-pad { height: 0; }
   .sheet .lines { overflow-y: auto; padding: 0 18px; }
   .line { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
   .line .l-name { flex: 1; min-width: 0; font-weight: 600; }
@@ -127,6 +135,7 @@ for money; the totals shown here are a preview.
 
 {% block content %}
 <div class="appbar">
+  <span class="brand-logo" aria-hidden="true"></span>
   <div>
     <div class="title">{{ branch.name }}</div>
     <div class="sub">สั่งอาหารเอง · Order &amp; pay from your phone</div>
@@ -142,6 +151,9 @@ for money; the totals shown here are a preview.
 {% else %}
   <div class="pills" id="pills"></div>
   <div id="menu"></div>
+  {# Lets the last (possibly short) category scroll up to the top when its
+     pill is tapped — sized in JS to just fill the remaining viewport. #}
+  <div id="scroll-pad" aria-hidden="true"></div>
 
   <div class="cartbar" id="cartbar">
     <div class="inner" id="open-cart">
@@ -155,10 +167,11 @@ for money; the totals shown here are a preview.
 
   <div class="scrim" id="scrim"></div>
   <div class="sheet" id="sheet">
-    <div class="grab"></div>
+    <button class="grab" id="grab" aria-label="Close"></button>
     <div class="head">
       <h3>ตะกร้าของคุณ · Your order</h3>
       <button class="clear" id="clear">ล้าง</button>
+      <button class="sheet-close" id="sheet-close" aria-label="Close">✕</button>
     </div>
     <div class="lines" id="cart-lines"></div>
     <div class="foot">
@@ -324,14 +337,30 @@ for money; the totals shown here are a preview.
     }
   }
 
-  // Sheet open/close
+  // Sheet open/close.  Locking the body stops the menu scrolling behind the
+  // sheet; the sheet's own list scrolls internally.
   const sheet = document.getElementById("sheet");
   const scrim = document.getElementById("scrim");
-  function openSheet() { sheet.classList.add("show"); scrim.classList.add("show"); }
-  function closeSheet() { sheet.classList.remove("show"); scrim.classList.remove("show"); }
+  function openSheet() { sheet.classList.add("show"); scrim.classList.add("show"); document.body.classList.add("sheet-open"); }
+  function closeSheet() { sheet.classList.remove("show"); scrim.classList.remove("show"); document.body.classList.remove("sheet-open"); }
   document.getElementById("open-cart").onclick = openSheet;
   scrim.onclick = closeSheet;
-  document.getElementById("clear").onclick = () => { cart.clear(); renderMenu(); syncCart(); };
+  document.getElementById("sheet-close").onclick = closeSheet;
+  document.getElementById("grab").onclick = closeSheet;
+  document.getElementById("clear").onclick = () => { cart.clear(); renderMenu(); sizeScrollPad(); syncCart(); };
+
+  // Give the last category enough room below it to scroll up to the top when
+  // its pill is tapped (otherwise a short final section can't reach the top).
+  function sizeScrollPad() {
+    const pad = document.getElementById("scroll-pad");
+    if (!pad || !cats.length) return;
+    const lastSec = document.getElementById(catId(cats[cats.length - 1]));
+    const pills = document.getElementById("pills");
+    if (!lastSec || !pills) return;
+    const stickyH = document.querySelector(".appbar").offsetHeight + pills.offsetHeight;
+    pad.style.height = Math.max(0, window.innerHeight - stickyH - lastSec.offsetHeight - 24) + "px";
+  }
+  window.addEventListener("resize", sizeScrollPad);
 
   // Scroll-spy: highlight the pill for the section in view.
   const spy = () => {
@@ -340,7 +369,18 @@ for money; the totals shown here are a preview.
       const sec = document.getElementById(catId(c));
       if (sec && sec.getBoundingClientRect().top <= 130) active = c;
     }
-    document.querySelectorAll(".pill").forEach((b) => b.classList.toggle("active", b.dataset.cat === active));
+    // At the very bottom, force the last pill active — a short final section
+    // may never cross the 130px line.
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
+      active = cats[cats.length - 1];
+    }
+    const pillsEl = document.getElementById("pills");
+    document.querySelectorAll(".pill").forEach((b) => {
+      const on = b.dataset.cat === active;
+      b.classList.toggle("active", on);
+      // Keep the active pill visible in the horizontal strip.
+      if (on) b.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    });
   };
   window.addEventListener("scroll", spy, { passive: true });
 
@@ -365,7 +405,10 @@ for money; the totals shown here are a preview.
 
   renderPills();
   renderMenu();
+  sizeScrollPad();
   syncCart();
+  // Re-measure once images/fonts settle (they change section heights).
+  window.addEventListener("load", sizeScrollPad);
 </script>
 {% endif %}
 {% endblock %}
