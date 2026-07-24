@@ -19,9 +19,14 @@ class BranchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Branch
+        # ``self_order_enabled`` lets the POS app switch the whole self-ordering
+        # feature off per branch (no print poller, no QR screen), so a branch
+        # that doesn't use it runs exactly as it did before.  Not a secret — the
+        # payment credentials on Branch are deliberately NOT exposed here.
         fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id',
-                  'peak_account_code', 'active', 'created_at', 'cashier_email']
-        read_only_fields = ['created_at', 'cashier_email']
+                  'peak_account_code', 'active', 'created_at', 'cashier_email',
+                  'self_order_enabled']
+        read_only_fields = ['created_at', 'cashier_email', 'self_order_enabled']
 
     def get_cashier_email(self, obj):
         s = obj.staff.filter(role='cashier').order_by('created_at').first()

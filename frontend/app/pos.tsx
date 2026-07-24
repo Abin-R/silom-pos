@@ -117,7 +117,9 @@ export default function POS() {
   // would give view-shot two hidden overlays to fight over.  Mounted only here,
   // never in admin.tsx: both screens can be mounted at once, and that would
   // double every receipt.  Waits for auth — the endpoint is session-scoped.
-  useSelfOrderPrinting(printReceipt, activeBranchName, authLoaded);
+  // Gated on the branch's self_order_enabled flag inside the hook — a branch
+  // that doesn't use self-ordering never polls and never prints.
+  useSelfOrderPrinting(printReceipt, activeBranchName, authLoaded, activeBranchId);
 
   useEffect(() => {
     (async () => {

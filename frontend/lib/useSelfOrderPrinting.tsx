@@ -15,7 +15,7 @@
 // Mount this ONCE, in pos.tsx only. admin.tsx also mounts useStarPrinter, and
 // in an expo-router stack both screens can be mounted at the same time.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api";
 import { loadLocalPrinterConfig } from "./localPrinterConfig";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
@@ -81,6 +81,7 @@ export function useSelfOrderPrinting(
   printReceipt: PrintFn,
   activeBranchName?: string,
   enabled: boolean = true,
+  branchId?: string,
 ) {
   // Keep the latest values without restarting the interval on every render.
   const printRef = useRef(printReceipt);
@@ -88,8 +89,31 @@ export function useSelfOrderPrinting(
   useEffect(() => { printRef.current = printReceipt; }, [printReceipt]);
   useEffect(() => { branchRef.current = activeBranchName; }, [activeBranchName]);
 
+  // Does THIS branch use self-ordering at all?  Branches with the feature off
+  // (e.g. biohouse) must behave exactly as before: no polling, no printing,
+  // nothing. We check once per branch rather than polling blindly.
+  const [allowed, setAllowed] = useState(false);
   useEffect(() => {
-    if (!enabled) return;
+    let cancelled = false;
+    if (!enabled || !branchId) { setAllowed(false); return; }
+    (async () => {
+      try {
+        const res = await apiFetch("/branches");
+        if (!res.ok || cancelled) return;
+        const list = await res.json();
+        const b = (Array.isArray(list) ? list : []).find(
+          (x: any) => String(x?.id) === String(branchId),
+        );
+        if (!cancelled) setAllowed(!!b?.self_order_enabled);
+      } catch {
+        if (!cancelled) setAllowed(false);   // fail closed
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [enabled, branchId]);
+
+  useEffect(() => {
+    if (!enabled || !allowed) return;
     let stopped = false;
     let busy = false;
 
@@ -134,5 +158,5 @@ export function useSelfOrderPrinting(
     tick();
     const timer = setInterval(tick, POLL_MS);
     return () => { stopped = true; clearInterval(timer); };
-  }, [enabled]);
+  }, [enabled, allowed]);
 }

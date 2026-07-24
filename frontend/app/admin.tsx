@@ -3662,6 +3662,29 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
   const [active, setActive] = useState("Shop");
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Self-ordering is per-branch.  On a branch that doesn't use it (e.g.
+  // biohouse) the section is hidden entirely, so the feature is invisible
+  // there rather than shown-but-useless.
+  const [selfOrderOn, setSelfOrderOn] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!branchId) { setSelfOrderOn(false); return; }
+    apiFetch(`${API}/branches`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => {
+        if (cancelled) return;
+        const b = (Array.isArray(list) ? list : []).find(
+          (x: any) => String(x?.id) === String(branchId),
+        );
+        setSelfOrderOn(!!b?.self_order_enabled);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [branchId]);
+  const visibleSections = sections.filter(
+    (sec) => sec.name !== "Self-Order QR" || selfOrderOn,
+  );
   // Narrow phones can't show the list + the detail side by side (leftNav is
   // 280px wide, leaving ~95px for the detail pane).  Use a master-detail
   // pattern: list first, then drill into a section.
@@ -3704,7 +3727,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
         <View style={[styles.leftNav, !isWide && styles.fullCol]}>
           <Text style={styles.sectionHeader}>Settings</Text>
           <ScrollView>
-            {sections.map((sec) => (
+            {visibleSections.map((sec) => (
               <TouchableOpacity
                 key={sec.name}
                 style={[styles.settingsRow, isWide && active === sec.name && styles.leftNavRowActive]}
