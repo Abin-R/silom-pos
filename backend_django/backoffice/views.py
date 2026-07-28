@@ -8,7 +8,7 @@ from __future__ import annotations
 import csv
 import json
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
@@ -31,6 +31,7 @@ from bravepos.models import (
     Unit,
 )
 from bravepos import images
+from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
 
@@ -2260,6 +2261,70 @@ def _branch_topbar_context():
     }
 
 
+# ─── Payment credentials (backoffice-only) ──────────────────────────────────
+# The POS app has no payment screen: a tablet on a shop counter has no business
+# learning the merchant account or changing where money lands.  Both the
+# per-branch config and the shop template are edited here and nowhere else.
+MASK_PREFIX = "••••"
+PAYMENT_SECRET_FIELDS = ("beam_api_key", "omise_secret_key")
+PAYMENT_FEE_FIELDS = ("beam_card_fee_percent", "omise_fee_percent")
+
+
+def mask_secret(value: str) -> str:
+    """``••••1234`` for display — never the key itself.
+
+    Short values are masked whole rather than leaking most of a short key.
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    return MASK_PREFIX + v[-4:] if len(v) > 4 else MASK_PREFIX
+
+
+def _apply_payment_form(obj, post) -> None:
+    """Copy submitted payment fields onto a Branch or the Settings template.
+
+    Secrets are write-only: the form renders a placeholder, never the stored
+    key, so a blank submission means "leave it alone" rather than "wipe it".
+    Clearing has to be asked for explicitly via the matching ``_clear`` box, so
+    a user who tabs past the field can't silently un-configure a live branch.
+    """
+    obj.beam_merchant_id = (post.get("beam_merchant_id") or "").strip()
+    obj.omise_public_key = (post.get("omise_public_key") or "").strip()
+    obj.beam_sandbox = post.get("payment_mode") == "test"
+
+    for field in PAYMENT_SECRET_FIELDS:
+        if post.get(f"{field}_clear") == "on":
+            setattr(obj, field, "")
+            continue
+        submitted = (post.get(field) or "").strip()
+        if submitted and not submitted.startswith(MASK_PREFIX):
+            setattr(obj, field, submitted)
+
+    for field in PAYMENT_FEE_FIELDS:
+        raw = (post.get(field) or "").strip()
+        if not raw:
+            continue
+        try:
+            setattr(obj, field, Decimal(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+
+
+def _payment_context(obj) -> dict:
+    """What the payment form needs to render without ever emitting a secret.
+
+    ``pay_obj`` is whichever row is being edited (a Branch or the Settings
+    template) so ``_payment_fields.html`` can serve both.
+    """
+    return {
+        "pay_obj": obj,
+        "pay_beam_key_mask": mask_secret(obj.beam_api_key),
+        "pay_omise_key_mask": mask_secret(obj.omise_secret_key),
+        "pay_is_test": obj.beam_sandbox,
+    }
+
+
 def _apply_branch_form(b: Branch, post) -> Branch:
     b.name = (post.get("name") or "").strip()
     b.code = (post.get("code") or "").strip()
@@ -2272,6 +2337,7 @@ def _apply_branch_form(b: Branch, post) -> Branch:
     b.close_time = (post.get("close_time") or "22:00").strip() or "22:00"
     b.peak_account_code = (post.get("peak_account_code") or "BSV003").strip() or "BSV003"
     b.active = post.get("active") == "on"
+    _apply_payment_form(b, post)
     return b
 
 
@@ -2281,6 +2347,12 @@ def branch_list(request):
     is sourced from the single Settings row; branch-level overrides
     (tax_id, address, phone) come from the Branch itself."""
     rows = list(Branch.objects.all().order_by("name"))
+    # Surface each branch's payment lane and key ending on the list, so "which
+    # branches are live, and which still need a key" is one glance rather than
+    # opening every branch in turn.
+    for row in rows:
+        row.beam_key_mask = mask_secret(row.beam_api_key)
+        row.omise_key_mask = mask_secret(row.omise_secret_key)
     context = {
         "active": "branches",
         "branches_all": rows,
@@ -2301,6 +2373,7 @@ def branch_detail(request, branch_id):
         "active": "branches",
         "branch_obj": b,
         "mode": "edit",
+        **_payment_context(b),
         **_branch_topbar_context(),
     }
     return render(request, "backoffice/branch_form.html", context)
@@ -2313,10 +2386,16 @@ def branch_new(request):
         _apply_branch_form(b, request.POST)
         b.save()
         return redirect("backoffice:branch_list")
+    # Show the payment config this branch is about to inherit rather than an
+    # empty form — the same seeding the pre_save signal will do on save, run
+    # early on a throwaway instance purely so the page tells the truth.
+    blank = Branch(active=True)
+    seed_branch_payment(blank)
     context = {
         "active": "branches",
-        "branch_obj": Branch(active=True),
+        "branch_obj": blank,
         "mode": "new",
+        **_payment_context(blank),
         **_branch_topbar_context(),
     }
     return render(request, "backoffice/branch_form.html", context)
@@ -2361,6 +2440,10 @@ def shop_settings(request):
         except Exception:
             pass
         s.service_charge_enabled = s.service_charge_percent > 0
+        # Payment credentials on the Settings row are a *template*: they seed
+        # branches created from here on and are never read at charge time, so
+        # editing them cannot disturb a branch that is already trading.
+        _apply_payment_form(s, request.POST)
         s.save()
 
         # ── Per-branch (selected Branch) ─────────────────────────────
@@ -2387,6 +2470,7 @@ def shop_settings(request):
         "branches": branches,
         "branch": branch,
         "hide_dates": True,
+        **_payment_context(s),
     }
     return render(request, "backoffice/shop_settings.html", context)
 
