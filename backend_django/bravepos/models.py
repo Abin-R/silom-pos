@@ -174,6 +174,16 @@ class Branch(models.Model):
     # ``peak.create_peak_receipt_for_order``.
     peak_account_code = models.CharField(max_length=32, blank=True, default="BSV003")
 
+    # ── Per-branch payment credentials ─────────────────────────────────
+    # Each branch can run its own Beam/Omise account.  This is an *override*,
+    # not a replacement: while ``payment_own`` is False (the default for every
+    # existing branch) all payment flows keep reading the shop-wide ``Settings``
+    # singleton exactly as before, so turning this on for one branch changes
+    # nothing for the others — and flipping it back off is an instant rollback.
+    # Resolution lives in ``gateways.resolve_payment_config``.
+    #
+    # Secrets never leave the backoffice: BranchSerializer (the public /branches
+    # feed the login screen reads) does NOT expose these fields.
     # Per-branch on/off switch for customer self-ordering — the feature flag for
     # a staged rollout AND the instant kill switch.  Default False, so deploying
     # the code exposes NO branch (biohouse included) until it is turned on here.
@@ -181,20 +191,7 @@ class Branch(models.Model):
     # obscurity — is what keeps self-ordering closed on a branch.
     self_order_enabled = models.BooleanField(default=False)
 
-    # ── Per-branch payment credentials ─────────────────────────────────
-    # Every branch holds its own Beam/Omise credentials and its own test/live
-    # lane; ``gateways.resolve_payment_config`` reads them straight off the
-    # branch.  New branches are seeded from the shop ``Settings`` row (see
-    # ``signals.seed_branch_payment``), which is a *template*: editing it later
-    # does NOT reach back into branches that already exist, so a change there
-    # can never silently redirect money at a shop that is already trading.
-    #
-    # ``beam_sandbox`` is that lane, and is set once in the backoffice.  A branch
-    # is either a permanent test branch or a permanent live one — there is no
-    # flipping back and forth, and the POS app deliberately has no UI for it.
-    #
-    # Secrets never leave the backoffice: neither BranchSerializer (the public
-    # /branches feed the login screen reads) nor /api/settings exposes them.
+    payment_own = models.BooleanField(default=False)
     beam_merchant_id = models.CharField(max_length=128, blank=True, default="")
     beam_api_key = models.CharField(max_length=256, blank=True, default="")
     beam_sandbox = models.BooleanField(default=True)

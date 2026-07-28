@@ -68,28 +68,9 @@
           <div class="col-4 text-muted">POS ID</div>
           <div class="col-8 text-end">{{ b.pos_id|default:"—" }}</div>
         </div>
-        <div class="row mb-2">
+        <div class="row">
           <div class="col-4 text-muted">Code</div>
           <div class="col-8 text-end">{{ b.code|default:"—" }}</div>
-        </div>
-        {% comment %}
-        Payment lane + key ending, so a missing or mis-laned key is visible
-        without opening each branch. Only the last 4 digits are ever shown.
-        {% endcomment %}
-        <div class="row">
-          <div class="col-4 text-muted">Payment</div>
-          <div class="col-8 text-end">
-            {% if b.beam_sandbox %}
-              <span class="badge text-bg-warning">Test</span>
-            {% else %}
-              <span class="badge text-bg-success">Live</span>
-            {% endif %}
-            {% if b.beam_key_mask %}
-              <span class="text-muted small ms-1">Beam {{ b.beam_key_mask }}</span>
-            {% else %}
-              <span class="text-danger small ms-1">no Beam key</span>
-            {% endif %}
-          </div>
         </div>
 
         <div class="d-flex justify-content-end gap-2 mt-3">

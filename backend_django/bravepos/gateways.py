@@ -72,58 +72,7 @@ def get_shop_settings() -> Settings:
     return obj
 
 
-# ─── Payment config resolution (per branch, shop row as template) ─────────────
-# The fields that make up a payment configuration.  Listed once so the seeding
-# helper and PaymentConfig can't drift apart as gateways are added.
-PAYMENT_FIELDS = (
-    'beam_merchant_id', 'beam_api_key', 'beam_sandbox', 'beam_card_fee_percent',
-    'omise_public_key', 'omise_secret_key', 'omise_fee_percent',
-)
-
-# Emptiness is judged on the credentials alone — the fee percentages and the
-# sandbox flag have non-blank defaults, so they can't tell us whether anyone
-# ever configured this branch.
-_CREDENTIAL_FIELDS = (
-    'beam_merchant_id', 'beam_api_key', 'omise_public_key', 'omise_secret_key',
-)
-
-
-def branch_is_configured(branch) -> bool:
-    """Has this branch ever had payment credentials set?"""
-    return any(getattr(branch, f, '') for f in _CREDENTIAL_FIELDS)
-
-
-def seed_branch_payment(branch) -> None:
-    """Copy the shop template's payment config onto a new branch.
-
-    Called from the ``pre_save`` signal on branch creation, so every path that
-    makes a branch — backoffice form, POS API, ``manage.py shell`` — produces a
-    branch that can take payments immediately.
-
-    Deliberately one-way and one-time: the shop row seeds new branches and is
-    never consulted again, so editing the template later cannot redirect money
-    at a branch that is already trading.
-
-    Two shapes of new branch arrive here, and the difference matters:
-
-      * nothing set at all (POS API, shell) — take the whole config, lane and
-        fee percentages included; and
-      * partially set — the backoffice "Add branch" form posts the merchant IDs
-        it rendered but never the secret keys, because those fields are
-        write-only and start empty.  Copying nothing here would create a branch
-        holding a merchant ID and no API key, which fails at the first sale.
-        So fill the gaps and leave what was typed alone.
-    """
-    shop = get_shop_settings()
-    if not branch_is_configured(branch):
-        for field in PAYMENT_FIELDS:
-            setattr(branch, field, getattr(shop, field))
-        return
-    for field in _CREDENTIAL_FIELDS:
-        if not getattr(branch, field, ''):
-            setattr(branch, field, getattr(shop, field))
-
-
+# ─── Payment config resolution (shop-wide, with per-branch override) ──────────
 class PaymentConfig:
     """The effective payment settings for a given branch.
 
@@ -132,20 +81,8 @@ class PaymentConfig:
     wherever a ``Settings`` used to be.
 
     ``tax_percent`` is always the shop-wide value (VAT is a company-level rate).
-    Credentials and fee percentages come off the *branch*, which owns them.
-
-    The shop row is a fallback in exactly two cases:
-
-      * there is no branch in context at all (shop-wide callers), and
-      * a **live** branch that was never seeded — which can only happen if the
-        backfill migration didn't run.  Falling back there keeps the tills
-        working on the shop account, exactly as they did before branches owned
-        their own credentials, so a missed migration can't stop trade.
-
-    A **test** branch never falls back.  A test terminal quietly reaching for
-    the live shop account is the one failure worth refusing outright, so an
-    unconfigured test branch resolves to its own blank config and raises a
-    GatewayConfigError at the point of charge.
+    The gateway credentials and fee percentages come from the *branch* when that
+    branch has opted in (``payment_own``), otherwise from the shop singleton.
     """
 
     __slots__ = (
@@ -159,18 +96,25 @@ class PaymentConfig:
         # VAT is always the shop rate.
         self.tax_percent = shop.tax_percent
 
-        use_branch = branch is not None and (
-            branch_is_configured(branch) or branch.beam_sandbox
-        )
+        use_branch = bool(branch is not None and getattr(branch, 'payment_own', False))
         src = branch if use_branch else shop
         self.source = 'branch' if use_branch else 'shop'
 
-        for field in PAYMENT_FIELDS:
-            setattr(self, field, getattr(src, field))
+        self.beam_merchant_id = src.beam_merchant_id
+        self.beam_api_key = src.beam_api_key
+        self.beam_sandbox = src.beam_sandbox
+        self.beam_card_fee_percent = src.beam_card_fee_percent
+        self.omise_public_key = src.omise_public_key
+        self.omise_secret_key = src.omise_secret_key
+        self.omise_fee_percent = src.omise_fee_percent
 
 
 def resolve_payment_config(branch=None) -> PaymentConfig:
-    """Effective payment config for ``branch`` (or shop-wide if ``branch`` is None)."""
+    """Effective payment config for ``branch`` (or shop-wide if ``branch`` is None).
+
+    A branch that hasn't opted in (the default) transparently uses the shop
+    singleton, so existing single-account shops behave exactly as before.
+    """
     return PaymentConfig(get_shop_settings(), branch)
 
 
@@ -220,21 +164,16 @@ def to_satang(amount: Decimal) -> int:
 
 
 # ─── Beam ────────────────────────────────────────────────────────────────────
-def _config_location(cfg: PaymentConfig) -> str:
-    """Where a human goes to fix a missing credential.  Payment settings are
-    backoffice-only — the POS app has no screen for them."""
-    return (
-        'this branch (Backoffice → Branches → edit branch → Payment)'
-        if cfg.source == 'branch'
-        else 'Backoffice → Shop settings → Payment'
-    )
-
-
 def _beam_credentials(cfg: PaymentConfig) -> tuple[str, dict]:
     if not cfg.beam_merchant_id or not cfg.beam_api_key:
+        where = (
+            'this branch (Backoffice → Branch → Payment)'
+            if cfg.source == 'branch'
+            else 'Settings → Payment'
+        )
         raise GatewayConfigError(
             f'Beam credentials not configured. Add the Merchant ID and API Key '
-            f'in {_config_location(cfg)}.'
+            f'in {where}.'
         )
     base = (
         django_settings.BRAVEPOS['BEAM_PLAYGROUND_URL']
@@ -441,9 +380,14 @@ def _omise_headers(cfg: PaymentConfig) -> dict:
     """Omise uses the secret key as the basic-auth username with an empty
     password; the key prefix (skey_test_ vs skey_) selects test/live."""
     if not cfg.omise_secret_key:
+        where = (
+            'this branch (Backoffice → Branch → Payment)'
+            if cfg.source == 'branch'
+            else 'Settings → Payment'
+        )
         raise GatewayConfigError(
             f'Omise credentials not configured. Add your Omise public + secret '
-            f'keys in {_config_location(cfg)}.'
+            f'keys in {where}.'
         )
     token = base64.b64encode(f"{cfg.omise_secret_key}:".encode()).decode()
     return {'Authorization': f'Basic {token}'}

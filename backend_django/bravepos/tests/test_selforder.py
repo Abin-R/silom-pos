@@ -23,9 +23,9 @@ REQUIRES_ROW_LOCKS = skipUnless(
     'concurrency tests require PostgreSQL row locking (SELECT ... FOR UPDATE)',
 )
 
-from bravepos import gateways, selforder
+from bravepos import selforder
 from bravepos.gateways import compute_order_charges
-from bravepos.models import Branch, Order, SelfOrder, Settings
+from bravepos.models import Order, SelfOrder, Settings
 from bravepos.orders import create_order_from_items
 
 from .factories import (
@@ -178,7 +178,8 @@ class PublicEndpointTests(TestCase):
 
 # ─── Branch-level payment credentials ────────────────────────────────────────
 class BranchPaymentConfigTests(TestCase):
-    """Every branch owns its payment config; the shop row only seeds new ones."""
+    """Each branch can run its own Beam/Omise account; the shop singleton is the
+    fallback so existing single-account shops are unaffected."""
 
     def setUp(self):
         self.shop = make_shop()
@@ -188,35 +189,19 @@ class BranchPaymentConfigTests(TestCase):
         self.shop.save()
         self.branch = make_branch()
 
-    def test_new_branch_is_seeded_from_the_shop_template(self):
-        """Creating a branch copies the shop credentials onto it — so a branch
-        can take payments the moment it exists, with no manual step."""
+    def test_branch_without_optin_falls_back_to_shop(self):
         from bravepos.gateways import resolve_payment_config
-        self.assertEqual(self.branch.beam_merchant_id, 'SHOP-MERCHANT')
-        self.assertEqual(self.branch.beam_api_key, 'shop-key')
-
         cfg = resolve_payment_config(self.branch)
-        self.assertEqual(cfg.source, 'branch')
+        self.assertEqual(cfg.source, 'shop')
         self.assertEqual(cfg.beam_merchant_id, 'SHOP-MERCHANT')
-
-    def test_editing_the_template_does_not_touch_existing_branches(self):
-        """The shop row is a template, not a live parent.  Changing it must never
-        redirect money at a branch that is already trading."""
-        from bravepos.gateways import resolve_payment_config
-        self.shop.beam_merchant_id = 'NEW-MERCHANT'
-        self.shop.beam_api_key = 'new-key'
-        self.shop.save()
-
-        cfg = resolve_payment_config(self.branch)
-        self.assertEqual(cfg.beam_merchant_id, 'SHOP-MERCHANT')
-        self.assertEqual(cfg.beam_api_key, 'shop-key')
 
     def test_no_branch_resolves_to_shop(self):
         from bravepos.gateways import resolve_payment_config
         self.assertEqual(resolve_payment_config(None).beam_merchant_id, 'SHOP-MERCHANT')
 
-    def test_branch_uses_its_own_keys_and_fee(self):
+    def test_opted_in_branch_uses_its_own_keys_and_fee(self):
         from bravepos.gateways import resolve_payment_config
+        self.branch.payment_own = True
         self.branch.beam_merchant_id = 'BRANCH-MERCHANT'
         self.branch.beam_api_key = 'branch-key'
         self.branch.beam_card_fee_percent = Decimal('2.00')
@@ -226,45 +211,14 @@ class BranchPaymentConfigTests(TestCase):
         self.assertEqual(cfg.source, 'branch')
         self.assertEqual(cfg.beam_merchant_id, 'BRANCH-MERCHANT')
         self.assertEqual(cfg.beam_card_fee_percent, Decimal('2.00'))
-        # VAT is always shop-wide, even though credentials are per-branch.
+        # VAT is always shop-wide, even for an opted-in branch.
         self.assertEqual(cfg.tax_percent, self.shop.tax_percent)
 
-    def test_unconfigured_live_branch_falls_back_to_shop(self):
-        """Belt and braces for a missed backfill: a live branch with no keys of
-        its own keeps trading on the shop account rather than erroring at the
-        till."""
-        from bravepos.gateways import resolve_payment_config
-        Branch.objects.filter(pk=self.branch.pk).update(
-            beam_merchant_id='', beam_api_key='',
-            omise_public_key='', omise_secret_key='',
-            beam_sandbox=False,
-        )
-        cfg = resolve_payment_config(Branch.objects.get(pk=self.branch.pk))
-        self.assertEqual(cfg.source, 'shop')
-        self.assertEqual(cfg.beam_merchant_id, 'SHOP-MERCHANT')
-
-    def test_unconfigured_test_branch_never_falls_back_to_live_keys(self):
-        """The one case worth refusing: a test branch must not quietly reach for
-        the shop's (live) account."""
-        from bravepos.gateways import GatewayConfigError, resolve_payment_config
-        Branch.objects.filter(pk=self.branch.pk).update(
-            beam_merchant_id='', beam_api_key='',
-            omise_public_key='', omise_secret_key='',
-            beam_sandbox=True,
-        )
-        branch = Branch.objects.get(pk=self.branch.pk)
-
-        cfg = resolve_payment_config(branch)
-        self.assertEqual(cfg.source, 'branch')
-        self.assertEqual(cfg.beam_merchant_id, '')
-
-        with self.assertRaises(GatewayConfigError):
-            gateways._beam_credentials(cfg)
-
     def test_self_order_charge_routes_to_branch_account(self):
-        """A self-order charges the account belonging to that branch."""
+        """A self-order at an opted-in branch charges that branch's Beam account."""
         open_shift(self.branch)
         p = make_product(self.branch, price='100.00')
+        self.branch.payment_own = True
         self.branch.beam_merchant_id = 'BRANCH-MERCHANT'
         self.branch.beam_api_key = 'branch-key'
         self.branch.save()
