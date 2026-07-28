@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bravepos.models import (
+    AuditLog,
     Branch,
     Category,
     Order,
@@ -2379,3 +2380,386 @@ def shop_settings(request):
         "hide_dates": True,
     }
     return render(request, "backoffice/shop_settings.html", context)
+
+
+# ─── Backoffice users ───────────────────────────────────────────────────
+# These are the *web* logins (username OR email + password), as opposed to
+# the Staff page above which manages in-app PIN logins. Both live in the same
+# `bravepos_staff` table — `backoffice_access` is what separates them.
+import secrets as _secrets
+from functools import wraps
+
+# Ambiguous glyphs (0/O, 1/l/I) removed so a generated password survives being
+# read aloud or copied off a screen.
+_PASSWORD_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def generate_password(length: int = 14) -> str:
+    return "".join(_secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def admin_required(view):
+    """Restrict a view to `role == "admin"` accounts.
+
+    Deliberately the *only* permission check in the backoffice — there's no
+    role matrix yet. It exists because user management and the audit log are
+    the two screens where "any signed-in account can do this" is unacceptable:
+    one hands out credentials, the other is the record of who did what.
+    """
+    @wraps(view)
+    @login_required
+    def wrapped(request, *args, **kwargs):
+        if getattr(request.user, "role", "") != "admin":
+            return render(request, "backoffice/forbidden.html", {
+                "active": "users",
+                "hide_dates": True,
+                **_branch_topbar_context(),
+            }, status=403)
+        return view(request, *args, **kwargs)
+    return wrapped
+
+
+def _user_form_errors(post, instance=None) -> list[str]:
+    """Validate a submitted user form. Returns human-readable problems; an
+    empty list means the form is good to save."""
+    errors = []
+    name = (post.get("name") or "").strip()
+    username = (post.get("username") or "").strip()
+    email = (post.get("email") or "").strip()
+    password = post.get("password") or ""
+
+    if not name:
+        errors.append("Name is required.")
+    if not username and not email:
+        errors.append("Give the account a username, an email, or both — it needs at least one to sign in with.")
+
+    clash = Staff.objects.all()
+    if instance is not None and instance.pk:
+        clash = clash.exclude(pk=instance.pk)
+    if username and clash.filter(username__iexact=username).exists():
+        errors.append(f"Username “{username}” is already taken.")
+    if email and clash.filter(email__iexact=email).exists():
+        errors.append(f"Email “{email}” is already in use.")
+    # An identifier that matches the *other* column on a different row would
+    # make sign-in ambiguous, so block that too.
+    if username and clash.filter(email__iexact=username).exists():
+        errors.append(f"“{username}” is already another account's email address.")
+    if email and clash.filter(username__iexact=email).exists():
+        errors.append(f"“{email}” is already another account's username.")
+
+    if password and len(password) < 10:
+        errors.append("Password must be at least 10 characters.")
+    return errors
+
+
+def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:
+    """Copy a submitted user form onto a Staff instance.
+
+    Returns the instance plus the plaintext password when one was set or
+    generated — the caller shows it once and never stores it.
+
+    ``is_new`` is passed explicitly rather than inferred from ``member.pk``:
+    Staff's primary key is a UUID with a `default`, so a brand-new unsaved
+    instance already has one and `pk` can't tell the two apart.
+    """
+    member.name = (post.get("name") or "").strip()
+    member.username = (post.get("username") or "").strip() or None
+    member.role = "admin" if post.get("role") == "admin" else "cashier"
+    member.active = post.get("active") == "on"
+    member.backoffice_access = True
+
+    email = (post.get("email") or "").strip()
+    if email:
+        member.email = email
+    elif not member.email:
+        # Email is a required unique column but the account may sign in by
+        # username alone; synthesise a non-routable placeholder.
+        member.email = f"{member.username or _uuid.uuid4().hex[:8]}@users.noreply.rollingpinn.com"
+
+    plaintext = post.get("password") or ""
+    if not plaintext and is_new:
+        plaintext = generate_password()
+    if plaintext:
+        member.set_password(plaintext)
+    return member, plaintext
+
+
+def _user_context(request, member, mode, errors=()):
+    return {
+        "active": "users",
+        "member": member,
+        "mode": mode,
+        "errors": list(errors),
+        "all_branches": list(Branch.objects.all().order_by("name")),
+        "selected_branches": (
+            [str(b.id) for b in member.branches.all()] if member.pk else []
+        ),
+        "hide_dates": True,
+        **_branch_topbar_context(),
+    }
+
+
+@admin_required
+def user_list(request):
+    """Backoffice web logins — the accounts that can sign in here."""
+    users = (
+        Staff.objects.filter(backoffice_access=True)
+        .prefetch_related("branches")
+        .order_by("-role", "name")
+    )
+    # Credentials handed off exactly once, immediately after create/reset.
+    # Held in the session rather than a URL so they never hit a proxy log or
+    # the browser's history.
+    issued = request.session.pop("issued_credentials", None)
+    context = {
+        "active": "users",
+        "users": users,
+        "issued": issued,
+        "hide_dates": True,
+        **_branch_topbar_context(),
+    }
+    return render(request, "backoffice/user_list.html", context)
+
+
+@admin_required
+def user_new(request):
+    if request.method == "POST":
+        errors = _user_form_errors(request.POST)
+        if errors:
+            draft = Staff(
+                name=(request.POST.get("name") or "").strip(),
+                username=(request.POST.get("username") or "").strip() or None,
+                email=(request.POST.get("email") or "").strip(),
+                role=request.POST.get("role") or "cashier",
+                active=request.POST.get("active") == "on",
+            )
+            return render(request, "backoffice/user_form.html",
+                          _user_context(request, draft, "new", errors))
+
+        member, plaintext = _apply_user_form(Staff(), request.POST, is_new=True)
+        member.save()
+        member.branches.set(request.POST.getlist("branches"))
+        request.session["issued_credentials"] = {
+            "name": member.name,
+            "username": member.username or "",
+            "email": member.email,
+            "password": plaintext,
+            "reason": "created",
+        }
+        return redirect("backoffice:user_list")
+
+    draft = Staff(role="cashier", active=True)
+    return render(request, "backoffice/user_form.html",
+                  _user_context(request, draft, "new"))
+
+
+@admin_required
+def user_detail(request, staff_id):
+    member = get_object_or_404(Staff, id=staff_id)
+
+    if request.method == "POST":
+        errors = _user_form_errors(request.POST, instance=member)
+        # Don't let an admin strip their own admin role or deactivate
+        # themselves — that's the one edit with no way back through the UI.
+        if str(member.id) == str(request.user.id):
+            if request.POST.get("role") != "admin":
+                errors.append("You can't remove your own Admin role — ask another admin to do it.")
+            if request.POST.get("active") != "on":
+                errors.append("You can't deactivate your own account.")
+        if errors:
+            return render(request, "backoffice/user_form.html",
+                          _user_context(request, member, "edit", errors))
+
+        member, plaintext = _apply_user_form(member, request.POST, is_new=False)
+        member.save()
+        member.branches.set(request.POST.getlist("branches"))
+        if plaintext:
+            request.session["issued_credentials"] = {
+                "name": member.name,
+                "username": member.username or "",
+                "email": member.email,
+                "password": plaintext,
+                "reason": "password reset",
+            }
+        return redirect("backoffice:user_list")
+
+    return render(request, "backoffice/user_form.html",
+                  _user_context(request, member, "edit"))
+
+
+@admin_required
+def user_reset_password(request, staff_id):
+    """Generate a fresh password and show it once on the list page."""
+    member = get_object_or_404(Staff, id=staff_id)
+    if request.method == "POST":
+        plaintext = generate_password()
+        member.set_password(plaintext)
+        member.save(update_fields=["password_hash"])
+        request.session["issued_credentials"] = {
+            "name": member.name,
+            "username": member.username or "",
+            "email": member.email,
+            "password": plaintext,
+            "reason": "password reset",
+        }
+    return redirect("backoffice:user_list")
+
+
+@admin_required
+def user_delete(request, staff_id):
+    """Revoke backoffice access.
+
+    The Staff row survives — deleting it would orphan every audit entry,
+    shift and order that points at it. Clearing `backoffice_access` and the
+    password is what actually locks the account out of this site; any in-app
+    PIN login it also has keeps working.
+    """
+    member = get_object_or_404(Staff, id=staff_id)
+    if request.method == "POST" and str(member.id) != str(request.user.id):
+        member.backoffice_access = False
+        member.username = None
+        member.set_password(_uuid.uuid4().hex)
+        member.save(update_fields=["backoffice_access", "username", "password_hash"])
+    return redirect("backoffice:user_list")
+
+
+# ─── Audit log ──────────────────────────────────────────────────────────
+AUDIT_MODEL_CHOICES = [
+    "Staff", "Branch", "Settings", "Product", "Category", "Unit",
+    "DrawerCategory", "Order", "OrderItem", "SelfOrder", "StockDocument",
+    "StockDocumentItem", "StockMovement", "Shift", "ShiftMovement", "Customer",
+]
+
+
+def _audit_qs(request):
+    """Filtered audit rows for the current query string."""
+    qs = AuditLog.objects.select_related("actor", "branch")
+
+    dfrom = request.GET.get("from") or ""
+    dto = request.GET.get("to") or ""
+    if dfrom:
+        try:
+            start = datetime.combine(date.fromisoformat(dfrom), time.min)
+            qs = qs.filter(at__gte=timezone.make_aware(start))
+        except ValueError:
+            pass
+    if dto:
+        try:
+            end = datetime.combine(date.fromisoformat(dto), time.max)
+            qs = qs.filter(at__lte=timezone.make_aware(end))
+        except ValueError:
+            pass
+
+    action = request.GET.get("action") or ""
+    if action:
+        qs = qs.filter(action=action)
+
+    model = request.GET.get("model") or ""
+    if model:
+        qs = qs.filter(model=model)
+
+    actor = request.GET.get("actor") or ""
+    if actor:
+        qs = qs.filter(actor_id=actor)
+
+    branch = request.GET.get("branch") or ""
+    if branch:
+        qs = qs.filter(branch_id=branch)
+
+    search = (request.GET.get("q") or "").strip()
+    if search:
+        qs = qs.filter(
+            Q(object_label__icontains=search)
+            | Q(actor_label__icontains=search)
+            | Q(note__icontains=search)
+            | Q(path__icontains=search)
+        )
+    return qs.order_by("-at")
+
+
+def _audit_filter_qs(request) -> str:
+    """Re-encode the active filters so pagination links keep them."""
+    keys = ("from", "to", "action", "model", "actor", "branch", "q")
+    parts = [f"{k}={request.GET.get(k)}" for k in keys if request.GET.get(k)]
+    return "&".join(parts)
+
+
+@admin_required
+def audit_log(request):
+    """Every recorded change, newest first."""
+    rows = _audit_qs(request)
+    paginator = Paginator(rows, 100)
+    page = paginator.get_page(request.GET.get("page"))
+
+    context = {
+        "active": "audit",
+        "page_obj": page,
+        "paginator": paginator,
+        "entries": page.object_list,
+        "total": paginator.count,
+        "action_choices": AuditLog.ACTION_CHOICES,
+        "model_choices": AUDIT_MODEL_CHOICES,
+        "actors": Staff.objects.filter(audit_entries__isnull=False).distinct().order_by("name"),
+        "selected": {
+            "from": request.GET.get("from") or "",
+            "to": request.GET.get("to") or "",
+            "action": request.GET.get("action") or "",
+            "model": request.GET.get("model") or "",
+            "actor": request.GET.get("actor") or "",
+            "q": request.GET.get("q") or "",
+        },
+        "audit_qs": _audit_filter_qs(request),
+        "hide_dates": True,
+        **_branch_topbar_context(),
+    }
+    return render(request, "backoffice/audit_log.html", context)
+
+
+def _audit_change_summary(entry) -> str:
+    """Flatten a changes dict into one readable cell / CSV column."""
+    changes = entry.changes or {}
+    if not changes:
+        return entry.note or ""
+    parts = []
+    for field, value in list(changes.items())[:12]:
+        if isinstance(value, dict) and "from" in value:
+            parts.append(f"{field}: {value.get('from')} → {value.get('to')}")
+        else:
+            parts.append(f"{field}={value}")
+    if len(changes) > 12:
+        parts.append(f"… +{len(changes) - 12} more")
+    return "; ".join(parts)
+
+
+@admin_required
+def audit_log_export(request):
+    """CSV of the currently filtered rows. The export itself is audited."""
+    rows = _audit_qs(request)
+    response, writer = _csv_response("audit-log.csv")
+    writer.writerow([
+        "When", "Actor", "Role", "Action", "Model", "Object", "Changes",
+        "Branch", "Source", "Method", "Path", "IP",
+    ])
+    for entry in rows.iterator(chunk_size=500):
+        writer.writerow([
+            timezone.localtime(entry.at).strftime("%Y-%m-%d %H:%M:%S"),
+            entry.actor_label or "—",
+            entry.actor_role or "",
+            entry.get_action_display(),
+            entry.model,
+            entry.object_label,
+            _audit_change_summary(entry),
+            entry.branch.name if entry.branch else "",
+            entry.source,
+            entry.method,
+            entry.path,
+            entry.ip or "",
+        ])
+
+    from bravepos import audit as _audit
+    _audit.record(
+        "export", model="AuditLog", object_label="audit log CSV",
+        note=f"filters: {_audit_filter_qs(request) or 'none'}",
+        actor=request.user if request.user.is_authenticated else None,
+    )
+    return response

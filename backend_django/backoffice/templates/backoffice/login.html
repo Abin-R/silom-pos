@@ -13,6 +13,11 @@
     .login-card .brand { font-weight: 700; font-size: 1.75rem; letter-spacing: -0.02em; }
     .login-card .brand .dot { color: #00B14F; }
     .btn-success { background: #00B14F; border-color: #00B14F; }
+    .id-switch {
+      background: none; border: 0; padding: 0; font-size: 0.8125rem;
+      color: #00B14F; text-decoration: none;
+    }
+    .id-switch:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -32,15 +37,25 @@
 
         <form method="post" action="{% url 'backoffice:login' %}">
           {% csrf_token %}
+          {# One field, two modes. The backend matches whatever is typed
+             against Staff.username OR Staff.email, so switching here only
+             changes the label, placeholder and keyboard — never the POST. #}
           <div class="mb-3">
-            <label class="form-label">Username</label>
-            <input type="text" name="username" class="form-control" autofocus required
-                   autocomplete="username"
+            <div class="d-flex justify-content-between align-items-center">
+              <label class="form-label mb-1" id="idLabel" for="idField">Username</label>
+              <button type="button" class="id-switch mb-1" id="idSwitch">
+                Use email instead
+              </button>
+            </div>
+            <input type="text" name="username" id="idField" class="form-control"
+                   autofocus required autocomplete="username"
+                   placeholder="your.username"
                    value="{{ form.username.value|default:'' }}">
           </div>
           <div class="mb-3">
-            <label class="form-label">Password</label>
-            <input type="password" name="password" class="form-control" required>
+            <label class="form-label" for="pwField">Password</label>
+            <input type="password" name="password" id="pwField" class="form-control"
+                   autocomplete="current-password" required>
           </div>
           <input type="hidden" name="next" value="{{ next }}">
           <button type="submit" class="btn btn-success w-100">
@@ -50,5 +65,50 @@
       </div>
     </div>
   </div>
+
+  <script>
+    // Identifier mode toggle. Remembered per browser so someone who signs in
+    // with their email doesn't have to flip the switch every visit.
+    (function () {
+      const KEY = 'bravepos.login.idmode';
+      const field = document.getElementById('idField');
+      const label = document.getElementById('idLabel');
+      const button = document.getElementById('idSwitch');
+
+      const MODES = {
+        username: {
+          label: 'Username', type: 'text', placeholder: 'your.username',
+          autocomplete: 'username', other: 'Use email instead',
+        },
+        email: {
+          label: 'Email address', type: 'email', placeholder: 'you@therollingpinn.com',
+          autocomplete: 'email', other: 'Use username instead',
+        },
+      };
+
+      function apply(mode) {
+        const cfg = MODES[mode] || MODES.username;
+        label.textContent = cfg.label;
+        field.type = cfg.type;
+        field.placeholder = cfg.placeholder;
+        field.autocomplete = cfg.autocomplete;
+        button.textContent = cfg.other;
+        button.dataset.mode = mode;
+      }
+
+      // A failed attempt re-renders the page with the submitted value; if it
+      // looks like an email, come back in email mode rather than resetting.
+      const submitted = field.value || '';
+      const stored = localStorage.getItem(KEY);
+      apply(submitted.includes('@') ? 'email' : (stored || 'username'));
+
+      button.addEventListener('click', function () {
+        const next = button.dataset.mode === 'username' ? 'email' : 'username';
+        apply(next);
+        localStorage.setItem(KEY, next);
+        field.focus();
+      });
+    })();
+  </script>
 </body>
 </html>

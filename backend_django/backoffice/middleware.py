@@ -60,3 +60,62 @@ class StaffAuthMiddleware:
     def __call__(self, request):
         request.user = SimpleLazyObject(lambda: _resolve_staff(request))
         return self.get_response(request)
+
+
+def _client_ip(request):
+    """Real client IP behind nginx. `REMOTE_ADDR` is the proxy on this box, so
+    the left-most `X-Forwarded-For` entry is the caller."""
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded:
+        candidate = forwarded.split(",")[0].strip()
+        if candidate:
+            return candidate
+    return request.META.get("REMOTE_ADDR") or None
+
+
+class AuditContextMiddleware:
+    """Opens an audit context for the duration of each request.
+
+    The model signals in ``bravepos.audit`` fire far from the request — inside
+    serializers, ``save()`` calls, management helpers — so this thread-local is
+    how a write learns who made it and from where. Cleared in a ``finally`` so
+    a thread returning to the pool can never inherit the previous request's
+    actor.
+
+    Must come **after** ``StaffAuthMiddleware`` so ``request.user`` exists.
+    ``request.user`` is only touched lazily, at the moment an audit row is
+    actually written, so read-only requests still cost no extra query.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from bravepos import audit
+
+        path = request.path or ""
+        source = "backoffice" if path.startswith("/backoffice") else "api"
+        audit.set_context(
+            actor=None,
+            source=source,
+            method=request.method or "",
+            path=path,
+            ip=_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        )
+        # Backoffice requests are session-authenticated, so the actor is known
+        # up front. POS API requests resolve theirs later, in
+        # `bravepos.views.get_session`, once the bearer token is validated.
+        if source == "backoffice":
+            audit.set_context_actor_resolver(lambda: _authenticated_or_none(request))
+        try:
+            return self.get_response(request)
+        finally:
+            audit.clear_context()
+
+
+def _authenticated_or_none(request):
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return None
+    return user

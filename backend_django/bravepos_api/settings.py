@@ -72,6 +72,9 @@ MIDDLEWARE = [
     # session's PK, which blows up on our UUID-keyed Staff. See
     # backoffice/middleware.py for the reasoning.
     'backoffice.middleware.StaffAuthMiddleware',
+    # Must sit after StaffAuthMiddleware — it reads request.user to attribute
+    # audit rows to the signed-in staff member.
+    'backoffice.middleware.AuditContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

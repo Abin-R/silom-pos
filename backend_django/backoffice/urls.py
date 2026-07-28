@@ -71,6 +71,17 @@ urlpatterns = [
     path("staff/<uuid:staff_id>", views.staff_detail, name="staff_detail"),
     path("staff/<uuid:staff_id>/delete", views.staff_delete, name="staff_delete"),
 
+    # Backoffice users (web logins — username or email + password)
+    path("users", views.user_list, name="user_list"),
+    path("users/new", views.user_new, name="user_new"),
+    path("users/<uuid:staff_id>", views.user_detail, name="user_detail"),
+    path("users/<uuid:staff_id>/reset-password", views.user_reset_password, name="user_reset_password"),
+    path("users/<uuid:staff_id>/revoke", views.user_delete, name="user_delete"),
+
+    # Audit log
+    path("audit", views.audit_log, name="audit_log"),
+    path("audit/export", views.audit_log_export, name="audit_log_export"),
+
     # Shops & Branches
     path("branches", views.branch_list, name="branch_list"),
     path("branches/new", views.branch_new, name="branch_new"),

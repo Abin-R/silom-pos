@@ -1,0 +1,174 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}Audit Log — Bravepos{% endblock %}
+
+{% block extra_head %}
+<style>
+  .audit-changes { font-size: 0.75rem; line-height: 1.35; }
+  .audit-changes .field { color: #6c757d; }
+  .audit-changes .from { color: #b02a37; text-decoration: line-through; }
+  .audit-changes .to { color: #146c43; }
+  .audit-meta { font-size: 0.7rem; color: #9aa0a6; }
+  td.audit-target { max-width: 18rem; }
+  td.audit-diff { max-width: 30rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-1">Audit Log</h4>
+    <div class="text-muted small">
+      {{ total }} recorded event{{ total|pluralize }} — who changed what, when, and from where
+    </div>
+  </div>
+  <a class="btn btn-outline-success" href="{% url 'backoffice:audit_log_export' %}?{{ audit_qs }}">
+    <i class="bi bi-download"></i> Export CSV
+  </a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">From</label>
+        <input type="date" name="from" class="form-control form-control-sm" value="{{ selected.from }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">To</label>
+        <input type="date" name="to" class="form-control form-control-sm" value="{{ selected.to }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">Action</label>
+        <select name="action" class="form-select form-select-sm">
+          <option value="">All actions</option>
+          {% for value, label in action_choices %}
+            <option value="{{ value }}" {% if selected.action == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">Type</label>
+        <select name="model" class="form-select form-select-sm">
+          <option value="">All types</option>
+          {% for m in model_choices %}
+            <option value="{{ m }}" {% if selected.model == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">User</label>
+        <select name="actor" class="form-select form-select-sm">
+          <option value="">Everyone</option>
+          {% for a in actors %}
+            <option value="{{ a.id }}" {% if selected.actor == a.id|stringformat:'s' %}selected{% endif %}>{{ a.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small mb-1">Search</label>
+        <div class="input-group input-group-sm">
+          <input type="text" name="q" class="form-control form-control-sm"
+                 value="{{ selected.q }}" placeholder="name, note…">
+          <button class="btn btn-success btn-sm px-3" type="submit">
+            <i class="bi bi-search"></i>
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th style="width:10rem;">When</th>
+          <th style="width:11rem;">Who</th>
+          <th style="width:7rem;">Action</th>
+          <th class="audit-target">What</th>
+          <th class="audit-diff">Changes</th>
+          <th style="width:9rem;">Where from</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="small text-nowrap">
+            {{ e.at|date:"d M Y" }}<br>
+            <span class="text-muted">{{ e.at|date:"H:i:s" }}</span>
+          </td>
+          <td class="small">
+            {% if e.actor_label %}
+              <span class="fw-semibold">{{ e.actor_label }}</span>
+              {% if e.actor_role %}<br><span class="audit-meta">{{ e.actor_role }}</span>{% endif %}
+            {% else %}
+              <span class="text-muted">system</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if e.action == 'create' %}
+              <span class="badge bg-success-subtle text-success">Created</span>
+            {% elif e.action == 'update' %}
+              <span class="badge bg-primary-subtle text-primary">Updated</span>
+            {% elif e.action == 'delete' %}
+              <span class="badge bg-danger-subtle text-danger">Deleted</span>
+            {% elif e.action == 'login' %}
+              <span class="badge bg-info-subtle text-info">Signed in</span>
+            {% elif e.action == 'login_failed' %}
+              <span class="badge bg-warning-subtle text-warning">Failed</span>
+            {% elif e.action == 'logout' %}
+              <span class="badge bg-secondary-subtle text-secondary">Signed out</span>
+            {% else %}
+              <span class="badge bg-secondary-subtle text-secondary">{{ e.get_action_display }}</span>
+            {% endif %}
+          </td>
+          <td class="audit-target small">
+            {% if e.model %}<span class="audit-meta">{{ e.model }}</span><br>{% endif %}
+            <span class="text-truncate d-inline-block w-100">{{ e.object_label|default:"—" }}</span>
+            {% if e.branch %}<br><span class="audit-meta"><i class="bi bi-shop"></i> {{ e.branch.name }}</span>{% endif %}
+          </td>
+          <td class="audit-diff audit-changes">
+            {% for field, change in e.changes.items %}
+              {% if forloop.counter <= 6 %}
+                <div>
+                  <span class="field">{{ field }}</span>
+                  {% if change.to is not None or change.from is not None %}
+                    <span class="from">{{ change.from|default_if_none:"∅"|truncatechars:40 }}</span>
+                    <span class="text-muted">→</span>
+                    <span class="to">{{ change.to|default_if_none:"∅"|truncatechars:40 }}</span>
+                  {% else %}
+                    <span class="to">{{ change|truncatechars:40 }}</span>
+                  {% endif %}
+                </div>
+              {% elif forloop.counter == 7 %}
+                <div class="audit-meta">… +{{ e.change_count|add:"-6" }} more field{{ e.change_count|add:"-6"|pluralize }}</div>
+              {% endif %}
+            {% empty %}
+              <span class="text-muted small">{{ e.note|default:"—" }}</span>
+            {% endfor %}
+            {% if e.note and e.changes %}<div class="audit-meta">{{ e.note }}</div>{% endif %}
+          </td>
+          <td class="small">
+            <span class="audit-meta">
+              {{ e.source|default:"—" }}{% if e.method %} · {{ e.method }}{% endif %}<br>
+              {{ e.ip|default:"" }}
+            </span>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-5">
+            <i class="bi bi-clipboard-check text-muted" style="font-size:2.5rem;"></i>
+            <div class="mt-2">Nothing recorded for these filters yet.</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% include "backoffice/_pagination.html" with page_obj=page_obj paginator=paginator qs=audit_qs %}
+{% endblock %}

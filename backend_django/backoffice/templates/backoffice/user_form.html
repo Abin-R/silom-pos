@@ -1,0 +1,126 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}{% if mode == 'new' %}Add User{% else %}{{ member.name }}{% endif %} — Bravepos{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-1">{% if mode == 'new' %}Add User{% else %}Edit User{% endif %}</h4>
+    <div class="text-muted small">Backoffice web login</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="{% url 'backoffice:user_list' %}">
+    <i class="bi bi-arrow-left"></i> Back
+  </a>
+</div>
+
+{% if errors %}
+<div class="alert alert-danger">
+  <ul class="mb-0 ps-3">
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Name <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control" required
+                 value="{{ member.name|default:'' }}"
+                 placeholder="e.g. Data Team">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Role</label>
+          <select name="role" class="form-select">
+            <option value="cashier" {% if member.role != 'admin' %}selected{% endif %}>Cashier</option>
+            <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
+          </select>
+          <div class="form-text">
+            Admin is the only role that can reach Users and the Audit Log.
+          </div>
+        </div>
+
+        <div class="col-12"><hr class="my-1"></div>
+
+        <div class="col-12">
+          <div class="text-muted small mb-2">
+            <i class="bi bi-box-arrow-in-right"></i>
+            Sign-in identifier — the login page takes <strong>either</strong> of
+            these. Fill in one or both.
+          </div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Username</label>
+          <input type="text" name="username" class="form-control"
+                 value="{{ member.username|default:'' }}"
+                 placeholder="e.g. data">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Email address</label>
+          <input type="email" name="email" class="form-control"
+                 value="{% if member.email and 'users.noreply' not in member.email %}{{ member.email }}{% endif %}"
+                 placeholder="e.g. data@therollingpinn.com">
+        </div>
+
+        <div class="col-12"><hr class="my-1"></div>
+
+        <div class="col-md-6">
+          <label class="form-label">Password</label>
+          <input type="text" name="password" class="form-control" autocomplete="new-password"
+                 placeholder="{% if mode == 'new' %}Leave blank to generate a strong one{% else %}Leave blank to keep the current password{% endif %}">
+          <div class="form-text">
+            {% if mode == 'new' %}
+              Generated passwords are 14 characters and shown once after saving.
+            {% else %}
+              Setting a value here signs the user out of any existing session.
+            {% endif %}
+            Minimum 10 characters.
+          </div>
+        </div>
+        <div class="col-md-6 d-flex align-items-center">
+          <div class="form-check form-switch mt-4">
+            <input class="form-check-input" type="checkbox" name="active" id="activeSwitch"
+                   {% if member.active or mode == 'new' %}checked{% endif %}>
+            <label class="form-check-label" for="activeSwitch">Active</label>
+            <div class="form-text">Inactive accounts can't sign in anywhere.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <label class="form-label">Branches</label>
+      <div class="form-text mb-2">
+        Which shops this account's POS PIN login is listed under. Select none to
+        leave the account unassigned — it doesn't restrict what the backoffice
+        shows.
+      </div>
+      <div class="row g-2">
+        {% for b in all_branches %}
+        <div class="col-md-4">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="branches"
+                   value="{{ b.id }}" id="branch{{ forloop.counter }}"
+                   {% if b.id|stringformat:'s' in selected_branches %}checked{% endif %}>
+            <label class="form-check-label small" for="branch{{ forloop.counter }}">{{ b.name }}</label>
+          </div>
+        </div>
+        {% empty %}
+        <div class="col-12 text-muted small">No branches yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-success px-4">
+    <i class="bi bi-check-lg"></i>
+    {% if mode == 'new' %}Create user{% else %}Save changes{% endif %}
+  </button>
+  <a class="btn btn-link text-secondary" href="{% url 'backoffice:user_list' %}">Cancel</a>
+</form>
+{% endblock %}

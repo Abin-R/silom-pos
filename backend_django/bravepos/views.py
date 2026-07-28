@@ -20,7 +20,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import gateways
+from . import audit, gateways
 from .orders import create_order_from_items
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
@@ -58,6 +58,10 @@ def get_session(request):
     except BranchSession.DoesNotExist:
         return None
     sess.save(update_fields=['last_seen_at'])
+    # Single choke point for POS API auth — tell the audit log who is acting
+    # so writes made further down the view stack are attributed to this staff
+    # member rather than landing as anonymous.
+    audit.set_actor(sess.staff)
     return sess
 
 

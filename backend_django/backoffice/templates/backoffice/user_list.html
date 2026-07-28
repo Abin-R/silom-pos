@@ -1,0 +1,170 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}Users — Bravepos{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h4 class="mb-1">Users</h4>
+    <div class="text-muted small">
+      Backoffice web logins · {{ users|length }} account{{ users|length|pluralize }}
+    </div>
+  </div>
+  <a class="btn btn-success" href="{% url 'backoffice:user_new' %}">
+    <i class="bi bi-person-plus"></i> Add User
+  </a>
+</div>
+
+{% if issued %}
+{# Shown exactly once, straight after create/reset. Refreshing loses it —
+   that's deliberate: nothing stores the plaintext password anywhere. #}
+<div class="card border-success mb-3">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start">
+      <h6 class="text-success mb-3">
+        <i class="bi bi-key-fill"></i>
+        Credentials for {{ issued.name }} ({{ issued.reason }})
+      </h6>
+      <span class="badge bg-warning-subtle text-warning">Shown once</span>
+    </div>
+    <div class="row g-3">
+      {% if issued.username %}
+      <div class="col-sm-4">
+        <div class="text-muted small">Username</div>
+        <code class="fs-6" id="credUsername">{{ issued.username }}</code>
+      </div>
+      {% endif %}
+      <div class="col-sm-4">
+        <div class="text-muted small">Email</div>
+        <code class="fs-6">{{ issued.email }}</code>
+      </div>
+      <div class="col-sm-4">
+        <div class="text-muted small">Password</div>
+        <code class="fs-6" id="credPassword">{{ issued.password }}</code>
+      </div>
+    </div>
+    <button type="button" class="btn btn-outline-success btn-sm mt-3" id="copyCreds">
+      <i class="bi bi-clipboard"></i> Copy
+    </button>
+    <div class="form-text mt-2">
+      Send these over a private channel and have the user change the password
+      after their first sign-in. Reload this page and the password is gone for good.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="alert alert-light border small text-muted">
+  <i class="bi bi-info-circle"></i>
+  These accounts sign in to <strong>this website</strong> with a username
+  <em>or</em> an email address, plus a password. The
+  <a href="{% url 'backoffice:staff_list' %}">Staff</a> page is separate — that
+  manages the 4-digit <strong>PIN logins on the POS app</strong>.
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Name</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th style="width:8rem;">Role</th>
+          <th style="width:12rem;">Branches</th>
+          <th style="width:11rem;">Last sign-in</th>
+          <th style="width:7rem;" class="text-center">Status</th>
+          <th style="width:11rem;" class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>
+            <a class="text-decoration-none fw-semibold"
+               href="{% url 'backoffice:user_detail' staff_id=u.id %}">{{ u.name }}</a>
+          </td>
+          <td>
+            {% if u.username %}<code>{{ u.username }}</code>
+            {% else %}<span class="text-muted small">—</span>{% endif %}
+          </td>
+          <td class="small">{{ u.email }}</td>
+          <td>
+            {% if u.role == 'admin' %}
+              <span class="badge bg-primary-subtle text-primary">Admin</span>
+            {% else %}
+              <span class="badge bg-info-subtle text-info">Cashier</span>
+            {% endif %}
+          </td>
+          <td class="small text-muted">
+            {% if u.branches.all %}
+              {% for b in u.branches.all %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+            {% else %}
+              All branches
+            {% endif %}
+          </td>
+          <td class="small text-muted">
+            {% if u.last_login_at %}{{ u.last_login_at|date:"d M Y H:i" }}
+            {% else %}<span class="text-muted">Never</span>{% endif %}
+          </td>
+          <td class="text-center">
+            {% if u.active %}
+              <span class="badge bg-success-subtle text-success">Active</span>
+            {% else %}
+              <span class="badge bg-secondary-subtle text-secondary">Inactive</span>
+            {% endif %}
+          </td>
+          <td class="text-end text-nowrap">
+            <a class="btn btn-outline-primary btn-sm"
+               href="{% url 'backoffice:user_detail' staff_id=u.id %}"
+               title="Edit"><i class="bi bi-pencil"></i></a>
+            <form method="post" action="{% url 'backoffice:user_reset_password' staff_id=u.id %}"
+                  class="d-inline"
+                  onsubmit="return confirm('Generate a new password for “{{ u.name|escapejs }}”? Their current one stops working immediately.');">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-outline-secondary btn-sm" title="Reset password">
+                <i class="bi bi-key"></i>
+              </button>
+            </form>
+            {% if u.id != user.id %}
+            <form method="post" action="{% url 'backoffice:user_delete' staff_id=u.id %}"
+                  class="d-inline"
+                  onsubmit="return confirm('Revoke backoffice access for “{{ u.name|escapejs }}”? Their POS PIN login is unaffected.');">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-outline-danger btn-sm" title="Revoke access">
+                <i class="bi bi-person-slash"></i>
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">
+            <i class="bi bi-people text-muted" style="font-size:2.5rem;"></i>
+            <div class="mt-2">No backoffice users yet.</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if issued %}
+<script>
+  document.getElementById('copyCreds').addEventListener('click', function () {
+    const username = document.getElementById('credUsername');
+    const lines = [
+      username ? 'Username: ' + username.textContent : null,
+      'Email: {{ issued.email|escapejs }}',
+      'Password: ' + document.getElementById('credPassword').textContent,
+      'Sign in: ' + window.location.origin + '{% url "backoffice:login" %}',
+    ].filter(Boolean);
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      this.innerHTML = '<i class="bi bi-check-lg"></i> Copied';
+    });
+  });
+</script>
+{% endif %}
+{% endblock %}

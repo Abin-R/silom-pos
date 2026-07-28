@@ -164,6 +164,16 @@
         </li>
         <li><a class="nav-link {% if active == 'branches' %}active{% endif %}"
                href="{% url 'backoffice:branch_list' %}"><i class="bi bi-shop"></i> Shops &amp; Branches</a></li>
+
+        {# Admin-only. The views enforce this too — hiding the links is just so
+           a cashier isn't offered a door that won't open. #}
+        {% if user.role == 'admin' %}
+        <div class="group-label">Administration</div>
+        <li><a class="nav-link {% if active == 'users' %}active{% endif %}"
+               href="{% url 'backoffice:user_list' %}"><i class="bi bi-person-badge"></i> Users</a></li>
+        <li><a class="nav-link {% if active == 'audit' %}active{% endif %}"
+               href="{% url 'backoffice:audit_log' %}"><i class="bi bi-clipboard-check"></i> Audit Log</a></li>
+        {% endif %}
       </ul>
     </nav>
 

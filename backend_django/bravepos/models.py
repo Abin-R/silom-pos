@@ -31,6 +31,13 @@ class Staff(models.Model):
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
+    # Backoffice sign-in accepts EITHER this username or the email above — the
+    # login page defaults to username and has a button to switch the field to
+    # email. Nullable (not blank="") because the column is unique: Postgres
+    # allows many NULLs but only one "". Auto-provisioned PIN staff have none.
+    username = models.CharField(
+        max_length=64, unique=True, null=True, blank=True, db_index=True,
+    )
     password_hash = models.CharField(max_length=256)
     # PIN is the only credential the in-app login uses. Email/password remain
     # in the schema so a Django-admin/script-driven flow can still seed staff,
@@ -41,6 +48,12 @@ class Staff(models.Model):
     branches = models.ManyToManyField(
         "Branch", related_name="staff", blank=True,
     )
+    # Can this account sign in to the web backoffice? The POS PIN pad ignores
+    # this flag entirely — it only gates `backoffice.auth_backend.StaffBackend`.
+    # Migration 0028 backfills True for every pre-existing row so nobody is
+    # locked out; new PIN staff added from the Staff page default to False.
+    backoffice_access = models.BooleanField(default=False)
+    last_login_at = models.DateTimeField(null=True, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -49,6 +62,11 @@ class Staff(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} <{self.email}>"
+
+    @property
+    def login_id(self) -> str:
+        """What the user types to sign in — username when set, else email."""
+        return self.username or self.email
 
     # ── Password helpers ──
     def set_password(self, plain: str) -> None:
@@ -81,7 +99,7 @@ class Staff(models.Model):
         return self.role == "admin"
 
     def get_username(self):
-        return self.email
+        return self.login_id
 
     def get_session_auth_hash(self):
         from django.utils.crypto import salted_hmac
@@ -812,3 +830,83 @@ class StockDocumentItem(models.Model):
     before_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     reconcile_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
+
+
+# ─── Audit log ───────────────────────────────────────────────────────────────
+class AuditLog(models.Model):
+    """Append-only record of who changed what, when, and from where.
+
+    Written automatically — nothing calls this model by hand in normal flows:
+
+    * ``bravepos.audit`` hooks ``post_save`` / ``post_delete`` / ``m2m_changed``
+      on the registered models and stores a field-level before/after diff.
+    * ``backoffice.middleware.AuditContextMiddleware`` supplies the actor and
+      request metadata (IP, path, user agent) via a thread-local.
+    * Django's ``user_logged_in`` / ``user_login_failed`` / ``user_logged_out``
+      signals write the auth rows.
+
+    Rows are never updated. Deletion is a manual retention decision.
+    """
+    ACTION_CHOICES = [
+        ("create", "Created"),
+        ("update", "Updated"),
+        ("delete", "Deleted"),
+        ("login", "Signed in"),
+        ("login_failed", "Sign-in failed"),
+        ("logout", "Signed out"),
+        ("export", "Exported"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    # Actor. The FK goes null if the staff row is later deleted, which is why
+    # the name/role/login are snapshotted as plain text alongside it.
+    actor = models.ForeignKey(
+        Staff, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="audit_entries",
+    )
+    actor_label = models.CharField(max_length=200, blank=True, default="")
+    actor_role = models.CharField(max_length=32, blank=True, default="")
+
+    action = models.CharField(max_length=16, choices=ACTION_CHOICES, db_index=True)
+    # Target — stored as strings so a deleted object still reads sensibly.
+    model = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    object_id = models.CharField(max_length=64, blank=True, default="")
+    object_label = models.CharField(max_length=250, blank=True, default="")
+
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="audit_entries",
+    )
+
+    # {"field": {"from": ..., "to": ...}} for updates; the full field map for
+    # creates/deletes. Secrets (passwords, PINs, API keys) are redacted by
+    # ``bravepos.audit.REDACTED_FIELDS`` before they ever reach this column.
+    changes = models.JSONField(default=dict, blank=True)
+
+    # Request context — blank for shell/management-command writes.
+    source = models.CharField(max_length=16, blank=True, default="")  # backoffice | api | shell
+    method = models.CharField(max_length=8, blank=True, default="")
+    path = models.CharField(max_length=300, blank=True, default="")
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=300, blank=True, default="")
+    note = models.CharField(max_length=300, blank=True, default="")
+
+    class Meta:
+        ordering = ["-at"]
+        indexes = [
+            models.Index(fields=["-at"]),
+            models.Index(fields=["actor", "-at"]),
+            models.Index(fields=["model", "-at"]),
+            models.Index(fields=["action", "-at"]),
+        ]
+
+    def __str__(self) -> str:
+        who = self.actor_label or "system"
+        target = f"{self.model} {self.object_label}".strip()
+        return f"{who} {self.action} {target}".strip()
+
+    @property
+    def change_count(self) -> int:
+        return len(self.changes or {})
