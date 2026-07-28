@@ -21,6 +21,7 @@ load_dotenv(BASE_DIR / '.env')
 SENTRY_DSN = os.environ.get('SENTRY_DSN')
 if SENTRY_DSN:
     import sentry_sdk
+    from django.core.exceptions import DisallowedHost
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,
@@ -30,6 +31,10 @@ if SENTRY_DSN:
         traces_sample_rate=float(os.environ.get('SENTRY_TRACES_RATE', '1.0')),
         # POS payloads can carry customer/order data — keep PII out of Sentry.
         send_default_pii=False,
+        # Internet background noise: bots hit the server's raw IP, Django
+        # rejects the Host header, Sentry pages us about it.  Nothing we can
+        # fix in code — the request never belonged to us.
+        ignore_errors=[DisallowedHost],
     )
 
 
