@@ -711,7 +711,12 @@ def transactions_export(request):
     valid_count = void_count = 0
 
     no = 0
-    for o in qs.iterator():
+    # chunk_size is mandatory once the queryset has prefetch_related() — Django
+    # deprecated the bare call in 4.1 and made it a hard ValueError in 5.0, so
+    # this export 500s without it. `_transactions_qs` prefetches items and
+    # items__product; 500 orders per chunk keeps the prefetch query small
+    # enough while still streaming a big date range.
+    for o in qs.iterator(chunk_size=500):
         no += 1
         row = _build_transaction_row(o, tax_percent, tax_mode, service_charge_pct)
         data = _trx_export_row(no, o, row)
