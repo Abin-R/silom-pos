@@ -615,21 +615,26 @@ class BranchViewSet(viewsets.ModelViewSet):
 
 
 # ─── Settings — singleton, GET + PUT only ────────────────────────────────────
-BEAM_API_KEY_MASK_PREFIX = '••••'
-
-
 # The Settings singleton accessor now lives in gateways.py (the payment layer
 # needs it for credentials + fee rates, and importing it back from views would
 # be circular).  Kept under the old name so the ~20 call sites below don't churn.
 _get_or_create_settings = get_shop_settings
 
 
-def _mask_api_key(data: dict) -> dict:
-    """Mirror the FastAPI mask: replace secret keys with ••••<last4>."""
-    for field in ('beam_api_key', 'omise_secret_key'):
-        key = data.get(field) or ''
-        if key and not key.startswith(BEAM_API_KEY_MASK_PREFIX) and len(key) > 4:
-            data[field] = BEAM_API_KEY_MASK_PREFIX + key[-4:]
+def _strip_payment_fields(data: dict) -> dict:
+    """Remove payment config from anything crossing the POS API.
+
+    Payment credentials are backoffice-only.  The app used to read and write
+    them on this endpoint (Settings → Payment), but that screen is gone: a POS
+    session is a tablet on a shop counter, and it has no business either
+    learning the merchant account or being able to change where money lands.
+
+    Stripping rather than masking, on both directions, so an older app build
+    still in the field can neither read a key nor write one back — its stale
+    copy of the payment fields is simply ignored.
+    """
+    for field in gateways.PAYMENT_FIELDS:
+        data.pop(field, None)
     return data
 
 
@@ -638,21 +643,12 @@ def _mask_api_key(data: dict) -> dict:
 def settings_view(request):
     obj = _get_or_create_settings()
     if request.method == 'GET':
-        return Response(_mask_api_key(dict(SettingsSerializer(obj).data)))
+        return Response(_strip_payment_fields(dict(SettingsSerializer(obj).data)))
 
-    # PUT — update, but never overwrite the API key with a mask placeholder
-    # echoed back from the UI (matches FastAPI semantics).
-    payload = dict(request.data)
-    for field in ('beam_api_key', 'omise_secret_key'):
-        if field in payload:
-            val = payload[field]
-            if not val or (isinstance(val, str) and val.startswith(BEAM_API_KEY_MASK_PREFIX)):
-                payload.pop(field)
-
-    ser = SettingsSerializer(obj, data=payload, partial=True)
+    ser = SettingsSerializer(obj, data=_strip_payment_fields(dict(request.data)), partial=True)
     ser.is_valid(raise_exception=True)
     ser.save()
-    return Response(_mask_api_key(dict(SettingsSerializer(obj).data)))
+    return Response(_strip_payment_fields(dict(SettingsSerializer(obj).data)))
 
 
 # ─── Orders ──────────────────────────────────────────────────────────────────
