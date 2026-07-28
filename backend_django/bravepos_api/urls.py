@@ -21,6 +21,10 @@ urlpatterns = [
     # the path.  See bravepos/public_views.py for the trust model.
     path('order/<uuid:branch_id>/', public_views.order_menu, name='selforder_menu'),
     path('order/<uuid:branch_id>/start/', public_views.order_start, name='selforder_start'),
+    # Product images as separate cacheable resources rather than base64 inlined
+    # into the menu HTML — see public_views.product_image.
+    path('order/<uuid:branch_id>/img/<uuid:product_id>/', public_views.product_image,
+         name='selforder_product_image'),
     path('order/s/<str:token>/', public_views.order_pay_page, name='selforder_pay_page'),
     path('order/s/<str:token>/pay/', public_views.order_pay, name='selforder_pay'),
     path('order/s/<str:token>/status/', public_views.order_status, name='selforder_status'),

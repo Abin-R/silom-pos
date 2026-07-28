@@ -30,6 +30,7 @@ from bravepos.models import (
     Staff,
     Unit,
 )
+from bravepos import images
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
 
@@ -1768,7 +1769,10 @@ def _apply_product_form(product, post, branch):
     product.category_id = cat_id if cat_id else None
     product.tax_type = post.get("tax_type") or "V"
     product.product_type = post.get("product_type") or "P"
-    product.image_url = (post.get("image_url") or "").strip()
+    # The form's JS downscales before POSTing, but that runs in the browser and
+    # can be bypassed (JS off) or fall through its own error path. Normalising
+    # server-side is what actually bounds the column. See bravepos.images.
+    product.image_url = images.normalize(post.get("image_url") or "")
     product.is_favorite = bool(post.get("is_favorite"))
     unit_id = post.get("unit") or ""
     product.unit_id = unit_id if unit_id else None

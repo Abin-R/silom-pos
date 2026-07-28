@@ -298,23 +298,30 @@
     const preview = document.getElementById('imgPreview');
     const MAX_DIM = 512;       // longest edge, px
     const JPEG_QUALITY = 0.8;
+    // Failure hands back null rather than the original data URL. Falling back
+    // to the original was how a 262 KB unresized photo reached production and
+    // made the customer menu page 648 KB — a silent fallback that does the one
+    // thing this function exists to prevent. The server normalises on save too
+    // (bravepos.images), so nothing oversized is stored either way; refusing
+    // here just means the user finds out now instead of wondering why their
+    // image looks different.
     function downscale(dataUrl, done) {
       const img = new Image();
       img.onload = function () {
-        const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
         try {
+          const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
           done(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
         } catch (err) {
-          done(dataUrl);  // e.g. tainted canvas — fall back to the original
+          done(null);   // e.g. tainted canvas
         }
       };
-      img.onerror = function () { done(dataUrl); };
+      img.onerror = function () { done(null); };
       img.src = dataUrl;
     }
     if (file) {
@@ -324,10 +331,21 @@
         const reader = new FileReader();
         reader.onload = function (e) {
           downscale(e.target.result, function (small) {
+            if (!small) {
+              // Leave the existing image in place — clearing it would lose the
+              // product's current picture over a failed *new* upload.
+              file.value = '';
+              alert("Couldn't process that image. Try a JPEG or PNG saved from your device.");
+              return;
+            }
             url.value = small;
             preview.src = small;
             preview.style.display = '';
           });
+        };
+        reader.onerror = function () {
+          file.value = '';
+          alert("Couldn't read that file.");
         };
         reader.readAsDataURL(f);
       });

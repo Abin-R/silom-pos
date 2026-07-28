@@ -2807,9 +2807,13 @@ function ProductEditModal({
         return;
       }
       const original = result.assets[0];
+      // 512px matches the server's cap (bravepos.images.MAX_DIM). It used to be
+      // 800, which the server would then downscale on save — a second lossy
+      // re-encode of an already-lossy JPEG, for an image only ever shown as a
+      // thumbnail. Matching the cap means what we send is what gets stored.
       const manipulated = await ImageManipulator.manipulateAsync(
         original.uri,
-        [{ resize: { width: 800 } }],
+        [{ resize: { width: 512 } }],
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
       );
       if (manipulated.base64) {

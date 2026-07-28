@@ -244,8 +244,11 @@ for money; the totals shown here are a preview.
   function cardFor(p) {
     const card = document.createElement("div");
     card.className = "card" + (p.sold_out ? " sold" : "");
+    // Images are separate requests now (they used to be base64 inlined into
+    // this document), so lazy-loading them actually means something: a customer
+    // who orders one coffee never downloads the pictures further down the menu.
     const thumb = p.image_url
-      ? `<img class="thumb" src="${esc(p.image_url)}" alt="">`
+      ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
       : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`;
     const badge = p.low_stock ? `<span class="badge">เหลือ ${p.stock} ชิ้น</span>` : "";
     card.innerHTML = `

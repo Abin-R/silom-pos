@@ -22,15 +22,16 @@ Trust model:
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
-from django.http import JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseNotModified, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
 
-from . import selforder
+from . import images, selforder
 from .gateways import GatewayConfigError, GatewayError
-from .models import Branch, SelfOrder
+from .models import Branch, Product, SelfOrder
 
 
 def _no_referrer(response):
@@ -52,6 +53,30 @@ def _err(message: str, status: int = 400) -> JsonResponse:
     return JsonResponse({'status': 'error', 'error': message}, status=status)
 
 
+def _summary_lines(draft: SelfOrder) -> list[dict]:
+    """Order-summary rows for the pay page, with the amount per LINE.
+
+    ``draft.items`` stores the *unit* price, and the template can't multiply
+    (``widthratio`` only does integers, which is wrong for money), so the line
+    total is computed here.  It has to be the line total: rendering the unit
+    price against a "name × qty" label makes the rows visibly fail to add up to
+    the total the customer is about to pay.
+    """
+    lines = []
+    for it in draft.items or []:
+        try:
+            qty = int(it.get('qty') or 0)
+            price = Decimal(str(it.get('price') or 0))
+        except (TypeError, ValueError, InvalidOperation):
+            continue
+        lines.append({
+            'name': it.get('name') or '',
+            'qty': qty,
+            'line_total': price * qty,
+        })
+    return lines
+
+
 # ─── Menu ────────────────────────────────────────────────────────────────────
 def order_menu(request, branch_id):
     """The page a customer lands on after scanning the branch QR."""
@@ -63,6 +88,52 @@ def order_menu(request, branch_id):
         'menu_json': json.dumps(selforder.menu_for(branch) if open_now else []),
         'start_url': f'/order/{branch.id}/start/',
     }))
+
+
+# ─── Product image ───────────────────────────────────────────────────────────
+def product_image(request, branch_id, product_id):
+    """Serve one product image as its own cacheable resource.
+
+    Product images are stored as base64 ``data:`` URIs, and ``menu_for`` used to
+    paste them straight into the menu HTML. Three oversized rows made that page
+    648 KB — and because they were *markup*, nothing rendered until all of it
+    arrived and every visit re-downloaded the lot.
+
+    Served from here instead, the browser fetches them in parallel, lazily, and
+    keeps them. The ``?v=`` the menu appends is a content hash, so an image that
+    changes gets a new URL and this one can be cached immutably for a year
+    without ever going stale.
+    """
+    branch = get_object_or_404(Branch, id=branch_id, active=True)
+    # Same gate as the menu itself: the feature flag, not the unguessable-ness
+    # of the URL, is what keeps an opted-out branch closed.
+    if not selforder.self_order_enabled(branch):
+        raise Http404
+
+    product = get_object_or_404(Product, id=product_id, branch=branch, active=True)
+    raw = product.image_url or product.image_base64 or ''
+    decoded = images.decode(raw)
+    if decoded is None:
+        # Hosted URL or no image — the menu links straight to the origin in that
+        # case and never points here.
+        raise Http404
+
+    data, mime = decoded
+    etag = f'"{images.digest(raw)}"'
+    if request.headers.get('If-None-Match') == etag:
+        return HttpResponseNotModified()
+
+    resp = HttpResponse(data, content_type=mime)
+    resp['ETag'] = etag
+    resp['Content-Length'] = str(len(data))
+    # Only promise immutability when the caller asked for the version we
+    # actually have; a bare/stale ``?v=`` must stay revalidatable or a renamed
+    # image would be pinned in phone caches for a year.
+    if request.GET.get('v') == images.digest(raw):
+        resp['Cache-Control'] = 'public, max-age=31536000, immutable'
+    else:
+        resp['Cache-Control'] = 'public, max-age=300'
+    return resp
 
 
 # ─── Create a draft ──────────────────────────────────────────────────────────
@@ -107,6 +178,7 @@ def order_pay_page(request, token):
     return _no_referrer(render(request, 'selforder/pay.html', {
         'draft': draft,
         'branch': draft.branch,
+        'lines': _summary_lines(draft),
         'quote_qr': selforder.quote(draft, 'qr'),
         'quote_card': selforder.quote(draft, 'card'),
         'pay_url': f'/order/s/{draft.token}/pay/',

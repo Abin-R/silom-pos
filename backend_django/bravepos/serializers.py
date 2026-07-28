@@ -2,6 +2,7 @@
 existing frontend already sends and expects."""
 from rest_framework import serializers
 
+from . import images
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
@@ -54,6 +55,19 @@ class ProductSerializer(serializers.ModelSerializer):
             'is_favorite', 'tax_type', 'product_type',
             'active', 'sort_order',
         ]
+
+    # Both image fields are unbounded TextFields holding base64 ``data:`` URIs.
+    # The app resizes before sending, but that is the *client's* promise —
+    # ``image_url`` is a free-text field a paste can bypass entirely, and an
+    # older build may not resize at all.  Capping here means the cap holds for
+    # every writer of this API, now and later.  Oversized is normalised rather
+    # than rejected: a 400 on save would lose the whole product edit over an
+    # image, which is not a trade the cashier asked for.  See bravepos.images.
+    def validate_image_url(self, value):
+        return images.normalize(value)
+
+    def validate_image_base64(self, value):
+        return images.normalize(value)
 
 
 class CustomerSerializer(serializers.ModelSerializer):

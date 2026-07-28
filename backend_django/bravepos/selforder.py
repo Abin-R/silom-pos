@@ -25,7 +25,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone as djtz
 
-from . import gateways
+from . import gateways, images
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -88,6 +88,21 @@ def branch_is_open(branch) -> bool:
 LOW_STOCK_THRESHOLD = 5
 
 
+def menu_image_ref(branch, product) -> str:
+    """What the menu should put in ``image_url`` for one product.
+
+    A hosted ``https://`` image is already small and already cacheable, so it
+    passes straight through. A base64 ``data:`` URI does not: inlining those
+    into the menu HTML is what made this page 648 KB, of which 583 KB was three
+    products. Those become a URL to ``public_views.product_image``, carrying a
+    content hash so the response can be cached hard and still never go stale.
+    """
+    raw = product.image_url or product.image_base64 or ''
+    if not images.is_data_uri(raw):
+        return raw
+    return f'/order/{branch.id}/img/{product.id}/?v={images.digest(raw)}'
+
+
 def menu_for(branch) -> list[dict]:
     """The public menu for one branch — every active product it stocks.
 
@@ -112,7 +127,7 @@ def menu_for(branch) -> list[dict]:
             'price': float(p.price),
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
-            'image_url': p.image_url or p.image_base64 or '',
+            'image_url': menu_image_ref(branch, p),
             # Inventory the customer is allowed to see. Service products (stock
             # not tracked) and anything with stock on hand are orderable.
             'stock': stock,
