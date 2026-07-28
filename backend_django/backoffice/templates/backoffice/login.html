@@ -37,9 +37,11 @@
 
         <form method="post" action="{% url 'backoffice:login' %}">
           {% csrf_token %}
-          {# One field, two modes. The backend matches whatever is typed
-             against Staff.username OR Staff.email, so switching here only
-             changes the label, placeholder and keyboard — never the POST. #}
+          {% comment %}
+            One field, two modes. The backend matches whatever is typed
+            against Staff.username OR Staff.email, so switching here only
+            changes the label, placeholder and keyboard — never the POST.
+          {% endcomment %}
           <div class="mb-3">
             <div class="d-flex justify-content-between align-items-center">
               <label class="form-label mb-1" id="idLabel" for="idField">Username</label>

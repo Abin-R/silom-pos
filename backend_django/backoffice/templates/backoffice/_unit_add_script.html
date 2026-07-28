@@ -1,7 +1,9 @@
-{# Inline "add new unit" for any <select class="unit-select"> on the page.
-   Selecting the "➕ Add new unit…" option prompts for a name, creates the
-   Unit via AJAX, appends it to every unit dropdown, and selects it — no
-   page reload. Shared by the product Add / Quick Add / Quick Edit forms. #}
+{% comment %}
+  Inline "add new unit" for any <select class="unit-select"> on the page.
+  Selecting the "➕ Add new unit…" option prompts for a name, creates the
+  Unit via AJAX, appends it to every unit dropdown, and selects it — no
+  page reload. Shared by the product Add / Quick Add / Quick Edit forms.
+{% endcomment %}
 <script>
 (function () {
   const url = "{% url 'backoffice:unit_create_ajax' %}";

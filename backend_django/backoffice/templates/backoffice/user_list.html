@@ -16,8 +16,10 @@
 </div>
 
 {% if issued %}
-{# Shown exactly once, straight after create/reset. Refreshing loses it —
-   that's deliberate: nothing stores the plaintext password anywhere. #}
+{% comment %}
+  Shown exactly once, straight after create/reset. Refreshing loses it —
+  that's deliberate: nothing stores the plaintext password anywhere.
+{% endcomment %}
 <div class="card border-success mb-3">
   <div class="card-body">
     <div class="d-flex justify-content-between align-items-start">
