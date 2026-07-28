@@ -71,8 +71,10 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
 
   {# ── Order summary ── #}
   <div class="card-soft summary">
-    {% for it in draft.items %}
-      <div class="row"><span>{{ it.name }} × {{ it.qty }}</span><span>฿{{ it.price|floatformat:2 }}</span></div>
+    {% comment %}Amount per line (unit price × qty) — the rows have to add up to
+    the total below them.{% endcomment %}
+    {% for it in lines %}
+      <div class="row"><span>{{ it.name }} × {{ it.qty }}</span><span>฿{{ it.line_total|floatformat:2 }}</span></div>
     {% endfor %}
     <div class="row tot"><span>ยอดรวม (รวม VAT 7%)</span><span>฿{{ draft.goods_total|floatformat:2 }}</span></div>
   </div>
