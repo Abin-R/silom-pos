@@ -59,12 +59,16 @@ export type PrinterConfig = {
   paperWidth?: 80 | 58;
   charsPerLine?: number;        // default 48 for 80mm
   cutType?: 'partial' | 'full' | 'none';
-  // Pixel width the receipt image is captured + printed at.  The native module
-  // prints the bitmap at 1px→1dot with no scaling, so on a printer whose head
-  // is narrower than the default 576 dots the right edge clips.  Lower this
-  // (e.g. 512, 480) to scale the whole receipt down until it fits.  Undefined
-  // → 576 (leaves already-working printers, e.g. biohouse's, untouched).
-  printWidth?: number;
+  // Right padding of the printed receipt, in the 576px image space.  Some
+  // printers clip the right edge (printable area narrower than the 576-dot
+  // head); increasing this pushes content left until it fits.  Undefined → 170
+  // (leaves already-fine printers, e.g. biohouse's, untouched).
+  //
+  // NOTE: an earlier `printWidth` approach (scaling the captured image) is
+  // abandoned — react-native-view-shot's width option is ignored on some
+  // devices, so it changed nothing.  Padding is the lever that actually moves
+  // this printer's output.
+  receiptRightPad?: number;
 };
 
 export type ReceiptOrder = {

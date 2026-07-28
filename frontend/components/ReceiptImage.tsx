@@ -105,9 +105,15 @@ type Props = {
   // snapshot the view before the image is ready, producing a receipt
   // with a blank space where the logo should be.
   onLogoReady?: () => void;
+  // Right padding of the whole slip, in the 576px image space.  Some printers
+  // clip the right edge (their printable area is narrower than the 576-dot
+  // head), so this pushes the content further left until it fits.  Per device,
+  // from the local printer config; default 170 leaves already-fine printers
+  // (e.g. biohouse) unchanged.
+  rightPad?: number;
 };
 
-export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady }, ref) => {
+export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady, rightPad }, ref) => {
   // Prefer the backoffice-edited address_line_1/2 fields; fall back to the
   // legacy `address` blob (split on newlines) and only use the hardcoded
   // default block when no shop data exists at all.
@@ -158,7 +164,11 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady 
   const change = Number(order.change) || 0;
 
   return (
-    <View ref={ref} collapsable={false} style={s.root}>
+    <View
+      ref={ref}
+      collapsable={false}
+      style={[s.root, typeof rightPad === "number" ? { paddingRight: rightPad } : null]}
+    >
       {/* ─── Big queue number ─────────────────────────────────────── */}
       <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>
 

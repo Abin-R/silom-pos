@@ -73,11 +73,7 @@ async function doLogout(): Promise<void> {
 }
 const THB = (n: number) => `฿${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-// Mask prefix used by the backend to redact stored Beam API keys (••••<last4>).
-// Kept in sync with backend/server.py BEAM_API_KEY_MASK_PREFIX.
-const BEAM_API_KEY_MASK_PREFIX = "••••";
-
-type Section = "transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "settings";
+type Section ="transactions" | "reports" | "inventory" | "customers" | "products" | "drawer" | "settings";
 
 type Category = { id: string; name: string; name_th?: string; color: string; source?: string; order: number };
 type Product = {
@@ -131,9 +127,8 @@ type Settings = {
   open_time: string; close_time: string;
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
-  beam_merchant_id?: string; beam_api_key?: string; beam_sandbox?: boolean;
-  beam_card_fee_percent?: number;
-  omise_public_key?: string; omise_secret_key?: string; omise_fee_percent?: number;
+  // No payment fields: gateway credentials and the test/live lane are
+  // backoffice-only, and /api/settings strips them in both directions.
   printer_enabled?: boolean;
   printer_transport?: "disabled" | "file" | "network";
   printer_address?: string | null;
@@ -3650,7 +3645,10 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
     { name: "Floor plan", icon: "grid", color: "#3B82F6" },
     { name: "Language", icon: "language", color: "#8B5CF6" },
     { name: "Receipt", icon: "receipt", color: "#EF4444" },
-    { name: "Payment", icon: "card", color: "#F59E0B" },
+    // No Payment section: gateway credentials and the test/live lane are
+    // backoffice-only. A tablet on a shop counter has no business learning the
+    // merchant account or changing where money lands. /api/settings strips the
+    // payment fields in both directions, so there is nothing here to edit.
     { name: "Self-Order QR", icon: "qr-code", color: "#D61222" },
     { name: "Drawer", icon: "calculator", color: "#06B6D4" },
     { name: "Sales channels", icon: "link", color: "#EC4899" },
@@ -3855,165 +3853,6 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
               <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
             </TouchableOpacity>
           </ScrollView>
-        ) : active === "Payment" && s ? (
-          (() => {
-            // Normalize Beam-related settings once so the JSX stays clean.
-            const isMaskedKey = s.beam_api_key?.startsWith(BEAM_API_KEY_MASK_PREFIX) ?? false;
-            const sandbox = s.beam_sandbox ?? true;
-            return (
-          <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-            <Text style={styles.h2}>Payment</Text>
-
-            {/* ── Beam QR Payment ── */}
-            <View style={styles.beamSettingsCard}>
-              <View style={styles.beamSettingsHeader}>
-                <View style={styles.beamLogoBox}>
-                  <Ionicons name="qr-code" size={20} color="#FFF" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.beamSettingsTitle}>Beam Payment</Text>
-                  <Text style={styles.beamSettingsSub}>PromptPay QR + credit card via Beam Checkout</Text>
-                </View>
-              </View>
-
-              <Field label="Merchant ID">
-                <TextInput
-                  style={styles.formInput}
-                  value={s.beam_merchant_id || ""}
-                  onChangeText={(v) => update({ beam_merchant_id: v })}
-                  placeholder="m_xxxxxxxxxxxxxxxx"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  testID="beam-merchant-id"
-                />
-              </Field>
-
-              <Field label="API Key">
-                <TextInput
-                  style={styles.formInput}
-                  value={isMaskedKey ? "" : (s.beam_api_key || "")}
-                  onChangeText={(v) => update({ beam_api_key: v })}
-                  placeholder={isMaskedKey ? "Key saved — enter new key to replace" : "Enter your Beam API Key"}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  testID="beam-api-key"
-                />
-              </Field>
-
-              <Field label="Mode">
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  <TouchableOpacity
-                    style={[styles.bizBtn, sandbox && styles.bizBtnActive]}
-                    onPress={() => update({ beam_sandbox: true })}
-                    testID="beam-sandbox"
-                  >
-                    <Text style={[styles.bizBtnText, sandbox && { color: "#FFF" }]}>Test (Playground)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.bizBtn, !sandbox && styles.bizBtnActive]}
-                    onPress={() => update({ beam_sandbox: false })}
-                    testID="beam-production"
-                  >
-                    <Text style={[styles.bizBtnText, !sandbox && { color: "#FFF" }]}>Production</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.beamSettingsHint}>
-                  Use Test mode with Beam Playground credentials. Switch to Production when you are ready to accept real payments.
-                </Text>
-              </Field>
-
-              <Field label="Card Processing Fee %">
-                <TextInput
-                  style={styles.formInput}
-                  // Uncontrolled (defaultValue) so a half-typed decimal like
-                  // "3." isn't reformatted away mid-keystroke.
-                  defaultValue={s.beam_card_fee_percent != null ? String(s.beam_card_fee_percent) : ""}
-                  onChangeText={(v) => {
-                    const n = parseFloat(v.replace(/[^0-9.]/g, ""));
-                    update({ beam_card_fee_percent: isNaN(n) ? 0 : n });
-                  }}
-                  placeholder="3.65"
-                  keyboardType="decimal-pad"
-                  testID="beam-card-fee-percent"
-                />
-                <Text style={styles.beamSettingsHint}>
-                  Charged to the customer on the "Beam Card" payment method (percentage of the order total). 7% VAT is added on top of this fee. Test/live mode follows the Mode setting above.
-                </Text>
-              </Field>
-            </View>
-
-            {/* ── Omise Credit Card ── */}
-            {(() => {
-              const isMaskedOmise = s.omise_secret_key?.startsWith(BEAM_API_KEY_MASK_PREFIX) ?? false;
-              return (
-            <View style={styles.beamSettingsCard}>
-              <View style={styles.beamSettingsHeader}>
-                <View style={[styles.beamLogoBox, { backgroundColor: "#1A1F71" }]}>
-                  <Ionicons name="card" size={20} color="#FFF" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.beamSettingsTitle}>Credit Card (Omise)</Text>
-                  <Text style={styles.beamSettingsSub}>Card payment link · customer scans a QR to pay</Text>
-                </View>
-              </View>
-
-              <Field label="Public Key">
-                <TextInput
-                  style={styles.formInput}
-                  value={s.omise_public_key || ""}
-                  onChangeText={(v) => update({ omise_public_key: v })}
-                  placeholder="pkey_test_xxxxxxxxxxxxxxxx"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  testID="omise-public-key"
-                />
-              </Field>
-
-              <Field label="Secret Key">
-                <TextInput
-                  style={styles.formInput}
-                  value={isMaskedOmise ? "" : (s.omise_secret_key || "")}
-                  onChangeText={(v) => update({ omise_secret_key: v })}
-                  placeholder={isMaskedOmise ? "Key saved — enter new key to replace" : "skey_test_xxxxxxxxxxxxxxxx"}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  testID="omise-secret-key"
-                />
-              </Field>
-
-              <Field label="Processing Fee %">
-                <TextInput
-                  style={styles.formInput}
-                  // Uncontrolled (defaultValue, not value) so a half-typed
-                  // decimal like "3." isn't reformatted away mid-keystroke.
-                  defaultValue={s.omise_fee_percent != null ? String(s.omise_fee_percent) : ""}
-                  onChangeText={(v) => {
-                    const n = parseFloat(v.replace(/[^0-9.]/g, ""));
-                    update({ omise_fee_percent: isNaN(n) ? 0 : n });
-                  }}
-                  placeholder="3.65"
-                  keyboardType="decimal-pad"
-                  testID="omise-fee-percent"
-                />
-                <Text style={styles.beamSettingsHint}>
-                  Charged to the customer on card payments (percentage of the order total). 7% VAT is added on top of this fee. Test/live mode is set by the key prefix (skey_test_ vs skey_).
-                </Text>
-              </Field>
-            </View>
-              );
-            })()}
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, saving && { opacity: 0.5 }]}
-              onPress={save}
-              disabled={saving}
-              testID="settings-save-payment"
-            >
-              <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
-            </TouchableOpacity>
-          </ScrollView>
-            );
-          })()
         ) : active === "Printers" && s ? (
           <PrintersSection s={s} update={update} save={save} saving={saving} />
         ) : active === "Drawer" ? (
@@ -4272,11 +4111,12 @@ function PrintersSection({
     await saveLocalPrinterConfig(next);
   }, [localCfg]);
 
-  // Per-device receipt print width.  Lower it if this printer clips the right
-  // edge; undefined = full 576 (default, e.g. biohouse).
-  const setPrintWidth = useCallback(async (w: number | undefined) => {
+  // Per-device receipt right margin.  Increase it if this printer clips the
+  // right edge (pushes content further left); undefined = 170 (default, e.g.
+  // biohouse, unchanged).
+  const setRightPad = useCallback(async (v: number | undefined) => {
     if (!localCfg) return;
-    const next = { ...localCfg, printWidth: w };
+    const next = { ...localCfg, receiptRightPad: v };
     setLocalCfg(next);
     await saveLocalPrinterConfig(next);
   }, [localCfg]);
@@ -4504,33 +4344,34 @@ function PrintersSection({
           </TouchableOpacity>
         </View>
 
-        {/* Receipt width — fixes right-edge clipping on printers whose head is
-            narrower than the default 576 dots.  Lower it and Test Print until
-            the whole receipt fits. */}
+        {/* Right margin — fixes right-edge clipping on printers whose printable
+            area is narrower than the 576-dot head, by pushing content left.
+            Higher = more trimmed from the right.  Print a receipt after each
+            change (reprint any bill from Transactions). */}
         {localCfg?.identifier && (
           <View style={{ marginTop: 14 }}>
-            <Text style={styles.formLabel}>Receipt width</Text>
+            <Text style={styles.formLabel}>Receipt right margin</Text>
             <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 8 }}>
-              If the right side of the receipt is cut off, pick a smaller width, then Test Print. Keep lowering until it fits.
+              If the right side of the receipt is cut off, pick a bigger margin, then reprint a bill. Keep increasing until the amounts fit.
             </Text>
             <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
               {[
-                { label: "Full", v: undefined as number | undefined },
-                { label: "560", v: 560 },
-                { label: "512", v: 512 },
-                { label: "480", v: 480 },
-                { label: "448", v: 448 },
+                { label: "Default", v: undefined as number | undefined },
+                { label: "210", v: 210 },
+                { label: "250", v: 250 },
+                { label: "290", v: 290 },
+                { label: "330", v: 330 },
               ].map((opt) => {
-                const isActive = (localCfg.printWidth ?? 576) === (opt.v ?? 576);
+                const isActive = (localCfg.receiptRightPad ?? 170) === (opt.v ?? 170);
                 return (
                   <TouchableOpacity
                     key={opt.label}
-                    onPress={() => setPrintWidth(opt.v)}
+                    onPress={() => setRightPad(opt.v)}
                     style={[
                       styles.secondaryBtn,
                       isActive && { borderColor: "#10B981", backgroundColor: "#F0FDF4" },
                     ]}
-                    testID={`printwidth-${opt.label}`}
+                    testID={`rightpad-${opt.label}`}
                   >
                     <Text style={styles.secondaryBtnText}>{opt.label}</Text>
                   </TouchableOpacity>
