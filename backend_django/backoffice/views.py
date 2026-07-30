@@ -2315,6 +2315,69 @@ def _apply_payment_form(obj, post) -> None:
             pass
 
 
+def omise_key_kind(value: str) -> str | None:
+    """``'test'`` / ``'live'`` / ``None`` for blank or unrecognised.
+
+    Omise has no test/live switch of its own — the key prefix is the only thing
+    that decides which environment a charge lands in.  That makes it the one
+    credential we can check against the branch's declared lane.
+    """
+    v = (value or "").strip()
+    if not v:
+        return None
+    if v.startswith(("pkey_test_", "skey_test_")):
+        return "test"
+    if v.startswith(("pkey_", "skey_")):
+        return "live"
+    return None
+
+
+def payment_errors(obj) -> list[str]:
+    """Lane/key mismatches serious enough to refuse the save.
+
+    This exists because both halves of it happened for real on the live system:
+    a branch marked Test was holding live Omise keys (so a "practice" terminal
+    would have charged real cards), and the shop template was marked Live while
+    holding test keys (so every branch created from it would have collected
+    nothing).  Neither is visible by eye — the keys are masked on screen — so
+    the check has to be at save time.
+
+    Beam is deliberately not checked: its keys carry no test/live prefix, so
+    there is nothing to compare the lane against.  Only Omise self-describes.
+    """
+    lane = "test" if obj.beam_sandbox else "live"
+    errors = []
+
+    for label, value in (("public", obj.omise_public_key),
+                         ("secret", obj.omise_secret_key)):
+        kind = omise_key_kind(value)
+        if kind is None or kind == lane:
+            continue
+        if lane == "test":
+            errors.append(
+                f"This is a Test row, but the Omise {label} key is a LIVE key "
+                f"(starts with pkey_/skey_). Omise ignores the Test setting — "
+                f"the key prefix is what decides — so card payments here would "
+                f"charge real cards. Use a {label} key starting with "
+                f"pkey_test_/skey_test_, or clear it to switch Omise off here."
+            )
+        else:
+            errors.append(
+                f"This is a Live row, but the Omise {label} key is a TEST key "
+                f"(starts with pkey_test_/skey_test_). Card payments would look "
+                f"like they worked and collect no money. Use a live key."
+            )
+
+    pub, sec = omise_key_kind(obj.omise_public_key), omise_key_kind(obj.omise_secret_key)
+    if pub and sec and pub != sec:
+        errors.append(
+            f"The Omise public key is a {pub.upper()} key but the secret key is "
+            f"a {sec.upper()} key. They must be from the same account."
+        )
+
+    return errors
+
+
 def _payment_context(obj) -> dict:
     """What the payment form needs to render without ever emitting a secret.
 
@@ -2369,14 +2432,20 @@ def branch_list(request):
 @login_required
 def branch_detail(request, branch_id):
     b = get_object_or_404(Branch, id=branch_id)
+    errors = []
     if request.method == "POST":
         _apply_branch_form(b, request.POST)
-        b.save()
-        return redirect("backoffice:branch_list")
+        errors = payment_errors(b)
+        if not errors:
+            b.save()
+            return redirect("backoffice:branch_list")
+        # Fall through and re-render with the submitted values still in place,
+        # so the fix is one edit rather than retyping the whole form.
     context = {
         "active": "branches",
         "branch_obj": b,
         "mode": "edit",
+        "payment_errors": errors,
         **_payment_context(b),
         **_branch_topbar_context(),
     }
@@ -2385,11 +2454,27 @@ def branch_detail(request, branch_id):
 
 @login_required
 def branch_new(request):
+    errors = []
     if request.method == "POST":
         b = Branch()
         _apply_branch_form(b, request.POST)
-        b.save()
-        return redirect("backoffice:branch_list")
+        # Validate against the config the branch will actually end up with —
+        # seeding fills the write-only key fields the form leaves blank, and it
+        # is those seeded keys that have to match the lane.
+        seed_branch_payment(b)
+        errors = payment_errors(b)
+        if not errors:
+            b.save()
+            return redirect("backoffice:branch_list")
+        context = {
+            "active": "branches",
+            "branch_obj": b,
+            "mode": "new",
+            "payment_errors": errors,
+            **_payment_context(b),
+            **_branch_topbar_context(),
+        }
+        return render(request, "backoffice/branch_form.html", context)
     # Show the payment config this branch is about to inherit rather than an
     # empty form — the same seeding the pre_save signal will do on save, run
     # early on a throwaway instance purely so the page tells the truth.
@@ -2399,6 +2484,7 @@ def branch_new(request):
         "active": "branches",
         "branch_obj": blank,
         "mode": "new",
+        "payment_errors": errors,
         **_payment_context(blank),
         **_branch_topbar_context(),
     }
@@ -2448,6 +2534,18 @@ def shop_settings(request):
         # branches created from here on and are never read at charge time, so
         # editing them cannot disturb a branch that is already trading.
         _apply_payment_form(s, request.POST)
+        errors = payment_errors(s)
+        if errors:
+            # Refuse the whole page rather than saving the non-payment half —
+            # a template that says Live while holding test keys silently mints
+            # branches that collect no money.
+            context = {
+                "active": "shop_settings", "settings": s, "branch_obj": branch,
+                "branches": branches, "branch": branch, "hide_dates": True,
+                "payment_errors": errors,
+                **_payment_context(s),
+            }
+            return render(request, "backoffice/shop_settings.html", context)
         s.save()
 
         # ── Per-branch (selected Branch) ─────────────────────────────

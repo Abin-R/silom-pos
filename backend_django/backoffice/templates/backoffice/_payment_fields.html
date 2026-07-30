@@ -23,6 +23,18 @@ off the page (or out of a browser's saved-form cache, or a screenshot).
   </div>
   <div class="card-body">
 
+    {% if payment_errors %}
+      <div class="alert alert-danger d-flex gap-2 mb-4">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+          <strong>Not saved — the keys don't match the mode.</strong>
+          <ul class="mb-0 mt-2 ps-3">
+            {% for err in payment_errors %}<li>{{ err }}</li>{% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% endif %}
+
     {% if payment_scope == 'template' %}
       <div class="alert alert-secondary d-flex gap-2 py-2 mb-4">
         <i class="bi bi-info-circle mt-1"></i>

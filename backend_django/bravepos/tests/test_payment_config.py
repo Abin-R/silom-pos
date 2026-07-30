@@ -228,11 +228,16 @@ class BranchPaymentFormTests(TestCase):
         self.assertEqual(self.branch.beam_api_key, "")
 
     def test_mode_switches_the_lane(self):
-        self._post(payment_mode="test")
+        """Switching to Test also means dropping the live Omise keys — the lane
+        check refuses the pair, since Omise would charge real cards regardless
+        of the Test setting. See OmiseLaneValidationTests."""
+        self._post(payment_mode="test", omise_public_key="",
+                   omise_secret_key="", omise_secret_key_clear="on")
         self.branch.refresh_from_db()
         self.assertTrue(self.branch.beam_sandbox)
 
-        self._post(payment_mode="live")
+        self._post(payment_mode="live", omise_public_key="pkey_live_abcd",
+                   omise_secret_key="skey_live_abcd")
         self.branch.refresh_from_db()
         self.assertFalse(self.branch.beam_sandbox)
 
@@ -247,6 +252,114 @@ class BranchPaymentFormTests(TestCase):
         self._post(beam_card_fee_percent="three point six five")
         self.branch.refresh_from_db()
         self.assertEqual(self.branch.beam_card_fee_percent, Decimal("3.65"))
+
+
+class OmiseLaneValidationTests(TestCase):
+    """Both halves of this fired on the live system before the check existed.
+
+    A branch marked Test held live Omise keys — Omise ignores the Test setting,
+    so a "practice" terminal would have charged real cards. And the shop
+    template was marked Live while holding test keys, so every branch created
+    from it would have collected nothing. Masked fields mean neither is visible
+    by eye, so the check has to run at save time.
+    """
+
+    def setUp(self):
+        self.shop = _shop_with_keys()
+        self.branch = Branch.objects.create(name="Lane Branch", code="LANE")
+        admin = Staff(
+            name="BO Admin", username="bo", email="bo@x.test",
+            role="admin", active=True, backoffice_access=True,
+        )
+        admin.set_password("pw-pw-pw")
+        admin.save()
+        self.client.post(reverse("backoffice:login"),
+                         {"username": "bo", "password": "pw-pw-pw"})
+        self.url = reverse("backoffice:branch_detail", kwargs={"branch_id": self.branch.id})
+
+    def _post(self, **overrides):
+        data = {
+            "name": self.branch.name, "code": self.branch.code,
+            "open_time": "09:00", "close_time": "22:00",
+            "peak_account_code": "BSV003", "active": "on",
+            "payment_mode": "live",
+            "beam_merchant_id": "SHOP-MERCHANT",
+            "omise_public_key": "pkey_live_abcd",
+            "beam_card_fee_percent": "3.65",
+            "omise_fee_percent": "3.65",
+        }
+        data.update(overrides)
+        return self.client.post(self.url, data)
+
+    def test_test_branch_with_live_omise_keys_is_refused(self):
+        """The dangerous one — this would charge real cards on a test terminal."""
+        response = self._post(
+            payment_mode="test",
+            omise_public_key="pkey_live_abcd",
+            omise_secret_key="skey_live_abcd",
+        )
+        self.assertEqual(response.status_code, 200, "should re-render, not redirect")
+        self.assertContains(response, "would charge real cards")
+
+        self.branch.refresh_from_db()
+        self.assertFalse(self.branch.beam_sandbox, "the bad save must not land")
+
+    def test_live_row_with_test_omise_keys_is_refused(self):
+        response = self._post(
+            payment_mode="live",
+            omise_public_key="pkey_test_abcd",
+            omise_secret_key="skey_test_abcd",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "collect no money")
+
+    def test_mismatched_pair_is_refused(self):
+        response = self._post(
+            payment_mode="live",
+            omise_public_key="pkey_live_abcd",
+            omise_secret_key="skey_test_abcd",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "same account")
+
+    def test_matching_keys_save_normally(self):
+        response = self._post(
+            payment_mode="live",
+            omise_public_key="pkey_live_abcd",
+            omise_secret_key="skey_live_wxyz",
+        )
+        self.assertEqual(response.status_code, 302, "a valid save should redirect")
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.omise_secret_key, "skey_live_wxyz")
+
+    def test_clearing_omise_on_a_test_branch_is_allowed(self):
+        """Switching Omise off is the recommended fix for a test branch, so it
+        must not be blocked by the very check that flags the problem."""
+        self.branch.omise_public_key = "pkey_live_abcd"
+        self.branch.omise_secret_key = "skey_live_abcd"
+        self.branch.save()
+
+        response = self._post(
+            payment_mode="test",
+            omise_public_key="",
+            omise_secret_key="",
+            omise_secret_key_clear="on",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.omise_secret_key, "")
+        self.assertTrue(self.branch.beam_sandbox)
+
+    def test_beam_keys_are_not_lane_checked(self):
+        """Beam keys carry no test/live prefix, so there is nothing to compare
+        the lane against — the check must not invent a rule for them."""
+        from backoffice.views import payment_errors
+
+        self.branch.beam_sandbox = True
+        self.branch.beam_api_key = "any-opaque-beam-key"
+        self.branch.omise_public_key = ""
+        self.branch.omise_secret_key = ""
+        self.assertEqual(payment_errors(self.branch), [])
 
 
 class AddBranchFormTests(TestCase):
