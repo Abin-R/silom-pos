@@ -1451,6 +1451,9 @@ function TaxInvoiceFlow({
   const [selected, setSelected] = useState<Customer | null>(null);
   // Non-null while a request is in flight; the string is the overlay caption.
   const [busy, setBusy] = useState<string | null>(null);
+  // Set once Print has been tapped, so "Required" messages appear on the fields
+  // the cashier skipped instead of greeting them on a blank form.
+  const [attempted, setAttempted] = useState(false);
 
   const [form, setForm] = useState({
     name: existing?.name || order.customer_name || "",
@@ -1548,16 +1551,34 @@ function TaxInvoiceFlow({
   };
 
   const taxDigits = form.tax_id.replace(/\D/g, "");
-  const canPrint =
-    !!form.name.trim() && taxDigits.length === 13 && !!form.address.trim();
+
+  // Why Print can't proceed, per field.  These are shown inline rather than
+  // only greying the button out: a disabled button with no explanation is
+  // indistinguishable from a broken one, and a 12-digit tax ID looks complete
+  // at a glance.  The tax-ID count shows as soon as there is something to
+  // count; the bare "Required" messages wait until Print is tapped so a
+  // freshly-opened form isn't shouting at the cashier.
+  const errors = {
+    name: !form.name.trim() && attempted ? "Required" : "",
+    tax_id: !form.tax_id.trim()
+      ? (attempted ? "Required" : "")
+      : taxDigits.length !== 13
+        ? `A Thai tax ID is 13 digits — this has ${taxDigits.length}`
+        : "",
+    address: !form.address.trim() && attempted ? "Required" : "",
+  };
 
   const saveAndPrint = async () => {
+    setAttempted(true);
     if (!form.name.trim()) {
       Alert.alert("Missing details", "Taxpayer or company name is required.");
       return;
     }
     if (taxDigits.length !== 13) {
-      Alert.alert("Invalid tax ID", "A Thai tax ID is 13 digits.");
+      Alert.alert(
+        "Invalid tax ID",
+        `A Thai tax ID is 13 digits — this has ${taxDigits.length}. Check it against the buyer's paperwork.`,
+      );
       return;
     }
     if (!form.address.trim()) {
@@ -1778,6 +1799,7 @@ function TaxInvoiceFlow({
                 required
                 value={form.name}
                 onChange={setField("name")}
+                error={errors.name}
                 testID="ti-name"
               />
               <TiField
@@ -1788,6 +1810,7 @@ function TaxInvoiceFlow({
                 placeholder="i.e. 1234567890121"
                 keyboardType="number-pad"
                 maxLength={20}
+                error={errors.tax_id}
                 testID="ti-tax-id"
               />
               <TiField
@@ -1803,6 +1826,7 @@ function TaxInvoiceFlow({
                 value={form.address}
                 onChange={setField("address")}
                 multiline
+                error={errors.address}
                 testID="ti-address"
               />
               <TiField
@@ -1820,10 +1844,12 @@ function TaxInvoiceFlow({
                 keyboardType="email-address"
                 testID="ti-email"
               />
+              {/* Deliberately always enabled.  Greying it out is what sent a
+                  cashier hunting for a bug in a form that was simply one digit
+                  short — tapping now always says what's wrong. */}
               <TouchableOpacity
-                style={[styles.tiPrimaryBtn, !canPrint && { opacity: 0.4 }]}
+                style={styles.tiPrimaryBtn}
                 onPress={saveAndPrint}
-                disabled={!canPrint}
                 testID="ti-print"
               >
                 <Text style={styles.tiPrimaryText}>Print</Text>
@@ -1858,6 +1884,7 @@ function TiField({
   multiline,
   keyboardType,
   maxLength,
+  error,
   testID,
 }: {
   label: string;
@@ -1868,6 +1895,7 @@ function TiField({
   multiline?: boolean;
   keyboardType?: "default" | "number-pad" | "phone-pad" | "email-address";
   maxLength?: number;
+  error?: string;
   testID?: string;
 }) {
   return (
@@ -1877,7 +1905,7 @@ function TiField({
         {required && <Text style={styles.tiRequired}>*</Text>}
       </Text>
       <TextInput
-        style={[styles.input, multiline && styles.tiTextArea]}
+        style={[styles.input, multiline && styles.tiTextArea, !!error && styles.tiInputError]}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
@@ -1888,6 +1916,11 @@ function TiField({
         autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
         testID={testID}
       />
+      {!!error && (
+        <Text style={styles.tiError} testID={testID ? `${testID}-error` : undefined}>
+          {error}
+        </Text>
+      )}
     </View>
   );
 }
@@ -5482,6 +5515,8 @@ const styles = StyleSheet.create({
   tiForm: { padding: 16, gap: 12 },
   tiLabel: { fontSize: 13, color: "#64748B", fontWeight: "600", marginBottom: 6 },
   tiRequired: { color: "#DC2626" },
+  tiInputError: { borderColor: "#DC2626" },
+  tiError: { fontSize: 12, color: "#DC2626", marginTop: 4 },
   // Registered addresses run long, so the field is tall enough to read one
   // without scrolling inside the input.
   tiTextArea: { height: 96, paddingTop: 10, textAlignVertical: "top" },
