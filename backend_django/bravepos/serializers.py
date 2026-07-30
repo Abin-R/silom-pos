@@ -72,10 +72,26 @@ class ProductSerializer(serializers.ModelSerializer):
 
 class CustomerSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=False, required=False)
+    # The Add-Customer form leaves the date of birth empty most of the time and
+    # sends "" for it.  DRF's DateField rejects "" outright, so accept it and
+    # store NULL instead of failing the whole save over an optional field.
+    birth_date = serializers.DateField(required=False, allow_null=True)
 
     class Meta:
         model = Customer
-        fields = ['id', 'name', 'phone', 'last_visit', 'color']
+        fields = [
+            'id', 'name', 'phone', 'last_visit', 'color',
+            'last_name', 'gender', 'birth_date', 'group',
+            'tax_id', 'tax_branch', 'address', 'email',
+        ]
+
+    def validate_birth_date(self, value):
+        return value or None
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and data.get('birth_date') == '':
+            data = {**data, 'birth_date': None}
+        return super().to_internal_value(data)
 
 
 class SettingsSerializer(serializers.ModelSerializer):
@@ -129,9 +145,15 @@ class OrderSerializer(serializers.ModelSerializer):
             'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
             'voided_by', 'voided_at',
+            # Buyer details captured when a full tax invoice is issued for this
+            # bill.  Exposed read-only so Transactions can tell which bills
+            # already have one and prefill the form on a re-issue; writes go
+            # through the dedicated /orders/<id>/tax-invoice endpoint.
+            'pos_tax_invoice',
         ]
         read_only_fields = [
             'order_number', 'queue_number', 'created_at', 'voided_by', 'voided_at',
+            'pos_tax_invoice',
         ]
 
 

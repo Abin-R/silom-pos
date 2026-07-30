@@ -330,10 +330,41 @@ class Customer(models.Model):
         "Branch", on_delete=models.CASCADE, related_name="customers",
         null=True, blank=True,
     )
+    GENDER_CHOICES = [
+        ("male", "Male"),
+        ("female", "Female"),
+        ("unspecified", "Unspecified"),
+    ]
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=32, blank=True, default="")
     last_visit = models.CharField(max_length=32, blank=True, default="")
     color = models.CharField(max_length=16, default="#94A3B8")
+
+    # ── Profile ────────────────────────────────────────────────────────
+    # ``name`` predates this block and holds the *given* name for people
+    # and the whole company name for juristic buyers, so it stays the
+    # display field; ``last_name`` is additive and blank for companies.
+    last_name = models.CharField(max_length=200, blank=True, default="")
+    gender = models.CharField(
+        max_length=16, choices=GENDER_CHOICES, blank=True, default="",
+    )
+    birth_date = models.DateField(null=True, blank=True)
+    group = models.CharField(max_length=64, blank=True, default="")
+
+    # ── Full tax-invoice identity ──────────────────────────────────────
+    # A full tax invoice (ใบกำกับภาษีเต็มรูป) must name the buyer and carry
+    # their Revenue Department tax ID and registered address — none of
+    # which fit in name/phone.  Captured once from Transactions → Reprint →
+    # Receipt / Tax Invoice and reused on every later invoice for the same
+    # buyer, which is why it lives on Customer and not only on the Order.
+    #
+    # ``tax_branch`` is the buyer's own branch designation printed after
+    # the company name ("Head Office" / "สำนักงานใหญ่", or a branch name) —
+    # unrelated to Customer.branch, which is *our* shop location.
+    tax_id = models.CharField(max_length=32, blank=True, default="")
+    tax_branch = models.CharField(max_length=120, blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    email = models.EmailField(max_length=254, blank=True, default="")
 
     class Meta:
         ordering = ["name"]
@@ -499,6 +530,25 @@ class Order(models.Model):
     tax_invoice_data = models.JSONField(null=True, blank=True)
     peak_queue_id = models.CharField(max_length=128, blank=True, default="")
     peak_response = models.JSONField(null=True, blank=True)
+
+    # ── In-app full tax invoice ────────────────────────────────────────
+    # Buyer particulars captured when a cashier issues a full tax invoice from
+    # Transactions → Reprint, and replayed verbatim when that slip is
+    # reprinted.
+    #
+    # Deliberately NOT ``tax_invoice_data`` above, even though both describe
+    # "who this bill was invoiced to".  That field belongs to the customer-facing
+    # Peak flow, which stores a different schema (registered_address /
+    # _province / _district / _postal_code instead of one ``address``) and has
+    # two behaviours that make it unsafe to share:
+    #   * ``save_tax_invoice`` overwrites the whole field, which would drop the
+    #     address a reprint needs — reprinting would emit an invoice with a
+    #     blank buyer address.
+    #   * ``tax_invoice_process`` treats a non-empty field as "the customer
+    #     submitted the web form" and will enqueue a Peak document from it. A
+    #     POS-issued invoice must not trip that, or Peak receives a contact with
+    #     no address that nobody asked it to create.
+    pos_tax_invoice = models.JSONField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

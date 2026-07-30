@@ -716,6 +716,72 @@ def orders_list_create(request):
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
+# Buyer particulars a Thai full tax invoice (ใบกำกับภาษีเต็มรูป) cannot legally
+# omit.  Everything else on the form — branch designation, phone, email — is
+# optional, matching the reference POS.
+TAX_INVOICE_REQUIRED = (
+    ('name', 'Taxpayer or company name is required'),
+    ('tax_id', 'Tax ID is required'),
+    ('address', 'Address is required'),
+)
+TAX_INVOICE_FIELDS = (
+    'name', 'tax_id', 'tax_branch', 'address', 'phone', 'email', 'customer_id',
+)
+
+
+@api_view(['POST'])
+@require_session
+def order_tax_invoice(request, order_id):
+    """Record the buyer details a full tax invoice was issued to.
+
+    Writes ``Order.pos_tax_invoice``, which a reprint replays so the cashier
+    never retypes the particulars.  See that field's comment for why this does
+    NOT reuse ``tax_invoice_data`` — that one belongs to the customer-facing
+    Peak flow and has an incompatible schema.
+
+    Printing happens on the device; this endpoint only persists.  It does NOT
+    push to Peak — the customer-facing flow still owns that.
+    """
+    order = get_object_or_404(Order, id=order_id, branch=request.session_obj.branch)
+
+    payload = request.data or {}
+    data = {f: str(payload.get(f) or '').strip() for f in TAX_INVOICE_FIELDS}
+    for field, message in TAX_INVOICE_REQUIRED:
+        if not data[field]:
+            return Response({'detail': message}, status=400)
+
+    # Thai tax IDs are 13 digits (both juristic-person and citizen numbers).
+    digits = ''.join(c for c in data['tax_id'] if c.isdigit())
+    if len(digits) != 13:
+        return Response({'detail': 'Tax ID must be 13 digits'}, status=400)
+    data['tax_id'] = digits
+
+    # Stamp who issued it and when, so a reissued invoice is attributable —
+    # the printed slip itself carries no such trace.
+    data['issued_by'] = request.session_obj.staff.name
+    data['issued_at'] = djtz.now().isoformat()
+
+    update_fields = ['pos_tax_invoice']
+
+    # Issuing a full tax invoice names the buyer, so attach them to the bill if
+    # it was rung up anonymously.  An existing customer link is left alone —
+    # rewriting it would silently move the sale to a different customer's
+    # history.
+    customer_id = data.pop('customer_id', '')
+    if customer_id and not order.customer_id:
+        customer = Customer.objects.filter(
+            id=customer_id, branch=request.session_obj.branch,
+        ).first()
+        if customer:
+            order.customer = customer
+            order.customer_name = customer.name
+            update_fields += ['customer', 'customer_name']
+
+    order.pos_tax_invoice = data
+    order.save(update_fields=update_fields)
+    return Response(OrderSerializer(order).data)
+
+
 @api_view(['PUT'])
 @require_session
 def order_update_status(request, order_id):

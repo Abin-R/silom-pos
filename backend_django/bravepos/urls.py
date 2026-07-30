@@ -44,6 +44,8 @@ urlpatterns = [
     # Orders
     path('orders', views.orders_list_create),
     path('orders/<uuid:order_id>/status', views.order_update_status),
+    # Buyer details for a full tax invoice issued from Transactions → Reprint.
+    path('orders/<uuid:order_id>/tax-invoice', views.order_tax_invoice),
 
     # Parked orders
     path('parked-orders', views.parked_orders_list_create),

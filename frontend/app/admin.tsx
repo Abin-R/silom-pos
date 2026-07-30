@@ -96,7 +96,20 @@ type ChannelRow = {
   channel: string; source: string; count: number;
   before_gp: number; gp: number; after_gp: number; has_gp: boolean;
 };
-type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
+type Customer = {
+  id: string; name: string; phone?: string; last_visit?: string; color: string;
+  // Profile + full-tax-invoice identity.  All optional: rows created before
+  // these fields existed, and every customer added from the POS cart, have
+  // only name/phone.
+  last_name?: string;
+  gender?: "male" | "female" | "unspecified" | "";
+  birth_date?: string | null;
+  group?: string;
+  tax_id?: string;
+  tax_branch?: string;
+  address?: string;
+  email?: string;
+};
 type CustomerStats = {
   success_total: number;
   bill_count: number;
@@ -113,6 +126,23 @@ type Order = {
   staff?: string; voided_by?: string; voided_at?: string | null;
   subtotal?: number; paid_amount?: number; change?: number;
   discount_amount?: number; branch_name?: string;
+  customer_id?: string | null; customer_name?: string;
+  // Buyer of record, set once a full tax invoice has been issued for this
+  // bill.  Present → the form prefills from it on a re-issue.
+  pos_tax_invoice?: TaxInvoiceData | null;
+};
+
+// What /orders/<id>/tax-invoice stores and returns.  ``issued_by`` /
+// ``issued_at`` are stamped server-side.
+type TaxInvoiceData = {
+  name: string;
+  tax_id: string;
+  tax_branch?: string;
+  address: string;
+  phone?: string;
+  email?: string;
+  issued_by?: string;
+  issued_at?: string;
 };
 type Dashboard = {
   total_sales: number; cost: number; profit: number; gp_percent: number;
@@ -865,9 +895,10 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   const [productMap, setProductMap] = useState<Record<string, ProductRef>>({});
   const [taxPercent, setTaxPercent] = useState(7);
 
-  // Merge a server-updated order (e.g. after a void) back into the list
-  // and the open detail pane so the "Voided" state shows without a reload.
-  const handleVoided = useCallback((updated: Order) => {
+  // Merge a server-updated order (after a void, or after a full tax invoice is
+  // issued) back into the list and the open detail pane so the new state shows
+  // without a reload.
+  const handleOrderUpdated = useCallback((updated: Order) => {
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)));
     setSelected((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
   }, []);
@@ -943,7 +974,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           order={selected}
           reprint={reprint}
           staff={staff}
-          onVoided={handleVoided}
+          onOrderUpdated={handleOrderUpdated}
           productMap={productMap}
           taxPercent={taxPercent}
         />
@@ -1043,7 +1074,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
               order={selected}
               reprint={reprint}
               staff={staff}
-              onVoided={handleVoided}
+              onOrderUpdated={handleOrderUpdated}
               productMap={productMap}
               taxPercent={taxPercent}
             />
@@ -1075,19 +1106,23 @@ function TransactionDetail({
   order,
   reprint,
   staff,
-  onVoided,
+  onOrderUpdated,
   productMap,
   taxPercent,
 }: {
   order: Order;
   reprint: ReprintFn;
   staff: string;
-  onVoided: (updated: Order) => void;
+  onOrderUpdated: (updated: Order) => void;
   productMap: Record<string, ProductRef>;
   taxPercent: number;
 }) {
   const [reprintBusy, setReprintBusy] = useState(false);
   const [voidBusy, setVoidBusy] = useState(false);
+  // Reprint is a menu of documents (abbreviated slip, full tax invoice, …),
+  // not a single action — see the reference POS's พิมพ์ซ้ำ popup.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [taxFlowOpen, setTaxFlowOpen] = useState(false);
 
   const isVoided = order.status === "cancel";
 
@@ -1104,7 +1139,11 @@ function TransactionDetail({
   // Snapshot this order into the printer's ReceiptOrder shape.  `voided`
   // stamps the VOIDED banner on the printed copy (and carries the name of
   // whoever voided it) so the cancelled-bill reprint is unmistakable.
-  const toReceiptOrder = (voided: boolean, voidedBy?: string): ReceiptOrder => ({
+  const toReceiptOrder = (
+    voided: boolean,
+    voidedBy?: string,
+    taxInvoice?: TaxInvoiceData,
+  ): ReceiptOrder => ({
     order_number: order.order_number,
     items: order.items.map((it: any) => ({ name: it.name, qty: it.qty, price: it.price })),
     subtotal: Number(order.subtotal) || 0,
@@ -1117,6 +1156,15 @@ function TransactionDetail({
     staff: order.staff || "",
     voided,
     voided_by: voided ? voidedBy || order.voided_by || staff : undefined,
+    doc_type: taxInvoice ? "full" : "abbreviated",
+    tax_invoice: taxInvoice && {
+      name: taxInvoice.name,
+      tax_id: taxInvoice.tax_id,
+      tax_branch: taxInvoice.tax_branch,
+      address: taxInvoice.address,
+      phone: taxInvoice.phone,
+      email: taxInvoice.email,
+    },
   });
 
   // Centralised so both Re-Print and the void auto-print surface their
@@ -1138,10 +1186,26 @@ function TransactionDetail({
     return r.ok;
   };
 
-  const onReprint = async () => {
+  const printAbbreviated = async () => {
     setReprintBusy(true);
     try {
       await sendPrint(toReceiptOrder(isVoided));
+    } catch (e: any) {
+      Alert.alert("Print failed", e?.message || String(e));
+    } finally {
+      setReprintBusy(false);
+    }
+  };
+
+  // Called by TaxInvoiceFlow once the buyer details are saved on the server.
+  // Printing is separate from saving on purpose: a print failure (paper out,
+  // printer asleep) must not lose the details the cashier just typed — they
+  // are already persisted, so Reprint replays them without retyping.
+  const printFullTaxInvoice = async (data: TaxInvoiceData) => {
+    setTaxFlowOpen(false);
+    setReprintBusy(true);
+    try {
+      await sendPrint(toReceiptOrder(isVoided, undefined, data));
     } catch (e: any) {
       Alert.alert("Print failed", e?.message || String(e));
     } finally {
@@ -1165,7 +1229,7 @@ function TransactionDetail({
         throw new Error(detail?.detail || `HTTP ${res.status}`);
       }
       const updated: Order = await res.json();
-      onVoided(updated);
+      onOrderUpdated(updated);
       // Auto-print the void receipt (fires the "Printing…" overlay).
       await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
@@ -1198,6 +1262,12 @@ function TransactionDetail({
         <Text style={styles.tdMeta}>Cashier: {order.staff || "—"}</Text>
         {isVoided && (
           <Text style={styles.voidedBy}>Voided by: {order.voided_by || "—"}</Text>
+        )}
+        {!!order.pos_tax_invoice && (
+          <Text style={styles.tdTaxIssued}>
+            Tax invoice issued to {order.pos_tax_invoice.name}
+            {order.pos_tax_invoice.issued_by ? ` by ${order.pos_tax_invoice.issued_by}` : ""}
+          </Text>
         )}
 
         {/* ── Description ── */}
@@ -1260,13 +1330,564 @@ function TransactionDetail({
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tdReprintBtn, reprintBusy && { opacity: 0.6 }]}
-          onPress={onReprint}
+          onPress={() => setMenuOpen(true)}
           disabled={reprintBusy}
           testID={`reprint-${order.order_number}`}
         >
           <Text style={styles.tdActionText}>{reprintBusy ? "Printing…" : "Re-Print"}</Text>
         </TouchableOpacity>
       </View>
+
+      <ReprintMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onAbbreviated={() => { setMenuOpen(false); printAbbreviated(); }}
+        onFullTaxInvoice={() => { setMenuOpen(false); setTaxFlowOpen(true); }}
+      />
+
+      {taxFlowOpen && (
+        <TaxInvoiceFlow
+          order={order}
+          onClose={() => setTaxFlowOpen(false)}
+          onOrderUpdated={onOrderUpdated}
+          onPrint={printFullTaxInvoice}
+        />
+      )}
+    </View>
+  );
+}
+
+// ─── Reprint document picker ────────────────────────────────────────────────
+// Mirrors the reference POS's พิมพ์ซ้ำ popup.  All five documents are listed so
+// the menu matches what cashiers are trained on, but only the two thermal
+// documents are wired up; the rest say so rather than failing silently.
+const REPRINT_UNBUILT = [
+  { key: "a4", label: "Receipt / Tax Invoice (A4)" },
+  { key: "image", label: "Save as Image" },
+  { key: "email", label: "Email" },
+];
+
+function ReprintMenu({
+  visible,
+  onClose,
+  onAbbreviated,
+  onFullTaxInvoice,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onAbbreviated: () => void;
+  onFullTaxInvoice: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.tiBackdrop} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity style={styles.rpMenu} activeOpacity={1} testID="reprint-menu">
+          <Text style={styles.rpTitle}>Reprint</Text>
+          <TouchableOpacity
+            style={styles.rpItem}
+            onPress={onAbbreviated}
+            testID="reprint-abbreviated"
+          >
+            <Text style={styles.rpItemText}>Abbreviated Tax Invoice</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.rpItem}
+            onPress={onFullTaxInvoice}
+            testID="reprint-full-tax-invoice"
+          >
+            <Text style={styles.rpItemText}>Receipt / Tax Invoice</Text>
+          </TouchableOpacity>
+          {REPRINT_UNBUILT.map((opt) => (
+            <View key={opt.key} style={[styles.rpItem, styles.rpItemDisabled]}>
+              <Text style={[styles.rpItemText, styles.rpItemTextDisabled]}>{opt.label}</Text>
+              <Text style={styles.rpSoon}>Not available yet</Text>
+            </View>
+          ))}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
+// ─── Full tax invoice (ใบกำกับภาษีเต็มรูป) ──────────────────────────────────
+// Three steps, matching the reference POS: find or create the buyer, fill in
+// their Revenue Department particulars, then print.  The particulars are saved
+// twice on purpose — onto the Customer, so the next invoice for the same
+// company prefills, and onto the Order, so this bill keeps a permanent buyer of
+// record that a reprint can replay.
+type TaxStep = "search" | "add" | "form";
+
+const GENDERS: { key: NonNullable<Customer["gender"]>; label: string }[] = [
+  { key: "male", label: "Male" },
+  { key: "female", label: "Female" },
+  { key: "unspecified", label: "Unspecified" },
+];
+
+// Display name for a picker row: companies use `name` alone, people have both.
+function customerFullName(c: Customer): string {
+  return [c.name, c.last_name].filter(Boolean).join(" ").trim();
+}
+
+function TaxInvoiceFlow({
+  order,
+  onClose,
+  onOrderUpdated,
+  onPrint,
+}: {
+  order: Order;
+  onClose: () => void;
+  onOrderUpdated: (updated: Order) => void;
+  onPrint: (data: TaxInvoiceData) => void;
+}) {
+  const existing = order.pos_tax_invoice;
+
+  // Re-issuing an invoice that already names a buyer opens straight on the
+  // form: the buyer is settled, and sending the cashier back through the picker
+  // invites them to silently change who the bill was invoiced to.
+  const [step, setStep] = useState<TaxStep>(existing ? "form" : "search");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Customer | null>(null);
+  // Non-null while a request is in flight; the string is the overlay caption.
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const [form, setForm] = useState({
+    name: existing?.name || order.customer_name || "",
+    tax_id: existing?.tax_id || "",
+    tax_branch: existing?.tax_branch || "",
+    address: existing?.address || "",
+    phone: existing?.phone || "",
+    email: existing?.email || "",
+  });
+  const setField = (k: keyof typeof form) => (v: string) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  const [add, setAdd] = useState({
+    name: "",
+    last_name: "",
+    gender: "unspecified" as NonNullable<Customer["gender"]>,
+    phone: "",
+    birth_date: "",
+    group: "",
+  });
+  const setAddField = (k: keyof typeof add) => (v: string) =>
+    setAdd((a) => ({ ...a, [k]: v }));
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiFetch(`${API}/customers`);
+        setCustomers(res.ok ? await res.json() : []);
+      } catch {
+        setCustomers([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter((c) =>
+      customerFullName(c).toLowerCase().includes(q) ||
+      (c.phone || "").includes(q) ||
+      (c.tax_id || "").includes(q),
+    );
+  }, [customers, query]);
+
+  // Picking a buyer carries over whatever tax details they already have, so a
+  // repeat company is one tap and a Print away.
+  const pick = (c: Customer) => {
+    setSelected(c);
+    setForm({
+      name: customerFullName(c),
+      tax_id: c.tax_id || "",
+      tax_branch: c.tax_branch || "",
+      address: c.address || "",
+      phone: c.phone || "",
+      email: c.email || "",
+    });
+    setStep("form");
+  };
+
+  const createCustomer = async () => {
+    if (!add.name.trim() || !add.last_name.trim()) {
+      Alert.alert("Missing details", "First name and last name are required.");
+      return;
+    }
+    setBusy("Saving customer…");
+    try {
+      const res = await apiFetch(`${API}/customers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: add.name.trim(),
+          last_name: add.last_name.trim(),
+          gender: add.gender,
+          phone: add.phone.trim(),
+          // Sent as "" when untouched; the serializer maps that to NULL rather
+          // than rejecting the whole save over an optional field.
+          birth_date: add.birth_date.trim(),
+          group: add.group.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(detail || `Server error (${res.status})`);
+      }
+      const created: Customer = await res.json();
+      setCustomers((list) => [created, ...list]);
+      pick(created);
+    } catch (e: any) {
+      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const taxDigits = form.tax_id.replace(/\D/g, "");
+  const canPrint =
+    !!form.name.trim() && taxDigits.length === 13 && !!form.address.trim();
+
+  const saveAndPrint = async () => {
+    if (!form.name.trim()) {
+      Alert.alert("Missing details", "Taxpayer or company name is required.");
+      return;
+    }
+    if (taxDigits.length !== 13) {
+      Alert.alert("Invalid tax ID", "A Thai tax ID is 13 digits.");
+      return;
+    }
+    if (!form.address.trim()) {
+      Alert.alert("Missing details", "Address is required.");
+      return;
+    }
+
+    setBusy("Updating…");
+    const payload = {
+      name: form.name.trim(),
+      tax_id: taxDigits,
+      tax_branch: form.tax_branch.trim(),
+      address: form.address.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim(),
+    };
+
+    try {
+      // Remember the details on the customer so the next invoice for this buyer
+      // prefills.  Best-effort: this is a convenience, and failing it must not
+      // stop the invoice the cashier is standing there waiting for.
+      if (selected) {
+        try {
+          await apiFetch(`${API}/customers/${selected.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tax_id: payload.tax_id,
+              tax_branch: payload.tax_branch,
+              address: payload.address,
+              email: payload.email,
+              ...(payload.phone ? { phone: payload.phone } : {}),
+            }),
+          });
+        } catch {/* non-fatal — the invoice itself is what matters */}
+      }
+
+      const res = await apiFetch(`${API}/orders/${order.id}/tax-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, customer_id: selected?.id || "" }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `Server error (${res.status})`);
+      }
+      const updated: Order = await res.json();
+      onOrderUpdated(updated);
+      // Print from what the server stored, not the local form, so the slip can
+      // never disagree with the buyer of record.
+      onPrint(updated.pos_tax_invoice ?? payload);
+    } catch (e: any) {
+      Alert.alert("Couldn't save tax invoice", e?.message || "Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const title =
+    step === "search" ? "Search Customer"
+      : step === "add" ? "Add Customer"
+        : "Full Tax Invoice";
+
+  // The picker is the first screen of a fresh issue, so its left action closes
+  // the whole flow.  A re-issue opens on the form with no picker behind it, so
+  // there is nothing to go back to and its left action closes too.
+  const showsBack = step === "add" || (step === "form" && !existing);
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.tiBackdrop}>
+        <View style={styles.tiCard} testID="tax-invoice-flow">
+          {/* ── Header ── */}
+          <View style={styles.tiHeader}>
+            {showsBack ? (
+              <TouchableOpacity onPress={() => setStep("search")} testID="tax-invoice-back">
+                <View style={styles.tiBackRow}>
+                  <Ionicons name="chevron-back" size={20} color="#00B14F" />
+                  <Text style={styles.tiHeaderAction}>Back</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={onClose} testID="tax-invoice-close">
+                <Text style={styles.tiHeaderAction}>Close</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.tiTitle}>{title}</Text>
+            {step === "search" ? (
+              <TouchableOpacity onPress={() => setStep("add")} testID="tax-invoice-add-customer">
+                <Ionicons name="create-outline" size={22} color="#00B14F" />
+              </TouchableOpacity>
+            ) : (
+              <View style={{ width: 22 }} />
+            )}
+          </View>
+
+          {/* ── Step 1: pick the buyer ── */}
+          {step === "search" && (
+            <>
+              <View style={styles.tiSearchBox}>
+                <Ionicons name="search" size={16} color="#94A3B8" />
+                <TextInput
+                  placeholder="Search by name or phone"
+                  placeholderTextColor="#94A3B8"
+                  style={styles.tiSearchInput}
+                  value={query}
+                  onChangeText={setQuery}
+                  testID="tax-invoice-search"
+                />
+              </View>
+              {loading ? (
+                <ActivityIndicator color="#00B14F" style={{ marginTop: 32 }} />
+              ) : filtered.length === 0 ? (
+                <View style={styles.tiEmpty}>
+                  <Text style={styles.emptyText}>
+                    {customers.length === 0
+                      ? "No customers yet — tap the pencil to add one"
+                      : "No matching customers"}
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filtered}
+                  keyExtractor={(c) => c.id}
+                  style={{ flexGrow: 0 }}
+                  ItemSeparatorComponent={() => <View style={styles.divider} />}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.tiCustRow}
+                      onPress={() => pick(item)}
+                      testID={`tax-invoice-cust-${item.id}`}
+                    >
+                      <View style={[styles.tiAvatar, { backgroundColor: item.color || "#94A3B8" }]}>
+                        <Text style={styles.tiAvatarText}>
+                          {(customerFullName(item)[0] || "?").toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.tiCustName}>{customerFullName(item) || "—"}</Text>
+                        <Text style={styles.tiCustSub}>
+                          {item.phone || "No phone"}
+                          {item.tax_id ? `   Tax ID ${item.tax_id}` : ""}
+                        </Text>
+                      </View>
+                      {!!item.last_visit && (
+                        <Text style={styles.tiCustVisit}>Last purchase {item.last_visit}</Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                />
+              )}
+            </>
+          )}
+
+          {/* ── Step 2: add a buyer ── */}
+          {step === "add" && (
+            <ScrollView contentContainerStyle={styles.tiForm} keyboardShouldPersistTaps="handled">
+              <TiField label="First name" required value={add.name} onChange={setAddField("name")} testID="ti-add-first" />
+              <TiField label="Last name" required value={add.last_name} onChange={setAddField("last_name")} testID="ti-add-last" />
+              <Text style={styles.tiLabel}>Gender</Text>
+              <View style={styles.tiRadioRow}>
+                {GENDERS.map((g) => {
+                  const on = add.gender === g.key;
+                  return (
+                    <TouchableOpacity
+                      key={g.key}
+                      style={styles.tiRadio}
+                      onPress={() => setAdd((a) => ({ ...a, gender: g.key }))}
+                      testID={`ti-gender-${g.key}`}
+                    >
+                      <Ionicons
+                        name={on ? "checkmark-circle" : "ellipse-outline"}
+                        size={20}
+                        color={on ? "#00B14F" : "#CBD5E1"}
+                      />
+                      <Text style={styles.tiRadioText}>{g.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.tiLabel}>Phone (optional)</Text>
+              <PhoneInput
+                value={add.phone}
+                onChange={(e164) => setAddField("phone")(e164)}
+                placeholder="Phone (optional)"
+                defaultCountryCode="TH"
+                testID="ti-add-phone"
+              />
+              <TiField
+                label="Date of birth (optional)"
+                value={add.birth_date}
+                onChange={setAddField("birth_date")}
+                placeholder="YYYY-MM-DD"
+                testID="ti-add-dob"
+              />
+              <TiField
+                label="Customer group (optional)"
+                value={add.group}
+                onChange={setAddField("group")}
+                testID="ti-add-group"
+              />
+              <TouchableOpacity
+                style={[styles.tiPrimaryBtn, (!add.name.trim() || !add.last_name.trim()) && { opacity: 0.4 }]}
+                onPress={createCustomer}
+                disabled={!add.name.trim() || !add.last_name.trim()}
+                testID="ti-add-next"
+              >
+                <Text style={styles.tiPrimaryText}>Next</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* ── Step 3: the invoice particulars ── */}
+          {step === "form" && (
+            <ScrollView contentContainerStyle={styles.tiForm} keyboardShouldPersistTaps="handled">
+              <TiField
+                label="Taxpayer name or company name"
+                required
+                value={form.name}
+                onChange={setField("name")}
+                testID="ti-name"
+              />
+              <TiField
+                label="Tax ID / juristic person no."
+                required
+                value={form.tax_id}
+                onChange={setField("tax_id")}
+                placeholder="i.e. 1234567890121"
+                keyboardType="number-pad"
+                maxLength={20}
+                testID="ti-tax-id"
+              />
+              <TiField
+                label="Branch name (optional)"
+                value={form.tax_branch}
+                onChange={setField("tax_branch")}
+                placeholder="Head Office"
+                testID="ti-branch"
+              />
+              <TiField
+                label="Address"
+                required
+                value={form.address}
+                onChange={setField("address")}
+                multiline
+                testID="ti-address"
+              />
+              <TiField
+                label="Phone (optional)"
+                value={form.phone}
+                onChange={setField("phone")}
+                keyboardType="phone-pad"
+                testID="ti-phone"
+              />
+              <TiField
+                label="Email (optional)"
+                value={form.email}
+                onChange={setField("email")}
+                placeholder="abc@mail.com"
+                keyboardType="email-address"
+                testID="ti-email"
+              />
+              <TouchableOpacity
+                style={[styles.tiPrimaryBtn, !canPrint && { opacity: 0.4 }]}
+                onPress={saveAndPrint}
+                disabled={!canPrint}
+                testID="ti-print"
+              >
+                <Text style={styles.tiPrimaryText}>Print</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* Blocking overlay for the save round trip — mirrors the reference
+              POS's "กำลังอัพเดตข้อมูล…" spinner. */}
+          {!!busy && (
+            <View style={styles.tiBusy}>
+              <View style={styles.tiBusyCard}>
+                <ActivityIndicator color="#00B14F" />
+                <Text style={styles.tiBusyText}>{busy}</Text>
+              </View>
+            </View>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// One labelled field in the tax-invoice forms.  Required fields carry the same
+// red asterisk the reference POS uses.
+function TiField({
+  label,
+  value,
+  onChange,
+  required,
+  placeholder,
+  multiline,
+  keyboardType,
+  maxLength,
+  testID,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  required?: boolean;
+  placeholder?: string;
+  multiline?: boolean;
+  keyboardType?: "default" | "number-pad" | "phone-pad" | "email-address";
+  maxLength?: number;
+  testID?: string;
+}) {
+  return (
+    <View>
+      <Text style={styles.tiLabel}>
+        {label}
+        {required && <Text style={styles.tiRequired}>*</Text>}
+      </Text>
+      <TextInput
+        style={[styles.input, multiline && styles.tiTextArea]}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor="#94A3B8"
+        multiline={multiline}
+        keyboardType={keyboardType}
+        maxLength={maxLength}
+        autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
+        testID={testID}
+      />
     </View>
   );
 }
@@ -4811,6 +5432,80 @@ const styles = StyleSheet.create({
   tdCancelBtnDisabled: { backgroundColor: "#F9A8C4" },
   tdReprintBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: "#15803D" },
   tdActionText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+  tdTaxIssued: { fontSize: 13, color: "#15803D", fontWeight: "600", marginTop: 4 },
+
+  // ── Reprint document menu (reference POS's พิมพ์ซ้ำ popup) ──
+  rpMenu: {
+    width: 320, maxWidth: "90%", backgroundColor: "#FFFFFF",
+    borderRadius: 16, padding: 16, gap: 10,
+  },
+  rpTitle: { fontSize: 15, fontWeight: "700", color: "#0F172A", textAlign: "center", marginBottom: 2 },
+  rpItem: {
+    minHeight: 48, borderRadius: 10, backgroundColor: "#F1F5F9",
+    alignItems: "center", justifyContent: "center", paddingVertical: 8, paddingHorizontal: 12,
+  },
+  rpItemDisabled: { backgroundColor: "#F8FAFC" },
+  rpItemText: { fontSize: 14, fontWeight: "600", color: "#0F172A", textAlign: "center" },
+  rpItemTextDisabled: { color: "#CBD5E1" },
+  rpSoon: { fontSize: 11, color: "#CBD5E1", marginTop: 2 },
+
+  // ── Full tax invoice flow ──
+  tiBackdrop: {
+    flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
+    alignItems: "center", justifyContent: "center", padding: 20,
+  },
+  tiCard: {
+    width: 520, maxWidth: "100%", maxHeight: "90%",
+    backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
+  },
+  tiHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+  },
+  tiBackRow: { flexDirection: "row", alignItems: "center" },
+  tiHeaderAction: { fontSize: 15, color: "#00B14F", fontWeight: "600" },
+  tiTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A", flexShrink: 1, textAlign: "center" },
+  tiSearchBox: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    margin: 16, paddingHorizontal: 12, height: 40,
+    backgroundColor: "#F1F5F9", borderRadius: 10,
+  },
+  tiSearchInput: { flex: 1, fontSize: 14, color: "#0F172A" },
+  tiEmpty: { padding: 40, alignItems: "center" },
+  tiCustRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  tiAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  tiAvatarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 15 },
+  tiCustName: { fontSize: 15, fontWeight: "600", color: "#0F172A" },
+  tiCustSub: { fontSize: 12, color: "#94A3B8", marginTop: 2 },
+  tiCustVisit: { fontSize: 11, color: "#94A3B8", marginLeft: 8, maxWidth: 120, textAlign: "right" },
+  tiForm: { padding: 16, gap: 12 },
+  tiLabel: { fontSize: 13, color: "#64748B", fontWeight: "600", marginBottom: 6 },
+  tiRequired: { color: "#DC2626" },
+  // Registered addresses run long, so the field is tall enough to read one
+  // without scrolling inside the input.
+  tiTextArea: { height: 96, paddingTop: 10, textAlignVertical: "top" },
+  tiRadioRow: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginBottom: 2 },
+  tiRadio: { flexDirection: "row", alignItems: "center", gap: 6 },
+  tiRadioText: { fontSize: 14, color: "#0F172A" },
+  tiPrimaryBtn: {
+    height: 48, borderRadius: 10, backgroundColor: "#00B14F",
+    alignItems: "center", justifyContent: "center", marginTop: 8,
+  },
+  tiPrimaryText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+  tiBusy: {
+    position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+    backgroundColor: "rgba(255,255,255,0.6)",
+    alignItems: "center", justifyContent: "center",
+  },
+  tiBusyCard: {
+    backgroundColor: "#FFFFFF", borderRadius: 12, paddingVertical: 20, paddingHorizontal: 28,
+    alignItems: "center", gap: 10,
+    // Matches the reference POS's floating spinner card.
+    shadowColor: "#0F172A", shadowOpacity: 0.15, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 4,
+  },
+  tiBusyText: { fontSize: 13, color: "#64748B" },
   // Generic text input used by the "Add by IP" field in Local Printer.
   // Standard 40px height + rounded corners + slate border to match the
   // rest of the admin form fields.

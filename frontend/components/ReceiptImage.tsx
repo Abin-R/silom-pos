@@ -97,6 +97,17 @@ const thb = (n: number) =>
 
 const Dash = () => <View style={s.dash} />;
 
+// One acknowledgement block on a full tax invoice: blank space to sign in, the
+// signature rule, then a hand-written date and who is signing.  Matches the
+// two blocks on the reference printout.
+const SignatureBlock = ({ role }: { role: string }) => (
+  <View style={s.sigBlock}>
+    <View style={s.sigLine} />
+    <Text style={s.sigText}>วันที่ / Date ___/___/___</Text>
+    <Text style={s.sigText}>{role}</Text>
+  </View>
+);
+
 type Props = {
   order: ReceiptOrder;
   shop?: ReceiptShop;
@@ -139,6 +150,19 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
     tax_percent: Number(shop?.tax_percent ?? SHOP_DEFAULTS.tax_percent),
   };
 
+  // Full tax invoice (ใบกำกับภาษีเต็มรูป) vs the everyday abbreviated slip.
+  // Only trust the flag when buyer particulars actually came with it — a
+  // "full" invoice with no named buyer is not a valid tax invoice, so fall
+  // back to the abbreviated layout rather than printing an unusable document.
+  const party = order.tax_invoice;
+  const isFull = order.doc_type === "full" && !!party;
+
+  // The abbreviated slip stays Thai-only (unchanged for every existing call
+  // site); the full tax invoice prints "Thai / English" so the buyer's
+  // accounting team can read it either way.
+  const lbl = (th: string, en: string) => (isFull ? `${th} / ${en}` : th);
+  const vatLines = isFull ? 2 : 1;
+
   const queue =
     order.queue_number !== undefined
       ? String(order.queue_number)
@@ -170,7 +194,9 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       style={[s.root, typeof rightPad === "number" ? { paddingRight: rightPad } : null]}
     >
       {/* ─── Big queue number ─────────────────────────────────────── */}
-      <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>
+      {/* Omitted on a full tax invoice: it's an accounting document issued
+          after the fact, not the slip the customer is called by. */}
+      {!isFull && <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>}
 
       {/* ─── Shop logo (replaces the text title) ──────────────────── */}
       <Image
@@ -181,18 +207,25 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       />
 
       {/* ─── Branch + company info ────────────────────────────────── */}
-      <Text style={s.branchLine} numberOfLines={1}>สาขา: {sh.branch}</Text>
+      <Text style={s.branchLine} numberOfLines={1}>{lbl("สาขา", "Branch")}: {sh.branch}</Text>
       <Text style={s.companyCenter}>{sh.company}</Text>
       {sh.address.map((line, i) => (
         <Text key={i} style={s.companyCenter}>{line}</Text>
       ))}
       <Text style={s.companyCenter}>{sh.phone}</Text>
-      <Text style={s.companyCenter}>เลขประจำตัวผู้เสียภาษี: {sh.tax_id}</Text>
+      <Text style={s.companyCenter}>{lbl("เลขประจำตัวผู้เสียภาษี", "Tax ID")}: {sh.tax_id}</Text>
       {/* POS ID hidden until the Revenue Department issues an approved machine
           number. Re-enable this line once the RD application is approved. */}
       {/* <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text> */}
 
-      <Text style={s.receiptType}>ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</Text>
+      {isFull ? (
+        <>
+          <Text style={s.receiptType}>ใบเสร็จรับเงิน / ใบกำกับภาษี</Text>
+          <Text style={s.receiptTypeEn}>Receipt / Tax Invoice</Text>
+        </>
+      ) : (
+        <Text style={s.receiptType}>ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</Text>
+      )}
 
       {/* Void marker — same position/styling as the reference void copy.
           The only difference from a normal receipt is this single line. */}
@@ -200,20 +233,48 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
 
       <Dash />
 
+      {/* ─── Buyer block (full tax invoice only) ──────────────────── */}
+      {/* Field order follows the reference printout: heading, tax ID, name,
+          then address.  ``numberOfLines`` is deliberately unset — a buyer's
+          registered address is long and must never be truncated on a tax
+          invoice, so it wraps as far as it needs to. */}
+      {isFull && party && (
+        <>
+          <Text style={s.line}>ลูกค้า / Customer</Text>
+          <Text style={s.line}>เลขประจำตัวผู้เสียภาษี / Tax ID: {party.tax_id}</Text>
+          <Text style={s.line}>
+            {party.name}
+            {party.tax_branch ? ` (${party.tax_branch})` : ""}
+          </Text>
+          <Text style={s.line}>ที่อยู่ / Address: {party.address}</Text>
+          {!!party.phone && <Text style={s.line}>โทร / Tel: {party.phone}</Text>}
+          {!!party.email && <Text style={s.line}>อีเมล / Email: {party.email}</Text>}
+          <Dash />
+        </>
+      )}
+
       {/* ─── Order metadata ───────────────────────────────────────── */}
-      <Text style={s.line}>Order Ref:</Text>
-      <Text style={s.line}>วันที่: {order.created_at_local ?? ""}</Text>
+      {/* "Order Ref:" is an abbreviated-slip artefact (always blank); a tax
+          invoice is identified by its invoice number, so it's dropped there. */}
+      {!isFull && <Text style={s.line}>Order Ref:</Text>}
+      <Text style={s.line}>
+        {isFull ? "วันที่ / Date: " : "วันที่: "}{order.created_at_local ?? ""}
+      </Text>
       <Text style={s.line}>Invoice #: {order.order_number}</Text>
       <View style={s.row}>
         <Text style={s.line} numberOfLines={1}>POS #: {sh.pos_number}</Text>
-        <Text style={[s.line, s.staffName]} numberOfLines={1}>ชื่อพนักงาน: {order.staff || ""}</Text>
+        <Text style={[s.line, s.staffName]} numberOfLines={1}>
+          {isFull ? "พนักงาน / Cashier: " : "ชื่อพนักงาน: "}{order.staff || ""}
+        </Text>
       </View>
 
       <Dash />
 
       {/* ─── Items ────────────────────────────────────────────────── */}
       <View style={s.row}>
-        <Text style={[s.line, s.bold, { flex: 1 }]} numberOfLines={1}>Qty  รายละเอียด</Text>
+        <Text style={[s.line, s.bold, { flex: 1 }]} numberOfLines={1}>
+          {isFull ? "Qty  รายละเอียด / Description" : "Qty  รายละเอียด"}
+        </Text>
         <Text style={[s.line, s.bold, s.amount]} numberOfLines={1}>Total</Text>
       </View>
       {order.items.map((it, i) => {
@@ -229,59 +290,94 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       <Dash />
 
       {/* ─── VAT breakdown ────────────────────────────────────────── */}
+      {/* Bilingual labels are up to twice as long as the Thai alone, so they
+          get a second line to wrap into rather than being ellipsised — a
+          truncated VAT label on a tax invoice is not acceptable. */}
       {hasDiscount && (
         <>
           <View style={s.row}>
-            <Text style={[s.line, s.vatLabel]} numberOfLines={1}>รวมยอดสินค้า</Text>
+            <Text style={[s.line, s.vatLabel]} numberOfLines={vatLines}>{lbl("รวมยอดสินค้า", "Subtotal")}</Text>
             <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(grossSubtotal)}</Text>
           </View>
           <View style={s.row}>
-            <Text style={[s.line, s.vatLabel]} numberOfLines={1}>ส่วนลด</Text>
+            <Text style={[s.line, s.vatLabel]} numberOfLines={vatLines}>{lbl("ส่วนลด", "Discount")}</Text>
             <Text style={[s.line, s.amount]} numberOfLines={1}>-{thb(discountAmount)}</Text>
           </View>
         </>
       )}
       <View style={s.row}>
-        <Text style={[s.line, s.vatLabel]} numberOfLines={1}>รวมเป็นเงิน</Text>
+        <Text style={[s.line, s.vatLabel]} numberOfLines={vatLines}>{lbl("รวมเป็นเงิน", "Total")}</Text>
         <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(grandTotal)}</Text>
       </View>
       <View style={s.row}>
-        <Text style={[s.line, s.vatLabel]} numberOfLines={1}>มูลค่าสินค้าก่อน Vat</Text>
+        <Text style={[s.line, s.vatLabel]} numberOfLines={vatLines}>{lbl("มูลค่าสินค้าก่อน Vat", "Ex-VAT")}</Text>
         <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(subtotalBeforeVat)}</Text>
       </View>
       <View style={s.row}>
-        <Text style={[s.line, s.vatLabel]} numberOfLines={1}>คิดเป็นมูลค่าภาษี {sh.tax_percent}%</Text>
+        <Text style={[s.line, s.vatLabel]} numberOfLines={vatLines}>
+          {lbl(`คิดเป็นมูลค่าภาษี ${sh.tax_percent}%`, `VAT ${sh.tax_percent}%`)}
+        </Text>
         <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(vat)}</Text>
       </View>
-      <View style={[s.row, { marginTop: 4, alignItems: "center" }]}>
-        <Text style={[s.line, { flex: 1 }]} numberOfLines={1}>จำนวน {itemCount} ชิ้น</Text>
-        <Text style={s.line} numberOfLines={1}>รวมมูลค่า</Text>
-        <Text style={[s.grandTotal, s.amount]} numberOfLines={1}>{thb(grandTotal)}</Text>
-      </View>
+      {isFull ? (
+        // Three cells on one row (the abbreviated layout) can't hold the
+        // bilingual count *and* the bilingual grand-total label, so the full
+        // invoice splits them across two rows.
+        <>
+          <Text style={[s.line, { marginTop: 4 }]} numberOfLines={1}>
+            จำนวน {itemCount} ชิ้น / {itemCount} item{itemCount === 1 ? "" : "s"}
+          </Text>
+          <View style={[s.row, { alignItems: "center" }]}>
+            <Text style={[s.line, s.vatLabel]} numberOfLines={2}>รวมมูลค่า / Grand Total</Text>
+            <Text style={[s.grandTotal, s.amount]} numberOfLines={1}>{thb(grandTotal)}</Text>
+          </View>
+        </>
+      ) : (
+        <View style={[s.row, { marginTop: 4, alignItems: "center" }]}>
+          <Text style={[s.line, { flex: 1 }]} numberOfLines={1}>จำนวน {itemCount} ชิ้น</Text>
+          <Text style={s.line} numberOfLines={1}>รวมมูลค่า</Text>
+          <Text style={[s.grandTotal, s.amount]} numberOfLines={1}>{thb(grandTotal)}</Text>
+        </View>
+      )}
 
       <Dash />
 
       {/* ─── Payment ──────────────────────────────────────────────── */}
-      <Text style={s.line}>การชำระเงิน</Text>
+      <Text style={s.line}>{lbl("การชำระเงิน", "Payment")}</Text>
       <View style={s.row}>
         <Text style={[s.line, { flex: 1 }]} numberOfLines={1}>{order.payment_method || "Cash"}</Text>
         <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(paid)}</Text>
       </View>
       {change > 0 && (
         <View style={s.row}>
-          <Text style={[s.line, { flex: 1 }]} numberOfLines={1}>เงินทอน</Text>
+          <Text style={[s.line, { flex: 1 }]} numberOfLines={1}>{lbl("เงินทอน", "Change")}</Text>
           <Text style={[s.line, s.amount]} numberOfLines={1}>{thb(change)}</Text>
         </View>
       )}
 
-      {/* ─── QR code ──────────────────────────────────────────────── */}
-      <View style={s.qrSection}>
-        <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}/`} targetSize={180} />
-        <Text style={s.qrCaption}>สแกนเพื่อดูใบเสร็จ / Scan to view receipt</Text>
-      </View>
+      {isFull ? (
+        // ─── Signature blocks ───────────────────────────────────────
+        // A full tax invoice doubles as the delivery/receipt document, so it
+        // carries the two acknowledgement blocks from the reference printout.
+        // No QR here: the QR lands on the customer page that *offers* to issue
+        // a tax invoice, which is redundant once one has been issued.
+        <>
+          <Dash />
+          <SignatureBlock role="ผู้รับสินค้า / Goods Received By" />
+          <SignatureBlock role="ผู้รับเงิน / Payment Received By" />
+        </>
+      ) : (
+        /* ─── QR code ────────────────────────────────────────────── */
+        <View style={s.qrSection}>
+          <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}/`} targetSize={180} />
+          <Text style={s.qrCaption}>สแกนเพื่อดูใบเสร็จ / Scan to view receipt</Text>
+        </View>
+      )}
 
       {/* ─── Footer ───────────────────────────────────────────────── */}
-      <Text style={s.smallCenter}>ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว</Text>
+      <Text style={s.smallCenter}>
+        {lbl("ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว", "Prices include VAT")}
+      </Text>
       <Text style={s.thankYou}>THANK YOU FOR YOUR SHOPPING</Text>
       <Text style={s.centerText}>Tel. {sh.phone}</Text>
       <Text style={s.poweredBy}>Powered by Brave POS</Text>
@@ -359,12 +455,40 @@ const s = StyleSheet.create({
     marginTop: 12,
     marginBottom: 4,
   },
+  // English half of the full tax invoice's title, sitting under the Thai one.
+  receiptTypeEn: {
+    fontFamily: BOLD,
+    fontSize: 15,
+    color: "#000000",
+    textAlign: "center",
+    marginBottom: 4,
+  },
   dash: {
     height: 1,
     borderStyle: "dashed",
     borderBottomWidth: 1,
     borderColor: "#000000",
     marginVertical: 8,
+  },
+  // Acknowledgement block.  The 40px top margin is the space someone actually
+  // signs in; the rule below it is what they sign on.  Width is a fraction of
+  // the content column so the block reads as a signature field rather than a
+  // section divider (which is what the full-width dashes are).
+  sigBlock: {
+    alignItems: "center",
+    marginTop: 40,
+  },
+  sigLine: {
+    width: 220,
+    borderBottomWidth: 1,
+    borderColor: "#000000",
+    marginBottom: 4,
+  },
+  sigText: {
+    fontFamily: FONT,
+    fontSize: 14,
+    color: "#000000",
+    textAlign: "center",
   },
   line: {
     fontFamily: FONT,

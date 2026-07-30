@@ -236,7 +236,11 @@ export function useStarPrinter() {
         <ReceiptImage
           // Remount per job so a queued receipt never captures the previous
           // one's laid-out view (and so onLogoReady fires again for each).
-          key={active.order.order_number ?? active.queueId}
+          // doc_type is part of the key because the same order can be printed
+          // twice with different layouts (abbreviated slip, then full tax
+          // invoice) — without it React reuses the mounted tree and view-shot
+          // can capture the previous document's layout.
+          key={`${active.order.order_number ?? active.queueId}:${active.order.doc_type ?? "abbreviated"}`}
           ref={receiptRef}
           order={active.order}
           shop={active.shop}

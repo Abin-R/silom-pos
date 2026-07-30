@@ -71,6 +71,20 @@ export type PrinterConfig = {
   receiptRightPad?: number;
 };
 
+// Buyer particulars printed on a full tax invoice.  Thai law requires the
+// buyer's name, tax ID and address on ใบกำกับภาษีเต็มรูป; the rest is optional
+// and only printed when supplied.
+export type TaxInvoiceParty = {
+  name: string;
+  tax_id: string;
+  // The buyer's OWN branch designation ("Head Office" / a branch name),
+  // printed after their company name — not one of our shop locations.
+  tax_branch?: string;
+  address: string;
+  phone?: string;
+  email?: string;
+};
+
 export type ReceiptOrder = {
   order_number: string;
   queue_number?: string | number;
@@ -97,6 +111,14 @@ export type ReceiptOrder = {
   // banner is stamped on the image so the cancelled bill is unmistakable.
   voided?: boolean;
   voided_by?: string;
+
+  // Which document to print.  'abbreviated' (the default, and every existing
+  // call site) is the everyday slip — ใบกำกับภาษีอย่างย่อ.  'full' is the
+  // buyer-named full tax invoice: it drops the queue number and the receipt QR,
+  // adds the buyer block, and adds the two signature blocks.  ``tax_invoice``
+  // is required for 'full' and ignored otherwise.
+  doc_type?: 'abbreviated' | 'full';
+  tax_invoice?: TaxInvoiceParty;
 };
 
 export type ReceiptShop = {
