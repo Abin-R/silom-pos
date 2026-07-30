@@ -1374,13 +1374,17 @@ def _report_sell_items(branch, dfrom, dto):
 def _sell_row(it):
     """Derived columns for a single line item, shared by page and export."""
     line_sub = (it.price or Decimal(0)) * (it.qty or 0)
+    # The POS only has per-line discounts (a bill's discount_amount is their
+    # sum), and it clamps each one to its line total — mirror that here so a
+    # stale/oversized value can't push the line negative.
+    disc = min(it.discount or Decimal(0), line_sub)
     return {
         "item": it,
         "barcode": it.product.barcode if it.product_id else "",
         "add_on_total": Decimal(0),
-        "discount": Decimal(0),
+        "discount": disc,
         "sub_total": line_sub,
-        "total": line_sub,
+        "total": line_sub - disc,
     }
 
 

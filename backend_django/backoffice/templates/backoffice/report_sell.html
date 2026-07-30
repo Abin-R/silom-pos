@@ -45,7 +45,7 @@
             <td class="text-end currency">{{ it.price|floatformat:2|intcomma }}</td>
             <td class="text-end currency">{{ row.add_on_total|floatformat:2|intcomma }}</td>
             <td class="text-end currency">{{ row.sub_total|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.discount|floatformat:2|intcomma }}</td>
+            <td class="text-end currency {% if row.discount %}text-danger{% endif %}">{{ row.discount|floatformat:2|intcomma }}</td>
             <td class="text-end currency fw-semibold">{{ row.total|floatformat:2|intcomma }}</td>
           </tr>
           {% endwith %}{% empty %}

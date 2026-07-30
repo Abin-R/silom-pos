@@ -121,3 +121,29 @@ class BackofficePageSmokeTests(TestCase):
         # Bill Detail = one row per line item, so the product name does.
         lines = self.client.get(reverse("backoffice:report_sell_export"), scope)
         self.assertIn("Latte", lines.content.decode())
+
+    def test_bill_detail_reports_the_line_discount(self):
+        """Bill Detail used to hardcode Discount to 0.00, so a bill that Sales
+        by Date showed as discounted looked full-price line by line."""
+        order = Order.objects.create(
+            branch=self.branch, order_number="SMK-0002",
+            subtotal=Decimal("160.00"), discount_amount=Decimal("110.00"),
+            total=Decimal("50.00"), created_at=timezone.now(),
+        )
+        OrderItem.objects.create(
+            order=order, name="Red Velvet Cookie", qty=1,
+            price=Decimal("160.00"), discount=Decimal("110.00"),
+        )
+        scope = {"branch": str(self.branch.id)}
+
+        page = self.client.get(reverse("backoffice:report_sell"), scope)
+        self.assertContains(page, "110.00")
+
+        row = next(
+            line for line in
+            self.client.get(reverse("backoffice:report_sell_export"), scope)
+            .content.decode().splitlines()
+            if "Red Velvet Cookie" in line
+        )
+        # …,Sub Total,Discount,Total
+        self.assertTrue(row.endswith("160.00,110.00,50.00"), row)
