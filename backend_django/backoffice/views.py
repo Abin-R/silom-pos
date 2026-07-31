@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Max, Min, Sum, Q
 from django.db.models.functions import Coalesce, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
@@ -119,14 +119,25 @@ def _write_export_header(writer, title, branch, dfrom, dto):
     writer.writerow([])
 
 
+# Where a receipt-QR scan sends the customer.  ``oid`` lets the form tie a
+# review back to the order it came from.
+FEEDBACK_FORM_URL = "https://rollingpinn.formaloo.me/zg8zkq"
+
+
 def customer_receipt(request, order_number: str):
     """Public landing page for the receipt QR code.  No auth required —
-    customers scan the QR on their thermal receipt and land here.  Two
-    CTAs: request a full tax invoice (ใบกำกับภาษีเต็มรูป) and leave a
-    review.  Buttons are placeholders until the real flows are wired."""
-    return render(request, "backoffice/customer_receipt.html", {
-        "order_number": order_number,
-    })
+    customers scan the QR on their thermal receipt and land here.
+
+    It used to be a two-button menu: "issue a full tax invoice" or "leave a
+    review".  The POS now issues full tax invoices itself at the counter, so
+    the first button only offered the customer a slower way to do what the
+    cashier already did — while standing between every scanner and the review
+    form.  So the scan goes straight to feedback.
+
+    The tax-invoice views under this URL stay mounted: a customer who was
+    handed that link before, or a cashier who needs it, can still reach the
+    form directly."""
+    return HttpResponseRedirect(f"{FEEDBACK_FORM_URL}?oid={order_number}")
 
 
 def create_tax_invoice(request, order_number: str):
@@ -163,8 +174,7 @@ def create_tax_invoice(request, order_number: str):
 # isn't a logged-in user — this is the same trust model Shopster uses
 # for its public peak_create_receipt_view endpoint.
 
-from django.http import HttpResponseRedirect, JsonResponse
-from django.urls import reverse
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from bravepos.models import Order

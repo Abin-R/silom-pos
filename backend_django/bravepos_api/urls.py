@@ -3,9 +3,10 @@ frontend's existing ``EXPO_PUBLIC_BACKEND_URL`` keeps working unchanged.
 
 The server-rendered backoffice lives under ``/backoffice/``.
 
-``/receipt/<order_number>/`` is the public landing page for the QR code
-printed on every thermal receipt.  It is intentionally root-level (NOT
-under ``/backoffice/``) so it isn't gated by Django's auth login."""
+``/receipt/<order_number>/`` is where the QR code printed on every thermal
+receipt points; it redirects the scanner to the review form.  It is
+intentionally root-level (NOT under ``/backoffice/``) so it isn't gated by
+Django's auth login."""
 from django.urls import include, path
 
 from backoffice import views as backoffice_views
