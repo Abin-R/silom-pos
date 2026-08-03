@@ -144,7 +144,9 @@ export default function POS() {
   const { width } = useWindowDimensions();
   const isWide = width >= 720;
   const isMid = width >= 600;
-  const gridCols = isWide ? 4 : isMid ? 3 : 2;
+  // The vertical category rail used to eat 112px of the grid; with categories
+  // on top there is room for a fifth column on a full-size tablet.
+  const gridCols = width >= 1100 ? 5 : isWide ? 4 : isMid ? 3 : 2;
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -599,42 +601,35 @@ export default function POS() {
       {/* ============ MAIN LAYOUT ============ */}
       <View style={{ flex: 1 }}>
       <View style={[styles.main, !isWide && styles.mainStacked]}>
-        {/* Category rail — vertical on wide, horizontal scroll on narrow */}
-        {isWide ? (
-          <View style={styles.leftRail} testID="category-rail">
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <CatPill
-                label="Favorite"
-                active={activeCat === "favorite"}
-                onPress={() => {
-                  setActiveCat("favorite");
-                  setSearch("");
-                }}
-                testId="cat-favorite"
-              />
-              {categories
-                .filter((c) => c.name !== "Favorite")
-                .map((c) => (
-                  <CatPill
-                    key={c.id}
-                    label={c.name}
-                    sub={c.name_th}
-                    active={activeCat === c.id}
-                    onPress={() => {
-                      setActiveCat(c.id);
-                      setSearch("");
-                    }}
-                    testId={`cat-${c.id}`}
-                  />
-                ))}
-            </ScrollView>
-          </View>
-        ) : (
+        {/* Order panel — pinned to the left edge on tablet, so the running
+            order is the first thing in reading order rather than an
+            afterthought parked on the right. On phone it collapses into the
+            bottom sheet behind the cart button. */}
+        {isWide && (
+          <CartSidebar
+            cart={cart}
+            customer={customer}
+            subtotal={subtotal}
+            discountAmount={discountAmount}
+            total={total}
+            cartCount={cartCount}
+            onClear={clearCart}
+            onRemoveCustomer={() => setCustomer(null)}
+            onPay={() => setShowPayment(true)}
+            onInc={(pid) => updateQty(pid, 1)}
+            onDec={(pid) => updateQty(pid, -1)}
+            onRemove={removeItem}
+            onEdit={setEditItem}
+          />
+        )}
+
+        {/* Products — categories run across the top at every width, grid below. */}
+        <View style={styles.center}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={styles.catStrip}
-            contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
+            style={[styles.catStrip, !isMid && styles.catStripStacked]}
+            contentContainerStyle={{ paddingHorizontal: 12, gap: 8, alignItems: "center" }}
             testID="category-rail"
           >
             <CatChip
@@ -652,6 +647,7 @@ export default function POS() {
                 <CatChip
                   key={c.id}
                   label={c.name}
+                  sub={isWide ? c.name_th : undefined}
                   active={activeCat === c.id}
                   onPress={() => {
                     setActiveCat(c.id);
@@ -661,10 +657,7 @@ export default function POS() {
                 />
               ))}
           </ScrollView>
-        )}
 
-        {/* Center product grid */}
-        <View style={styles.center}>
           <FlatList
             key={`grid-${gridCols}`}
             data={filteredProducts}
@@ -707,46 +700,28 @@ export default function POS() {
           )}
         </View>
 
-        {/* Right cart — sidebar on wide, floating button + modal on narrow */}
-        {isWide ? (
-          <CartSidebar
-            cart={cart}
-            customer={customer}
-            subtotal={subtotal}
-            discountAmount={discountAmount}
-            total={total}
-            cartCount={cartCount}
-            onClear={clearCart}
-            onRemoveCustomer={() => setCustomer(null)}
-            onPay={() => setShowPayment(true)}
-            onInc={(pid) => updateQty(pid, 1)}
-            onDec={(pid) => updateQty(pid, -1)}
-            onRemove={removeItem}
-            onEdit={setEditItem}
-          />
-        ) : (
-          cart.length > 0 && (
-            <TouchableOpacity
-              style={styles.fabCart}
-              onPress={() => setShowCart(true)}
-              testID="fab-cart"
-            >
-              <View style={styles.fabLeft}>
-                <MaterialCommunityIcons name="cart" size={22} color={C.surface} />
-                <View style={styles.fabBadge}>
-                  <Text style={styles.fabBadgeText}>{cartCount}</Text>
-                </View>
+        {/* Phone: the order rides in a bottom sheet behind this button. */}
+        {!isWide && cart.length > 0 && (
+          <TouchableOpacity
+            style={styles.fabCart}
+            onPress={() => setShowCart(true)}
+            testID="fab-cart"
+          >
+            <View style={styles.fabLeft}>
+              <MaterialCommunityIcons name="cart" size={22} color={C.surface} />
+              <View style={styles.fabBadge}>
+                <Text style={styles.fabBadgeText}>{cartCount}</Text>
               </View>
-              <View style={styles.fabMid}>
-                <Text style={styles.fabTotalLabel}>Total</Text>
-                <Text style={styles.fabTotal}>{THB(total)}</Text>
-              </View>
-              <View style={styles.fabRight}>
-                <Text style={styles.fabView}>View</Text>
-                <Ionicons name="chevron-up" size={18} color={C.surface} />
-              </View>
-            </TouchableOpacity>
-          )
+            </View>
+            <View style={styles.fabMid}>
+              <Text style={styles.fabTotalLabel}>Total</Text>
+              <Text style={styles.fabTotal}>{THB(total)}</Text>
+            </View>
+            <View style={styles.fabRight}>
+              <Text style={styles.fabView}>View</Text>
+              <Ionicons name="chevron-up" size={18} color={C.surface} />
+            </View>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -984,28 +959,6 @@ function ToolbarIcon({
 
 function CatChip({
   label,
-  active,
-  onPress,
-  testId,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  testId: string;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.catChip, active && styles.catChipActive]}
-      onPress={onPress}
-      testID={testId}
-    >
-      <Text style={[styles.catChipText, active && styles.catChipTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-function CatPill({
-  label,
   sub,
   active,
   onPress,
@@ -1019,15 +972,15 @@ function CatPill({
 }) {
   return (
     <TouchableOpacity
-      style={[styles.catPill, active && styles.catPillActive]}
+      style={[styles.catChip, active && styles.catChipActive]}
       onPress={onPress}
       testID={testId}
     >
-      <Text style={[styles.catText, active && styles.catTextActive]} numberOfLines={2}>
+      <Text style={[styles.catChipText, active && styles.catChipTextActive]} numberOfLines={1}>
         {label}
       </Text>
-      {sub && (
-        <Text style={[styles.catSub, active && styles.catSubActive]} numberOfLines={1}>
+      {!!sub && (
+        <Text style={[styles.catChipSub, active && styles.catChipSubActive]} numberOfLines={1}>
           {sub}
         </Text>
       )}
@@ -1068,7 +1021,7 @@ function CartSidebar({
   embedded?: boolean;
 }) {
   return (
-    <View style={[styles.rightCart, embedded && styles.rightCartEmbedded]} testID="cart-sidebar">
+    <View style={[styles.orderPanel, embedded && styles.orderPanelEmbedded]} testID="cart-sidebar">
       <View style={styles.cartHeader}>
         <View style={styles.tablePill}>
           <Ionicons name="restaurant-outline" size={14} color={C.ink} />
@@ -3112,27 +3065,33 @@ const styles = StyleSheet.create({
     borderColor: C.line,
   },
 
-  // Horizontal category strip (mobile)
+  // Horizontal category strip — sits above the grid at every width now that
+  // the vertical rail is gone.
   catStrip: {
-    maxHeight: 58,
+    maxHeight: 64,
     backgroundColor: C.surface,
     borderBottomWidth: 1,
     borderBottomColor: C.line,
-    marginTop: 12,
     paddingVertical: 10,
     flexGrow: 0,
   },
+  catStripStacked: { marginTop: 12 },
   catChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 12,
     backgroundColor: C.bg,
     borderWidth: 1,
     borderColor: C.line,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 72,
   },
   catChipActive: { backgroundColor: C.brand, borderColor: C.brand },
-  catChipText: { fontSize: 13, fontWeight: "600", color: C.ink2 },
+  catChipText: { fontSize: 13, fontWeight: "700", color: C.ink2 },
   catChipTextActive: { color: C.surface },
+  catChipSub: { fontSize: 10, fontWeight: "500", color: C.ink3, marginTop: 1 },
+  catChipSubActive: { color: C.brandTint },
 
   // FAB cart (mobile)
   fabCart: {
@@ -3214,35 +3173,6 @@ const styles = StyleSheet.create({
   },
   mobileDiscText: { color: C.brand, fontSize: 13, fontWeight: "600" },
 
-  // Left rail
-  leftRail: {
-    width: 112,
-    backgroundColor: C.surface,
-    borderRightWidth: 1,
-    borderRightColor: C.line,
-    paddingVertical: 6,
-  },
-  catPill: {
-    marginHorizontal: 8,
-    marginVertical: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: C.brand,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 64,
-  },
-  catPillActive: {
-    backgroundColor: C.surface,
-    borderWidth: 2,
-    borderColor: C.brand,
-  },
-  catText: { fontSize: 11, fontWeight: "700", color: C.surface, textAlign: "center" },
-  catTextActive: { color: C.brand },
-  catSub: { fontSize: 9, color: C.brandTint, marginTop: 2, textAlign: "center" },
-  catSubActive: { color: C.brand },
-
   // Center
   center: { flex: 1 },
   productCard: {
@@ -3275,19 +3205,19 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 10 },
   emptyText: { color: C.ink3, fontSize: 14 },
 
-  // Right cart
-  rightCart: {
-    width: 320,
+  // Order panel (left column on tablet, sheet body on phone)
+  orderPanel: {
+    width: 330,
     backgroundColor: C.surface,
-    borderLeftWidth: 1,
-    borderLeftColor: C.line,
+    borderRightWidth: 1,
+    borderRightColor: C.line,
     padding: 14,
     flexDirection: "column",
   },
-  rightCartEmbedded: {
+  orderPanelEmbedded: {
     flex: 1,
     width: "100%",
-    borderLeftWidth: 0,
+    borderRightWidth: 0,
   },
   cartHeader: { alignItems: "center", marginBottom: 8 },
   tablePill: {
