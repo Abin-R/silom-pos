@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
@@ -261,7 +262,7 @@ export default function Login() {
   }
 
   // ── Shared sub-renderers ───────────────────────────────────────────────
-  const BranchButton = () => (
+  const BranchButton = ({ onBrand }: { onBrand?: boolean }) => (
     <>
       <TouchableOpacity
         style={s.branchBtn}
@@ -280,9 +281,13 @@ export default function Login() {
       </TouchableOpacity>
       {!!branchLoadError && (
         <View style={{ marginBottom: 12 }}>
-          <Text style={s.branchLoadError}>{branchLoadError}</Text>
-          <TouchableOpacity onPress={loadBranches} style={s.retryBtn} testID="branch-retry">
-            <Text style={s.retryText}>Retry</Text>
+          <Text style={[s.branchLoadError, onBrand && s.branchLoadErrorOnBrand]}>{branchLoadError}</Text>
+          <TouchableOpacity
+            onPress={loadBranches}
+            style={[s.retryBtn, onBrand && s.retryBtnOnBrand]}
+            testID="branch-retry"
+          >
+            <Text style={[s.retryText, onBrand && s.retryTextOnBrand]}>Retry</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -427,19 +432,77 @@ export default function Login() {
     </Modal>
   );
 
-  // ── Tablet: side-by-side ───────────────────────────────────────────────
+  // Wide sign-in: staff pick themselves from a row of chips rather than a
+  // list column, so the whole left half is free for the shop's own mark.
+  const StaffStrip = () => (
+    <View style={s.staffStrip}>
+      {usersLoading ? (
+        <ActivityIndicator color={C.brand} />
+      ) : users.length === 0 ? (
+        <Text style={s.empty}>No users assigned to this branch yet.</Text>
+      ) : (
+        users.map((u) => {
+          const active = selectedUser?.id === u.id;
+          return (
+            <TouchableOpacity
+              key={u.id}
+              style={[s.staffChip, active && s.staffChipActive]}
+              onPress={() => {
+                setSelectedUser(u);
+                setPin("");
+                setError("");
+              }}
+              testID={`user-${u.role}`}
+            >
+              <View style={[s.staffChipAvatar, active && s.staffChipAvatarActive]}>
+                <Ionicons name="person" size={18} color={active ? C.surface : C.ink2} />
+              </View>
+              <Text style={[s.staffChipName, active && s.staffChipNameActive]} numberOfLines={1}>
+                {u.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })
+      )}
+    </View>
+  );
+
+  // ── Tablet: brand panel + sign-in card ─────────────────────────────────
   if (isWide) {
     return (
       <SafeAreaView style={s.container} testID="login-screen">
         <View style={s.tabletLayout}>
-          <View style={s.tabletLeft}>
-            <Text style={s.clock}>{formatClock(now)}</Text>
-            <Text style={s.date}>{formatThaiDate(now)}</Text>
-            <BranchButton />
-            <UserList />
+          {/* The shop's own mark owns half the screen — the first thing staff
+              see should say whose system this is. */}
+          <View style={s.brandPanel}>
+            <View style={s.brandTop}>
+              <View style={s.brandBadge}>
+                <Image
+                  source={require("../assets/images/rolling-pinn-logo.png")}
+                  style={s.brandLogo}
+                  resizeMode="contain"
+                />
+              </View>
+              <Text style={s.brandName}>The Rolling Pinn</Text>
+            </View>
+
+            <View>
+              <Text style={s.clockOnBrand}>{formatClock(now)}</Text>
+              <Text style={s.dateOnBrand}>{formatThaiDate(now)}</Text>
+            </View>
+
+            <View>
+              <Text style={s.brandBranchLabel}>สาขา</Text>
+              <BranchButton onBrand />
+            </View>
           </View>
+
           <View style={s.tabletRight}>
-            <PinPad />
+            <View style={s.authCard}>
+              <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
+              <StaffStrip />
+              <PinPad />
+            </View>
           </View>
         </View>
         <BranchPickerModal />
@@ -544,16 +607,81 @@ const s = StyleSheet.create({
 
   // ── Tablet layout ──
   tabletLayout: { flex: 1, flexDirection: "row" },
-  tabletLeft: { flex: 1.1, padding: 32 },
+  brandPanel: {
+    flex: 1,
+    backgroundColor: C.brand,
+    padding: 40,
+    justifyContent: "space-between",
+  },
+  brandTop: { flexDirection: "row", alignItems: "center", gap: 14 },
+  brandBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: C.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 6,
+  },
+  brandLogo: { width: "100%", height: "100%" },
+  brandName: { fontSize: 22, fontWeight: "800", color: C.surface, letterSpacing: -0.3 },
+  clockOnBrand: { fontSize: 72, fontWeight: "800", color: C.surface, letterSpacing: -2 },
+  dateOnBrand: { fontSize: 16, color: C.brandTint, marginTop: 2 },
+  brandBranchLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: C.brandTint,
+    marginBottom: 8,
+    letterSpacing: 0.4,
+  },
   tabletRight: {
     flex: 1,
     padding: 32,
     alignItems: "center",
     justifyContent: "center",
-    borderLeftWidth: 1,
-    borderLeftColor: C.line,
-    backgroundColor: C.surface,
+    backgroundColor: C.bg,
   },
+  authCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.line,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 24,
+  },
+  staffStrip: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 4,
+  },
+  staffChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingLeft: 6,
+    paddingRight: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: C.line,
+    backgroundColor: C.bg,
+  },
+  staffChipActive: { borderColor: C.brand, backgroundColor: C.brandTintSoft },
+  staffChipAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: C.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  staffChipAvatarActive: { backgroundColor: C.brand },
+  staffChipName: { fontSize: 14, fontWeight: "600", color: C.ink2 },
+  staffChipNameActive: { color: C.brand, fontWeight: "700" },
 
   // ── Phone layout ──
   phoneRoot: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
@@ -597,11 +725,14 @@ const s = StyleSheet.create({
   },
   branchLabel: { fontSize: 13, fontWeight: "600", color: C.ink },
   branchLoadError: { color: C.danger, fontSize: 11, marginBottom: 6 },
+  branchLoadErrorOnBrand: { color: C.surface },
   retryBtn: {
     paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
     borderWidth: 1, borderColor: C.danger, alignSelf: "flex-start",
   },
   retryText: { color: C.danger, fontSize: 12, fontWeight: "600" },
+  retryBtnOnBrand: { borderColor: C.surface, backgroundColor: "rgba(255,255,255,0.12)" },
+  retryTextOnBrand: { color: C.surface },
 
   // ── User list ──
   staffHeading: {

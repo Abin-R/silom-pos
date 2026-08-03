@@ -13,6 +13,7 @@
 
 import React from "react";
 import {
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
@@ -91,13 +92,17 @@ export function SidebarDrawer({
           testID="sidebar-drawer"
         >
           <View style={s.avatarBox}>
-            <View style={s.avatarCircle}>
-              <Ionicons name="person" size={32} color={C.ink2} />
+            <View style={s.badge}>
+              <Image
+                source={require("../assets/images/rolling-pinn-logo.png")}
+                style={s.badgeLogo}
+                resizeMode="contain"
+              />
             </View>
-            <Text style={s.avatarText}>{staff || "Admin"}</Text>
+            <Text style={s.avatarText} numberOfLines={1}>{staff || "Admin"}</Text>
             {!!branchName && (
               <View style={s.branchChip}>
-                <Ionicons name="storefront-outline" size={12} color={C.brand} />
+                <Ionicons name="storefront-outline" size={12} color={C.surface} />
                 <Text style={s.branchChipText} numberOfLines={1}>
                   {branchName}
                 </Text>
@@ -116,7 +121,7 @@ export function SidebarDrawer({
                 <Ionicons
                   name={it.icon}
                   size={20}
-                  color={activeKey === it.key ? C.brand : C.ink2}
+                  color={activeKey === it.key ? C.brand : "rgba(255,255,255,0.85)"}
                 />
                 <Text
                   style={[s.label, activeKey === it.key && s.labelActive]}
@@ -132,12 +137,12 @@ export function SidebarDrawer({
             onPress={onLogout}
             testID="sidebar-logout"
           >
-            <Ionicons name="log-out-outline" size={18} color={C.danger} />
+            <Ionicons name="log-out-outline" size={18} color={C.surface} />
             <Text style={s.logoutText}>Log out</Text>
           </TouchableOpacity>
 
           <View style={s.footer}>
-            <Ionicons name="refresh-circle-outline" size={14} color={C.ink3} />
+            <Ionicons name="refresh-circle-outline" size={14} color="rgba(255,255,255,0.6)" />
             <Text style={s.footerDate}>
               {new Date().toLocaleDateString("en-GB", {
                 day: "2-digit",
@@ -191,36 +196,34 @@ const s = StyleSheet.create({
     backgroundColor: C.scrim,
   },
   panel: {
-    width: 240,
-    backgroundColor: C.surface,
-    borderRightWidth: 1,
-    borderRightColor: C.line,
+    width: 248,
+    backgroundColor: C.brand,
     paddingHorizontal: 12,
   },
   avatarBox: { alignItems: "center", marginBottom: 16 },
-  avatarCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: C.lineStrong,
+  badge: {
+    width: 52,
+    height: 52,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: C.bg,
+    backgroundColor: C.surface,
+    padding: 6,
   },
-  avatarText: { fontSize: 14, color: C.ink2, marginTop: 6, fontWeight: "600" },
+  badgeLogo: { width: "100%", height: "100%" },
+  avatarText: { fontSize: 14, color: C.surface, marginTop: 8, fontWeight: "700" },
   branchChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 3,
-    backgroundColor: C.okTint,
+    backgroundColor: "rgba(255,255,255,0.18)",
     borderRadius: 12,
     marginTop: 6,
     maxWidth: 200,
   },
-  branchChipText: { fontSize: 11, color: C.brand, fontWeight: "600" },
+  branchChipText: { fontSize: 11, color: C.surface, fontWeight: "600" },
   item: {
     flexDirection: "row",
     alignItems: "center",
@@ -229,8 +232,8 @@ const s = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 4,
   },
-  itemActive: { backgroundColor: C.brandTint },
-  label: { fontSize: 14, color: C.ink2, fontWeight: "500" },
+  itemActive: { backgroundColor: C.surface },
+  label: { fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: "500" },
   labelActive: { color: C.brand, fontWeight: "700" },
   logoutBtn: {
     flexDirection: "row",
@@ -238,7 +241,7 @@ const s = StyleSheet.create({
     padding: 12,
     alignItems: "center",
   },
-  logoutText: { color: C.danger, fontSize: 13, fontWeight: "600" },
+  logoutText: { color: C.surface, fontSize: 13, fontWeight: "600" },
   footer: {
     flexDirection: "row",
     alignItems: "center",
@@ -247,8 +250,8 @@ const s = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 2,
     borderTopWidth: 1,
-    borderTopColor: C.bg,
+    borderTopColor: "rgba(255,255,255,0.18)",
   },
-  footerDate: { fontSize: 10, color: C.ink3 },
-  version: { fontSize: 10, color: C.lineStrong, textAlign: "center", marginTop: 4 },
+  footerDate: { fontSize: 10, color: "rgba(255,255,255,0.6)" },
+  version: { fontSize: 10, color: "rgba(255,255,255,0.5)", textAlign: "center", marginTop: 4 },
 });

@@ -285,13 +285,17 @@ export default function Admin() {
   const renderSidebar = (extraStyle?: any) => (
     <View style={[styles.sidebar, extraStyle]} testID="admin-sidebar">
       <View style={styles.avatarBox}>
-        <View style={styles.avatarCircle}>
-          <Ionicons name="person" size={32} color={C.ink2} />
+        <View style={styles.sideBadge}>
+          <Image
+            source={require("../assets/images/rolling-pinn-logo.png")}
+            style={styles.sideBadgeLogo}
+            resizeMode="contain"
+          />
         </View>
-        <Text style={styles.avatarText}>{staff || "Admin"}</Text>
+        <Text style={styles.avatarText} numberOfLines={1}>{staff || "Admin"}</Text>
         {!!activeBranchName && (
           <View style={styles.sideBranchChip} testID="admin-branch-chip">
-            <Ionicons name="storefront-outline" size={12} color={C.brand} />
+            <Ionicons name="storefront-outline" size={12} color={C.surface} />
             <Text style={styles.sideBranchChipText} numberOfLines={1}>{activeBranchName}</Text>
           </View>
         )}
@@ -310,7 +314,7 @@ export default function Admin() {
             <Ionicons
               name={it.icon}
               size={20}
-              color={section === it.key ? C.brand : C.ink2}
+              color={section === it.key ? C.brand : "rgba(255,255,255,0.85)"}
             />
             <Text
               style={[styles.sideLabel, section === it.key && styles.sideLabelActive]}
@@ -325,11 +329,11 @@ export default function Admin() {
         onPress={async () => { await doLogout(); router.replace("/"); }}
         testID="admin-logout"
       >
-        <Ionicons name="log-out-outline" size={18} color={C.danger} />
+        <Ionicons name="log-out-outline" size={18} color={C.surface} />
         <Text style={styles.logoutSideText}>Log out</Text>
       </TouchableOpacity>
       <View style={styles.sideFooter}>
-        <Ionicons name="refresh-circle-outline" size={14} color={C.ink3} />
+        <Ionicons name="refresh-circle-outline" size={14} color="rgba(255,255,255,0.6)" />
         <Text style={styles.sideFooterDate}>
           {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
           {" "}
@@ -3033,7 +3037,7 @@ function Customers({ isWide }: { isWide: boolean }) {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.custAdminName} numberOfLines={1}>{item.name}</Text>
-                {item.phone && <Text style={styles.custAdminPhone}>{item.phone}</Text>}
+                {!!item.phone && <Text style={styles.custAdminPhone}>{item.phone}</Text>}
               </View>
             </TouchableOpacity>
           )}
@@ -5256,43 +5260,44 @@ const styles = StyleSheet.create({
   // desktop and modal layouts.  width:220 sets the fixed column width;
   // cross-axis stretch gives it the full row height (no flex needed).
   sidebar: {
-    width: 220,
-    backgroundColor: C.surface,
-    borderRightWidth: 1,
-    borderRightColor: C.line,
+    width: 232,
+    backgroundColor: C.brand,
     paddingVertical: 20,
     paddingHorizontal: 12,
   },
   avatarBox: { alignItems: "center", marginBottom: 20 },
-  avatarCircle: {
-    width: 56, height: 56, borderRadius: 28,
-    borderWidth: 2, borderColor: C.lineStrong,
+  sideBadge: {
+    width: 52, height: 52, borderRadius: 15,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: C.bg,
+    backgroundColor: C.surface, padding: 6,
   },
-  avatarText: { fontSize: 14, color: C.ink2, marginTop: 6, fontWeight: "600" },
+  sideBadgeLogo: { width: "100%", height: "100%" },
+  avatarText: { fontSize: 14, color: C.surface, marginTop: 8, fontWeight: "700" },
   sideBranchChip: {
     flexDirection: "row", alignItems: "center", gap: 4,
     marginTop: 6, paddingHorizontal: 8, paddingVertical: 4,
-    backgroundColor: C.brandTint, borderRadius: 999, maxWidth: 160,
+    backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 999, maxWidth: 180,
   },
-  sideBranchChipText: { fontSize: 11, color: C.brand, fontWeight: "600" },
+  sideBranchChipText: { fontSize: 11, color: C.surface, fontWeight: "600" },
   sideItem: {
     flexDirection: "row", alignItems: "center", gap: 12,
     padding: 12, borderRadius: 10, marginBottom: 4,
   },
-  sideItemActive: { backgroundColor: C.brandTint },
-  sideLabel: { fontSize: 14, color: C.ink2, fontWeight: "500" },
+  sideItemActive: { backgroundColor: C.surface },
+  sideLabel: { fontSize: 14, color: "rgba(255,255,255,0.85)", fontWeight: "500" },
   sideLabelActive: { color: C.brand, fontWeight: "700" },
-  logoutSide: { flexDirection: "row", gap: 8, padding: 12, alignItems: "center" },
-  logoutSideText: { color: C.danger, fontSize: 13, fontWeight: "600" },
-  versionText: { fontSize: 10, color: C.lineStrong, textAlign: "center", marginTop: 4 },
+  logoutSide: {
+    flexDirection: "row", gap: 8, padding: 12, alignItems: "center",
+    borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.18)",
+  },
+  logoutSideText: { color: C.surface, fontSize: 13, fontWeight: "600" },
+  versionText: { fontSize: 10, color: "rgba(255,255,255,0.5)", textAlign: "center", marginTop: 4 },
   sideFooter: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 12, paddingTop: 6, paddingBottom: 2,
     borderTopWidth: 1, borderTopColor: C.bg,
   },
-  sideFooterDate: { fontSize: 10, color: C.ink3 },
+  sideFooterDate: { fontSize: 10, color: "rgba(255,255,255,0.6)" },
 
   mobileTop: {
     height: 56, backgroundColor: C.surface, flexDirection: "row",
