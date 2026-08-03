@@ -27,6 +27,7 @@ import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
+import { C } from "../lib/theme";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -475,7 +476,7 @@ export default function POS() {
   if (loading) {
     return (
       <View style={[styles.root, { alignItems: "center", justifyContent: "center" }]}>
-        <ActivityIndicator color="#00B14F" size="large" />
+        <ActivityIndicator color={C.brand} size="large" />
       </View>
     );
   }
@@ -486,7 +487,7 @@ export default function POS() {
     return (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color="#00B14F" />
+          <ActivityIndicator color={C.brand} />
         </View>
       </SafeAreaView>
     );
@@ -501,15 +502,15 @@ export default function POS() {
           onPress={() => setSidebarOpen(true)}
           testID="menu-btn"
         >
-          <Ionicons name="menu" size={24} color="#0F172A" />
+          <Ionicons name="menu" size={24} color={C.ink} />
         </TouchableOpacity>
 
         {isMid && (
           <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color="#94A3B8" />
+            <Ionicons name="search" size={18} color={C.ink3} />
             <TextInput
               placeholder="Search Products"
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor={C.ink3}
               style={styles.searchInput}
               value={search}
               onChangeText={setSearch}
@@ -553,13 +554,13 @@ export default function POS() {
             it moves into the mobile search row to avoid overflowing the bar. */}
         {isMid && !!activeBranchName && (
           <View style={styles.branchChip} testID="branch-chip">
-            <Ionicons name="storefront-outline" size={16} color="#00B14F" />
+            <Ionicons name="storefront-outline" size={16} color={C.brand} />
             <Text style={styles.branchChipText} numberOfLines={1}>{activeBranchName}</Text>
           </View>
         )}
         {isWide && (
           <View style={styles.staffChip}>
-            <Ionicons name="person-circle" size={22} color="#00B14F" />
+            <Ionicons name="person-circle" size={22} color={C.brand} />
             <Text style={styles.staffText}>{staff || "Admin"}</Text>
           </View>
         )}
@@ -568,7 +569,7 @@ export default function POS() {
           onPress={async () => { await doLogout(); router.replace("/"); }}
           testID="logout-btn"
         >
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+          <Ionicons name="log-out-outline" size={20} color={C.danger} />
         </TouchableOpacity>
       </View>
 
@@ -576,10 +577,10 @@ export default function POS() {
       {!isMid && (
         <View style={styles.mobileTopRow}>
           <View style={[styles.mobileSearchWrap, { flex: 1, marginRight: 0 }]}>
-            <Ionicons name="search" size={18} color="#94A3B8" />
+            <Ionicons name="search" size={18} color={C.ink3} />
             <TextInput
               placeholder="Search Products"
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor={C.ink3}
               style={styles.searchInput}
               value={search}
               onChangeText={setSearch}
@@ -588,7 +589,7 @@ export default function POS() {
           </View>
           {!!activeBranchName && (
             <View style={styles.branchChipMobile} testID="branch-chip">
-              <Ionicons name="storefront-outline" size={14} color="#00B14F" />
+              <Ionicons name="storefront-outline" size={14} color={C.brand} />
               <Text style={styles.branchChipMobileText} numberOfLines={1}>{activeBranchName}</Text>
             </View>
           )}
@@ -672,12 +673,12 @@ export default function POS() {
             contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
             columnWrapperStyle={{ gap: 10 }}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
             }
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Ionicons name="search-outline" size={40} color="#CBD5E1" />
+                <Ionicons name="search-outline" size={40} color={C.lineStrong} />
                 <Text style={styles.emptyText}>No products found</Text>
               </View>
             }
@@ -700,7 +701,7 @@ export default function POS() {
           />
           {isWide && (
             <View style={styles.scanBar}>
-              <Ionicons name="barcode-outline" size={20} color="#475569" />
+              <Ionicons name="barcode-outline" size={20} color={C.ink2} />
               <Text style={styles.scanText}>Scan Barcode</Text>
             </View>
           )}
@@ -731,7 +732,7 @@ export default function POS() {
               testID="fab-cart"
             >
               <View style={styles.fabLeft}>
-                <MaterialCommunityIcons name="cart" size={22} color="#FFFFFF" />
+                <MaterialCommunityIcons name="cart" size={22} color={C.surface} />
                 <View style={styles.fabBadge}>
                   <Text style={styles.fabBadgeText}>{cartCount}</Text>
                 </View>
@@ -742,7 +743,7 @@ export default function POS() {
               </View>
               <View style={styles.fabRight}>
                 <Text style={styles.fabView}>View</Text>
-                <Ionicons name="chevron-up" size={18} color="#FFFFFF" />
+                <Ionicons name="chevron-up" size={18} color={C.surface} />
               </View>
             </TouchableOpacity>
           )
@@ -753,7 +754,7 @@ export default function POS() {
             bar (and its sidebar → admin/reports) stays reachable above this. */}
         {shiftOpen === false && (
           <View style={styles.shiftGate} testID="shift-gate">
-            <Ionicons name="lock-closed-outline" size={44} color="#CBD5E1" />
+            <Ionicons name="lock-closed-outline" size={44} color={C.lineStrong} />
             <Text style={styles.shiftGateText}>Open shift to continue</Text>
             <TouchableOpacity
               style={styles.shiftGateBtn}
@@ -771,7 +772,7 @@ export default function POS() {
         <View style={styles.gateModalOverlay}>
           <View style={styles.gateModal}>
             <View style={styles.gateModalHead}>
-              <TouchableOpacity onPress={() => setShowOpenShift(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowOpenShift(false)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.gateModalTitle}>Open Shift</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 12 }}>
@@ -812,7 +813,7 @@ export default function POS() {
             <View style={styles.cartSheetHeader}>
               <Text style={styles.cartSheetTitle}>Current Order</Text>
               <TouchableOpacity onPress={() => setShowCart(false)}>
-                <Ionicons name="close" size={24} color="#475569" />
+                <Ionicons name="close" size={24} color={C.ink2} />
               </TouchableOpacity>
             </View>
             <CartSidebar
@@ -969,7 +970,7 @@ function ToolbarIcon({
       testID={testId}
     >
       <View>
-        <Ionicons name={icon} size={compact ? 20 : 22} color="#0F172A" />
+        <Ionicons name={icon} size={compact ? 20 : 22} color={C.ink} />
         {badge && badge > 0 ? (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
@@ -1070,7 +1071,7 @@ function CartSidebar({
     <View style={[styles.rightCart, embedded && styles.rightCartEmbedded]} testID="cart-sidebar">
       <View style={styles.cartHeader}>
         <View style={styles.tablePill}>
-          <Ionicons name="restaurant-outline" size={14} color="#0F172A" />
+          <Ionicons name="restaurant-outline" size={14} color={C.ink} />
           <Text style={styles.tableText}>Tables</Text>
         </View>
         {customer && (
@@ -1084,7 +1085,7 @@ function CartSidebar({
               {customer.name}
             </Text>
             <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer">
-              <Ionicons name="close" size={16} color="#94A3B8" />
+              <Ionicons name="close" size={16} color={C.ink3} />
             </TouchableOpacity>
           </View>
         )}
@@ -1134,7 +1135,7 @@ function CartSidebar({
         contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
         ListEmptyComponent={
           <View style={styles.emptyCart}>
-            <MaterialCommunityIcons name="cart-outline" size={40} color="#CBD5E1" />
+            <MaterialCommunityIcons name="cart-outline" size={40} color={C.lineStrong} />
             <Text style={styles.emptyCartText}>Cart is empty</Text>
             <Text style={styles.emptyCartSub}>Tap a product to add</Text>
           </View>
@@ -1162,7 +1163,7 @@ function CartSidebar({
                 onPress={() => onDec(item.product_id)}
                 testID={`qty-dec-${item.product_id}`}
               >
-                <Ionicons name="remove" size={16} color="#0F172A" />
+                <Ionicons name="remove" size={16} color={C.ink} />
               </TouchableOpacity>
               <Text style={styles.qtyText}>{item.qty}</Text>
               <TouchableOpacity
@@ -1170,7 +1171,7 @@ function CartSidebar({
                 onPress={() => onInc(item.product_id)}
                 testID={`qty-inc-${item.product_id}`}
               >
-                <Ionicons name="add" size={16} color="#0F172A" />
+                <Ionicons name="add" size={16} color={C.ink} />
               </TouchableOpacity>
             </View>
             <TouchableOpacity
@@ -1178,7 +1179,7 @@ function CartSidebar({
               style={styles.trashBtn}
               testID={`remove-${item.product_id}`}
             >
-              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+              <Ionicons name="trash-outline" size={18} color={C.danger} />
             </TouchableOpacity>
           </View>
         )}
@@ -1187,7 +1188,7 @@ function CartSidebar({
       {cart.length > 0 && (
         <View style={styles.cartFooterRow}>
           <TouchableOpacity onPress={onClear} style={styles.footerTrash} testID="clear-cart">
-            <Ionicons name="trash-outline" size={18} color="#EF4444" />
+            <Ionicons name="trash-outline" size={18} color={C.danger} />
           </TouchableOpacity>
         </View>
       )}
@@ -1613,7 +1614,7 @@ function PaymentModal({
         <View style={styles.paymentModal} testID="payment-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose} testID="close-payment">
-              <Ionicons name="close" size={26} color="#475569" />
+              <Ionicons name="close" size={26} color={C.ink2} />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Payment</Text>
             <View style={{ width: 26 }} />
@@ -1638,7 +1639,7 @@ function PaymentModal({
                   <Ionicons
                     name={m.icon}
                     size={24}
-                    color={method === m.key ? "#00B14F" : "#475569"}
+                    color={method === m.key ? C.brand : C.ink2}
                   />
                   <Text
                     style={[styles.methodText, method === m.key && styles.methodTextActive]}
@@ -1661,8 +1662,8 @@ function PaymentModal({
                 </View>
                 <View style={styles.easyPayCard}>
                   <View style={styles.easyPayDevicePlaceholder}>
-                    <Ionicons name="tablet-landscape" size={80} color="#00B14F" />
-                    <Ionicons name="qr-code" size={32} color="#0F172A" style={{ position: "absolute", bottom: 4, right: 4 }} />
+                    <Ionicons name="tablet-landscape" size={80} color={C.brand} />
+                    <Ionicons name="qr-code" size={32} color={C.ink} style={{ position: "absolute", bottom: 4, right: 4 }} />
                   </View>
                   <View style={styles.easyPayBrandGrid}>
                     {[
@@ -1671,7 +1672,7 @@ function PaymentModal({
                       { name: "UP", color: "#E21836" },
                       { name: "JCB", color: "#0E4C96" },
                       { name: "LINE", color: "#06C755" },
-                      { name: "True", color: "#EF4444" },
+                      { name: "True", color: C.danger },
                       { name: "Ali", color: "#1677FF" },
                       { name: "PP", color: "#00457C" },
                       { name: "Shop", color: "#EE4D2D" },
@@ -1692,7 +1693,7 @@ function PaymentModal({
             ) : method === PAYMENT_METHODS.PROMPTPAY ? (
               <View style={styles.promptPayPane} testID="promptpay-pane">
                 <View style={styles.thaiQrHeader}>
-                  <Ionicons name="grid" size={28} color="#fff" />
+                  <Ionicons name="grid" size={28} color={C.surface} />
                   <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
                 </View>
                 <View style={styles.promptPayLogoBox}>
@@ -1705,14 +1706,14 @@ function PaymentModal({
                   Please enter Mobile No. / Citizen ID / Tax ID in Shop{"\n"}Setting -{">"} Payment
                 </Text>
                 <TouchableOpacity style={styles.printQrBtn}>
-                  <Ionicons name="print-outline" size={16} color="#475569" />
+                  <Ionicons name="print-outline" size={16} color={C.ink2} />
                   <Text style={styles.printQrText}>Print QR Code</Text>
                 </TouchableOpacity>
               </View>
             ) : method === PAYMENT_METHODS.QR_KBANK ? (
               <View style={styles.qrKbankPane} testID="qrkbank-pane">
                 <View style={styles.thaiQrHeader}>
-                  <Ionicons name="grid" size={28} color="#fff" />
+                  <Ionicons name="grid" size={28} color={C.surface} />
                   <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
                 </View>
                 <View style={styles.kbankBrandRow}>
@@ -1737,8 +1738,8 @@ function PaymentModal({
                   </View>
                 </View>
                 <View style={styles.kbankIllustration}>
-                  <Ionicons name="phone-portrait-outline" size={56} color="#475569" />
-                  <Ionicons name="qr-code" size={32} color="#0F172A" style={{ position: "absolute", bottom: 0, right: 0 }} />
+                  <Ionicons name="phone-portrait-outline" size={56} color={C.ink2} />
+                  <Ionicons name="qr-code" size={32} color={C.ink} style={{ position: "absolute", bottom: 0, right: 0 }} />
                 </View>
                 <TouchableOpacity style={styles.kbankRegisterBtn}>
                   <Text style={styles.kbankRegisterText}>Register</Text>
@@ -1749,7 +1750,7 @@ function PaymentModal({
                 {/* Header */}
                 <View style={styles.beamHeader}>
                   <View style={styles.beamLogoBox}>
-                    <Ionicons name="scan-outline" size={28} color="#00B14F" />
+                    <Ionicons name="scan-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.beamTitle}>Beam QR Payment</Text>
@@ -1759,14 +1760,14 @@ function PaymentModal({
 
                 {beamStatus === "idle" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
                     <Text style={styles.beamIdleText}>{'Tap "Generate QR" to create a QR code'}</Text>
                   </View>
                 )}
 
                 {beamStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
-                    <ActivityIndicator size="large" color="#00B14F" />
+                    <ActivityIndicator size="large" color={C.brand} />
                     <Text style={styles.beamIdleText}>Generating QR code…</Text>
                   </View>
                 )}
@@ -1779,7 +1780,7 @@ function PaymentModal({
                       resizeMode="contain"
                     />
                     <View style={styles.beamWaiting}>
-                      <ActivityIndicator size="small" color="#00B14F" />
+                      <ActivityIndicator size="small" color={C.brand} />
                       <Text style={styles.beamWaitingText}>Waiting for customer to scan…</Text>
                     </View>
                     <TouchableOpacity
@@ -1794,8 +1795,8 @@ function PaymentModal({
 
                 {beamStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamError || "Payment failed"}</Text>
+                    <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamError || "Payment failed"}</Text>
                     <TouchableOpacity
                       style={styles.beamRetryBtn}
                       onPress={resetBeam}
@@ -1812,7 +1813,7 @@ function PaymentModal({
                 {/* Header */}
                 <View style={styles.beamHeader}>
                   <View style={styles.beamLogoBox}>
-                    <Ionicons name="card-outline" size={28} color="#00B14F" />
+                    <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.beamTitle}>Credit Card</Text>
@@ -1822,7 +1823,7 @@ function PaymentModal({
 
                 {omiseStatus === "idle" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
                     <Text style={styles.beamIdleText}>
                       {'Tap "Generate Card QR" — the customer scans it to pay by card'}
                     </Text>
@@ -1831,7 +1832,7 @@ function PaymentModal({
 
                 {omiseStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
-                    <ActivityIndicator size="large" color="#00B14F" />
+                    <ActivityIndicator size="large" color={C.brand} />
                     <Text style={styles.beamIdleText}>Generating payment link…</Text>
                   </View>
                 )}
@@ -1844,7 +1845,7 @@ function PaymentModal({
                       resizeMode="contain"
                     />
                     <View style={styles.beamWaiting}>
-                      <ActivityIndicator size="small" color="#00B14F" />
+                      <ActivityIndicator size="small" color={C.brand} />
                       <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
                     </View>
                     <TouchableOpacity
@@ -1859,8 +1860,8 @@ function PaymentModal({
 
                 {omiseStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{omiseError || "Payment failed"}</Text>
+                    <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{omiseError || "Payment failed"}</Text>
                     <TouchableOpacity style={styles.beamRetryBtn} onPress={resetOmise}>
                       <Text style={styles.beamRetryText}>Try Again</Text>
                     </TouchableOpacity>
@@ -1900,7 +1901,7 @@ function PaymentModal({
                 {/* Header */}
                 <View style={styles.beamHeader}>
                   <View style={styles.beamLogoBox}>
-                    <Ionicons name="card-outline" size={28} color="#00B14F" />
+                    <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.beamTitle}>Beam Card</Text>
@@ -1910,7 +1911,7 @@ function PaymentModal({
 
                 {beamCardStatus === "idle" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="qr-code-outline" size={72} color="#CBD5E1" />
+                    <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
                     <Text style={styles.beamIdleText}>
                       {'Tap "Generate Card QR" — the customer scans it to pay by card'}
                     </Text>
@@ -1919,7 +1920,7 @@ function PaymentModal({
 
                 {beamCardStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
-                    <ActivityIndicator size="large" color="#00B14F" />
+                    <ActivityIndicator size="large" color={C.brand} />
                     <Text style={styles.beamIdleText}>Generating payment link…</Text>
                   </View>
                 )}
@@ -1932,7 +1933,7 @@ function PaymentModal({
                       resizeMode="contain"
                     />
                     <View style={styles.beamWaiting}>
-                      <ActivityIndicator size="small" color="#00B14F" />
+                      <ActivityIndicator size="small" color={C.brand} />
                       <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
                     </View>
                     <TouchableOpacity
@@ -1947,8 +1948,8 @@ function PaymentModal({
 
                 {beamCardStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
-                    <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-                    <Text style={[styles.beamIdleText, { color: "#EF4444" }]}>{beamCardError || "Payment failed"}</Text>
+                    <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamCardError || "Payment failed"}</Text>
                     <TouchableOpacity style={styles.beamRetryBtn} onPress={resetBeamCard}>
                       <Text style={styles.beamRetryText}>Try Again</Text>
                     </TouchableOpacity>
@@ -1987,14 +1988,14 @@ function PaymentModal({
               <View style={styles.edcPane} testID="edc-pane">
                 <View style={styles.edcHeroRow}>
                   <View style={styles.edcDeviceGroup}>
-                    <Ionicons name="tablet-landscape" size={64} color="#0F172A" />
-                    <Ionicons name="phone-portrait-outline" size={40} color="#0F172A" />
+                    <Ionicons name="tablet-landscape" size={64} color={C.ink} />
+                    <Ionicons name="phone-portrait-outline" size={40} color={C.ink} />
                   </View>
                   <View style={styles.edcArrowWrap}>
                     <View style={styles.edcArrowLine} />
                     <Text style={styles.edcArrowLabel}>Send data</Text>
                   </View>
-                  <Ionicons name="print" size={64} color="#00B14F" />
+                  <Ionicons name="print" size={64} color={C.brand} />
                 </View>
                 <Text style={styles.edcTitle}>
                   Connect Brave POS with Electronic Data Capture (EDC) payment terminal no need
@@ -2007,7 +2008,7 @@ function PaymentModal({
                     <Text style={styles.kbankLogoText}>KBank</Text>
                   </View>
                 </View>
-                <Ionicons name="phone-portrait-outline" size={32} color="#475569" style={{ marginTop: 4 }} />
+                <Ionicons name="phone-portrait-outline" size={32} color={C.ink2} style={{ marginTop: 4 }} />
                 <TouchableOpacity style={styles.edcRegister} testID="edc-register">
                   <Text style={styles.edcRegisterText}>สมัครใช้บริการ</Text>
                 </TouchableOpacity>
@@ -2021,7 +2022,7 @@ function PaymentModal({
                     style={styles.customRefInput}
                     value={orderRef}
                     onChangeText={setOrderRef}
-                    placeholderTextColor="#94A3B8"
+                    placeholderTextColor={C.ink3}
                     testID="custom-order-ref"
                   />
                 </View>
@@ -2054,7 +2055,7 @@ function PaymentModal({
                 </View>
                 <TextInput
                   placeholder="Card Number (Last 4 digits)"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={C.ink3}
                   style={styles.creditInput}
                   value={cardLast4}
                   onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, "").slice(0, 4))}
@@ -2088,7 +2089,7 @@ function PaymentModal({
                 <View style={styles.creditGrid}>
                   {[
                     { k: "WELFARE", th: "บัตรสวัสดิการแห่งรัฐ", color: "#3B82F6" },
-                    { k: "BAY", th: "กรุงศรีอยุธยา", color: "#F59E0B" },
+                    { k: "BAY", th: "กรุงศรีอยุธยา", color: C.warn },
                     { k: "BBL", th: "กรุงเทพ", color: "#0EA5E9" },
                     { k: "KTC", th: "กรุงไทย", color: "#06B6D4" },
                   ].map((b) => (
@@ -2170,7 +2171,7 @@ function PaymentModal({
                         onPress={() => onKey("back")}
                         testID="pad-back"
                       >
-                        <Ionicons name="backspace-outline" size={22} color="#EF4444" />
+                        <Ionicons name="backspace-outline" size={22} color={C.danger} />
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -2203,7 +2204,7 @@ function PaymentModal({
               <View style={styles.netBoxV2}>
                 <View style={styles.rightPanelTop}>
                   <View style={styles.guestRow}>
-                    <Ionicons name="person-outline" size={14} color="#475569" />
+                    <Ionicons name="person-outline" size={14} color={C.ink2} />
                     <Text style={styles.guestText}>Guest</Text>
                   </View>
                   <View style={styles.netRowV2}>
@@ -2285,13 +2286,13 @@ function CartItemModal({
         <View style={styles.itemModal} testID="cart-item-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose} testID="close-item-modal">
-              <Ionicons name="chevron-back" size={26} color="#00B14F" />
+              <Ionicons name="chevron-back" size={26} color={C.brand} />
             </TouchableOpacity>
             <Text style={styles.modalTitle} numberOfLines={1}>
               {item.name}
             </Text>
             <TouchableOpacity onPress={() => onRemove(item.product_id)} testID="item-modal-remove">
-              <Ionicons name="trash-outline" size={22} color="#EF4444" />
+              <Ionicons name="trash-outline" size={22} color={C.danger} />
             </TouchableOpacity>
           </View>
 
@@ -2303,7 +2304,7 @@ function CartItemModal({
                 onPress={() => setQty((q) => Math.max(1, q - 1))}
                 testID="item-qty-dec"
               >
-                <Ionicons name="remove" size={20} color="#0F172A" />
+                <Ionicons name="remove" size={20} color={C.ink} />
               </TouchableOpacity>
               <Text style={styles.itemStepVal}>{qty}</Text>
               <TouchableOpacity
@@ -2311,7 +2312,7 @@ function CartItemModal({
                 onPress={() => setQty((q) => q + 1)}
                 testID="item-qty-inc"
               >
-                <Ionicons name="add" size={20} color="#0F172A" />
+                <Ionicons name="add" size={20} color={C.ink} />
               </TouchableOpacity>
             </View>
           </View>
@@ -2349,7 +2350,7 @@ function CartItemModal({
                 onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
                 keyboardType="decimal-pad"
                 placeholder={discMode === "pct" ? "0%" : "0.00"}
-                placeholderTextColor="#CBD5E1"
+                placeholderTextColor={C.lineStrong}
                 testID="item-discount-input"
               />
             </View>
@@ -2465,7 +2466,7 @@ function CustomerModal({
               <Ionicons
                 name={showAdd ? "close" : "create-outline"}
                 size={22}
-                color="#00B14F"
+                color={C.brand}
               />
             </TouchableOpacity>
           </View>
@@ -2474,7 +2475,7 @@ function CustomerModal({
             <View style={{ padding: 20, gap: 14 }}>
               <TextInput
                 placeholder="Name"
-                placeholderTextColor="#94A3B8"
+                placeholderTextColor={C.ink3}
                 style={styles.textInput}
                 value={name}
                 onChangeText={setName}
@@ -2499,10 +2500,10 @@ function CustomerModal({
           ) : (
             <>
               <View style={styles.searchBox}>
-                <Ionicons name="search" size={18} color="#94A3B8" />
+                <Ionicons name="search" size={18} color={C.ink3} />
                 <TextInput
                   placeholder="Search"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={C.ink3}
                   style={styles.searchInput2}
                   value={q}
                   onChangeText={setQ}
@@ -2570,7 +2571,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
         <View
           style={[
             styles.delDot,
-            { backgroundColor: deliveryOn ? "#00B14F" : "#CBD5E1" },
+            { backgroundColor: deliveryOn ? C.brand : C.lineStrong },
           ]}
         />
         <Text style={styles.delText}>Delivery ON/OFF</Text>
@@ -2593,10 +2594,10 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
   }, [visible, tab]);
 
   const cols: { key: string; label: string; icon: any; color: string }[] = [
-    { key: "new", label: "New Order", icon: "list-outline", color: "#F59E0B" },
+    { key: "new", label: "New Order", icon: "list-outline", color: C.warn },
     { key: "preparing", label: "Preparing", icon: "restaurant-outline", color: "#3B82F6" },
-    { key: "completed", label: "Completed", icon: "checkmark-circle-outline", color: "#00B14F" },
-    { key: "cancel", label: "Cancel", icon: "close-circle-outline", color: "#EF4444" },
+    { key: "completed", label: "Completed", icon: "checkmark-circle-outline", color: C.ok },
+    { key: "cancel", label: "Cancel", icon: "close-circle-outline", color: C.danger },
   ];
 
   const grouped = (col: string) => orders.filter((o) => o.status === col);
@@ -2616,7 +2617,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
         <View style={styles.orderHub} testID="order-hub-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose} testID="close-orderhub">
-              <Ionicons name="close" size={26} color="#475569" />
+              <Ionicons name="close" size={26} color={C.ink2} />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>All Orders</Text>
             {isNarrow ? <View style={{ width: 26 }} /> : deliveryCtrl}
@@ -2643,7 +2644,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
           </View>
 
           <View style={styles.hubSearch}>
-            <Ionicons name="search" size={16} color="#94A3B8" />
+            <Ionicons name="search" size={16} color={C.ink3} />
             <Text style={styles.hubSearchText}>Search by order number</Text>
           </View>
 
@@ -2677,7 +2678,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                       <Ionicons
                         name={isExpanded ? "chevron-up" : "chevron-down"}
                         size={18}
-                        color="#94A3B8"
+                        color={C.ink3}
                       />
                     )}
                   </HeadContainer>
@@ -2706,8 +2707,8 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                               {
                                 backgroundColor:
                                   o.delivery_status === "DELIVERING"
-                                    ? "#FEE2E2"
-                                    : "#DCFCE7",
+                                    ? C.dangerTint
+                                    : C.okTint,
                               },
                             ]}
                           >
@@ -2717,8 +2718,8 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                                 {
                                   color:
                                     o.delivery_status === "DELIVERING"
-                                      ? "#DC2626"
-                                      : "#16A34A",
+                                      ? C.dangerDark
+                                      : C.okDark,
                                 },
                               ]}
                             >
@@ -2736,7 +2737,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                         </View>
                         <View style={styles.orderMeta}>
                           <View style={styles.metaItem}>
-                            <Ionicons name="cube-outline" size={13} color="#94A3B8" />
+                            <Ionicons name="cube-outline" size={13} color={C.ink3} />
                             <Text style={styles.metaText}>
                               {o.items.reduce((s, i) => s + i.qty, 0)}
                             </Text>
@@ -2745,7 +2746,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                             <Text style={styles.metaText}>฿{o.total.toFixed(2)}</Text>
                           </View>
                           <View style={styles.metaItem}>
-                            <Ionicons name="time-outline" size={13} color="#94A3B8" />
+                            <Ionicons name="time-outline" size={13} color={C.ink3} />
                             <Text style={styles.metaText}>{o.created_time}</Text>
                           </View>
                         </View>
@@ -2798,7 +2799,7 @@ function ParkedOrdersModal({
         <View style={styles.parkedModal} testID="parked-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={26} color="#475569" />
+              <Ionicons name="close" size={26} color={C.ink2} />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Save & Retrieve</Text>
             <View style={{ width: 26 }} />
@@ -2806,7 +2807,7 @@ function ParkedOrdersModal({
 
           {currentCart.length > 0 && (
             <TouchableOpacity style={styles.parkBtn} onPress={onPark} testID="park-current">
-              <Ionicons name="bookmark" size={18} color="#00B14F" />
+              <Ionicons name="bookmark" size={18} color={C.brand} />
               <Text style={styles.parkBtnText}>Park current order ({currentCart.length} items)</Text>
             </TouchableOpacity>
           )}
@@ -2817,7 +2818,7 @@ function ParkedOrdersModal({
             contentContainerStyle={{ padding: 16, gap: 10 }}
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Ionicons name="bookmarks-outline" size={40} color="#CBD5E1" />
+                <Ionicons name="bookmarks-outline" size={40} color={C.lineStrong} />
                 <Text style={styles.emptyText}>No parked orders</Text>
               </View>
             }
@@ -2840,7 +2841,7 @@ function ParkedOrdersModal({
                   <Text style={styles.retrieveBtnText}>Retrieve</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => del(item.id)} testID={`park-del-${item.id}`}>
-                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Ionicons name="trash-outline" size={20} color={C.danger} />
                 </TouchableOpacity>
               </View>
             )}
@@ -2873,7 +2874,7 @@ function SuccessModal({
         {data && (
           <View style={styles.successModal} testID="success-modal">
             <View style={styles.successIcon}>
-              <Ionicons name="checkmark" size={56} color="#FFFFFF" />
+              <Ionicons name="checkmark" size={56} color={C.surface} />
             </View>
             <Text style={styles.successTitle}>Payment Successful</Text>
             <Text style={styles.successOrder}>{data.order_number}</Text>
@@ -2913,7 +2914,7 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
   if (status.state === "printing") {
     return (
       <View style={[styles.printPill, styles.printPillNeutral]} testID="print-status-printing">
-        <ActivityIndicator size="small" color="#475569" />
+        <ActivityIndicator size="small" color={C.ink2} />
         <Text style={styles.printPillText}>Printing receipt…</Text>
       </View>
     );
@@ -2922,8 +2923,8 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
   if (status.state === "printed") {
     return (
       <View style={[styles.printPill, styles.printPillOk]} testID="print-status-printed">
-        <Ionicons name="checkmark-circle" size={16} color="#00B14F" />
-        <Text style={[styles.printPillText, { color: "#00875A" }]}>Receipt printed</Text>
+        <Ionicons name="checkmark-circle" size={16} color={C.ok} />
+        <Text style={[styles.printPillText, { color: C.okDark }]}>Receipt printed</Text>
       </View>
     );
   }
@@ -2932,9 +2933,9 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
   // will retry every 30s until the printer comes back online.
   return (
     <View style={[styles.printPill, styles.printPillWarn]} testID="print-status-queued">
-      <Ionicons name="time-outline" size={16} color="#B45309" />
+      <Ionicons name="time-outline" size={16} color={C.warnDark} />
       <View style={{ flex: 1 }}>
-        <Text style={[styles.printPillText, { color: "#92400E", fontWeight: "700" }]}>
+        <Text style={[styles.printPillText, { color: C.warnDark, fontWeight: "700" }]}>
           Printer offline — receipt queued
         </Text>
         <Text style={styles.printPillSub}>Will print automatically when the printer is back online.</Text>
@@ -2953,9 +2954,9 @@ function DrawerModal({ visible, onClose }: { visible: boolean; onClose: () => vo
           <Text style={styles.drawerSub}>{"Today's quick view"}</Text>
 
           <View style={styles.drawerStats}>
-            <StatCard label="Sales" value="฿12,480.00" icon="trending-up" color="#00B14F" />
+            <StatCard label="Sales" value="฿12,480.00" icon="trending-up" color={C.brand} />
             <StatCard label="Orders" value="24" icon="receipt-outline" color="#3B82F6" />
-            <StatCard label="Avg Ticket" value="฿520.00" icon="pulse" color="#F59E0B" />
+            <StatCard label="Avg Ticket" value="฿520.00" icon="pulse" color={C.warn} />
           </View>
 
           <Text style={styles.drawerNote}>More reports coming soon.</Text>
@@ -2994,24 +2995,24 @@ function StatCard({
 const MARGIN_TOP_AUTO = { marginTop: "auto" as any };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#F1F5F9" },
+  root: { flex: 1, backgroundColor: C.bg },
 
   // Top bar
   topBar: {
     height: 64,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
     gap: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
   menuBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   searchWrap: {
     flex: 1,
     height: 40,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
@@ -3019,15 +3020,15 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 360,
   },
-  searchInput: { flex: 1, fontSize: 14, color: "#0F172A", ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
+  searchInput: { flex: 1, fontSize: 14, color: C.ink, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   tbItem: { alignItems: "center", paddingHorizontal: 12, minWidth: 64 },
   tbItemCompact: { minWidth: 40, paddingHorizontal: 6 },
-  tbLabel: { fontSize: 10, color: "#475569", marginTop: 2, fontWeight: "500" },
+  tbLabel: { fontSize: 10, color: C.ink2, marginTop: 2, fontWeight: "500" },
   badge: {
     position: "absolute",
     top: -4,
     right: -8,
-    backgroundColor: "#EF4444",
+    backgroundColor: C.danger,
     minWidth: 16,
     height: 16,
     borderRadius: 8,
@@ -3035,7 +3036,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  badgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
+  badgeText: { color: C.surface, fontSize: 10, fontWeight: "700" },
   staffChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -3043,9 +3044,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 20,
-    backgroundColor: "#E5F7ED",
+    backgroundColor: C.brandTint,
   },
-  staffText: { fontSize: 12, color: "#00B14F", fontWeight: "600" },
+  staffText: { fontSize: 12, color: C.brand, fontWeight: "600" },
   branchChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -3054,11 +3055,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderColor: C.line,
+    backgroundColor: C.surface,
     maxWidth: 200,
   },
-  branchChipText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
+  branchChipText: { fontSize: 12, color: C.ink, fontWeight: "600" },
   mobileTopRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3074,11 +3075,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderColor: C.line,
+    backgroundColor: C.surface,
     maxWidth: 130,
   },
-  branchChipMobileText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
+  branchChipMobileText: { fontSize: 12, color: C.ink, fontWeight: "600" },
   adminBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -3087,9 +3088,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
   },
-  adminBtnText: { fontSize: 12, fontWeight: "700", color: "#00B14F" },
+  adminBtnText: { fontSize: 12, fontWeight: "700", color: C.brand },
   logoutBtn: { padding: 8 },
 
   // Main
@@ -3104,19 +3105,19 @@ const styles = StyleSheet.create({
     margin: 12,
     marginBottom: 0,
     height: 44,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
   },
 
   // Horizontal category strip (mobile)
   catStrip: {
     maxHeight: 58,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
     marginTop: 12,
     paddingVertical: 10,
     flexGrow: 0,
@@ -3125,13 +3126,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
   },
-  catChipActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  catChipText: { fontSize: 13, fontWeight: "600", color: "#475569" },
-  catChipTextActive: { color: "#FFFFFF" },
+  catChipActive: { backgroundColor: C.brand, borderColor: C.brand },
+  catChipText: { fontSize: 13, fontWeight: "600", color: C.ink2 },
+  catChipTextActive: { color: C.surface },
 
   // FAB cart (mobile)
   fabCart: {
@@ -3141,7 +3142,7 @@ const styles = StyleSheet.create({
     bottom: 12,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -3159,23 +3160,23 @@ const styles = StyleSheet.create({
     minWidth: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     paddingHorizontal: 6,
     alignItems: "center",
     justifyContent: "center",
   },
-  fabBadgeText: { color: "#00B14F", fontSize: 11, fontWeight: "700" },
+  fabBadgeText: { color: C.brand, fontSize: 11, fontWeight: "700" },
   fabMid: { flex: 1 },
   fabTotalLabel: { color: "rgba(255,255,255,0.8)", fontSize: 10, fontWeight: "600" },
-  fabTotal: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  fabTotal: { color: C.surface, fontSize: 18, fontWeight: "700" },
   fabRight: { flexDirection: "row", alignItems: "center", gap: 4 },
-  fabView: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
+  fabView: { color: C.surface, fontSize: 13, fontWeight: "700" },
 
   // Mobile cart bottom sheet
-  cartSheetOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "flex-end" },
+  cartSheetOverlay: { flex: 1, backgroundColor: C.scrim, justifyContent: "flex-end" },
   cartSheet: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 10,
@@ -3185,7 +3186,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#CBD5E1",
+    backgroundColor: C.lineStrong,
     alignSelf: "center",
     marginBottom: 8,
   },
@@ -3196,9 +3197,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
+    borderBottomColor: C.bg,
   },
-  cartSheetTitle: { fontSize: 17, fontWeight: "700", color: "#0F172A" },
+  cartSheetTitle: { fontSize: 17, fontWeight: "700", color: C.ink },
   mobileDiscBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -3209,16 +3210,16 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
   },
-  mobileDiscText: { color: "#00B14F", fontSize: 13, fontWeight: "600" },
+  mobileDiscText: { color: C.brand, fontSize: 13, fontWeight: "600" },
 
   // Left rail
   leftRail: {
     width: 112,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRightWidth: 1,
-    borderRightColor: "#E2E8F0",
+    borderRightColor: C.line,
     paddingVertical: 6,
   },
   catPill: {
@@ -3227,26 +3228,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 14,
     borderRadius: 10,
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     alignItems: "center",
     justifyContent: "center",
     minHeight: 64,
   },
   catPillActive: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderWidth: 2,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
   },
-  catText: { fontSize: 11, fontWeight: "700", color: "#FFFFFF", textAlign: "center" },
-  catTextActive: { color: "#00B14F" },
-  catSub: { fontSize: 9, color: "#E5F7ED", marginTop: 2, textAlign: "center" },
-  catSubActive: { color: "#00B14F" },
+  catText: { fontSize: 11, fontWeight: "700", color: C.surface, textAlign: "center" },
+  catTextActive: { color: C.brand },
+  catSub: { fontSize: 9, color: C.brandTint, marginTop: 2, textAlign: "center" },
+  catSubActive: { color: C.brand },
 
   // Center
   center: { flex: 1 },
   productCard: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 14,
     overflow: "hidden",
     maxWidth: "24%",
@@ -3256,30 +3257,30 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  productImg: { width: "100%", height: 110, backgroundColor: "#F1F5F9" },
+  productImg: { width: "100%", height: 110, backgroundColor: C.bg },
   productInfo: { padding: 10 },
-  productName: { fontSize: 13, fontWeight: "600", color: "#0F172A", minHeight: 34 },
-  productPrice: { fontSize: 15, fontWeight: "700", color: "#00B14F", marginTop: 4 },
+  productName: { fontSize: 13, fontWeight: "600", color: C.ink, minHeight: 34 },
+  productPrice: { fontSize: 15, fontWeight: "700", color: C.brand, marginTop: 4 },
   scanBar: {
     height: 44,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
   },
-  scanText: { fontSize: 13, color: "#475569", fontWeight: "500" },
+  scanText: { fontSize: 13, color: C.ink2, fontWeight: "500" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 10 },
-  emptyText: { color: "#94A3B8", fontSize: 14 },
+  emptyText: { color: C.ink3, fontSize: 14 },
 
   // Right cart
   rightCart: {
     width: 320,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderLeftWidth: 1,
-    borderLeftColor: "#E2E8F0",
+    borderLeftColor: C.line,
     padding: 14,
     flexDirection: "column",
   },
@@ -3297,14 +3298,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
   },
-  tableText: { fontSize: 11, fontWeight: "600", color: "#0F172A" },
+  tableText: { fontSize: 11, fontWeight: "600", color: C.ink },
   custChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#E5F7ED",
+    backgroundColor: C.brandTint,
     paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: 10,
@@ -3316,20 +3317,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  custInitial: { color: "#FFFFFF", fontWeight: "700", fontSize: 11 },
-  custName: { flex: 1, fontSize: 12, fontWeight: "600", color: "#0F172A" },
+  custInitial: { color: C.surface, fontWeight: "700", fontSize: 11 },
+  custName: { flex: 1, fontSize: 12, fontWeight: "600", color: C.ink },
 
   totalBox: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     paddingVertical: 14,
     marginBottom: 10,
   },
   sumTotalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
-  totalLabel: { fontSize: 13, color: "#475569", fontWeight: "500" },
-  subTotalVal: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
+  totalLabel: { fontSize: 13, color: C.ink2, fontWeight: "500" },
+  subTotalVal: { fontSize: 14, color: C.ink, fontWeight: "600" },
   discRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
-  discLabel: { fontSize: 11, color: "#EF4444" },
-  discVal: { fontSize: 12, color: "#EF4444", fontWeight: "600" },
+  discLabel: { fontSize: 11, color: C.danger },
+  discVal: { fontSize: 12, color: C.danger, fontWeight: "600" },
   totalRow: {
     flexDirection: "row",
     alignItems: "baseline",
@@ -3337,26 +3338,26 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
   },
-  thbText: { fontSize: 14, color: "#94A3B8", fontWeight: "600" },
-  totalVal: { fontSize: 36, fontWeight: "300", color: "#0F172A", letterSpacing: -1 },
+  thbText: { fontSize: 14, color: C.ink3, fontWeight: "600" },
+  totalVal: { fontSize: 36, fontWeight: "300", color: C.ink, letterSpacing: -1 },
   payBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     height: 56,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  payBtnDisabled: { backgroundColor: "#CBD5E1" },
-  payBtnText: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  payBtnDisabled: { backgroundColor: C.lineStrong },
+  payBtnText: { color: C.surface, fontSize: 18, fontWeight: "700" },
   cartListHeader: {
     flexDirection: "row",
     justifyContent: "flex-end",
     marginBottom: 8,
   },
-  cartListCount: { fontSize: 11, color: "#94A3B8" },
+  cartListCount: { fontSize: 11, color: C.ink3 },
   cartFooterRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3364,14 +3365,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 6,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
     marginTop: 6,
   },
   footerTrash: {
     width: 34,
     height: 34,
     borderRadius: 8,
-    backgroundColor: "#FEE2E2",
+    backgroundColor: C.dangerTint,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3381,15 +3382,15 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
+    borderBottomColor: C.bg,
   },
-  cartItemName: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
-  cartItemPrice: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  cartItemName: { fontSize: 12, color: C.ink, fontWeight: "600" },
+  cartItemPrice: { fontSize: 11, color: C.ink3, marginTop: 2 },
   qtyCtrl: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 8,
     padding: 2,
   },
@@ -3397,8 +3398,8 @@ const styles = StyleSheet.create({
   qtyText: { fontSize: 13, fontWeight: "700", minWidth: 18, textAlign: "center" },
   trashBtn: { padding: 4 },
   emptyCart: { alignItems: "center", paddingVertical: 40, gap: 6 },
-  emptyCartText: { fontSize: 13, color: "#94A3B8", fontWeight: "600" },
-  emptyCartSub: { fontSize: 11, color: "#CBD5E1" },
+  emptyCartText: { fontSize: 13, color: C.ink3, fontWeight: "600" },
+  emptyCartSub: { fontSize: 11, color: C.lineStrong },
   clearBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -3407,12 +3408,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 8,
   },
-  clearBtnText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
+  clearBtnText: { color: C.danger, fontSize: 12, fontWeight: "600" },
 
   // Generic modal
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.45)",
+    backgroundColor: C.scrim,
     alignItems: "center",
     justifyContent: "center",
     padding: 20,
@@ -3423,12 +3424,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
-  modalTitle: { fontSize: 17, fontWeight: "700", color: "#0F172A", flex: 1, textAlign: "center", marginHorizontal: 8 },
+  modalTitle: { fontSize: 17, fontWeight: "700", color: C.ink, flex: 1, textAlign: "center", marginHorizontal: 8 },
 
   // Cart item edit modal (per-line qty + discount)
-  itemModal: { width: "100%", maxWidth: 440, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden" },
+  itemModal: { width: "100%", maxWidth: 440, backgroundColor: C.surface, borderRadius: 16, overflow: "hidden" },
   itemRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3436,25 +3437,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
+    borderBottomColor: C.bg,
   },
-  itemRowLabel: { fontSize: 15, color: "#0F172A", fontWeight: "600" },
+  itemRowLabel: { fontSize: 15, color: C.ink, fontWeight: "600" },
   itemStepper: { flexDirection: "row", alignItems: "center", gap: 18 },
   itemStepBtn: {
     width: 38,
     height: 38,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     alignItems: "center",
     justifyContent: "center",
   },
-  itemStepVal: { fontSize: 18, fontWeight: "700", minWidth: 28, textAlign: "center", color: "#0F172A" },
+  itemStepVal: { fontSize: 18, fontWeight: "700", minWidth: 28, textAlign: "center", color: C.ink },
   itemDiscControls: { flexDirection: "row", alignItems: "center", gap: 10 },
   discModeToggle: {
     flexDirection: "row",
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 10,
     overflow: "hidden",
   },
@@ -3463,21 +3464,21 @@ const styles = StyleSheet.create({
     height: 38,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
   },
-  discModeBtnActive: { backgroundColor: "#00B14F" },
-  discModeText: { fontSize: 16, fontWeight: "700", color: "#64748B" },
-  discModeTextActive: { color: "#FFFFFF" },
+  discModeBtnActive: { backgroundColor: C.brand },
+  discModeText: { fontSize: 16, fontWeight: "700", color: C.ink2Soft },
+  discModeTextActive: { color: C.surface },
   itemDiscInput: {
     minWidth: 90,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 16,
     fontWeight: "700",
-    color: "#EF4444",
+    color: C.danger,
     textAlign: "right",
   },
   itemDiscSummaryRow: {
@@ -3486,7 +3487,7 @@ const styles = StyleSheet.create({
     marginTop: -4,
     alignItems: "flex-end",
   },
-  itemDiscSummaryText: { fontSize: 13, fontWeight: "700", color: "#EF4444" },
+  itemDiscSummaryText: { fontSize: 13, fontWeight: "700", color: C.danger },
   itemTotalRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3494,15 +3495,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  itemTotalVal: { fontSize: 18, fontWeight: "800", color: "#00B14F" },
-  cartItemDisc: { fontSize: 11, color: "#EF4444", marginTop: 2, fontWeight: "600" },
+  itemTotalVal: { fontSize: 18, fontWeight: "800", color: C.brand },
+  cartItemDisc: { fontSize: 11, color: C.danger, marginTop: 2, fontWeight: "600" },
 
   // Payment modal
   paymentModal: {
     width: "92%",
     maxWidth: 1000,
     height: "88%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 20,
     overflow: "hidden",
   },
@@ -3518,28 +3519,28 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     alignItems: "center",
     gap: 6,
     minWidth: 100,
     flexGrow: 1,
     flexBasis: 100,
   },
-  methodBtnActive: { borderColor: "#00B14F", backgroundColor: "#E5F7ED" },
-  methodText: { fontSize: 12, fontWeight: "600", color: "#475569" },
-  methodTextActive: { color: "#00B14F" },
+  methodBtnActive: { borderColor: C.brand, backgroundColor: C.brandTint },
+  methodText: { fontSize: 12, fontWeight: "600", color: C.ink2 },
+  methodTextActive: { color: C.brand },
 
   padCol: { flex: 1, gap: 10 },
   amountDisplay: {
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 12,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  thbSmall: { fontSize: 14, color: "#94A3B8", fontWeight: "600" },
-  amountText: { fontSize: 32, fontWeight: "700", color: "#0F172A" },
+  thbSmall: { fontSize: 14, color: C.ink3, fontWeight: "600" },
+  amountText: { fontSize: 32, fontWeight: "700", color: C.ink },
 
   // Numpad + quick amounts side-by-side layout
   padWithQuicks: {
@@ -3561,12 +3562,12 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     maxWidth: "33.33%",
     paddingVertical: 14,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  padText: { fontSize: 24, fontWeight: "600", color: "#0F172A" },
+  padText: { fontSize: 24, fontWeight: "600", color: C.ink },
 
   // Bottom row: Clear + Backspace side-by-side
   padBottomRow: {
@@ -3575,7 +3576,7 @@ const styles = StyleSheet.create({
   },
   clearPadBtnHalf: {
     flex: 1,
-    backgroundColor: "#FEF0D9",
+    backgroundColor: C.warnTint,
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: "center",
@@ -3583,19 +3584,19 @@ const styles = StyleSheet.create({
   },
   backspacePadBtn: {
     flex: 1,
-    backgroundColor: "#FEE2E2",
+    backgroundColor: C.dangerTint,
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
   },
   clearPadBtn: {
-    backgroundColor: "#FEF3C7",
+    backgroundColor: C.warnTint,
     padding: 12,
     borderRadius: 12,
     alignItems: "center",
   },
-  clearPadText: { fontSize: 16, fontWeight: "700", color: "#D97706" },
+  clearPadText: { fontSize: 16, fontWeight: "700", color: C.warnDark },
 
   // Quick amounts as a vertical column beside numpad
   quickColInline: {
@@ -3604,13 +3605,13 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
   },
   quickBtnInline: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 12,
   },
-  quickTextInline: { fontSize: 14, fontWeight: "700", color: "#00B14F" },
+  quickTextInline: { fontSize: 14, fontWeight: "700", color: C.brand },
   // Quick-amount chips shown horizontally above the keypad on phone, so the
   // numpad gets the full width instead of fighting with a side column.
   quickRowMobile: {
@@ -3619,38 +3620,38 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   quickChipMobile: {
-    backgroundColor: "#E5F7ED",
+    backgroundColor: C.brandTint,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
   },
-  quickChipMobileText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
+  quickChipMobileText: { fontSize: 13, fontWeight: "700", color: C.brand },
 
   quickCol: { width: 168, minWidth: 168, gap: 12 },
   netBox: {
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 12,
     padding: 12,
     alignItems: "center",
   },
-  netLabel: { fontSize: 11, color: "#475569", fontWeight: "600" },
-  netHint: { fontSize: 9, color: "#94A3B8", marginTop: 2 },
-  netVal: { fontSize: 16, color: "#00B14F", fontWeight: "700", marginTop: 6 },
+  netLabel: { fontSize: 11, color: C.ink2, fontWeight: "600" },
+  netHint: { fontSize: 9, color: C.ink3, marginTop: 2 },
+  netVal: { fontSize: 16, color: C.brand, fontWeight: "700", marginTop: 6 },
   quickBtn: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     borderRadius: 10,
     padding: 14,
     alignItems: "center",
   },
-  quickText: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  quickText: { fontSize: 16, fontWeight: "700", color: C.ink },
 
   // QR pane (Thai QR / KBank)
   qrPane: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     padding: 16,
     alignItems: "center",
     gap: 10,
@@ -3663,56 +3664,56 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     alignItems: "center",
   },
-  qrHeaderText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  qrHeaderText: { color: C.surface, fontSize: 16, fontWeight: "700" },
   qrBrandRow: { flexDirection: "row", gap: 10, flexWrap: "wrap", justifyContent: "center" },
   brandPill: {
     paddingHorizontal: 10,
     paddingVertical: 4,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 4,
     fontSize: 11,
-    color: "#475569",
+    color: C.ink2,
     fontWeight: "700",
   },
-  qrHint: { fontSize: 11, color: "#475569", textAlign: "center" },
-  qrBy: { fontSize: 11, color: "#94A3B8" },
+  qrHint: { fontSize: 11, color: C.ink2, textAlign: "center" },
+  qrBy: { fontSize: 11, color: C.ink3 },
   qrBox: {
     width: 160,
     height: 160,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderWidth: 2,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
     borderRadius: 10,
   },
-  qrAmount: { fontSize: 22, fontWeight: "700", color: "#00B14F" },
+  qrAmount: { fontSize: 22, fontWeight: "700", color: C.brand },
   qrInstructBox: {
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     padding: 10,
     borderRadius: 8,
     flexDirection: "row",
     gap: 6,
     alignItems: "flex-start",
   },
-  qrInstructText: { flex: 1, fontSize: 11, color: "#475569" },
+  qrInstructText: { flex: 1, fontSize: 11, color: C.ink2 },
 
   // Custom pane
   customPane: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     padding: 14,
     gap: 12,
   },
   customRef: {
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
     paddingVertical: 10,
     fontSize: 14,
-    color: "#0F172A",
+    color: C.ink,
     ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
   },
   customAmountRow: {
@@ -3720,10 +3721,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
-  customAmountLabel: { fontSize: 14, color: "#475569" },
-  customAmountVal: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  customAmountLabel: { fontSize: 14, color: C.ink2 },
+  customAmountVal: { fontSize: 16, fontWeight: "700", color: C.ink },
   customGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -3739,64 +3740,64 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
   },
-  customOptionActive: { borderColor: "#00B14F", backgroundColor: "#E5F7ED" },
+  customOptionActive: { borderColor: C.brand, backgroundColor: C.brandTint },
   radio: {
     width: 18,
     height: 18,
     borderRadius: 9,
     borderWidth: 2,
-    borderColor: "#CBD5E1",
+    borderColor: C.lineStrong,
     alignItems: "center",
     justifyContent: "center",
   },
-  radioActive: { borderColor: "#00B14F" },
+  radioActive: { borderColor: C.brand },
   radioInner: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
   },
-  customOptionText: { flex: 1, fontSize: 12, color: "#0F172A", fontWeight: "500" },
+  customOptionText: { flex: 1, fontSize: 12, color: C.ink, fontWeight: "500" },
 
   // Credit pane
   creditPane: { padding: 16, gap: 14 },
   creditAmtRow: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: 16, paddingVertical: 14,
-    backgroundColor: "#F1F5F9", borderRadius: 12,
+    backgroundColor: C.bg, borderRadius: 12,
   },
-  creditAmtLabel: { fontSize: 14, color: "#475569", fontWeight: "600" },
-  creditAmtVal: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
+  creditAmtLabel: { fontSize: 14, color: C.ink2, fontWeight: "600" },
+  creditAmtVal: { fontSize: 22, fontWeight: "700", color: C.ink },
   creditInput: {
     height: 46, paddingHorizontal: 14,
-    backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E2E8F0",
-    borderRadius: 10, fontSize: 14, color: "#0F172A",
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
+    borderRadius: 10, fontSize: 14, color: C.ink,
   },
   creditDivider: {
-    fontSize: 12, fontWeight: "600", color: "#475569",
+    fontSize: 12, fontWeight: "600", color: C.ink2,
     textAlign: "center", marginVertical: 4,
   },
   creditGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   creditOption: {
     flexDirection: "row", alignItems: "center",
     paddingHorizontal: 12, paddingVertical: 12,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
     width: "48%",
     gap: 4,
   },
-  creditOptionActive: { borderColor: "#00B14F", backgroundColor: "#F0FDF4" },
-  creditOptionText: { fontSize: 13, color: "#0F172A", fontWeight: "600" },
+  creditOptionActive: { borderColor: C.brand, backgroundColor: C.brandTintSoft },
+  creditOptionText: { fontSize: 13, color: C.ink, fontWeight: "600" },
   bankBadge: {
     width: 24, height: 24, borderRadius: 6, marginRight: 6,
     alignItems: "center", justifyContent: "center",
   },
-  bankBadgeText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
-  bankSubText: { fontSize: 10, color: "#94A3B8", fontWeight: "600" },
+  bankBadgeText: { color: C.surface, fontSize: 12, fontWeight: "700" },
+  bankSubText: { fontSize: 10, color: C.ink3, fontWeight: "600" },
   summaryBox: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     padding: 12,
     borderRadius: 10,
     alignItems: "center",
@@ -3805,19 +3806,19 @@ const styles = StyleSheet.create({
   summaryVal: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#0F172A",
+    color: C.ink,
     marginTop: 4,
   },
 
   // Payment right panel v2 (matching screenshot)
   netBoxV2: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 16,
     padding: 14,
     gap: 14,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
   },
   rightPanelTop: {
     flex: 1,
@@ -3832,27 +3833,27 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
+    borderBottomColor: C.bg,
   },
-  guestText: { fontSize: 13, color: "#475569", fontWeight: "600" },
+  guestText: { fontSize: 13, color: C.ink2, fontWeight: "600" },
   netRowV2: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  netLabelV2: { fontSize: 13, color: "#475569", fontWeight: "600" },
-  netValV2: { fontSize: 18, color: "#0F172A", fontWeight: "700" },
+  netLabelV2: { fontSize: 13, color: C.ink2, fontWeight: "600" },
+  netValV2: { fontSize: 18, color: C.ink, fontWeight: "700" },
   tapEqualRow: {
     flexDirection: "column",
     alignItems: "flex-start",
     gap: 2,
-    backgroundColor: "#F0FDF4",
+    backgroundColor: C.brandTintSoft,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: "#BBF7D0",
+    borderColor: C.okBorder,
   },
-  tapEqualLabel: { fontSize: 12, color: "#00B14F", fontWeight: "600" },
-  tapEqualVal: { fontSize: 18, color: "#EF4444", fontWeight: "700" },
+  tapEqualLabel: { fontSize: 12, color: C.brand, fontWeight: "600" },
+  tapEqualVal: { fontSize: 18, color: C.danger, fontWeight: "700" },
   payConfirmBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingVertical: 15,
     paddingHorizontal: 14,
     borderRadius: 12,
@@ -3860,10 +3861,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 52,
   },
-  payConfirmText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  payConfirmText: { color: C.surface, fontSize: 15, fontWeight: "700" },
   itemCountText: {
     fontSize: 11,
-    color: "#64748B",
+    color: C.ink2Soft,
     textAlign: "center",
     marginTop: 2,
     lineHeight: 16,
@@ -3871,19 +3872,19 @@ const styles = StyleSheet.create({
   summaryCard: {
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
+    borderTopColor: C.bg,
     gap: 4,
   },
-  summaryLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
-  summaryValue: { fontSize: 20, color: "#0F172A", fontWeight: "700" },
+  summaryLabel: { fontSize: 12, color: C.ink2Soft, fontWeight: "600" },
+  summaryValue: { fontSize: 20, color: C.ink, fontWeight: "700" },
 
   // EDC marketing pane
   edcPane: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     padding: 24,
     alignItems: "center",
     gap: 14,
@@ -3897,25 +3898,25 @@ const styles = StyleSheet.create({
   edcTitle: {
     fontSize: 17,
     fontWeight: "700",
-    color: "#0F172A",
+    color: C.ink,
     textAlign: "center",
     lineHeight: 24,
   },
   edcBody: {
     fontSize: 13,
-    color: "#475569",
+    color: C.ink2,
     textAlign: "center",
     lineHeight: 20,
   },
-  edcBy: { fontSize: 12, color: "#94A3B8" },
+  edcBy: { fontSize: 12, color: C.ink3 },
   edcRegister: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingVertical: 14,
     paddingHorizontal: 40,
     borderRadius: 10,
     marginTop: 8,
   },
-  edcRegisterText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  edcRegisterText: { color: C.surface, fontSize: 15, fontWeight: "700" },
 
   paymentFooter: {
     flexDirection: "row",
@@ -3923,14 +3924,14 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 16,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
   },
   changeBox: { flex: 1 },
-  changeLabel: { fontSize: 11, color: "#94A3B8" },
-  changeVal: { fontSize: 20, fontWeight: "700", color: "#0F172A" },
+  changeLabel: { fontSize: 11, color: C.ink3 },
+  changeVal: { fontSize: 20, fontWeight: "700", color: C.ink },
   confirmBtn: {
     flex: 1,
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingVertical: 16,
     borderRadius: 12,
     flexDirection: "row",
@@ -3938,13 +3939,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
   },
-  confirmText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  confirmText: { color: C.surface, fontSize: 16, fontWeight: "700" },
 
   // Discount modal
   discountModal: {
     width: "92%",
     maxWidth: 520,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 20,
     padding: 4,
     overflow: "hidden",
@@ -3952,22 +3953,22 @@ const styles = StyleSheet.create({
   toggleRow: {
     flexDirection: "row",
     margin: 16,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 10,
     padding: 4,
   },
   toggleBtn: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: 8 },
-  toggleBtnActive: { backgroundColor: "#FFFFFF" },
-  toggleText: { fontSize: 13, fontWeight: "600", color: "#94A3B8" },
-  toggleTextActive: { color: "#0F172A" },
+  toggleBtnActive: { backgroundColor: C.surface },
+  toggleText: { fontSize: 13, fontWeight: "600", color: C.ink3 },
+  toggleTextActive: { color: C.ink },
   discountInput: {
     marginHorizontal: 16,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     padding: 20,
     borderRadius: 12,
     alignItems: "center",
   },
-  discountInputText: { fontSize: 32, fontWeight: "700", color: "#00B14F" },
+  discountInputText: { fontSize: 32, fontWeight: "700", color: C.brand },
   quickRow: {
     flexDirection: "row",
     justifyContent: "space-around",
@@ -3979,11 +3980,11 @@ const styles = StyleSheet.create({
     height: 64,
     borderRadius: 32,
     borderWidth: 2,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
     alignItems: "center",
     justifyContent: "center",
   },
-  quickPctText: { fontSize: 16, fontWeight: "700", color: "#00B14F" },
+  quickPctText: { fontSize: 16, fontWeight: "700", color: C.brand },
   scanBarBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -3991,9 +3992,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
   },
-  scanBarText: { fontSize: 10, color: "#475569", fontWeight: "600" },
+  scanBarText: { fontSize: 10, color: C.ink2, fontWeight: "600" },
   discPad: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -4006,37 +4007,37 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  discKeyText: { fontSize: 26, fontWeight: "500", color: "#00B14F" },
+  discKeyText: { fontSize: 26, fontWeight: "500", color: C.brand },
   doneBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     padding: 16,
     alignItems: "center",
     margin: 16,
     borderRadius: 12,
   },
-  doneBtnText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  doneBtnText: { color: C.surface, fontSize: 16, fontWeight: "700" },
 
   // Customer modal
   customerModal: {
     width: "92%",
     maxWidth: 560,
     height: "80%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 20,
     overflow: "hidden",
   },
-  cancelText: { color: "#EF4444", fontSize: 14, fontWeight: "600" },
+  cancelText: { color: C.danger, fontSize: 14, fontWeight: "600" },
   searchBox: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     margin: 16,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 10,
     paddingHorizontal: 12,
     height: 40,
   },
-  searchInput2: { flex: 1, fontSize: 14, color: "#0F172A", ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
+  searchInput2: { flex: 1, fontSize: 14, color: C.ink, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   custRow: { flexDirection: "row", gap: 12, alignItems: "center", padding: 16 },
   custAvatar: {
     width: 48,
@@ -4045,32 +4046,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  custAvatarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 18 },
-  custRowName: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
-  custRowPhone: { fontSize: 12, color: "#475569", marginTop: 2 },
-  custRowLast: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
-  sep: { height: 1, backgroundColor: "#F1F5F9", marginLeft: 76 },
+  custAvatarText: { color: C.surface, fontWeight: "700", fontSize: 18 },
+  custRowName: { fontSize: 14, fontWeight: "600", color: C.ink },
+  custRowPhone: { fontSize: 12, color: C.ink2, marginTop: 2 },
+  custRowLast: { fontSize: 11, color: C.ink3, marginTop: 2 },
+  sep: { height: 1, backgroundColor: C.bg, marginLeft: 76 },
   textInput: {
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 10,
     padding: 14,
     fontSize: 14,
-    color: "#0F172A",
+    color: C.ink,
   },
   saveCustBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     padding: 14,
     borderRadius: 10,
     alignItems: "center",
   },
-  saveCustText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  saveCustText: { color: C.surface, fontSize: 15, fontWeight: "700" },
 
   // Order Hub
   orderHub: {
     width: "96%",
     height: "92%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 20,
     overflow: "hidden",
   },
@@ -4079,7 +4080,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
     paddingBottom: 10,
   },
   delToggle: {
@@ -4087,49 +4088,49 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
   delDot: { width: 10, height: 10, borderRadius: 5 },
-  delText: { fontSize: 11, color: "#475569", fontWeight: "600" },
+  delText: { fontSize: 11, color: C.ink2, fontWeight: "600" },
   delMenu: {
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  delMenuText: { fontSize: 11, color: "#475569", fontWeight: "600" },
+  delMenuText: { fontSize: 11, color: C.ink2, fontWeight: "600" },
   hubTabs: {
     flexDirection: "row",
     marginHorizontal: 16,
     marginTop: 14,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 10,
     padding: 4,
   },
   hubTab: { flex: 1, paddingVertical: 10, alignItems: "center", borderRadius: 8 },
-  hubTabActive: { backgroundColor: "#FFFFFF" },
-  hubTabText: { fontSize: 13, color: "#94A3B8", fontWeight: "600" },
-  hubTabTextActive: { color: "#0F172A" },
+  hubTabActive: { backgroundColor: C.surface },
+  hubTabText: { fontSize: 13, color: C.ink3, fontWeight: "600" },
+  hubTabTextActive: { color: C.ink },
   hubSearch: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     margin: 16,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 10,
     padding: 12,
   },
-  hubSearchText: { fontSize: 13, color: "#94A3B8" },
+  hubSearchText: { fontSize: 13, color: C.ink3 },
   kanban: { flex: 1, flexDirection: "row", paddingHorizontal: 12, paddingBottom: 16, gap: 10 },
   kanbanNarrow: { flex: 0, flexDirection: "column" },
-  kanCol: { flex: 1, backgroundColor: "#F8FAFC", borderRadius: 12, padding: 10 },
+  kanCol: { flex: 1, backgroundColor: C.bgSoft, borderRadius: 12, padding: 10 },
   kanColNarrow: { flex: 0, width: "100%" },
   kanHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
-  kanTitle: { flex: 1, fontSize: 13, fontWeight: "700", color: "#0F172A" },
+  kanTitle: { flex: 1, fontSize: 13, fontWeight: "700", color: C.ink },
   kanCount: {
     minWidth: 22,
     height: 22,
@@ -4138,14 +4139,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 6,
   },
-  kanCountText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
+  kanCountText: { color: C.surface, fontSize: 11, fontWeight: "700" },
   orderCard: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 10,
     padding: 10,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
   },
   delBadge: {
     alignSelf: "flex-start",
@@ -4157,23 +4158,23 @@ const styles = StyleSheet.create({
   delBadgeText: { fontSize: 9, fontWeight: "700", letterSpacing: 0.5 },
   orderRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   grabPill: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
   },
-  grabText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
-  orderNum: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
+  grabText: { color: C.surface, fontSize: 10, fontWeight: "700" },
+  orderNum: { fontSize: 14, fontWeight: "700", color: C.ink },
   orderMeta: { flexDirection: "row", gap: 12, marginTop: 8 },
   metaItem: { flexDirection: "row", alignItems: "center", gap: 3 },
-  metaText: { fontSize: 11, color: "#475569" },
+  metaText: { fontSize: 11, color: C.ink2 },
 
   // Parked
   parkedModal: {
     width: "92%",
     maxWidth: 560,
     height: "70%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 20,
     overflow: "hidden",
   },
@@ -4183,36 +4184,36 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 14,
     margin: 16,
-    backgroundColor: "#E5F7ED",
+    backgroundColor: C.brandTint,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: "#00B14F",
+    borderColor: C.brand,
     borderStyle: "dashed",
   },
-  parkBtnText: { color: "#00B14F", fontSize: 14, fontWeight: "700" },
+  parkBtnText: { color: C.brand, fontSize: 14, fontWeight: "700" },
   parkRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     padding: 14,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     borderRadius: 12,
   },
-  parkLabel: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
-  parkSub: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  parkLabel: { fontSize: 14, fontWeight: "700", color: C.ink },
+  parkSub: { fontSize: 11, color: C.ink3, marginTop: 2 },
   retrieveBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 8,
   },
-  retrieveBtnText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
+  retrieveBtnText: { color: C.surface, fontSize: 12, fontWeight: "700" },
 
   // Success
   successModal: {
     width: "92%",
     maxWidth: 440,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRadius: 24,
     padding: 28,
     alignItems: "center",
@@ -4221,28 +4222,28 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
   },
-  successTitle: { fontSize: 20, fontWeight: "700", color: "#0F172A" },
-  successOrder: { fontSize: 14, color: "#94A3B8", marginTop: 4, marginBottom: 20 },
+  successTitle: { fontSize: 20, fontWeight: "700", color: C.ink },
+  successOrder: { fontSize: 14, color: C.ink3, marginTop: 4, marginBottom: 20 },
   successRow: {
     width: "100%",
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
+    borderBottomColor: C.bg,
   },
-  successLabel: { fontSize: 13, color: "#475569" },
-  successVal: { fontSize: 13, color: "#0F172A", fontWeight: "600" },
+  successLabel: { fontSize: 13, color: C.ink2 },
+  successVal: { fontSize: 13, color: C.ink, fontWeight: "600" },
   changeRow: { borderBottomWidth: 0, marginTop: 8, paddingTop: 12 },
-  changeRowLabel: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
-  changeRowVal: { fontSize: 18, color: "#00B14F", fontWeight: "700" },
+  changeRowLabel: { fontSize: 14, color: C.ink, fontWeight: "700" },
+  changeRowVal: { fontSize: 18, color: C.brand, fontWeight: "700" },
   successBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 12,
@@ -4250,7 +4251,7 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
   },
-  successBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  successBtnText: { color: C.surface, fontSize: 15, fontWeight: "700" },
 
   // Print status pill shown inside SuccessModal — tells the cashier
   // whether the local printer actually printed the receipt or whether
@@ -4266,88 +4267,88 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderWidth: 1,
   },
-  printPillNeutral: { backgroundColor: "#F1F5F9", borderColor: "#E2E8F0" },
-  printPillOk: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
-  printPillWarn: { backgroundColor: "#FEF3C7", borderColor: "#FCD34D" },
-  printPillText: { fontSize: 13, color: "#475569", fontWeight: "600" },
-  printPillSub: { fontSize: 11, color: "#92400E", marginTop: 2 },
+  printPillNeutral: { backgroundColor: C.bg, borderColor: C.line },
+  printPillOk: { backgroundColor: C.okTint, borderColor: C.okBorder },
+  printPillWarn: { backgroundColor: C.warnTint, borderColor: "#FCD34D" },
+  printPillText: { fontSize: 13, color: C.ink2, fontWeight: "600" },
+  printPillSub: { fontSize: 11, color: C.warnDark, marginTop: 2 },
 
   // Selling gate (no open shift)
   shiftGate: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(241,245,249,0.92)",
+    backgroundColor: "rgba(244,244,246,0.92)",
     alignItems: "center",
     justifyContent: "center",
     gap: 14,
   },
-  shiftGateText: { fontSize: 17, color: "#475569", fontWeight: "600" },
+  shiftGateText: { fontSize: 17, color: C.ink2, fontWeight: "600" },
   shiftGateBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingHorizontal: 40,
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
   },
-  shiftGateBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700", letterSpacing: 1 },
+  shiftGateBtnText: { color: C.surface, fontSize: 15, fontWeight: "700", letterSpacing: 1 },
   gateModalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.45)",
+    backgroundColor: C.scrim,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
   },
-  gateModal: { width: "100%", maxWidth: 380, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden" },
+  gateModal: { width: "100%", maxWidth: 380, backgroundColor: C.surface, borderRadius: 16, overflow: "hidden" },
   gateModalHead: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  gateModalTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
-  gateModalLabel: { fontSize: 13, color: "#475569", fontWeight: "500" },
+  gateModalTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  gateModalLabel: { fontSize: 13, color: C.ink2, fontWeight: "500" },
   gateModalInput: {
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 12, fontSize: 18, color: "#0F172A",
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 12, fontSize: 18, color: C.ink,
     ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
   },
 
   // Drawer
   drawerOverlay: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.45)",
+    backgroundColor: C.scrim,
     flexDirection: "row",
   },
   drawerPanel: {
     width: 360,
     height: "100%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     padding: 24,
   },
-  drawerTitle: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
-  drawerSub: { fontSize: 13, color: "#94A3B8", marginTop: 4, marginBottom: 20 },
+  drawerTitle: { fontSize: 22, fontWeight: "700", color: C.ink },
+  drawerSub: { fontSize: 13, color: C.ink3, marginTop: 4, marginBottom: 20 },
   drawerStats: { gap: 10 },
   statCard: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
     borderRadius: 12,
     padding: 14,
     borderLeftWidth: 4,
     gap: 4,
   },
-  statLabel: { fontSize: 11, color: "#94A3B8", fontWeight: "600" },
-  statValue: { fontSize: 18, color: "#0F172A", fontWeight: "700" },
-  drawerNote: { fontSize: 12, color: "#94A3B8", marginTop: 24, fontStyle: "italic" },
+  statLabel: { fontSize: 11, color: C.ink3, fontWeight: "600" },
+  statValue: { fontSize: 18, color: C.ink, fontWeight: "700" },
+  drawerNote: { fontSize: 12, color: C.ink3, marginTop: 24, fontStyle: "italic" },
   drawerClose: {
     ...MARGIN_TOP_AUTO,
     padding: 14,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     borderRadius: 12,
     alignItems: "center",
   },
-  drawerCloseText: { fontSize: 14, fontWeight: "600", color: "#475569" },
+  drawerCloseText: { fontSize: 14, fontWeight: "600", color: C.ink2 },
 
   // ---------- Easy Pay pane ----------
   easyPayPane: {
     flex: 1,
-    backgroundColor: "#F0FDF4",
+    backgroundColor: C.brandTintSoft,
     borderRadius: 16,
     padding: 20,
     alignItems: "center",
@@ -4356,13 +4357,13 @@ const styles = StyleSheet.create({
   easyPayThai: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#0F172A",
+    color: C.ink,
     textAlign: "center",
   },
   easyPayTitle: {
     fontSize: 30,
     fontWeight: "700",
-    color: "#00B14F",
+    color: C.brand,
     textAlign: "center",
   },
   easyPayBadges: {
@@ -4372,16 +4373,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   easyPayBadge: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
   },
-  easyPayBadgeText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  easyPayBadgeText: { color: C.surface, fontSize: 12, fontWeight: "600" },
   easyPayCard: {
     flexDirection: "row",
     gap: 16,
-    backgroundColor: "#fff",
+    backgroundColor: C.surface,
     borderRadius: 14,
     padding: 16,
     alignItems: "center",
@@ -4406,9 +4407,9 @@ const styles = StyleSheet.create({
     minWidth: 36,
     alignItems: "center",
   },
-  easyPayBrandText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  easyPayBrandText: { color: C.surface, fontSize: 10, fontWeight: "700" },
   easyPayRegister: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     paddingVertical: 14,
     paddingHorizontal: 40,
     borderRadius: 30,
@@ -4416,12 +4417,12 @@ const styles = StyleSheet.create({
     width: "70%",
     alignItems: "center",
   },
-  easyPayRegisterText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  easyPayRegisterText: { color: C.surface, fontSize: 16, fontWeight: "700" },
 
   // ---------- PromptPay pane ----------
   promptPayPane: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: C.surface,
     borderRadius: 16,
     overflow: "hidden",
     alignItems: "center",
@@ -4439,7 +4440,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   thaiQrTitle: {
-    color: "#fff",
+    color: C.surface,
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: 1,
@@ -4465,12 +4466,12 @@ const styles = StyleSheet.create({
   promptPayInvalid: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#EF4444",
+    color: C.danger,
     textAlign: "center",
   },
   promptPayHint: {
     fontSize: 13,
-    color: "#475569",
+    color: C.ink2,
     textAlign: "center",
     lineHeight: 20,
   },
@@ -4479,18 +4480,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: "#CBD5E1",
+    borderColor: C.lineStrong,
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 20,
     ...MARGIN_TOP_AUTO,
   },
-  printQrText: { fontSize: 14, color: "#475569", fontWeight: "600" },
+  printQrText: { fontSize: 14, color: C.ink2, fontWeight: "600" },
 
   // ---------- QR Kbank pane ----------
   qrKbankPane: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: C.surface,
     borderRadius: 16,
     overflow: "hidden",
     alignItems: "center",
@@ -4509,10 +4510,10 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 14,
   },
-  kbankBrandText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  kbankBrandText: { color: C.surface, fontSize: 12, fontWeight: "600" },
   kbankSupportText: {
     fontSize: 13,
-    color: "#475569",
+    color: C.ink2,
     textAlign: "center",
     paddingHorizontal: 12,
     lineHeight: 20,
@@ -4522,13 +4523,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  kbankByLabel: { fontSize: 13, color: "#475569" },
+  kbankByLabel: { fontSize: 13, color: C.ink2 },
   kbankLogoPill: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 10,
   },
-  kbankLogoText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  kbankLogoText: { color: C.surface, fontSize: 12, fontWeight: "700" },
   kbankIllustration: {
     width: 80,
     height: 80,
@@ -4536,14 +4537,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   kbankRegisterBtn: {
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
     width: "90%",
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
     ...MARGIN_TOP_AUTO,
   },
-  kbankRegisterText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  kbankRegisterText: { color: C.surface, fontSize: 15, fontWeight: "700" },
 
   // ---------- EDC pane additions ----------
   edcHeroRow: {
@@ -4570,13 +4571,13 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 2,
-    backgroundColor: "#00B14F",
+    backgroundColor: C.brand,
   },
   edcArrowLabel: {
-    backgroundColor: "#fff",
+    backgroundColor: C.surface,
     paddingHorizontal: 6,
     fontSize: 11,
-    color: "#00B14F",
+    color: C.brand,
     fontWeight: "600",
   },
   edcByRow: {
@@ -4591,20 +4592,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
     paddingVertical: 10,
     paddingHorizontal: 2,
     gap: 8,
   },
   customRefLabel: {
     fontSize: 14,
-    color: "#64748B",
+    color: C.ink2Soft,
     minWidth: 70,
   },
   customRefInput: {
     flex: 1,
     fontSize: 14,
-    color: "#0F172A",
+    color: C.ink,
     textAlign: "right",
     outlineStyle: "none" as any,
   },
@@ -4622,18 +4623,18 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
   beamLogoBox: {
     width: 44,
     height: 44,
     borderRadius: 10,
-    backgroundColor: "#E5F7ED",
+    backgroundColor: C.brandTint,
     alignItems: "center",
     justifyContent: "center",
   },
-  beamTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
-  beamSub: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  beamTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  beamSub: { fontSize: 12, color: C.ink2Soft, marginTop: 2 },
   beamIdleBox: {
     flex: 1,
     alignItems: "center",
@@ -4641,7 +4642,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 24,
   },
-  beamIdleText: { fontSize: 13, color: "#94A3B8", textAlign: "center" },
+  beamIdleText: { fontSize: 13, color: C.ink3, textAlign: "center" },
   beamQrBox: {
     flex: 1,
     alignItems: "center",
@@ -4654,53 +4655,53 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  beamWaitingText: { fontSize: 13, color: "#475569" },
+  beamWaitingText: { fontSize: 13, color: C.ink2 },
   beamAmount: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#0F172A",
+    color: C.ink,
     textAlign: "center",
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
   },
   beamRetryBtn: {
-    backgroundColor: "#EF4444",
+    backgroundColor: C.danger,
     paddingHorizontal: 24,
     paddingVertical: 10,
     borderRadius: 8,
     marginTop: 8,
   },
-  beamRetryText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  beamRetryText: { color: C.surface, fontWeight: "700", fontSize: 14 },
   beamCancelBtn: {
     borderWidth: 1,
-    borderColor: "#CBD5E1",
+    borderColor: C.lineStrong,
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 8,
     marginTop: 4,
   },
-  beamCancelText: { color: "#64748B", fontSize: 13 },
+  beamCancelText: { color: C.ink2Soft, fontSize: 13 },
 
   // Omise credit-card fee + VAT breakdown
   feeBreakdown: {
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
     gap: 4,
   },
   feeRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  feeLabel: { fontSize: 13, color: "#334155" },
-  feeVal: { fontSize: 13, color: "#334155", fontWeight: "600" },
-  feeLabelMuted: { fontSize: 12, color: "#94A3B8", paddingLeft: 10 },
-  feeValMuted: { fontSize: 12, color: "#94A3B8" },
+  feeLabel: { fontSize: 13, color: C.ink2 },
+  feeVal: { fontSize: 13, color: C.ink2, fontWeight: "600" },
+  feeLabelMuted: { fontSize: 12, color: C.ink3, paddingLeft: 10 },
+  feeValMuted: { fontSize: 12, color: C.ink3 },
   feeRowTotal: {
     marginTop: 4,
     paddingTop: 6,
     borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
+    borderTopColor: C.line,
   },
-  feeTotalLabel: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
-  feeTotalVal: { fontSize: 16, fontWeight: "800", color: "#00B14F" },
+  feeTotalLabel: { fontSize: 15, fontWeight: "700", color: C.ink },
+  feeTotalVal: { fontSize: 16, fontWeight: "800", color: C.brand },
 });

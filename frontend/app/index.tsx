@@ -26,6 +26,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
+import { C } from "../lib/theme";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const BRANCH_KEY = "bravepos:selected-branch:v1";
@@ -251,9 +252,9 @@ export default function Login() {
 
   if (checkingSession) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }}>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color="#00B14F" />
+          <ActivityIndicator color={C.brand} />
         </View>
       </SafeAreaView>
     );
@@ -268,13 +269,13 @@ export default function Login() {
         disabled={branches.length <= 1}
         testID="branch-picker-btn"
       >
-        <Ionicons name="storefront-outline" size={16} color="#0F172A" />
+        <Ionicons name="storefront-outline" size={16} color={C.ink} />
         <Text style={s.branchLabel} numberOfLines={1}>
           {branch?.name
             || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
         </Text>
         {branches.length > 1 && (
-          <Ionicons name="chevron-down" size={14} color="#94A3B8" />
+          <Ionicons name="chevron-down" size={14} color={C.ink3} />
         )}
       </TouchableOpacity>
       {!!branchLoadError && (
@@ -301,10 +302,10 @@ export default function Login() {
         testID={`user-${item.role}`}
       >
         <View style={s.avatar}>
-          <Ionicons name="person-outline" size={20} color="#475569" />
+          <Ionicons name="person-outline" size={20} color={C.ink2} />
         </View>
         <Text style={s.userName}>{item.name}</Text>
-        <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+        <Ionicons name="chevron-forward" size={18} color={C.ink3} />
       </TouchableOpacity>
     );
   };
@@ -314,7 +315,7 @@ export default function Login() {
       <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
       {usersLoading ? (
         <View style={{ paddingVertical: 24 }}>
-          <ActivityIndicator color="#00B14F" />
+          <ActivityIndicator color={C.brand} />
         </View>
       ) : isWide ? (
         <FlatList
@@ -381,7 +382,7 @@ export default function Login() {
       </View>
       {submitting && (
         <View style={{ marginTop: 12 }}>
-          <ActivityIndicator color="#00B14F" />
+          <ActivityIndicator color={C.brand} />
         </View>
       )}
     </View>
@@ -413,10 +414,10 @@ export default function Login() {
                 }}
                 testID={`branch-pick-${item.id}`}
               >
-                <Ionicons name="storefront-outline" size={18} color="#0F172A" />
+                <Ionicons name="storefront-outline" size={18} color={C.ink} />
                 <Text style={s.branchRowName}>{item.name}</Text>
                 {branch?.id === item.id && (
-                  <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                  <Ionicons name="checkmark-circle" size={18} color={C.ok} />
                 )}
               </TouchableOpacity>
             )}
@@ -484,12 +485,12 @@ export default function Login() {
                 }}
                 testID="pin-back"
               >
-                <Ionicons name="chevron-back" size={18} color="#0F172A" />
+                <Ionicons name="chevron-back" size={18} color={C.ink} />
                 <Text style={s.backText}>เปลี่ยนพนักงาน</Text>
               </TouchableOpacity>
               {!!branch && (
                 <View style={s.phoneBranchTag}>
-                  <Ionicons name="storefront-outline" size={12} color="#00B14F" />
+                  <Ionicons name="storefront-outline" size={12} color={C.brand} />
                   <Text style={s.phoneBranchText} numberOfLines={1}>{branch.name}</Text>
                 </View>
               )}
@@ -530,7 +531,7 @@ function KeyButton({
       testID={`key-${label ?? "backspace"}`}
     >
       {icon ? (
-        <Ionicons name={icon} size={Math.round(size * 0.36)} color="#0F172A" />
+        <Ionicons name={icon} size={Math.round(size * 0.36)} color={C.ink} />
       ) : (
         <Text style={[s.keyLabel, { fontSize: Math.round(size * 0.36) }]}>{label}</Text>
       )}
@@ -539,7 +540,7 @@ function KeyButton({
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  container: { flex: 1, backgroundColor: C.bgSoft },
 
   // ── Tablet layout ──
   tabletLayout: { flex: 1, flexDirection: "row" },
@@ -550,8 +551,8 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderLeftWidth: 1,
-    borderLeftColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderLeftColor: C.line,
+    backgroundColor: C.surface,
   },
 
   // ── Phone layout ──
@@ -569,7 +570,7 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     paddingRight: 8,
   },
-  backText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  backText: { fontSize: 13, fontWeight: "600", color: C.ink },
   phoneBranchTag: {
     flexDirection: "row",
     alignItems: "center",
@@ -578,64 +579,64 @@ const s = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderColor: C.line,
+    backgroundColor: C.surface,
     maxWidth: 160,
   },
-  phoneBranchText: { fontSize: 12, fontWeight: "600", color: "#0F172A" },
+  phoneBranchText: { fontSize: 12, fontWeight: "600", color: C.ink },
 
   // ── Header / branch ──
-  clock: { fontSize: 56, fontWeight: "700", color: "#0F172A", letterSpacing: -1 },
-  date: { fontSize: 16, color: "#475569", marginTop: 4, marginBottom: 12 },
+  clock: { fontSize: 56, fontWeight: "700", color: C.ink, letterSpacing: -1 },
+  date: { fontSize: 16, color: C.ink2, marginTop: 4, marginBottom: 12 },
   branchBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999,
-    borderWidth: 1, borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF", alignSelf: "flex-start",
+    borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface, alignSelf: "flex-start",
     marginBottom: 12, maxWidth: "100%",
   },
-  branchLabel: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-  branchLoadError: { color: "#EF4444", fontSize: 11, marginBottom: 6 },
+  branchLabel: { fontSize: 13, fontWeight: "600", color: C.ink },
+  branchLoadError: { color: C.danger, fontSize: 11, marginBottom: 6 },
   retryBtn: {
     paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
-    borderWidth: 1, borderColor: "#EF4444", alignSelf: "flex-start",
+    borderWidth: 1, borderColor: C.danger, alignSelf: "flex-start",
   },
-  retryText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
+  retryText: { color: C.danger, fontSize: 12, fontWeight: "600" },
 
   // ── User list ──
   staffHeading: {
-    fontSize: 13, fontWeight: "600", color: "#64748B",
+    fontSize: 13, fontWeight: "600", color: C.ink2Soft,
     marginBottom: 8, marginTop: 8,
   },
   userRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingHorizontal: 14, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  userRowActive: { backgroundColor: "#F0FDF4" },
+  userRowActive: { backgroundColor: C.brandTintSoft },
   avatar: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
     alignItems: "center", justifyContent: "center",
   },
-  userName: { flex: 1, fontSize: 16, color: "#0F172A", fontWeight: "500" },
-  empty: { padding: 16, color: "#94A3B8", textAlign: "center" },
+  userName: { flex: 1, fontSize: 16, color: C.ink, fontWeight: "500" },
+  empty: { padding: 16, color: C.ink3, textAlign: "center" },
 
   // ── PIN pad ──
   pinPad: { alignItems: "center" },
-  rightTitle: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
+  rightTitle: { fontSize: 22, fontWeight: "700", color: C.ink },
   rightSubtitle: {
-    fontSize: 14, color: "#64748B",
+    fontSize: 14, color: C.ink2Soft,
     marginTop: 4, marginBottom: 20,
     maxWidth: 280, textAlign: "center",
   },
   dotsRow: { flexDirection: "row", gap: 14, marginBottom: 4 },
   dot: {
     width: 14, height: 14, borderRadius: 7,
-    borderWidth: 1.5, borderColor: "#CBD5E1", backgroundColor: "transparent",
+    borderWidth: 1.5, borderColor: C.lineStrong, backgroundColor: "transparent",
   },
-  dotFilled: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  error: { color: "#EF4444", fontSize: 13, marginTop: 4, marginBottom: 4, textAlign: "center" },
+  dotFilled: { backgroundColor: C.brand, borderColor: C.brand },
+  error: { color: C.danger, fontSize: 13, marginTop: 4, marginBottom: 4, textAlign: "center" },
   keypad: {
     flexDirection: "row", flexWrap: "wrap",
     justifyContent: "space-between",
@@ -644,30 +645,30 @@ const s = StyleSheet.create({
   key: {
     alignItems: "center", justifyContent: "center",
     marginVertical: 4,
-    backgroundColor: "#F8FAFC",
-    borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: C.bgSoft,
+    borderWidth: 1, borderColor: C.line,
   },
-  keyLabel: { fontWeight: "500", color: "#0F172A" },
+  keyLabel: { fontWeight: "500", color: C.ink },
 
   // ── Branch picker modal ──
   branchModalOverlay: {
-    flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
+    flex: 1, backgroundColor: C.scrim,
     justifyContent: "center", padding: 24,
   },
   branchModalSheet: {
-    backgroundColor: "#FFFFFF", borderRadius: 16,
+    backgroundColor: C.surface, borderRadius: 16,
     maxHeight: "70%", overflow: "hidden",
     maxWidth: 420, alignSelf: "center", width: "100%",
   },
   branchModalTitle: {
-    fontSize: 15, fontWeight: "700", color: "#0F172A", padding: 16,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    fontSize: 15, fontWeight: "700", color: C.ink, padding: 16,
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   branchRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F8FAFC",
+    borderBottomWidth: 1, borderBottomColor: C.bgSoft,
   },
-  branchRowActive: { backgroundColor: "#F0FDF4" },
-  branchRowName: { flex: 1, fontSize: 14, color: "#0F172A", fontWeight: "500" },
+  branchRowActive: { backgroundColor: C.brandTintSoft },
+  branchRowName: { flex: 1, fontSize: 14, color: C.ink, fontWeight: "500" },
 });

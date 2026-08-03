@@ -43,6 +43,7 @@ import {
 import * as printerQueue from "../lib/printerQueue";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { C } from "../lib/theme";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
@@ -285,12 +286,12 @@ export default function Admin() {
     <View style={[styles.sidebar, extraStyle]} testID="admin-sidebar">
       <View style={styles.avatarBox}>
         <View style={styles.avatarCircle}>
-          <Ionicons name="person" size={32} color="#475569" />
+          <Ionicons name="person" size={32} color={C.ink2} />
         </View>
         <Text style={styles.avatarText}>{staff || "Admin"}</Text>
         {!!activeBranchName && (
           <View style={styles.sideBranchChip} testID="admin-branch-chip">
-            <Ionicons name="storefront-outline" size={12} color="#00B14F" />
+            <Ionicons name="storefront-outline" size={12} color={C.brand} />
             <Text style={styles.sideBranchChipText} numberOfLines={1}>{activeBranchName}</Text>
           </View>
         )}
@@ -309,7 +310,7 @@ export default function Admin() {
             <Ionicons
               name={it.icon}
               size={20}
-              color={section === it.key ? "#00B14F" : "#475569"}
+              color={section === it.key ? C.brand : C.ink2}
             />
             <Text
               style={[styles.sideLabel, section === it.key && styles.sideLabelActive]}
@@ -324,11 +325,11 @@ export default function Admin() {
         onPress={async () => { await doLogout(); router.replace("/"); }}
         testID="admin-logout"
       >
-        <Ionicons name="log-out-outline" size={18} color="#EF4444" />
+        <Ionicons name="log-out-outline" size={18} color={C.danger} />
         <Text style={styles.logoutSideText}>Log out</Text>
       </TouchableOpacity>
       <View style={styles.sideFooter}>
-        <Ionicons name="refresh-circle-outline" size={14} color="#94A3B8" />
+        <Ionicons name="refresh-circle-outline" size={14} color={C.ink3} />
         <Text style={styles.sideFooterDate}>
           {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
           {" "}
@@ -348,7 +349,7 @@ export default function Admin() {
     return (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color="#00B14F" />
+          <ActivityIndicator color={C.brand} />
         </View>
       </SafeAreaView>
     );
@@ -363,13 +364,13 @@ export default function Admin() {
           <>
             <View style={styles.mobileTop}>
               <TouchableOpacity onPress={() => setSidebarOpen(true)} testID="open-sidebar">
-                <Ionicons name="menu" size={26} color="#0F172A" />
+                <Ionicons name="menu" size={26} color={C.ink} />
               </TouchableOpacity>
               <Text style={styles.mobileTitle}>
                 {items.find((i) => i.key === section)?.label}
               </Text>
               <TouchableOpacity onPress={async () => { await doLogout(); router.replace("/"); }}>
-                <Ionicons name="log-out-outline" size={22} color="#EF4444" />
+                <Ionicons name="log-out-outline" size={22} color={C.danger} />
               </TouchableOpacity>
             </View>
             {/* Use the SHARED SidebarDrawer so the menu looks and behaves
@@ -457,7 +458,7 @@ function Reports({ isWide }: { isWide: boolean }) {
   const maxBar = Math.max(1, ...(data?.timeline || []).map((t) => t.value));
   const topProdTotal = (data?.top_products || []).reduce((s, p) => s + p.total, 0) || 1;
   const topCatTotal = (data?.top_categories || []).reduce((s, c) => s + c.total, 0) || 1;
-  const palette = ["#00B14F", "#EF4444", "#F59E0B", "#3B82F6", "#8B5CF6"];
+  const palette = [C.brand, "#3B82F6", C.warn, C.ok, "#8B5CF6"];
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} testID="reports-section">
@@ -468,7 +469,7 @@ function Reports({ isWide }: { isWide: boolean }) {
           onPress={() => setShowChannels(true)}
           testID="open-channel-report"
         >
-          <Ionicons name="bar-chart-outline" size={16} color="#00B14F" />
+          <Ionicons name="bar-chart-outline" size={16} color={C.brand} />
           <Text style={styles.reportsBtnText}>Reports</Text>
         </TouchableOpacity>
       </View>
@@ -503,13 +504,13 @@ function Reports({ isWide }: { isWide: boolean }) {
       </View>
 
       {loading || !data ? (
-        <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />
+        <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
       ) : (
         <>
           <View style={styles.kpiRow}>
-            <KPI label="Sales" value={THB(data.total_sales)} color="#00B14F" icon="cash-outline" />
+            <KPI label="Sales" value={THB(data.total_sales)} color={C.brand} icon="cash-outline" />
             <KPI label="Profit" value={THB(data.profit)} color="#3B82F6" icon="trending-up" />
-            <KPI label="Transactions" value={String(data.tx_count ?? 0)} color="#F59E0B" icon="receipt-outline" />
+            <KPI label="Transactions" value={String(data.tx_count ?? 0)} color={C.warn} icon="receipt-outline" />
             <KPI label="Avg/bill" value={THB(data.avg_bill)} color="#8B5CF6" icon="stats-chart" />
           </View>
 
@@ -596,7 +597,7 @@ function Reports({ isWide }: { isWide: boolean }) {
         onPress={() => Linking.openURL(BACKOFFICE_URL)}
         testID="open-backoffice"
       >
-        <Ionicons name="desktop-outline" size={18} color="#00B14F" />
+        <Ionicons name="desktop-outline" size={18} color={C.brand} />
         <Text style={styles.backofficeBtnText}>Back office</Text>
       </TouchableOpacity>
     </ScrollView>
@@ -617,9 +618,9 @@ function KPI({ label, value, color, icon }: { label: string; value: string; colo
 
 function GPStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <View style={[styles.gpStat, accent && { backgroundColor: "#E5F7ED" }]}>
+    <View style={[styles.gpStat, accent && { backgroundColor: C.brandTint }]}>
       <Text style={styles.gpLabel}>{label}</Text>
-      <Text style={[styles.gpValue, accent && { color: "#00B14F" }]}>{value}</Text>
+      <Text style={[styles.gpValue, accent && { color: C.brand }]}>{value}</Text>
     </View>
   );
 }
@@ -672,11 +673,11 @@ function Calendar({ start, end, onPick }: { start: string; end: string; onPick: 
     <View>
       <View style={styles.calHeader}>
         <TouchableOpacity onPress={() => shift(-1)} style={styles.calNavBtn} testID="cal-prev">
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color={C.ink} />
         </TouchableOpacity>
         <Text style={styles.calMonth}>{monthLabel}</Text>
         <TouchableOpacity onPress={() => shift(1)} style={styles.calNavBtn} testID="cal-next">
-          <Ionicons name="chevron-forward" size={20} color="#0F172A" />
+          <Ionicons name="chevron-forward" size={20} color={C.ink} />
         </TouchableOpacity>
       </View>
       <View style={styles.calWeekRow}>
@@ -729,7 +730,7 @@ function DateRangeModal({
       <View style={styles.modalOverlay}>
         <View style={styles.rangeCard} testID="date-range-modal">
           <View style={styles.modalHead}>
-            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color="#475569" /></TouchableOpacity>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={C.ink2} /></TouchableOpacity>
             <Text style={styles.modalTitle}>Custom range</Text>
             <View style={{ width: 22 }} />
           </View>
@@ -739,7 +740,7 @@ function DateRangeModal({
                 <Text style={styles.docFieldLabel}>Start</Text>
                 <Text style={styles.rangeSummaryVal}>{start || "—"}</Text>
               </View>
-              <Ionicons name="arrow-forward" size={16} color="#94A3B8" />
+              <Ionicons name="arrow-forward" size={16} color={C.ink3} />
               <View style={styles.rangeSummaryCol}>
                 <Text style={styles.docFieldLabel}>End</Text>
                 <Text style={styles.rangeSummaryVal}>{end || (start ? "Same day" : "—")}</Text>
@@ -795,7 +796,7 @@ function ChannelReportModal({
       <SafeAreaView style={styles.docScreen} testID="channel-report">
         <View style={styles.docTopBar}>
           <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
-            <Ionicons name="chevron-back" size={22} color="#0F172A" />
+            <Ionicons name="chevron-back" size={22} color={C.ink} />
             <Text style={styles.docBackText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.docTopTitle}>Sales channel report</Text>
@@ -835,7 +836,7 @@ function ChannelReportModal({
         </View>
 
         {rows === null ? (
-          <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
         ) : rows.length === 0 ? (
           <View style={styles.emptyBox}><Text style={styles.emptyText}>No sales</Text></View>
         ) : (
@@ -845,7 +846,7 @@ function ChannelReportModal({
                 <Text style={[styles.chCell, { width: 30 }]}>{i + 1}</Text>
                 <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <View style={styles.chIcon}>
-                    <Ionicons name="storefront" size={14} color="#00B14F" />
+                    <Ionicons name="storefront" size={14} color={C.brand} />
                   </View>
                   <Text style={styles.chName} numberOfLines={1}>{r.channel}</Text>
                   {!r.has_gp && (
@@ -858,7 +859,7 @@ function ChannelReportModal({
                 <Text style={[styles.chCell, { width: 110 }]}>{r.after_gp.toFixed(2)}</Text>
               </View>
             ))}
-            <View style={[styles.chRow, { backgroundColor: "#F8FAFC" }]}>
+            <View style={[styles.chRow, { backgroundColor: C.bgSoft }]}>
               <Text style={[styles.chCell, { width: 30 }]} />
               <Text style={[styles.chCell, { flex: 1, textAlign: "left", fontWeight: "700" }]}>Total</Text>
               <Text style={[styles.chCell, { width: 70, fontWeight: "700" }]}>{totals.count}</Text>
@@ -960,14 +961,14 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
     }
   }, [filteredOrders, selected, isWide]);
 
-  if (loading) return <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />;
+  if (loading) return <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />;
 
   // Mobile drill-down: show list OR detail
   if (!isWide && showDetail && selected) {
     return (
       <View style={{ flex: 1 }}>
         <TouchableOpacity style={styles.backRow} onPress={() => setShowDetail(false)}>
-          <Ionicons name="chevron-back" size={22} color="#00B14F" />
+          <Ionicons name="chevron-back" size={22} color={C.brand} />
           <Text style={styles.backText}>Back to transactions</Text>
         </TouchableOpacity>
         <TransactionDetail
@@ -987,19 +988,19 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       <View style={[styles.txList, !isWide && styles.fullCol]}>
         <Text style={styles.sectionHeader}>Sale Transactions</Text>
         <View style={styles.searchBoxRow}>
-          <Ionicons name="search" size={16} color="#94A3B8" />
+          <Ionicons name="search" size={16} color={C.ink3} />
           <TextInput
             placeholder="Search order #"
             style={styles.searchBoxInput}
             value={query}
             onChangeText={setQuery}
-            placeholderTextColor="#94A3B8"
+            placeholderTextColor={C.ink3}
             autoCapitalize="characters"
             testID="tx-search"
           />
           {!!query && (
             <TouchableOpacity onPress={() => setQuery("")} testID="tx-search-clear">
-              <Ionicons name="close-circle" size={16} color="#94A3B8" />
+              <Ionicons name="close-circle" size={16} color={C.ink3} />
             </TouchableOpacity>
           )}
         </View>
@@ -1019,7 +1020,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                 testID={`tx-date-${opt.key}`}
               >
                 <Text
-                  style={[styles.txDateChipText, active && { color: "#FFF" }]}
+                  style={[styles.txDateChipText, active && { color: C.surface }]}
                   numberOfLines={1}
                 >
                   {opt.label}
@@ -1048,7 +1049,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                 onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
                 testID={`tx-${item.order_number}`}
               >
-                <Ionicons name="folder-outline" size={18} color={voided ? "#DC2626" : "#94A3B8"} />
+                <Ionicons name="folder-outline" size={18} color={voided ? C.dangerDark : C.ink3} />
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.txNum, voided && styles.txVoided]}>{item.order_number}</Text>
                   <Text style={styles.txTime}>
@@ -1281,7 +1282,7 @@ function TransactionDetail({
                 <Image source={{ uri: img }} style={styles.tdItemImg} />
               ) : (
                 <View style={[styles.tdItemImg, styles.tdItemImgEmpty]}>
-                  <Ionicons name="image-outline" size={18} color="#CBD5E1" />
+                  <Ionicons name="image-outline" size={18} color={C.lineStrong} />
                 </View>
               )}
               <View style={styles.tdItemMid}>
@@ -1312,7 +1313,7 @@ function TransactionDetail({
         <SectionLabel text="Sales channels" />
         <View style={styles.tdChannelRow}>
           <View style={styles.tdChannelBadge}>
-            <Ionicons name="storefront" size={14} color="#00B14F" />
+            <Ionicons name="storefront" size={14} color={C.brand} />
             <Text style={styles.tdChannelText}>{channelLabel(order.source)}</Text>
           </View>
         </View>
@@ -1656,7 +1657,7 @@ function TaxInvoiceFlow({
             {showsBack ? (
               <TouchableOpacity onPress={() => setStep("search")} testID="tax-invoice-back">
                 <View style={styles.tiBackRow}>
-                  <Ionicons name="chevron-back" size={20} color="#00B14F" />
+                  <Ionicons name="chevron-back" size={20} color={C.brand} />
                   <Text style={styles.tiHeaderAction}>Back</Text>
                 </View>
               </TouchableOpacity>
@@ -1668,7 +1669,7 @@ function TaxInvoiceFlow({
             <Text style={styles.tiTitle}>{title}</Text>
             {step === "search" ? (
               <TouchableOpacity onPress={() => setStep("add")} testID="tax-invoice-add-customer">
-                <Ionicons name="create-outline" size={22} color="#00B14F" />
+                <Ionicons name="create-outline" size={22} color={C.brand} />
               </TouchableOpacity>
             ) : (
               <View style={{ width: 22 }} />
@@ -1679,10 +1680,10 @@ function TaxInvoiceFlow({
           {step === "search" && (
             <>
               <View style={styles.tiSearchBox}>
-                <Ionicons name="search" size={16} color="#94A3B8" />
+                <Ionicons name="search" size={16} color={C.ink3} />
                 <TextInput
                   placeholder="Search by name or phone"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={C.ink3}
                   style={styles.tiSearchInput}
                   value={query}
                   onChangeText={setQuery}
@@ -1690,7 +1691,7 @@ function TaxInvoiceFlow({
                 />
               </View>
               {loading ? (
-                <ActivityIndicator color="#00B14F" style={{ marginTop: 32 }} />
+                <ActivityIndicator color={C.brand} style={{ marginTop: 32 }} />
               ) : filtered.length === 0 ? (
                 <View style={styles.tiEmpty}>
                   <Text style={styles.emptyText}>
@@ -1711,7 +1712,7 @@ function TaxInvoiceFlow({
                       onPress={() => pick(item)}
                       testID={`tax-invoice-cust-${item.id}`}
                     >
-                      <View style={[styles.tiAvatar, { backgroundColor: item.color || "#94A3B8" }]}>
+                      <View style={[styles.tiAvatar, { backgroundColor: item.color || C.ink3 }]}>
                         <Text style={styles.tiAvatarText}>
                           {(customerFullName(item)[0] || "?").toUpperCase()}
                         </Text>
@@ -1752,7 +1753,7 @@ function TaxInvoiceFlow({
                       <Ionicons
                         name={on ? "checkmark-circle" : "ellipse-outline"}
                         size={20}
-                        color={on ? "#00B14F" : "#CBD5E1"}
+                        color={on ? C.brand : C.lineStrong}
                       />
                       <Text style={styles.tiRadioText}>{g.label}</Text>
                     </TouchableOpacity>
@@ -1862,7 +1863,7 @@ function TaxInvoiceFlow({
           {!!busy && (
             <View style={styles.tiBusy}>
               <View style={styles.tiBusyCard}>
-                <ActivityIndicator color="#00B14F" />
+                <ActivityIndicator color={C.brand} />
                 <Text style={styles.tiBusyText}>{busy}</Text>
               </View>
             </View>
@@ -1909,7 +1910,7 @@ function TiField({
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
-        placeholderTextColor="#94A3B8"
+        placeholderTextColor={C.ink3}
         multiline={multiline}
         keyboardType={keyboardType}
         maxLength={maxLength}
@@ -2037,7 +2038,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
               </Text>
             </TouchableOpacity>
           ))}
-          <Ionicons name="chevron-forward" size={18} color="#94A3B8" style={{ marginLeft: 4 }} />
+          <Ionicons name="chevron-forward" size={18} color={C.ink3} style={{ marginLeft: 4 }} />
         </ScrollView>
       </View>
 
@@ -2048,11 +2049,11 @@ function Inventory({ isWide }: { isWide: boolean }) {
           {isWide ? (
             <View style={styles.leftNav}>
               <View style={styles.invSearchRow}>
-                <Ionicons name="search" size={16} color="#94A3B8" />
+                <Ionicons name="search" size={16} color={C.ink3} />
                 <TextInput
                   style={styles.invSearchInput}
                   placeholder="Search"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={C.ink3}
                   value={search}
                   onChangeText={setSearch}
                 />
@@ -2066,7 +2067,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
                     testID={`inv-cat-${c.id}`}
                   >
                     <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
-                    <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                    <Ionicons name="chevron-forward" size={14} color={C.ink3} />
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -2087,7 +2088,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
                       onPress={() => setActiveCat(c.id)}
                       testID={`inv-cat-${c.id}`}
                     >
-                      <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                      <Text style={[styles.catChipText, active && { color: C.surface }]}>{c.name}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -2118,7 +2119,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
               keyExtractor={(i) => i.id}
               contentContainerStyle={{ padding: 14 }}
               refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
               }
               renderItem={({ item }) => (
                 <TouchableOpacity
@@ -2136,16 +2137,16 @@ function Inventory({ isWide }: { isWide: boolean }) {
                       <Text style={styles.nonStockText}>Non-stock product</Text>
                     ) : (
                       <>
-                        <Text style={[styles.stockNum, item.stock <= 0 && { color: "#EF4444" }]}>
+                        <Text style={[styles.stockNum, item.stock <= 0 && { color: C.danger }]}>
                           {item.stock}
                         </Text>
-                        <Text style={[styles.stockStatus, item.stock <= 0 && { color: "#EF4444" }]}>
+                        <Text style={[styles.stockStatus, item.stock <= 0 && { color: C.danger }]}>
                           {item.stock <= 0 ? "Out of stock" : "In stock"}
                         </Text>
                       </>
                     )}
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                  <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
                 </TouchableOpacity>
               )}
               ListEmptyComponent={
@@ -2252,15 +2253,15 @@ function StockDocuments({
     <View style={{ flex: 1 }} testID={`stockdoc-${type}`}>
       <View style={styles.docListBar}>
         <View style={styles.docDateRange}>
-          <Ionicons name="chevron-back" size={16} color="#CBD5E1" />
+          <Ionicons name="chevron-back" size={16} color={C.lineStrong} />
           <Text style={styles.docDateRangeText}>{rangeLabel}</Text>
-          <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+          <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
         </View>
         {cfg.hasPrice && (
-          <Text style={styles.docListTotal}>Total <Text style={{ fontWeight: "700", color: "#0F172A" }}>{total.toFixed(2)}</Text></Text>
+          <Text style={styles.docListTotal}>Total <Text style={{ fontWeight: "700", color: C.ink }}>{total.toFixed(2)}</Text></Text>
         )}
         <TouchableOpacity style={styles.createDocBtn} onPress={() => setCreating(true)} testID="create-document">
-          <Ionicons name="add" size={16} color="#00B14F" />
+          <Ionicons name="add" size={16} color={C.brand} />
           <Text style={styles.createDocBtnText}>Create Document</Text>
         </TouchableOpacity>
       </View>
@@ -2276,7 +2277,7 @@ function StockDocuments({
       </View>
 
       {docs === null ? (
-        <ActivityIndicator color="#00B14F" style={{ marginTop: 40 }} />
+        <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
       ) : docs.length === 0 ? (
         <View style={styles.emptyBox}><Text style={styles.emptyText}>No document</Text></View>
       ) : (
@@ -2291,7 +2292,7 @@ function StockDocuments({
             return (
               <View style={styles.docRow} testID={`doc-${item.id}`}>
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
-                <Text style={[styles.docCell, { width: 150, color: "#0F172A" }]}>{item.document_no}</Text>
+                <Text style={[styles.docCell, { width: 150, color: C.ink }]}>{item.document_no}</Text>
                 <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
                 {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(item.total || 0).toFixed(2)}</Text>}
                 {cfg.hasAdjustType && <Text style={[styles.docCell, { width: 110 }]}>{item.adjust_type || ""}</Text>}
@@ -2437,12 +2438,12 @@ function CreateStockDocModal({
       <SafeAreaView style={styles.docScreen}>
         <View style={styles.docTopBar}>
           <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
-            <Ionicons name="chevron-back" size={22} color="#0F172A" />
+            <Ionicons name="chevron-back" size={22} color={C.ink} />
             <Text style={styles.docBackText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.docTopTitle}>{cfg.title}</Text>
           <TouchableOpacity onPress={confirmSave} disabled={!lines.length}>
-            <Text style={[styles.docSaveText, !lines.length && { color: "#CBD5E1" }]}>Save</Text>
+            <Text style={[styles.docSaveText, !lines.length && { color: C.lineStrong }]}>Save</Text>
           </TouchableOpacity>
         </View>
 
@@ -2453,7 +2454,7 @@ function CreateStockDocModal({
               <View style={styles.docFormRow}>
                 <TouchableOpacity style={[styles.docField, styles.importBtn]} onPress={() => setImportOpen(true)} testID="import-documents">
                   <Text style={styles.importBtnText}>Import Documents</Text>
-                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                  <Ionicons name="chevron-forward" size={16} color={C.ink3} />
                 </TouchableOpacity>
                 <View style={[styles.docField, { flex: 2 }]}>
                   <TextInput
@@ -2461,7 +2462,7 @@ function CreateStockDocModal({
                     value={reason}
                     onChangeText={setReason}
                     placeholder={cfg.reasonLabel}
-                    placeholderTextColor="#94A3B8"
+                    placeholderTextColor={C.ink3}
                     testID="reconcile-reason"
                   />
                 </View>
@@ -2527,7 +2528,7 @@ function CreateStockDocModal({
                     <TouchableOpacity style={[styles.itemInput, { width: 90 }]} onPress={() => setKeypad({ idx: i, field: "reconcile" })} testID={`reconcile-${i}`}>
                       <Text style={styles.itemInputText}>{parseFloat(l.reconcile) || 0}</Text>
                     </TouchableOpacity>
-                    <Text style={[styles.itemCellRO, { width: 80, textAlign: "right", color: d > 0 ? "#00B14F" : d < 0 ? "#EF4444" : "#64748B" }]}>
+                    <Text style={[styles.itemCellRO, { width: 80, textAlign: "right", color: d > 0 ? C.ok : d < 0 ? C.danger : C.ink2Soft }]}>
                       {d > 0 ? `+${d}` : `${d}`}
                     </Text>
                   </>
@@ -2546,7 +2547,7 @@ function CreateStockDocModal({
                   </>
                 )}
                 <TouchableOpacity style={{ width: 28, alignItems: "center" }} onPress={() => removeLine(i)}>
-                  <Ionicons name="close-circle" size={18} color="#EF4444" />
+                  <Ionicons name="close-circle" size={18} color={C.danger} />
                 </TouchableOpacity>
               </View>
             );
@@ -2563,12 +2564,12 @@ function CreateStockDocModal({
             {cfg.hasAvgCost && (
               <View style={styles.footToggle}>
                 <Text style={styles.footToggleLabel}>AVG Cost Calculate</Text>
-                <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: "#00B14F" }} />
+                <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: C.brand }} />
               </View>
             )}
             <View style={styles.footToggle}>
               <Text style={styles.footToggleLabel}>Tax Included</Text>
-              <Switch value={taxIncluded} onValueChange={setTaxIncluded} trackColor={{ true: "#00B14F" }} />
+              <Switch value={taxIncluded} onValueChange={setTaxIncluded} trackColor={{ true: C.brand }} />
             </View>
             <View style={styles.footStat}><Text style={styles.footStatLabel}>Total</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
             <View style={styles.footStat}><Text style={styles.footStatLabel}>Discount</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
@@ -2639,7 +2640,7 @@ function ProductPickerModal({
       <View style={styles.pickerOverlay}>
         <View style={styles.pickerCard} testID="product-picker">
           <View style={styles.pickerHead}>
-            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
             <Text style={styles.pickerTitle}>Select Products</Text>
             <TouchableOpacity onPress={() => onDone(products.filter((p) => selected.has(p.id)))}>
               <Text style={styles.pickerDone}>Done</Text>
@@ -2648,7 +2649,7 @@ function ProductPickerModal({
 
           <TouchableOpacity style={styles.pickerCatRow} onPress={() => setCatOpen((o) => !o)}>
             <Text style={styles.pickerCatText}>{curCatName}</Text>
-            <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            <Ionicons name="chevron-forward" size={16} color={C.ink3} />
           </TouchableOpacity>
           {catOpen && (
             <View style={styles.pickerCatList}>
@@ -2666,9 +2667,9 @@ function ProductPickerModal({
           )}
 
           <View style={styles.pickerSearchRow}>
-            <Ionicons name="search" size={16} color="#94A3B8" />
-            <TextInput style={styles.pickerSearchInput} placeholder="Search" placeholderTextColor="#94A3B8" value={search} onChangeText={setSearch} />
-            <Ionicons name="barcode-outline" size={20} color="#00B14F" />
+            <Ionicons name="search" size={16} color={C.ink3} />
+            <TextInput style={styles.pickerSearchInput} placeholder="Search" placeholderTextColor={C.ink3} value={search} onChangeText={setSearch} />
+            <Ionicons name="barcode-outline" size={20} color={C.brand} />
           </View>
 
           <View style={styles.pickerSortRow}>
@@ -2697,11 +2698,11 @@ function ProductPickerModal({
                   <Ionicons
                     name={already || checked ? "radio-button-on" : "radio-button-off"}
                     size={20}
-                    color={already ? "#CBD5E1" : checked ? "#00B14F" : "#CBD5E1"}
+                    color={already ? C.lineStrong : checked ? C.brand : C.lineStrong}
                   />
                   <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.pickerImg} />
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.pickerName, already && { color: "#CBD5E1" }]} numberOfLines={1}>{item.name}</Text>
+                    <Text style={[styles.pickerName, already && { color: C.lineStrong }]} numberOfLines={1}>{item.name}</Text>
                     <Text style={styles.pickerBarcode}>{item.barcode}</Text>
                   </View>
                 </TouchableOpacity>
@@ -2739,7 +2740,7 @@ function AmountKeypad({
             {keys.map((k) => (
               <TouchableOpacity key={k} style={styles.keypadKey} onPress={() => press(k)}>
                 {k === "del"
-                  ? <Ionicons name="backspace-outline" size={22} color="#0F172A" />
+                  ? <Ionicons name="backspace-outline" size={22} color={C.ink} />
                   : <Text style={styles.keypadKeyText}>{k}</Text>}
               </TouchableOpacity>
             ))}
@@ -2790,7 +2791,7 @@ function SelectDocumentsModal({
       <View style={styles.pickerOverlay}>
         <View style={styles.pickerCard} testID="select-documents">
           <View style={styles.pickerHead}>
-            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
             <Text style={styles.pickerTitle}>Select Documents</Text>
             <TouchableOpacity
               style={styles.loadDocsBtn}
@@ -2828,7 +2829,7 @@ function SelectDocumentsModal({
           </View>
 
           {docs === null ? (
-            <ActivityIndicator color="#00B14F" style={{ marginTop: 30 }} />
+            <ActivityIndicator color={C.brand} style={{ marginTop: 30 }} />
           ) : filtered.length === 0 ? (
             <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
           ) : (
@@ -2848,7 +2849,7 @@ function SelectDocumentsModal({
                     <Ionicons
                       name={checked ? "checkbox" : "square-outline"}
                       size={20}
-                      color={checked ? "#00B14F" : "#CBD5E1"}
+                      color={checked ? C.brand : C.lineStrong}
                       style={{ width: 28 }}
                     />
                   </TouchableOpacity>
@@ -2882,7 +2883,7 @@ function StockMovementModal({
         {product && (
           <View style={styles.smallModal} testID="stock-modal">
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.modalTitle}>Stock · {product.name.slice(0, 24)}</Text>
               <View style={{ width: 24 }} />
             </View>
@@ -2895,7 +2896,7 @@ function StockMovementModal({
                     onPress={() => setType(t)}
                     testID={`stock-type-${t}`}
                   >
-                    <Text style={[styles.typeBtnText, type === t && { color: "#FFF" }]}>
+                    <Text style={[styles.typeBtnText, type === t && { color: C.surface }]}>
                       {t === "in" ? "Stock-In" : t === "out" ? "Stock-Out" : "Adjust"}
                     </Text>
                   </TouchableOpacity>
@@ -3006,13 +3007,13 @@ function Customers({ isWide }: { isWide: boolean }) {
           </TouchableOpacity>
         </View>
         <View style={styles.searchBoxRow}>
-          <Ionicons name="search" size={16} color="#94A3B8" />
+          <Ionicons name="search" size={16} color={C.ink3} />
           <TextInput
             placeholder="Search"
             style={styles.searchBoxInput}
             value={q}
             onChangeText={setQ}
-            placeholderTextColor="#94A3B8"
+            placeholderTextColor={C.ink3}
             testID="cust-admin-search"
           />
         </View>
@@ -3052,14 +3053,14 @@ function Customers({ isWide }: { isWide: boolean }) {
               <Text style={styles.custProfileName}>{sel.name}</Text>
               <Text style={styles.custPoints}>
                 <Text style={{ fontSize: 22, fontWeight: "700" }}>0</Text>{" "}
-                <Text style={{ color: "#94A3B8" }}>Point</Text>
+                <Text style={{ color: C.ink3 }}>Point</Text>
               </Text>
             </View>
             <View style={styles.statsRow}>
               <View style={styles.statCell}>
-                <Text style={{ color: "#00B14F", fontWeight: "600", fontSize: 12 }}>Success</Text>
+                <Text style={{ color: C.ok, fontWeight: "600", fontSize: 12 }}>Success</Text>
                 {statsLoading ? (
-                  <ActivityIndicator size="small" color="#00B14F" />
+                  <ActivityIndicator size="small" color={C.brand} />
                 ) : (
                   <>
                     <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.success_total ?? 0)}</Text>
@@ -3068,17 +3069,17 @@ function Customers({ isWide }: { isWide: boolean }) {
                 )}
               </View>
               <View style={styles.statCell}>
-                <Text style={{ color: "#F59E0B", fontWeight: "600", fontSize: 12 }}>Avg/bill</Text>
+                <Text style={{ color: C.warn, fontWeight: "600", fontSize: 12 }}>Avg/bill</Text>
                 {statsLoading ? (
-                  <ActivityIndicator size="small" color="#F59E0B" />
+                  <ActivityIndicator size="small" color={C.warn} />
                 ) : (
                   <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.avg_bill ?? 0)}</Text>
                 )}
               </View>
               <View style={styles.statCell}>
-                <Text style={{ color: "#EF4444", fontWeight: "600", fontSize: 12 }}>Outstanding</Text>
+                <Text style={{ color: C.danger, fontWeight: "600", fontSize: 12 }}>Outstanding</Text>
                 {statsLoading ? (
-                  <ActivityIndicator size="small" color="#EF4444" />
+                  <ActivityIndicator size="small" color={C.danger} />
                 ) : (
                   <>
                     <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.outstanding_total ?? 0)}</Text>
@@ -3091,7 +3092,7 @@ function Customers({ isWide }: { isWide: boolean }) {
               <View style={styles.topBox}>
                 <Text style={styles.chartTitle}>Top Products</Text>
                 {statsLoading ? (
-                  <ActivityIndicator size="small" color="#94A3B8" style={{ marginTop: 12 }} />
+                  <ActivityIndicator size="small" color={C.ink3} style={{ marginTop: 12 }} />
                 ) : stats?.top_products?.length ? (
                   stats.top_products.map((p, i) => (
                     <View key={p.product_id} style={styles.topRow}>
@@ -3107,7 +3108,7 @@ function Customers({ isWide }: { isWide: boolean }) {
               <View style={styles.topBox}>
                 <Text style={styles.chartTitle}>Top Categories</Text>
                 {statsLoading ? (
-                  <ActivityIndicator size="small" color="#94A3B8" style={{ marginTop: 12 }} />
+                  <ActivityIndicator size="small" color={C.ink3} style={{ marginTop: 12 }} />
                 ) : stats?.top_categories?.length ? (
                   stats.top_categories.map((c, i) => (
                     <View key={c.name} style={styles.topRow}>
@@ -3130,7 +3131,7 @@ function Customers({ isWide }: { isWide: boolean }) {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setAddOpen(false)}>
-                <Ionicons name="close" size={24} color="#475569" />
+                <Ionicons name="close" size={24} color={C.ink2} />
               </TouchableOpacity>
               <Text style={styles.modalTitle}>New Customer</Text>
               <View style={{ width: 24 }} />
@@ -3222,13 +3223,13 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             <Text style={styles.sectionHeader}>Products</Text>
           </View>
           <View style={styles.searchBoxRow}>
-            <Ionicons name="search" size={16} color="#94A3B8" />
+            <Ionicons name="search" size={16} color={C.ink3} />
             <TextInput
               placeholder="Search Products"
               style={styles.searchBoxInput}
               value={q}
               onChangeText={setQ}
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor={C.ink3}
               testID="admin-prod-search"
             />
           </View>
@@ -3247,13 +3248,13 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                   <Ionicons
                     name={hasItems ? "checkmark-circle" : "ellipse-outline"}
                     size={18}
-                    color={hasItems ? c.color : "#CBD5E1"}
+                    color={hasItems ? c.color : C.lineStrong}
                   />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.catMgmtName}>{c.name}</Text>
                     {c.source && <Text style={styles.catMgmtSource}>Source: {c.source}</Text>}
                   </View>
-                  <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                  <Ionicons name="chevron-forward" size={14} color={C.ink3} />
                 </TouchableOpacity>
               );
             })}
@@ -3262,13 +3263,13 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
       ) : (
         <View style={styles.narrowCatBar}>
           <View style={styles.searchBoxRow}>
-            <Ionicons name="search" size={16} color="#94A3B8" />
+            <Ionicons name="search" size={16} color={C.ink3} />
             <TextInput
               placeholder="Search Products"
               style={styles.searchBoxInput}
               value={q}
               onChangeText={setQ}
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor={C.ink3}
               testID="admin-prod-search"
             />
           </View>
@@ -3286,7 +3287,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                   onPress={() => { setActiveCat(c.id); setQ(""); }}
                   testID={`admin-cat-${c.id}`}
                 >
-                  <Text style={[styles.catChipText, active && { color: "#FFF" }]}>{c.name}</Text>
+                  <Text style={[styles.catChipText, active && { color: C.surface }]}>{c.name}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -3299,14 +3300,14 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             {q ? `Search` : curCat?.name}({filtered.length})
           </Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-            <Text style={{ fontSize: 12, color: "#94A3B8" }}>Sort</Text>
+            <Text style={{ fontSize: 12, color: C.ink3 }}>Sort</Text>
             <View style={styles.sortGroup}>
               <TouchableOpacity
                 style={[styles.sortBtn, sort === "custom" && styles.sortBtnActive]}
                 onPress={() => setSort("custom")}
                 testID="sort-custom"
               >
-                <Text style={[styles.sortText, sort === "custom" && { color: "#00B14F" }]}>
+                <Text style={[styles.sortText, sort === "custom" && { color: C.brand }]}>
                   Custom
                 </Text>
               </TouchableOpacity>
@@ -3315,7 +3316,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                 onPress={() => setSort("name")}
                 testID="sort-name"
               >
-                <Text style={[styles.sortText, sort === "name" && { color: "#00B14F" }]}>
+                <Text style={[styles.sortText, sort === "name" && { color: C.brand }]}>
                   Name
                 </Text>
               </TouchableOpacity>
@@ -3337,7 +3338,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
           keyExtractor={(i) => i.id}
           contentContainerStyle={{ padding: 14 }}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#00B14F"]} tintColor="#00B14F" />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
           }
           renderItem={({ item }) => (
             <View style={styles.prodMgmtRow} testID={`prod-${item.id}`}>
@@ -3346,7 +3347,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                 <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
                 <View style={{ flexDirection: "row", gap: 10, marginTop: 4, alignItems: "center" }}>
                   <Text style={styles.prodPriceLabel}>
-                    <Text style={{ fontWeight: "700", color: item.price === 0 ? "#EF4444" : "#0F172A" }}>
+                    <Text style={{ fontWeight: "700", color: item.price === 0 ? C.danger : C.ink }}>
                       {THB(item.price)}
                     </Text>
                   </Text>
@@ -3371,18 +3372,18 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                 <Ionicons
                   name={item.is_favorite ? "heart" : "heart-outline"}
                   size={22}
-                  color={item.is_favorite ? "#00B14F" : "#CBD5E1"}
+                  color={item.is_favorite ? C.brand : C.lineStrong}
                 />
               </TouchableOpacity>
               <View style={styles.prodTags}>
                 <Text style={styles.tag}>TAX: {item.tax_type}</Text>
-                <Text style={[styles.tag, item.product_type === "BOM" && { color: "#00B14F", fontWeight: "700" }]}>
+                <Text style={[styles.tag, item.product_type === "BOM" && { color: C.brand, fontWeight: "700" }]}>
                   Type: {item.product_type}
                 </Text>
               </View>
               {isAdmin && (
                 <TouchableOpacity style={styles.editBtn} onPress={() => setEdit(item)} testID={`edit-${item.id}`}>
-                  <Ionicons name="create-outline" size={18} color="#475569" />
+                  <Ionicons name="create-outline" size={18} color={C.ink2} />
                 </TouchableOpacity>
               )}
             </View>
@@ -3519,7 +3520,7 @@ function ProductEditModal({
         {product && (
           <View style={styles.editModal} testID="product-edit-modal">
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.modalTitle}>{isNew ? "Add Product" : "Edit Product"}</Text>
               <View style={{ width: 24 }} />
             </View>
@@ -3544,7 +3545,7 @@ function ProductEditModal({
                   {imgBase64 || img ? (
                     <Image source={{ uri: imgBase64 || img }} style={styles.imgThumbImage} />
                   ) : (
-                    <Ionicons name="image-outline" size={36} color="#94A3B8" />
+                    <Ionicons name="image-outline" size={36} color={C.ink3} />
                   )}
                 </View>
                 <View style={{ flex: 1, gap: 8 }}>
@@ -3554,7 +3555,7 @@ function ProductEditModal({
                     disabled={pickingImage}
                     testID="prod-img-pick"
                   >
-                    <Ionicons name="camera-outline" size={18} color="#0F172A" />
+                    <Ionicons name="camera-outline" size={18} color={C.ink} />
                     <Text style={styles.imgPickBtnText}>
                       {pickingImage ? "Loading…" : (imgBase64 || img ? "Change Image" : "Choose Image")}
                     </Text>
@@ -3574,7 +3575,7 @@ function ProductEditModal({
                     style={[styles.catPick, catId === c.id && styles.catPickActive]}
                     onPress={() => setCatId(c.id)}
                   >
-                    <Text style={[styles.catPickText, catId === c.id && { color: "#FFF" }]}>
+                    <Text style={[styles.catPickText, catId === c.id && { color: C.surface }]}>
                       {c.name}
                     </Text>
                   </TouchableOpacity>
@@ -3588,9 +3589,9 @@ function ProductEditModal({
                 <Ionicons
                   name={fav ? "heart" : "heart-outline"}
                   size={22}
-                  color={fav ? "#00B14F" : "#94A3B8"}
+                  color={fav ? C.brand : C.ink3}
                 />
-                <Text style={{ color: fav ? "#00B14F" : "#475569", fontWeight: "600" }}>
+                <Text style={{ color: fav ? C.brand : C.ink2, fontWeight: "600" }}>
                   {fav ? "Favorite" : "Mark as favorite"}
                 </Text>
               </TouchableOpacity>
@@ -3599,8 +3600,8 @@ function ProductEditModal({
               </TouchableOpacity>
               {!isNew && (
                 <TouchableOpacity style={styles.dangerBtn} onPress={del} testID="prod-delete">
-                  <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                  <Text style={{ color: "#EF4444", fontWeight: "600" }}>Delete product</Text>
+                  <Ionicons name="trash-outline" size={16} color={C.danger} />
+                  <Text style={{ color: C.danger, fontWeight: "600" }}>Delete product</Text>
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -3761,7 +3762,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           {!current ? (
             <View style={styles.shiftCard}>
               <View style={styles.emptyBox}>
-                <Ionicons name="file-tray-outline" size={40} color="#CBD5E1" />
+                <Ionicons name="file-tray-outline" size={40} color={C.lineStrong} />
                 <Text style={styles.emptyText}>No open shift</Text>
                 <TouchableOpacity style={[styles.primaryBtn, { marginTop: 14 }]} onPress={() => setOpenDlg(true)} testID="open-shift">
                   <Text style={styles.primaryBtnText}>Open Shift</Text>
@@ -3784,10 +3785,10 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
               </View>
               <View style={styles.inOutRow}>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_in")} testID="paid-in">
-                  <Text style={[styles.inOutText, { color: "#00B14F" }]}>Paid In</Text>
+                  <Text style={[styles.inOutText, { color: C.ok }]}>Paid In</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_out")} testID="paid-out">
-                  <Text style={[styles.inOutText, { color: "#EF4444" }]}>Paid Out</Text>
+                  <Text style={[styles.inOutText, { color: C.danger }]}>Paid Out</Text>
                 </TouchableOpacity>
               </View>
               <TouchableOpacity style={styles.closeShiftBtn} onPress={() => setCloseDlg(true)} testID="close-shift">
@@ -3807,12 +3808,12 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
 
       <View style={styles.invTabs}>
         <TouchableOpacity style={[styles.invTab, tab === "shift" && styles.invTabActive]} onPress={() => setTab("shift")} testID="shift-tab">
-          <Ionicons name="file-tray-outline" size={16} color={tab === "shift" ? "#00B14F" : "#475569"} />
-          <Text style={[styles.invTabText, tab === "shift" && { color: "#00B14F" }]}>Shift</Text>
+          <Ionicons name="file-tray-outline" size={16} color={tab === "shift" ? C.brand : C.ink2} />
+          <Text style={[styles.invTabText, tab === "shift" && { color: C.brand }]}>Shift</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.invTab, tab === "history" && styles.invTabActive]} onPress={() => setTab("history")} testID="history-tab">
-          <Ionicons name="time-outline" size={16} color={tab === "history" ? "#00B14F" : "#475569"} />
-          <Text style={[styles.invTabText, tab === "history" && { color: "#00B14F" }]}>History</Text>
+          <Ionicons name="time-outline" size={16} color={tab === "history" ? C.brand : C.ink2} />
+          <Text style={[styles.invTabText, tab === "history" && { color: C.brand }]}>History</Text>
         </TouchableOpacity>
       </View>
 
@@ -3821,7 +3822,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setOpenDlg(false)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setOpenDlg(false)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.modalTitle}>Open Shift</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -3840,7 +3841,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color="#EF4444" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
               <Text style={styles.modalTitle}>Actual in Drawer</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -3854,7 +3855,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
                 testID="actual-cash"
               />
               <TouchableOpacity style={styles.closeShiftBtn} onPress={closeShift} testID="confirm-close-shift">
-                <Ionicons name="save-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Ionicons name="save-outline" size={18} color={C.surface} style={{ marginRight: 6 }} />
                 <Text style={styles.closeShiftText}>CLOSE SHIFT</Text>
               </TouchableOpacity>
             </View>
@@ -3867,7 +3868,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={closeMoveDlg}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={closeMoveDlg}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -3886,10 +3887,10 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
               <TouchableOpacity style={styles.moveRow} onPress={() => setShowCatPicker(true)} testID="move-cat">
                 <Text style={styles.moveRowLabel}>Category</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Text style={[styles.moveRowValue, !moveCat && { color: "#94A3B8" }]}>
+                  <Text style={[styles.moveRowValue, !moveCat && { color: C.ink3 }]}>
                     {moveCat || "Choose category"}
                   </Text>
-                  <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                  <Ionicons name="chevron-forward" size={16} color={C.ink3} />
                 </View>
               </TouchableOpacity>
               <Text style={styles.formLabel}>Description</Text>
@@ -3902,7 +3903,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
                 testID="move-note"
               />
               <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: moveDlg === "paid_in" ? "#00B14F" : "#EF4444" }]}
+                style={[styles.primaryBtn, { backgroundColor: moveDlg === "paid_in" ? C.ok : C.danger }]}
                 onPress={addMovement}
                 testID="confirm-movement"
               >
@@ -3942,7 +3943,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
       <Modal visible={printing} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.printingBox}>
-            <ActivityIndicator color="#00B14F" size="large" />
+            <ActivityIndicator color={C.brand} size="large" />
             <Text style={styles.printingText}>Printing…</Text>
           </View>
         </View>
@@ -4071,14 +4072,14 @@ function ShiftHistory({
           <Text style={styles.shiftLabel}>Paid In</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Text style={styles.shiftVal}>{(selected.total_paid_in || 0).toFixed(2)}</Text>
-            <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+            <Ionicons name="chevron-forward" size={14} color={C.ink3} />
           </View>
         </View>
         <View style={styles.shiftRow}>
           <Text style={styles.shiftLabel}>Paid Out</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Text style={[styles.shiftVal, { color: "#EF4444" }]}>{(selected.total_paid_out || 0).toFixed(2)}</Text>
-            <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+            <Text style={[styles.shiftVal, { color: C.danger }]}>{(selected.total_paid_out || 0).toFixed(2)}</Text>
+            <Ionicons name="chevron-forward" size={14} color={C.ink3} />
           </View>
         </View>
         <ShiftRow label="Actual in Drawer" value={(selected.actual_in_drawer ?? 0).toFixed(2)} />
@@ -4094,14 +4095,14 @@ function ShiftHistory({
           onPress={() => onReprint(selected.id)}
           testID={`shift-reprint-${selected.id}`}
         >
-          <Ionicons name="print-outline" size={18} color="#00B14F" />
+          <Ionicons name="print-outline" size={18} color={C.brand} />
           <Text style={styles.histReprintText}>Reprint summary</Text>
         </TouchableOpacity>
       )}
     </ScrollView>
   ) : (
     <View style={styles.emptyBox}>
-      <Ionicons name="time-outline" size={40} color="#CBD5E1" />
+      <Ionicons name="time-outline" size={40} color={C.lineStrong} />
       <Text style={styles.emptyText}>Pick a shift to see details</Text>
     </View>
   );
@@ -4110,7 +4111,7 @@ function ShiftHistory({
     <View style={styles.histListPanel}>
       <View style={styles.histRangeRow}>
         <TouchableOpacity onPress={() => shiftRange(-10)} testID="hist-range-prev">
-          <Ionicons name="chevron-back" size={20} color="#00B14F" />
+          <Ionicons name="chevron-back" size={20} color={C.brand} />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.histRangeLabelBtn}
@@ -4120,7 +4121,7 @@ function ShiftHistory({
           <Text style={styles.histRangeLabel}>{fmtRangeLabel(range)}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => shiftRange(10)} testID="hist-range-next">
-          <Ionicons name="chevron-forward" size={20} color="#00B14F" />
+          <Ionicons name="chevron-forward" size={20} color={C.brand} />
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
@@ -4147,7 +4148,7 @@ function ShiftHistory({
                         End Drawer: {fmtTimeOfDay(row.closed_at || row.opened_at)}
                       </Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                    <Ionicons name="chevron-forward" size={18} color={C.ink3} />
                   </TouchableOpacity>
                 );
               })}
@@ -4203,7 +4204,7 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
     return (
       <ScrollView contentContainerStyle={{ padding: 20 }}>
         <Text style={styles.h2}>Self-Order QR</Text>
-        <Text style={{ color: "#64748B", marginTop: 8 }}>
+        <Text style={{ color: C.ink2Soft, marginTop: 8 }}>
           No active branch on this device. Log in to a branch to see its QR.
         </Text>
       </ScrollView>
@@ -4213,14 +4214,14 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
   return (
     <ScrollView contentContainerStyle={{ padding: 20, gap: 16, alignItems: "center" }}>
       <Text style={[styles.h2, { alignSelf: "flex-start" }]}>Self-Order QR</Text>
-      <Text style={{ color: "#475569", alignSelf: "flex-start", marginTop: -6 }}>
+      <Text style={{ color: C.ink2, alignSelf: "flex-start", marginTop: -6 }}>
         Customers scan this to order &amp; pay from their phone for{" "}
         <Text style={{ fontWeight: "700" }}>{branchName || "this branch"}</Text>.
       </Text>
 
       <View
         style={{
-          backgroundColor: "#fff",
+          backgroundColor: C.surface,
           borderRadius: 20,
           padding: 20,
           marginTop: 8,
@@ -4238,27 +4239,27 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           <Image source={{ uri: qr }} style={{ width: 240, height: 240 }} resizeMode="contain" />
         ) : (
           <View style={{ width: 240, height: 240, alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ color: "#94A3B8" }}>Couldn’t render QR</Text>
+            <Text style={{ color: C.ink3 }}>Couldn’t render QR</Text>
           </View>
         )}
-        <Text style={{ fontWeight: "800", fontSize: 16, marginTop: 12, color: "#0F172A" }}>
+        <Text style={{ fontWeight: "800", fontSize: 16, marginTop: 12, color: C.ink }}>
           {branchName || "Self Order"}
         </Text>
       </View>
 
       <View
         style={{
-          backgroundColor: "#F8FAFC",
+          backgroundColor: C.bgSoft,
           borderRadius: 12,
           padding: 12,
           width: "100%",
           maxWidth: 360,
           borderWidth: 1,
-          borderColor: "#E2E8F0",
+          borderColor: C.line,
         }}
       >
-        <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>Link</Text>
-        <Text selectable style={{ color: "#0F172A", fontSize: 13 }}>{url}</Text>
+        <Text style={{ color: C.ink2Soft, fontSize: 12, marginBottom: 4 }}>Link</Text>
+        <Text selectable style={{ color: C.ink, fontSize: 13 }}>{url}</Text>
       </View>
 
       <View style={{ flexDirection: "row", gap: 12, marginTop: 4 }}>
@@ -4266,27 +4267,27 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           onPress={share}
           style={{
             flexDirection: "row", alignItems: "center", gap: 8,
-            backgroundColor: "#D61222", paddingVertical: 12, paddingHorizontal: 22,
+            backgroundColor: C.brand, paddingVertical: 12, paddingHorizontal: 22,
             borderRadius: 12,
           }}
         >
-          <Ionicons name="share-outline" size={18} color="#fff" />
-          <Text style={{ color: "#fff", fontWeight: "700" }}>Share link</Text>
+          <Ionicons name="share-outline" size={18} color={C.surface} />
+          <Text style={{ color: C.surface, fontWeight: "700" }}>Share link</Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => Linking.openURL(url)}
           style={{
             flexDirection: "row", alignItems: "center", gap: 8,
-            backgroundColor: "#fff", paddingVertical: 12, paddingHorizontal: 22,
-            borderRadius: 12, borderWidth: 1.5, borderColor: "#D61222",
+            backgroundColor: C.surface, paddingVertical: 12, paddingHorizontal: 22,
+            borderRadius: 12, borderWidth: 1.5, borderColor: C.brand,
           }}
         >
-          <Ionicons name="open-outline" size={18} color="#D61222" />
-          <Text style={{ color: "#D61222", fontWeight: "700" }}>Open</Text>
+          <Ionicons name="open-outline" size={18} color={C.brand} />
+          <Text style={{ color: C.brand, fontWeight: "700" }}>Open</Text>
         </TouchableOpacity>
       </View>
 
-      <Text style={{ color: "#94A3B8", fontSize: 12, textAlign: "center", maxWidth: 340, marginTop: 4 }}>
+      <Text style={{ color: C.ink3, fontSize: 12, textAlign: "center", maxWidth: 340, marginTop: 4 }}>
         Print this and place it on the table or counter. Each branch shows its own link automatically.
       </Text>
     </ScrollView>
@@ -4295,21 +4296,21 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
 
 function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branchId: string; branchName: string }) {
   const sections: { name: string; icon: any; color: string }[] = [
-    { name: "Shop", icon: "home", color: "#EF4444" },
+    { name: "Shop", icon: "home", color: C.danger },
     { name: "Floor plan", icon: "grid", color: "#3B82F6" },
     { name: "Language", icon: "language", color: "#8B5CF6" },
-    { name: "Receipt", icon: "receipt", color: "#EF4444" },
+    { name: "Receipt", icon: "receipt", color: C.danger },
     // No Payment section: gateway credentials and the test/live lane are
     // backoffice-only. A tablet on a shop counter has no business learning the
     // merchant account or changing where money lands. /api/settings strips the
     // payment fields in both directions, so there is nothing here to edit.
-    { name: "Self-Order QR", icon: "qr-code", color: "#D61222" },
+    { name: "Self-Order QR", icon: "qr-code", color: C.brand },
     { name: "Drawer", icon: "calculator", color: "#06B6D4" },
     { name: "Sales channels", icon: "link", color: "#EC4899" },
-    { name: "Printers", icon: "print", color: "#10B981" },
+    { name: "Printers", icon: "print", color: C.ok },
     { name: "Customer display", icon: "tv", color: "#3B82F6" },
     { name: "Users", icon: "person", color: "#F97316" },
-    { name: "Advance Settings", icon: "settings", color: "#64748B" },
+    { name: "Advance Settings", icon: "settings", color: C.ink2Soft },
     { name: "Backup & Restore", icon: "cloud-upload", color: "#A855F7" },
     { name: "Data synchronization", icon: "sync", color: "#06B6D4" },
     { name: "CRM System", icon: "star", color: "#EAB308" },
@@ -4391,10 +4392,10 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                 testID={`settings-${sec.name}`}
               >
                 <Ionicons name={sec.icon} size={18} color={sec.color} style={{ marginRight: 10 }} />
-                <Text style={[styles.settingsLabel, { flex: 1 }, isWide && active === sec.name && { color: "#00B14F", fontWeight: "700" }]}>
+                <Text style={[styles.settingsLabel, { flex: 1 }, isWide && active === sec.name && { color: C.brand, fontWeight: "700" }]}>
                   {sec.name}
                 </Text>
-                <Ionicons name="chevron-forward" size={14} color="#94A3B8" />
+                <Ionicons name="chevron-forward" size={14} color={C.ink3} />
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -4408,7 +4409,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
             onPress={() => setDrilled(false)}
             testID="settings-back"
           >
-            <Ionicons name="chevron-back" size={18} color="#00B14F" />
+            <Ionicons name="chevron-back" size={18} color={C.brand} />
             <Text style={styles.backText}>Settings</Text>
           </TouchableOpacity>
         )}
@@ -4429,7 +4430,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                     onPress={() => update({ business_type: bt })}
                     testID={`biz-${bt}`}
                   >
-                    <Text style={[styles.bizBtnText, s.business_type === bt && { color: "#FFF" }]}>{bt}</Text>
+                    <Text style={[styles.bizBtnText, s.business_type === bt && { color: C.surface }]}>{bt}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -4464,7 +4465,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                     style={[styles.bizBtn, s.tax_mode === m && styles.bizBtnActive]}
                     onPress={() => update({ tax_mode: m })}
                   >
-                    <Text style={[styles.bizBtnText, s.tax_mode === m && { color: "#FFF" }]}>{m}</Text>
+                    <Text style={[styles.bizBtnText, s.tax_mode === m && { color: C.surface }]}>{m}</Text>
                   </TouchableOpacity>
                 ))}
                 <TextInput
@@ -4513,9 +4514,9 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
           <DrawerCategoriesSection />
         ) : (
           <View style={styles.emptyBox}>
-            <Ionicons name="construct-outline" size={40} color="#CBD5E1" />
+            <Ionicons name="construct-outline" size={40} color={C.lineStrong} />
             <Text style={styles.emptyText}>{active}</Text>
-            <Text style={[styles.emptyText, { color: "#CBD5E1" }]}>Coming soon</Text>
+            <Text style={[styles.emptyText, { color: C.lineStrong }]}>Coming soon</Text>
           </View>
         )}
       </View>
@@ -4590,13 +4591,13 @@ function DrawerCategoriesSection() {
               onPress={() => setType(k)}
               testID={`drawer-cat-tab-${k}`}
             >
-              <Text style={[styles.bizBtnText, type === k && { color: "#FFF" }]}>{label}</Text>
+              <Text style={[styles.bizBtnText, type === k && { color: C.surface }]}>{label}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
         {loading ? (
-          <ActivityIndicator color="#00B14F" style={{ marginTop: 20 }} />
+          <ActivityIndicator color={C.brand} style={{ marginTop: 20 }} />
         ) : (
           rows.map((c) => (
             <View key={c.id} style={styles.moveRow} testID={`drawer-cat-row-${c.id}`}>
@@ -4606,7 +4607,7 @@ function DrawerCategoriesSection() {
                   <Ionicons name="create-outline" size={20} color="#3B82F6" />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => remove(c)} testID={`drawer-cat-del-${c.id}`}>
-                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Ionicons name="trash-outline" size={20} color={C.danger} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -4614,7 +4615,7 @@ function DrawerCategoriesSection() {
         )}
 
         <TouchableOpacity style={[styles.primaryBtn, { marginTop: 6 }]} onPress={openNew} testID="drawer-cat-add">
-          <Ionicons name="add" size={18} color="#FFFFFF" style={{ marginRight: 4 }} />
+          <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
           <Text style={styles.primaryBtnText}>Add Category</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -4623,7 +4624,7 @@ function DrawerCategoriesSection() {
         <View style={styles.modalOverlay}>
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setEditing(null)}><Ionicons name="close" size={24} color="#475569" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setEditing(null)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
               <Text style={styles.modalTitle}>{editing?.id ? "Edit Category" : "New Category"}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -4861,10 +4862,10 @@ function PrintersSection({
 
   const dotColor =
     !status || status.status === "disabled"
-      ? "#94A3B8"
+      ? C.ink3
       : status.connected
-      ? "#10B981"
-      : "#EF4444";
+      ? C.ok
+      : C.danger;
   const statusLabel = !status
     ? "Checking…"
     : status.status === "disabled"
@@ -4891,7 +4892,7 @@ function PrintersSection({
 
         <View style={styles.printerCard}>
           <View style={styles.printerHeader}>
-            <Ionicons name="phone-portrait-outline" size={22} color="#10B981" />
+            <Ionicons name="phone-portrait-outline" size={22} color={C.ok} />
             <View style={{ flex: 1 }}>
               <Text style={styles.printerName}>
                 {localCfg?.identifier
@@ -4912,18 +4913,18 @@ function PrintersSection({
             {(() => {
               const noConfig = !localCfg?.identifier;
               const disabled = !!localCfg && !localCfg.enabled;
-              let dotColor = "#94A3B8";
+              let dotColor = C.ink3;
               let label: string = "Off";
               if (noConfig) {
-                dotColor = "#94A3B8"; label = "Off";
+                dotColor = C.ink3; label = "Off";
               } else if (disabled) {
-                dotColor = "#94A3B8"; label = "Disabled";
+                dotColor = C.ink3; label = "Disabled";
               } else if (livePrinter.online === true) {
-                dotColor = "#10B981"; label = "Online";
+                dotColor = C.ok; label = "Online";
               } else if (livePrinter.online === false) {
-                dotColor = "#EF4444"; label = "Offline";
+                dotColor = C.danger; label = "Offline";
               } else {
-                dotColor = "#F59E0B"; label = "Checking…";
+                dotColor = C.warn; label = "Checking…";
               }
               return (
                 <View style={styles.printerStatusPill}>
@@ -4942,7 +4943,7 @@ function PrintersSection({
             disabled={localScanning}
             testID="local-printer-scan"
           >
-            <Ionicons name="search" size={16} color="#0F172A" />
+            <Ionicons name="search" size={16} color={C.ink} />
             <Text style={styles.secondaryBtnText}>
               {localScanning ? "Scanning…" : "Scan"}
             </Text>
@@ -4955,7 +4956,7 @@ function PrintersSection({
                 disabled={localTesting}
                 testID="local-printer-test"
               >
-                <Ionicons name="document-text-outline" size={16} color="#0F172A" />
+                <Ionicons name="document-text-outline" size={16} color={C.ink} />
                 <Text style={styles.secondaryBtnText}>
                   {localTesting ? "Sending…" : "Test Print"}
                 </Text>
@@ -4993,7 +4994,7 @@ function PrintersSection({
             disabled={!manualIp}
             testID="local-printer-add-by-ip"
           >
-            <Ionicons name="add" size={16} color="#0F172A" />
+            <Ionicons name="add" size={16} color={C.ink} />
             <Text style={styles.secondaryBtnText}>Add by IP</Text>
           </TouchableOpacity>
         </View>
@@ -5005,7 +5006,7 @@ function PrintersSection({
         {localCfg?.identifier && (
           <View style={{ marginTop: 14 }}>
             <Text style={styles.formLabel}>Receipt right margin</Text>
-            <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 8 }}>
+            <Text style={{ color: C.ink2Soft, fontSize: 12, marginBottom: 8 }}>
               If the right side of the receipt is cut off, pick a bigger margin, then reprint a bill. Keep increasing until the amounts fit.
             </Text>
             <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
@@ -5023,7 +5024,7 @@ function PrintersSection({
                     onPress={() => setRightPad(opt.v)}
                     style={[
                       styles.secondaryBtn,
-                      isActive && { borderColor: "#10B981", backgroundColor: "#F0FDF4" },
+                      isActive && { borderColor: C.ok, backgroundColor: C.brandTintSoft },
                     ]}
                     testID={`rightpad-${opt.label}`}
                   >
@@ -5044,8 +5045,8 @@ function PrintersSection({
                 style={[
                   styles.printerListRow,
                   localCfg?.identifier === d.identifier && {
-                    borderColor: "#10B981",
-                    backgroundColor: "#F0FDF4",
+                    borderColor: C.ok,
+                    backgroundColor: C.brandTintSoft,
                   },
                 ]}
                 onPress={() => selectLocal(d)}
@@ -5058,7 +5059,7 @@ function PrintersSection({
                   </Text>
                 </Text>
                 {localCfg?.identifier === d.identifier && (
-                  <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                  <Ionicons name="checkmark-circle" size={18} color={C.ok} />
                 )}
               </TouchableOpacity>
             ))}
@@ -5103,7 +5104,7 @@ function PrintersSection({
                     onPress={() => removeQueuedJob(j.id)}
                     testID={`queued-remove-${j.order.order_number}`}
                   >
-                    <Ionicons name="close" size={16} color="#EF4444" />
+                    <Ionicons name="close" size={16} color={C.danger} />
                     <Text style={styles.queuedRemoveText}>Remove</Text>
                   </TouchableOpacity>
                 </View>
@@ -5120,7 +5121,7 @@ function PrintersSection({
     <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <TouchableOpacity onPress={() => setEditing(false)} testID="printer-back">
-          <Ionicons name="chevron-back" size={22} color="#0F172A" />
+          <Ionicons name="chevron-back" size={22} color={C.ink} />
         </TouchableOpacity>
         <Text style={styles.h2}>Receipt Printer</Text>
       </View>
@@ -5152,7 +5153,7 @@ function PrintersSection({
               onPress={() => update({ printer_transport: t.k as any })}
               testID={`printer-transport-${t.k}`}
             >
-              <Text style={[styles.bizBtnText, transport === t.k && { color: "#FFF" }]}>
+              <Text style={[styles.bizBtnText, transport === t.k && { color: C.surface }]}>
                 {t.label}
               </Text>
             </TouchableOpacity>
@@ -5182,7 +5183,7 @@ function PrintersSection({
                   <Text
                     style={[
                       styles.detectChipText,
-                      address === d.path && { color: "#FFF" },
+                      address === d.path && { color: C.surface },
                     ]}
                   >
                     {d.path}
@@ -5196,7 +5197,7 @@ function PrintersSection({
               style={styles.detectRefresh}
               testID="detect-refresh"
             >
-              <Ionicons name="refresh" size={14} color="#475569" />
+              <Ionicons name="refresh" size={14} color={C.ink2} />
               <Text style={styles.printerListMeta}>{detecting ? "…" : "Rescan"}</Text>
             </TouchableOpacity>
           </View>
@@ -5237,7 +5238,7 @@ function PrintersSection({
           disabled={testing || transport === "disabled"}
           testID="printer-test"
         >
-          <Ionicons name="document-text-outline" size={16} color="#0F172A" />
+          <Ionicons name="document-text-outline" size={16} color={C.ink} />
           <Text style={styles.secondaryBtnText}>{testing ? "Sending…" : "Test Print"}</Text>
         </TouchableOpacity>
       </View>
@@ -5248,7 +5249,7 @@ function PrintersSection({
 
 // =================== STYLES ===================
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#F1F5F9" },
+  root: { flex: 1, backgroundColor: C.bg },
   rootRow: { flex: 1, flexDirection: "row" },
 
   // Sidebar — direct child of a flexDirection: "row" container in both
@@ -5256,61 +5257,61 @@ const styles = StyleSheet.create({
   // cross-axis stretch gives it the full row height (no flex needed).
   sidebar: {
     width: 220,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRightWidth: 1,
-    borderRightColor: "#E2E8F0",
+    borderRightColor: C.line,
     paddingVertical: 20,
     paddingHorizontal: 12,
   },
   avatarBox: { alignItems: "center", marginBottom: 20 },
   avatarCircle: {
     width: 56, height: 56, borderRadius: 28,
-    borderWidth: 2, borderColor: "#CBD5E1",
+    borderWidth: 2, borderColor: C.lineStrong,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
   },
-  avatarText: { fontSize: 14, color: "#475569", marginTop: 6, fontWeight: "600" },
+  avatarText: { fontSize: 14, color: C.ink2, marginTop: 6, fontWeight: "600" },
   sideBranchChip: {
     flexDirection: "row", alignItems: "center", gap: 4,
     marginTop: 6, paddingHorizontal: 8, paddingVertical: 4,
-    backgroundColor: "#E5F7ED", borderRadius: 999, maxWidth: 160,
+    backgroundColor: C.brandTint, borderRadius: 999, maxWidth: 160,
   },
-  sideBranchChipText: { fontSize: 11, color: "#00B14F", fontWeight: "600" },
+  sideBranchChipText: { fontSize: 11, color: C.brand, fontWeight: "600" },
   sideItem: {
     flexDirection: "row", alignItems: "center", gap: 12,
     padding: 12, borderRadius: 10, marginBottom: 4,
   },
-  sideItemActive: { backgroundColor: "#E5F7ED" },
-  sideLabel: { fontSize: 14, color: "#475569", fontWeight: "500" },
-  sideLabelActive: { color: "#00B14F", fontWeight: "700" },
+  sideItemActive: { backgroundColor: C.brandTint },
+  sideLabel: { fontSize: 14, color: C.ink2, fontWeight: "500" },
+  sideLabelActive: { color: C.brand, fontWeight: "700" },
   logoutSide: { flexDirection: "row", gap: 8, padding: 12, alignItems: "center" },
-  logoutSideText: { color: "#EF4444", fontSize: 13, fontWeight: "600" },
-  versionText: { fontSize: 10, color: "#CBD5E1", textAlign: "center", marginTop: 4 },
+  logoutSideText: { color: C.danger, fontSize: 13, fontWeight: "600" },
+  versionText: { fontSize: 10, color: C.lineStrong, textAlign: "center", marginTop: 4 },
   sideFooter: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 12, paddingTop: 6, paddingBottom: 2,
-    borderTopWidth: 1, borderTopColor: "#F1F5F9",
+    borderTopWidth: 1, borderTopColor: C.bg,
   },
-  sideFooterDate: { fontSize: 10, color: "#94A3B8" },
+  sideFooterDate: { fontSize: 10, color: C.ink3 },
 
   mobileTop: {
-    height: 56, backgroundColor: "#FFFFFF", flexDirection: "row",
+    height: 56, backgroundColor: C.surface, flexDirection: "row",
     alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  mobileTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
-  mobileSidebarOverlay: { flex: 1, flexDirection: "row", backgroundColor: "rgba(15,23,42,0.4)" },
+  mobileTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  mobileSidebarOverlay: { flex: 1, flexDirection: "row", backgroundColor: C.scrim },
 
   content: { flex: 1 },
 
   // Text
-  h1: { fontSize: 24, fontWeight: "700", color: "#0F172A", marginBottom: 12 },
-  h2: { fontSize: 18, fontWeight: "700", color: "#0F172A", marginBottom: 4 },
-  helperText: { color: "#94A3B8", fontSize: 13, marginBottom: 14 },
+  h1: { fontSize: 24, fontWeight: "700", color: C.ink, marginBottom: 12 },
+  h2: { fontSize: 18, fontWeight: "700", color: C.ink, marginBottom: 4 },
+  helperText: { color: C.ink3, fontSize: 13, marginBottom: 14 },
   sectionHeader: {
-    fontSize: 15, fontWeight: "700", color: "#0F172A",
-    padding: 14, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    fontSize: 15, fontWeight: "700", color: C.ink,
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.line,
+    backgroundColor: C.surface,
   },
 
   // Two-column layout
@@ -5328,91 +5329,91 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     borderRightWidth: 0,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
   // Compact horizontal category strip used on narrow screens for Products /
   // Inventory.  Replaces the ~600px-tall vertical rail so the FlatList of
   // products below has enough vertical space to render.
   narrowCatBar: {
     width: "100%",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
   catChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderColor: C.line,
+    backgroundColor: C.surface,
   },
-  catChipText: { fontSize: 12, color: "#0F172A", fontWeight: "600" },
+  catChipText: { fontSize: 12, color: C.ink, fontWeight: "600" },
   backRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     padding: 14,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
+    borderBottomColor: C.line,
   },
-  backText: { color: "#00B14F", fontSize: 14, fontWeight: "600" },
+  backText: { color: C.brand, fontSize: 14, fontWeight: "600" },
   leftNav: {
-    width: 280, backgroundColor: "#FFFFFF",
-    borderRightWidth: 1, borderRightColor: "#E2E8F0",
+    width: 280, backgroundColor: C.surface,
+    borderRightWidth: 1, borderRightColor: C.line,
   },
   leftNavRow: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    padding: 14, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  leftNavRowActive: { backgroundColor: "#F1F5F9" },
-  leftNavText: { flex: 1, fontSize: 13, color: "#475569" },
+  leftNavRowActive: { backgroundColor: C.bg },
+  leftNavText: { flex: 1, fontSize: 13, color: C.ink2 },
 
   // Reports
   periodRow: {
-    flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 10,
+    flexDirection: "row", backgroundColor: C.surface, borderRadius: 10,
     padding: 4, gap: 4, marginBottom: 16, alignSelf: "flex-start",
   },
   periodBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
-  periodBtnActive: { backgroundColor: "#00B14F" },
-  periodText: { fontSize: 13, color: "#475569", fontWeight: "600" },
-  periodTextActive: { color: "#FFFFFF" },
+  periodBtnActive: { backgroundColor: C.brand },
+  periodText: { fontSize: 13, color: C.ink2, fontWeight: "600" },
+  periodTextActive: { color: C.surface },
   kpiRow: { flexDirection: "row", gap: 12, marginBottom: 14, flexWrap: "wrap" },
   kpiCard: {
-    flex: 1, minWidth: 160, backgroundColor: "#FFFFFF", padding: 16,
+    flex: 1, minWidth: 160, backgroundColor: C.surface, padding: 16,
     borderRadius: 12, borderTopWidth: 3,
   },
   kpiHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 },
-  kpiLabel: { fontSize: 12, color: "#94A3B8", fontWeight: "600" },
-  kpiValue: { fontSize: 22, fontWeight: "700", color: "#0F172A" },
+  kpiLabel: { fontSize: 12, color: C.ink3, fontWeight: "600" },
+  kpiValue: { fontSize: 22, fontWeight: "700", color: C.ink },
   gpRow: { flexDirection: "row", gap: 12, marginBottom: 16, flexWrap: "wrap" },
   gpStat: {
     flex: 1, minWidth: 140, padding: 14, borderRadius: 10,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
   },
-  gpLabel: { fontSize: 11, color: "#94A3B8", fontWeight: "600" },
-  gpValue: { fontSize: 18, color: "#0F172A", fontWeight: "700", marginTop: 4 },
+  gpLabel: { fontSize: 11, color: C.ink3, fontWeight: "600" },
+  gpValue: { fontSize: 18, color: C.ink, fontWeight: "700", marginTop: 4 },
   chartsRow: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
   chartCard: {
-    flex: 1, minWidth: 280, backgroundColor: "#FFFFFF",
+    flex: 1, minWidth: 280, backgroundColor: C.surface,
     padding: 16, borderRadius: 12,
   },
-  chartTitle: { fontSize: 13, fontWeight: "700", color: "#0F172A", marginBottom: 10 },
+  chartTitle: { fontSize: 13, fontWeight: "700", color: C.ink, marginBottom: 10 },
   chart: { flexDirection: "row", alignItems: "flex-end", height: 180, gap: 8 },
   barCol: { flex: 1, alignItems: "center", gap: 6 },
-  bar: { width: "100%", backgroundColor: "#00B14F", borderRadius: 6 },
-  barLabel: { fontSize: 10, color: "#94A3B8" },
-  emptyChart: { color: "#94A3B8", fontSize: 12, padding: 20 },
+  bar: { width: "100%", backgroundColor: C.brand, borderRadius: 6 },
+  barLabel: { fontSize: 10, color: C.ink3 },
+  emptyChart: { color: C.ink3, fontSize: 12, padding: 20 },
   rankRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   rankDot: { width: 8, height: 8, borderRadius: 4 },
-  rankName: { flex: 1, fontSize: 12, color: "#475569" },
-  rankBarBg: { width: 80, height: 6, backgroundColor: "#F1F5F9", borderRadius: 3 },
+  rankName: { flex: 1, fontSize: 12, color: C.ink2 },
+  rankBarBg: { width: 80, height: 6, backgroundColor: C.bg, borderRadius: 3 },
   rankBar: { height: 6, borderRadius: 3 },
-  rankVal: { fontSize: 11, color: "#0F172A", fontWeight: "600", minWidth: 70, textAlign: "right" },
+  rankVal: { fontSize: 11, color: C.ink, fontWeight: "600", minWidth: 70, textAlign: "right" },
 
   // Transactions
-  txList: { width: 320, backgroundColor: "#FFFFFF", borderRightWidth: 1, borderRightColor: "#E2E8F0" },
+  txList: { width: 320, backgroundColor: C.surface, borderRightWidth: 1, borderRightColor: C.line },
   txDetail: { flex: 1 },
   txDateChips: {
     flexDirection: "row", alignItems: "center", gap: 6,
@@ -5421,126 +5422,126 @@ const styles = StyleSheet.create({
   txDateChip: {
     flex: 1, height: 34, borderRadius: 17,
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.line, backgroundColor: C.surface,
   },
-  txDateChipText: { fontSize: 11, color: "#0F172A", fontWeight: "600" },
-  txDateChipActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
+  txDateChipText: { fontSize: 11, color: C.ink, fontWeight: "600" },
+  txDateChipActive: { backgroundColor: C.brand, borderColor: C.brand },
   txEmpty: { padding: 24, alignItems: "center" },
   txRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
-  txRowActive: { backgroundColor: "#E5F7ED" },
+  txRowActive: { backgroundColor: C.brandTint },
   txNum: { fontSize: 13, color: "#3B82F6", fontWeight: "600" },
-  txTime: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
-  txAmount: { fontSize: 14, color: "#0F172A", fontWeight: "700" },
-  txVoided: { color: "#DC2626", fontWeight: "700" },
-  divider: { height: 1, backgroundColor: "#F1F5F9" },
-  voidedBy: { fontSize: 13, color: "#DC2626", fontWeight: "700", marginTop: 4 },
+  txTime: { fontSize: 11, color: C.ink3, marginTop: 2 },
+  txAmount: { fontSize: 14, color: C.ink, fontWeight: "700" },
+  txVoided: { color: C.dangerDark, fontWeight: "700" },
+  divider: { height: 1, backgroundColor: C.bg },
+  voidedBy: { fontSize: 13, color: C.dangerDark, fontWeight: "700", marginTop: 4 },
 
   // ── Transaction detail (reference "Sale Transactions" layout) ──
-  txDetailWrap: { flex: 1, backgroundColor: "#FFFFFF" },
+  txDetailWrap: { flex: 1, backgroundColor: C.surface },
   txDetailScroll: { padding: 24, paddingBottom: 32 },
   tdHeadRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  tdOrderNo: { fontSize: 26, fontWeight: "700", color: "#0F172A", flexShrink: 1 },
-  tdGrand: { fontSize: 26, fontWeight: "700", color: "#0F172A", marginLeft: 12 },
-  tdMeta: { fontSize: 13, color: "#94A3B8", marginTop: 4 },
+  tdOrderNo: { fontSize: 26, fontWeight: "700", color: C.ink, flexShrink: 1 },
+  tdGrand: { fontSize: 26, fontWeight: "700", color: C.ink, marginLeft: 12 },
+  tdMeta: { fontSize: 13, color: C.ink3, marginTop: 4 },
   tdSectionRow: { flexDirection: "row", alignItems: "center", marginVertical: 16 },
-  tdSectionLine: { flex: 1, height: 1, backgroundColor: "#E2E8F0" },
-  tdSectionText: { fontSize: 13, color: "#64748B", fontWeight: "600", marginHorizontal: 12 },
+  tdSectionLine: { flex: 1, height: 1, backgroundColor: C.line },
+  tdSectionText: { fontSize: 13, color: C.ink2Soft, fontWeight: "600", marginHorizontal: 12 },
   tdItemRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  tdItemImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: "#F1F5F9" },
+  tdItemImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: C.bg },
   tdItemImgEmpty: { alignItems: "center", justifyContent: "center" },
   tdItemMid: { flex: 1, marginLeft: 12 },
-  tdItemName: { fontSize: 15, color: "#0F172A", fontWeight: "500" },
-  tdItemSub: { fontSize: 12, color: "#94A3B8", marginTop: 3 },
-  tdItemTotal: { fontSize: 15, color: "#0F172A", fontWeight: "600", marginLeft: 12 },
+  tdItemName: { fontSize: 15, color: C.ink, fontWeight: "500" },
+  tdItemSub: { fontSize: 12, color: C.ink3, marginTop: 3 },
+  tdItemTotal: { fontSize: 15, color: C.ink, fontWeight: "600", marginLeft: 12 },
   tdTotalsBlock: { marginTop: 4 },
   tdLineRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", marginBottom: 8 },
-  tdLineLabel: { fontSize: 14, color: "#64748B", marginRight: 24 },
-  tdLineValue: { fontSize: 14, color: "#0F172A", fontWeight: "500", minWidth: 80, textAlign: "right" },
-  tdLineBold: { fontWeight: "700", color: "#0F172A" },
+  tdLineLabel: { fontSize: 14, color: C.ink2Soft, marginRight: 24 },
+  tdLineValue: { fontSize: 14, color: C.ink, fontWeight: "500", minWidth: 80, textAlign: "right" },
+  tdLineBold: { fontWeight: "700", color: C.ink },
   tdChannelRow: { flexDirection: "row", justifyContent: "flex-end" },
   tdChannelBadge: { flexDirection: "row", alignItems: "center", gap: 6 },
-  tdChannelText: { fontSize: 14, color: "#0F172A", fontWeight: "500" },
+  tdChannelText: { fontSize: 14, color: C.ink, fontWeight: "500" },
   tdActionBar: { flexDirection: "row" },
-  tdCancelBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: "#9F1239" },
+  tdCancelBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: C.dangerDark },
   tdCancelBtnDisabled: { backgroundColor: "#F9A8C4" },
-  tdReprintBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: "#15803D" },
-  tdActionText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
-  tdTaxIssued: { fontSize: 13, color: "#15803D", fontWeight: "600", marginTop: 4 },
+  tdReprintBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: C.okDark },
+  tdActionText: { fontSize: 16, fontWeight: "700", color: C.surface },
+  tdTaxIssued: { fontSize: 13, color: C.okDark, fontWeight: "600", marginTop: 4 },
 
   // ── Reprint document menu (reference POS's พิมพ์ซ้ำ popup) ──
   rpMenu: {
-    width: 320, maxWidth: "90%", backgroundColor: "#FFFFFF",
+    width: 320, maxWidth: "90%", backgroundColor: C.surface,
     borderRadius: 16, padding: 16, gap: 10,
   },
-  rpTitle: { fontSize: 15, fontWeight: "700", color: "#0F172A", textAlign: "center", marginBottom: 2 },
+  rpTitle: { fontSize: 15, fontWeight: "700", color: C.ink, textAlign: "center", marginBottom: 2 },
   rpItem: {
-    minHeight: 48, borderRadius: 10, backgroundColor: "#F1F5F9",
+    minHeight: 48, borderRadius: 10, backgroundColor: C.bg,
     alignItems: "center", justifyContent: "center", paddingVertical: 8, paddingHorizontal: 12,
   },
-  rpItemDisabled: { backgroundColor: "#F8FAFC" },
-  rpItemText: { fontSize: 14, fontWeight: "600", color: "#0F172A", textAlign: "center" },
-  rpItemTextDisabled: { color: "#CBD5E1" },
-  rpSoon: { fontSize: 11, color: "#CBD5E1", marginTop: 2 },
+  rpItemDisabled: { backgroundColor: C.bgSoft },
+  rpItemText: { fontSize: 14, fontWeight: "600", color: C.ink, textAlign: "center" },
+  rpItemTextDisabled: { color: C.lineStrong },
+  rpSoon: { fontSize: 11, color: C.lineStrong, marginTop: 2 },
 
   // ── Full tax invoice flow ──
   tiBackdrop: {
-    flex: 1, backgroundColor: "rgba(15,23,42,0.45)",
+    flex: 1, backgroundColor: C.scrim,
     alignItems: "center", justifyContent: "center", padding: 20,
   },
   tiCard: {
     width: 520, maxWidth: "100%", maxHeight: "90%",
-    backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
+    backgroundColor: C.surface, borderRadius: 16, overflow: "hidden",
   },
   tiHeader: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
   tiBackRow: { flexDirection: "row", alignItems: "center" },
-  tiHeaderAction: { fontSize: 15, color: "#00B14F", fontWeight: "600" },
-  tiTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A", flexShrink: 1, textAlign: "center" },
+  tiHeaderAction: { fontSize: 15, color: C.brand, fontWeight: "600" },
+  tiTitle: { fontSize: 16, fontWeight: "700", color: C.ink, flexShrink: 1, textAlign: "center" },
   tiSearchBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     margin: 16, paddingHorizontal: 12, height: 40,
-    backgroundColor: "#F1F5F9", borderRadius: 10,
+    backgroundColor: C.bg, borderRadius: 10,
   },
-  tiSearchInput: { flex: 1, fontSize: 14, color: "#0F172A" },
+  tiSearchInput: { flex: 1, fontSize: 14, color: C.ink },
   tiEmpty: { padding: 40, alignItems: "center" },
   tiCustRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   tiAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
-  tiAvatarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 15 },
-  tiCustName: { fontSize: 15, fontWeight: "600", color: "#0F172A" },
-  tiCustSub: { fontSize: 12, color: "#94A3B8", marginTop: 2 },
-  tiCustVisit: { fontSize: 11, color: "#94A3B8", marginLeft: 8, maxWidth: 120, textAlign: "right" },
+  tiAvatarText: { color: C.surface, fontWeight: "700", fontSize: 15 },
+  tiCustName: { fontSize: 15, fontWeight: "600", color: C.ink },
+  tiCustSub: { fontSize: 12, color: C.ink3, marginTop: 2 },
+  tiCustVisit: { fontSize: 11, color: C.ink3, marginLeft: 8, maxWidth: 120, textAlign: "right" },
   tiForm: { padding: 16, gap: 12 },
-  tiLabel: { fontSize: 13, color: "#64748B", fontWeight: "600", marginBottom: 6 },
-  tiRequired: { color: "#DC2626" },
-  tiInputError: { borderColor: "#DC2626" },
-  tiError: { fontSize: 12, color: "#DC2626", marginTop: 4 },
+  tiLabel: { fontSize: 13, color: C.ink2Soft, fontWeight: "600", marginBottom: 6 },
+  tiRequired: { color: C.dangerDark },
+  tiInputError: { borderColor: C.dangerDark },
+  tiError: { fontSize: 12, color: C.dangerDark, marginTop: 4 },
   // Registered addresses run long, so the field is tall enough to read one
   // without scrolling inside the input.
   tiTextArea: { height: 96, paddingTop: 10, textAlignVertical: "top" },
   tiRadioRow: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginBottom: 2 },
   tiRadio: { flexDirection: "row", alignItems: "center", gap: 6 },
-  tiRadioText: { fontSize: 14, color: "#0F172A" },
+  tiRadioText: { fontSize: 14, color: C.ink },
   tiPrimaryBtn: {
-    height: 48, borderRadius: 10, backgroundColor: "#00B14F",
+    height: 48, borderRadius: 10, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center", marginTop: 8,
   },
-  tiPrimaryText: { fontSize: 16, fontWeight: "700", color: "#FFFFFF" },
+  tiPrimaryText: { fontSize: 16, fontWeight: "700", color: C.surface },
   tiBusy: {
     position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
     backgroundColor: "rgba(255,255,255,0.6)",
     alignItems: "center", justifyContent: "center",
   },
   tiBusyCard: {
-    backgroundColor: "#FFFFFF", borderRadius: 12, paddingVertical: 20, paddingHorizontal: 28,
+    backgroundColor: C.surface, borderRadius: 12, paddingVertical: 20, paddingHorizontal: 28,
     alignItems: "center", gap: 10,
     // Matches the reference POS's floating spinner card.
-    shadowColor: "#0F172A", shadowOpacity: 0.15, shadowRadius: 12,
+    shadowColor: C.ink, shadowOpacity: 0.15, shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
-  tiBusyText: { fontSize: 13, color: "#64748B" },
+  tiBusyText: { fontSize: 13, color: C.ink2Soft },
   // Generic text input used by the "Add by IP" field in Local Printer.
   // Standard 40px height + rounded corners + slate border to match the
   // rest of the admin form fields.
@@ -5548,690 +5549,690 @@ const styles = StyleSheet.create({
     height: 40,
     paddingHorizontal: 12,
     fontSize: 14,
-    color: "#0F172A",
-    backgroundColor: "#FFFFFF",
+    color: C.ink,
+    backgroundColor: C.surface,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 10,
   },
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 6 },
-  emptyText: { color: "#94A3B8", fontSize: 14 },
+  emptyText: { color: C.ink3, fontSize: 14 },
 
   // Inventory
   invRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    padding: 12, backgroundColor: "#FFFFFF", borderRadius: 10,
-    marginBottom: 8, borderWidth: 1, borderColor: "#F1F5F9",
+    padding: 12, backgroundColor: C.surface, borderRadius: 10,
+    marginBottom: 8, borderWidth: 1, borderColor: C.bg,
   },
-  invImg: { width: 48, height: 48, borderRadius: 8, backgroundColor: "#F1F5F9" },
-  invName: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-  invPrice: { fontSize: 12, color: "#00B14F", fontWeight: "700", marginTop: 2 },
+  invImg: { width: 48, height: 48, borderRadius: 8, backgroundColor: C.bg },
+  invName: { fontSize: 13, fontWeight: "600", color: C.ink },
+  invPrice: { fontSize: 12, color: C.brand, fontWeight: "700", marginTop: 2 },
   stockBox: { alignItems: "flex-end" },
-  stockNum: { fontSize: 18, fontWeight: "700", color: "#00B14F" },
-  stockStatus: { fontSize: 10, color: "#94A3B8" },
-  nonStockText: { fontSize: 11, color: "#94A3B8", fontWeight: "600" },
+  stockNum: { fontSize: 18, fontWeight: "700", color: C.brand },
+  stockStatus: { fontSize: 10, color: C.ink3 },
+  nonStockText: { fontSize: 11, color: C.ink3, fontWeight: "600" },
   invTabs: {
-    flexDirection: "row", borderTopWidth: 1, borderTopColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    flexDirection: "row", borderTopWidth: 1, borderTopColor: C.line,
+    backgroundColor: C.surface,
   },
   invTab: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
     padding: 14, gap: 6,
   },
-  invTabActive: { borderTopWidth: 2, borderTopColor: "#00B14F" },
-  invTabText: { fontSize: 12, color: "#475569", fontWeight: "600" },
+  invTabActive: { borderTopWidth: 2, borderTopColor: C.brand },
+  invTabText: { fontSize: 12, color: C.ink2, fontWeight: "600" },
   sortRow: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 14, paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1, borderBottomColor: C.line,
+    backgroundColor: C.surface,
   },
-  sortLabel: { fontSize: 12, color: "#475569", fontWeight: "600", marginRight: 4 },
+  sortLabel: { fontSize: 12, color: C.ink2, fontWeight: "600", marginRight: 4 },
   sortTab: {
     paddingHorizontal: 14, paddingVertical: 6,
-    borderRadius: 6, borderWidth: 1, borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderRadius: 6, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface,
   },
-  sortTabActive: { borderColor: "#00B14F", backgroundColor: "#FFFFFF" },
-  sortTabText: { fontSize: 12, color: "#475569", fontWeight: "600" },
-  sortTabTextActive: { color: "#00B14F" },
+  sortTabActive: { borderColor: C.brand, backgroundColor: C.surface },
+  sortTabText: { fontSize: 12, color: C.ink2, fontWeight: "600" },
+  sortTabTextActive: { color: C.brand },
 
   // Customers
   custHeader: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    padding: 14, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.line,
+    backgroundColor: C.surface,
   },
-  addLink: { color: "#00B14F", fontSize: 14, fontWeight: "700" },
+  addLink: { color: C.brand, fontSize: 14, fontWeight: "700" },
   searchBoxRow: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    margin: 10, padding: 10, backgroundColor: "#F1F5F9", borderRadius: 8,
+    margin: 10, padding: 10, backgroundColor: C.bg, borderRadius: 8,
   },
-  searchBoxInput: { flex: 1, fontSize: 13, color: "#0F172A", ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
+  searchBoxInput: { flex: 1, fontSize: 13, color: C.ink, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   custAdminRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    padding: 12, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    padding: 12, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  custAdminActive: { backgroundColor: "#E5F7ED" },
+  custAdminActive: { backgroundColor: C.brandTint },
   custAv: {
     width: 40, height: 40, borderRadius: 20,
     alignItems: "center", justifyContent: "center",
   },
-  custAvText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
-  custAdminName: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-  custAdminPhone: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  custAvText: { color: C.surface, fontSize: 14, fontWeight: "700" },
+  custAdminName: { fontSize: 13, fontWeight: "600", color: C.ink },
+  custAdminPhone: { fontSize: 11, color: C.ink3, marginTop: 2 },
   custProfile: { alignItems: "center", padding: 20 },
   custAvLarge: {
     width: 80, height: 80, borderRadius: 40,
     alignItems: "center", justifyContent: "center",
   },
-  custAvLargeText: { color: "#FFFFFF", fontSize: 32, fontWeight: "700" },
-  custProfileName: { fontSize: 18, fontWeight: "700", color: "#0F172A", marginTop: 10 },
-  custPoints: { fontSize: 14, color: "#0F172A", marginTop: 6 },
+  custAvLargeText: { color: C.surface, fontSize: 32, fontWeight: "700" },
+  custProfileName: { fontSize: 18, fontWeight: "700", color: C.ink, marginTop: 10 },
+  custPoints: { fontSize: 14, color: C.ink, marginTop: 6 },
   statsRow: {
     flexDirection: "row", gap: 12, padding: 20,
-    backgroundColor: "#FFFFFF", borderRadius: 12,
+    backgroundColor: C.surface, borderRadius: 12,
   },
   statCell: { flex: 1, alignItems: "center", gap: 4 },
-  statSub: { fontSize: 10, color: "#94A3B8", marginTop: 2 },
+  statSub: { fontSize: 10, color: C.ink3, marginTop: 2 },
   topBox: {
-    flex: 1, backgroundColor: "#FFFFFF", padding: 14, borderRadius: 12,
+    flex: 1, backgroundColor: C.surface, padding: 14, borderRadius: 12,
     minHeight: 160,
   },
   topRow: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  topRank: { fontSize: 11, color: "#94A3B8", fontWeight: "600", width: 22 },
-  topName: { flex: 1, fontSize: 12, color: "#0F172A" },
-  topValue: { fontSize: 12, fontWeight: "700", color: "#0F172A" },
+  topRank: { fontSize: 11, color: C.ink3, fontWeight: "600", width: 22 },
+  topName: { flex: 1, fontSize: 12, color: C.ink },
+  topValue: { fontSize: 12, fontWeight: "700", color: C.ink },
 
   // Products Management
   allCatsLabel: {
-    padding: 14, fontSize: 12, color: "#94A3B8", fontWeight: "600",
+    padding: 14, fontSize: 12, color: C.ink3, fontWeight: "600",
     letterSpacing: 1, textTransform: "uppercase",
   },
   catMgmtRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
-    padding: 14, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  catMgmtName: { fontSize: 13, color: "#0F172A", fontWeight: "500" },
-  catMgmtSource: { fontSize: 10, color: "#94A3B8", marginTop: 2 },
+  catMgmtName: { fontSize: 13, color: C.ink, fontWeight: "500" },
+  catMgmtSource: { fontSize: 10, color: C.ink3, marginTop: 2 },
   prodHeader: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    padding: 14, backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    padding: 14, backgroundColor: C.surface,
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
   addProdBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: "#00B14F", paddingHorizontal: 14, paddingVertical: 8,
+    backgroundColor: C.brand, paddingHorizontal: 14, paddingVertical: 8,
     borderRadius: 8,
   },
-  addProdText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
+  addProdText: { color: C.surface, fontSize: 13, fontWeight: "700" },
   prodMgmtRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    padding: 12, backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    padding: 12, backgroundColor: C.surface,
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  prodPriceLabel: { fontSize: 12, color: "#94A3B8" },
+  prodPriceLabel: { fontSize: 12, color: C.ink3 },
   prodTags: { gap: 2 },
-  tag: { fontSize: 10, color: "#475569" },
+  tag: { fontSize: 10, color: C.ink2 },
   editBtn: { padding: 8 },
   sortGroup: {
     flexDirection: "row",
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: C.line,
     borderRadius: 6,
     overflow: "hidden",
   },
   sortBtn: { paddingHorizontal: 14, paddingVertical: 6 },
-  sortBtnActive: { borderWidth: 1, borderColor: "#00B14F", borderRadius: 5 },
-  sortText: { fontSize: 12, color: "#94A3B8", fontWeight: "600" },
-  linkText: { fontSize: 14, color: "#00B14F", fontWeight: "500" },
-  linkTextBold: { fontSize: 14, color: "#00B14F", fontWeight: "700" },
+  sortBtnActive: { borderWidth: 1, borderColor: C.brand, borderRadius: 5 },
+  sortText: { fontSize: 12, color: C.ink3, fontWeight: "600" },
+  linkText: { fontSize: 14, color: C.brand, fontWeight: "500" },
+  linkTextBold: { fontSize: 14, color: C.brand, fontWeight: "700" },
 
   // Warning pill for ฿0 cost
   warnPill: {
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: "#EF4444",
+    backgroundColor: C.danger,
     alignItems: "center",
     justifyContent: "center",
   },
-  warnPillText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
+  warnPillText: { color: C.surface, fontSize: 11, fontWeight: "700" },
 
   // Shift
   shiftHeader: {
-    fontSize: 16, fontWeight: "700", color: "#00B14F",
-    padding: 16, backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    fontSize: 16, fontWeight: "700", color: C.brand,
+    padding: 16, backgroundColor: C.surface,
+    borderBottomWidth: 1, borderBottomColor: C.line,
     textAlign: "center",
   },
   shiftCard: {
-    backgroundColor: "#F8FAFC", borderRadius: 10,
+    backgroundColor: C.bgSoft, borderRadius: 10,
     padding: 16, marginBottom: 14,
   },
   shiftRow: {
     flexDirection: "row", justifyContent: "space-between",
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  shiftLabel: { fontSize: 14, color: "#475569" },
-  shiftVal: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
+  shiftLabel: { fontSize: 14, color: C.ink2 },
+  shiftVal: { fontSize: 14, color: C.ink, fontWeight: "600" },
   inOutRow: { flexDirection: "row", gap: 14, marginBottom: 14 },
   inOutBtn: {
     flex: 1, padding: 16, borderRadius: 10,
-    backgroundColor: "#FFFFFF", borderWidth: 1,
-    borderColor: "#E2E8F0", alignItems: "center",
+    backgroundColor: C.surface, borderWidth: 1,
+    borderColor: C.line, alignItems: "center",
   },
   inOutText: { fontSize: 15, fontWeight: "700" },
   closeShiftBtn: {
-    backgroundColor: "#00B14F", padding: 18,
+    backgroundColor: C.brand, padding: 18,
     borderRadius: 10, alignItems: "center", justifyContent: "center",
     flexDirection: "row",
   },
-  closeShiftText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700", letterSpacing: 1 },
+  closeShiftText: { color: C.surface, fontSize: 16, fontWeight: "700", letterSpacing: 1 },
   // Paid In / Paid Out form rows (label left, value/input right)
   moveRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    backgroundColor: "#F8FAFC", borderRadius: 10,
+    backgroundColor: C.bgSoft, borderRadius: 10,
     paddingHorizontal: 14, paddingVertical: 12,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    borderWidth: 1, borderColor: C.line,
   },
-  moveRowLabel: { fontSize: 14, color: "#475569", fontWeight: "500" },
-  moveRowValue: { fontSize: 14, color: "#0F172A", fontWeight: "600" },
-  moveRowInput: { fontSize: 16, color: "#0F172A", fontWeight: "600", minWidth: 120, padding: 0 },
+  moveRowLabel: { fontSize: 14, color: C.ink2, fontWeight: "500" },
+  moveRowValue: { fontSize: 14, color: C.ink, fontWeight: "600" },
+  moveRowInput: { fontSize: 16, color: C.ink, fontWeight: "600", minWidth: 120, padding: 0 },
   // Category picker rows
   catRow: {
     paddingHorizontal: 20, paddingVertical: 16,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  catRowText: { fontSize: 15, color: "#0F172A" },
+  catRowText: { fontSize: 15, color: C.ink },
   printingBox: {
-    backgroundColor: "#FFFFFF", borderRadius: 16,
+    backgroundColor: C.surface, borderRadius: 16,
     paddingVertical: 28, paddingHorizontal: 40,
     alignItems: "center", gap: 14, alignSelf: "center",
   },
-  printingText: { fontSize: 15, fontWeight: "600", color: "#475569" },
+  printingText: { fontSize: 15, fontWeight: "600", color: C.ink2 },
 
   // Shift History — split list + detail
-  histLeftWide: { width: 340, borderRightWidth: 1, borderRightColor: "#E2E8F0" },
+  histLeftWide: { width: 340, borderRightWidth: 1, borderRightColor: C.line },
   histRightWide: { flex: 1 },
   histListPanel: { flex: 1 },
   histRangeRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 12, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   histRangeLabelBtn: {
     flex: 1, alignItems: "center",
     paddingVertical: 6, paddingHorizontal: 8,
     borderRadius: 999,
   },
-  histRangeLabel: { fontSize: 13, fontWeight: "600", color: "#00B14F" },
+  histRangeLabel: { fontSize: 13, fontWeight: "600", color: C.brand },
   histDateHeader: {
-    fontSize: 13, fontWeight: "600", color: "#475569",
+    fontSize: 13, fontWeight: "600", color: C.ink2,
     paddingHorizontal: 16, paddingVertical: 10,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: C.bgSoft,
   },
   histListRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
-    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
+    backgroundColor: C.surface,
   },
-  histListRowActive: { backgroundColor: "#F0FDF4" },
-  histListRound: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
-  histListSub: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  histListRowActive: { backgroundColor: C.brandTintSoft },
+  histListRound: { fontSize: 14, fontWeight: "700", color: C.ink },
+  histListSub: { fontSize: 11, color: C.ink3, marginTop: 2 },
   histCard: {
-    backgroundColor: "#FFFFFF", borderRadius: 12,
-    borderWidth: 1, borderColor: "#F1F5F9",
+    backgroundColor: C.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: C.bg,
     paddingHorizontal: 16, paddingVertical: 4,
   },
   histReprintBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
     paddingVertical: 10, borderRadius: 10,
-    borderWidth: 1, borderColor: "#00B14F", backgroundColor: "#F0FDF4",
+    borderWidth: 1, borderColor: C.brand, backgroundColor: C.brandTintSoft,
   },
-  histReprintText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
+  histReprintText: { fontSize: 13, fontWeight: "700", color: C.brand },
 
   catPick: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    borderWidth: 1, borderColor: C.line,
   },
-  catPickActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  catPickText: { fontSize: 11, color: "#475569", fontWeight: "600" },
+  catPickActive: { backgroundColor: C.brand, borderColor: C.brand },
+  catPickText: { fontSize: 11, color: C.ink2, fontWeight: "600" },
 
   // Product image picker
   imgThumb: {
     width: 88, height: 88, borderRadius: 12,
-    borderWidth: 1, borderColor: "#E2E8F0", backgroundColor: "#F8FAFC",
+    borderWidth: 1, borderColor: C.line, backgroundColor: C.bgSoft,
     alignItems: "center", justifyContent: "center", overflow: "hidden",
   },
   imgThumbImage: { width: "100%", height: "100%" },
   imgPickBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
     paddingVertical: 12, paddingHorizontal: 14,
-    borderRadius: 10, borderWidth: 1, borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderRadius: 10, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface,
   },
-  imgPickBtnText: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-  imgClearText: { fontSize: 12, color: "#EF4444", textAlign: "center" },
+  imgPickBtnText: { fontSize: 13, fontWeight: "600", color: C.ink },
+  imgClearText: { fontSize: 12, color: C.danger, textAlign: "center" },
 
   favToggle: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    padding: 12, backgroundColor: "#F8FAFC", borderRadius: 8,
+    padding: 12, backgroundColor: C.bgSoft, borderRadius: 8,
   },
 
   // Settings
   settingsRow: {
     flexDirection: "row", alignItems: "center",
     paddingVertical: 12, paddingHorizontal: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  settingsLabel: { fontSize: 13, color: "#475569" },
+  settingsLabel: { fontSize: 13, color: C.ink2 },
   bizBtn: {
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    borderWidth: 1, borderColor: C.line,
   },
-  bizBtnActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  bizBtnText: { fontSize: 13, fontWeight: "600", color: "#475569" },
+  bizBtnActive: { backgroundColor: C.brand, borderColor: C.brand },
+  bizBtnText: { fontSize: 13, fontWeight: "600", color: C.ink2 },
 
   // Beam payment settings card
   beamSettingsCard: {
-    backgroundColor: "#F8FAFC", borderRadius: 12, padding: 16, gap: 12,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: C.bgSoft, borderRadius: 12, padding: 16, gap: 12,
+    borderWidth: 1, borderColor: C.line,
   },
   beamSettingsHeader: {
     flexDirection: "row", alignItems: "center", gap: 10,
   },
   beamLogoBox: {
-    width: 36, height: 36, borderRadius: 8, backgroundColor: "#00B14F",
+    width: 36, height: 36, borderRadius: 8, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center",
   },
-  beamSettingsTitle: { fontSize: 15, fontWeight: "700", color: "#1E293B" },
-  beamSettingsSub: { fontSize: 12, color: "#64748B" },
-  beamSettingsHint: { fontSize: 11, color: "#94A3B8", marginTop: 4 },
+  beamSettingsTitle: { fontSize: 15, fontWeight: "700", color: C.inkStrong },
+  beamSettingsSub: { fontSize: 12, color: C.ink2Soft },
+  beamSettingsHint: { fontSize: 11, color: C.ink3, marginTop: 4 },
   toggleBox: {
-    width: 44, height: 24, borderRadius: 12, backgroundColor: "#CBD5E1",
+    width: 44, height: 24, borderRadius: 12, backgroundColor: C.lineStrong,
     padding: 2, justifyContent: "center",
   },
-  toggleBoxOn: { backgroundColor: "#00B14F" },
+  toggleBoxOn: { backgroundColor: C.brand },
   toggleKnob: {
-    width: 20, height: 20, borderRadius: 10, backgroundColor: "#FFFFFF",
+    width: 20, height: 20, borderRadius: 10, backgroundColor: C.surface,
   },
   toggleKnobOn: { transform: [{ translateX: 20 }] },
 
   // Forms
-  formLabel: { fontSize: 12, color: "#475569", fontWeight: "600" },
+  formLabel: { fontSize: 12, color: C.ink2, fontWeight: "600" },
   formInput: {
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8,
-    padding: 12, fontSize: 14, color: "#0F172A",
-    backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.line, borderRadius: 8,
+    padding: 12, fontSize: 14, color: C.ink,
+    backgroundColor: C.surface,
   },
   primaryBtn: {
-    backgroundColor: "#00B14F", padding: 14, borderRadius: 10,
+    backgroundColor: C.brand, padding: 14, borderRadius: 10,
     alignItems: "center", justifyContent: "center", flexDirection: "row", marginTop: 6,
   },
-  primaryBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  primaryBtnText: { color: C.surface, fontSize: 15, fontWeight: "700" },
   secondaryBtn: {
     flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center",
     paddingVertical: 14, paddingHorizontal: 16,
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
-    backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
+    backgroundColor: C.surface,
   },
-  secondaryBtnText: { color: "#0F172A", fontSize: 14, fontWeight: "600" },
+  secondaryBtnText: { color: C.ink, fontSize: 14, fontWeight: "600" },
 
   // Printers
   printerCard: {
-    backgroundColor: "#FFFFFF", borderRadius: 12,
-    borderWidth: 1, borderColor: "#E2E8F0", padding: 14, gap: 8,
+    backgroundColor: C.surface, borderRadius: 12,
+    borderWidth: 1, borderColor: C.line, padding: 14, gap: 8,
   },
   printerHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
-  printerName: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
-  printerSub: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  printerName: { fontSize: 15, fontWeight: "700", color: C.ink },
+  printerSub: { fontSize: 12, color: C.ink2Soft, marginTop: 2 },
   printerStatusPill: {
     flexDirection: "row", alignItems: "center", gap: 6,
     paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 999, backgroundColor: "#F1F5F9",
+    borderRadius: 999, backgroundColor: C.bg,
   },
   printerDot: { width: 8, height: 8, borderRadius: 4 },
-  printerStatusText: { fontSize: 12, fontWeight: "600", color: "#475569" },
-  printerError: { fontSize: 12, color: "#EF4444", marginTop: 4 },
+  printerStatusText: { fontSize: 12, fontWeight: "600", color: C.ink2 },
+  printerError: { fontSize: 12, color: C.danger, marginTop: 4 },
   printerListRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingVertical: 14, paddingHorizontal: 14,
-    backgroundColor: "#FFFFFF", borderRadius: 10,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    backgroundColor: C.surface, borderRadius: 10,
+    borderWidth: 1, borderColor: C.line,
   },
-  printerListName: { flex: 1, fontSize: 14, fontWeight: "600", color: "#0F172A" },
-  printerListMeta: { fontSize: 12, fontWeight: "400", color: "#64748B" },
+  printerListName: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink },
+  printerListMeta: { fontSize: 12, fontWeight: "400", color: C.ink2Soft },
 
   // Queued-receipts list (offline-print queue) — shown inside the
   // Local Printer settings page so cashiers can see what's pending.
   queuedRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
     paddingVertical: 10, paddingHorizontal: 12,
-    backgroundColor: "#FFFBEB", borderRadius: 10,
+    backgroundColor: C.warnTint, borderRadius: 10,
     borderWidth: 1, borderColor: "#FCD34D",
   },
-  queuedOrder: { fontSize: 14, fontWeight: "700", color: "#0F172A" },
-  queuedMeta: { fontSize: 12, color: "#64748B", marginTop: 2 },
-  queuedError: { fontSize: 11, color: "#B45309", marginTop: 2 },
+  queuedOrder: { fontSize: 14, fontWeight: "700", color: C.ink },
+  queuedMeta: { fontSize: 12, color: C.ink2Soft, marginTop: 2 },
+  queuedError: { fontSize: 11, color: C.warnDark, marginTop: 2 },
   queuedRemoveBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 10, paddingVertical: 6,
-    borderRadius: 8, borderWidth: 1, borderColor: "#FCA5A5",
-    backgroundColor: "#FFFFFF",
+    borderRadius: 8, borderWidth: 1, borderColor: C.dangerSoft,
+    backgroundColor: C.surface,
   },
-  queuedRemoveText: { fontSize: 12, color: "#EF4444", fontWeight: "600" },
+  queuedRemoveText: { fontSize: 12, color: C.danger, fontWeight: "600" },
 
   addPrinterBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
     gap: 6, paddingVertical: 12,
   },
-  addPrinterText: { color: "#00B14F", fontSize: 14, fontWeight: "600" },
+  addPrinterText: { color: C.brand, fontSize: 14, fontWeight: "600" },
   detectChip: {
     paddingHorizontal: 10, paddingVertical: 6,
     borderRadius: 999,
-    borderWidth: 1, borderColor: "#E2E8F0",
-    backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface,
   },
   detectChipActive: {
-    backgroundColor: "#00B14F", borderColor: "#00B14F",
+    backgroundColor: C.brand, borderColor: C.brand,
   },
-  detectChipText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  detectChipText: { fontSize: 12, fontWeight: "600", color: C.ink2 },
   detectRefresh: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 8, paddingVertical: 6,
   },
   dangerBtn: {
     flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center",
-    padding: 12, borderWidth: 1, borderColor: "#EF4444", borderRadius: 10,
+    padding: 12, borderWidth: 1, borderColor: C.danger, borderRadius: 10,
   },
   typeBtn: {
     flex: 1, padding: 10, borderRadius: 8, borderWidth: 1,
-    borderColor: "#E2E8F0", alignItems: "center",
+    borderColor: C.line, alignItems: "center",
   },
-  typeBtnActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  typeBtnText: { fontSize: 13, fontWeight: "600", color: "#475569" },
+  typeBtnActive: { backgroundColor: C.brand, borderColor: C.brand },
+  typeBtnText: { fontSize: 13, fontWeight: "600", color: C.ink2 },
 
   // Drawer / actions
   drawerAction: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    padding: 12, borderWidth: 1, borderColor: "#E2E8F0",
-    borderRadius: 10, backgroundColor: "#FFFFFF",
+    padding: 12, borderWidth: 1, borderColor: C.line,
+    borderRadius: 10, backgroundColor: C.surface,
   },
-  drawerActionText: { fontSize: 13, color: "#0F172A", fontWeight: "600" },
+  drawerActionText: { fontSize: 13, color: C.ink, fontWeight: "600" },
 
   // Modals
   modalOverlay: {
-    flex: 1, backgroundColor: "rgba(15,23,42,0.5)",
+    flex: 1, backgroundColor: C.scrim,
     alignItems: "center", justifyContent: "center", padding: 20,
   },
   modalHead: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    padding: 16, borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    padding: 16, borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  modalTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
+  modalTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
   smallModal: {
-    width: "85%", maxWidth: 440, backgroundColor: "#FFFFFF",
+    width: "85%", maxWidth: 440, backgroundColor: C.surface,
     borderRadius: 16, overflow: "hidden",
   },
   editModal: {
     width: "88%", maxWidth: 560, maxHeight: "88%",
-    backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
+    backgroundColor: C.surface, borderRadius: 16, overflow: "hidden",
   },
 
   // ── Reports header / Reports button ──
   reportsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   reportsBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    borderWidth: 1, borderColor: "#00B14F", borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.brand, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.surface,
   },
-  reportsBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 14 },
+  reportsBtnText: { color: C.brand, fontWeight: "700", fontSize: 14 },
   backofficeBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 20, borderWidth: 1, borderColor: "#00B14F", borderRadius: 12,
-    paddingVertical: 14, backgroundColor: "#FFFFFF",
+    marginTop: 20, borderWidth: 1, borderColor: C.brand, borderRadius: 12,
+    paddingVertical: 14, backgroundColor: C.surface,
   },
-  backofficeBtnText: { color: "#00B14F", fontWeight: "700", fontSize: 16 },
+  backofficeBtnText: { color: C.brand, fontWeight: "700", fontSize: 16 },
   rangeCard: {
-    width: "92%", maxWidth: 420, backgroundColor: "#FFFFFF",
+    width: "92%", maxWidth: 420, backgroundColor: C.surface,
     borderRadius: 16, overflow: "hidden",
   },
   rangeSummary: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    backgroundColor: "#F8FAFC", borderRadius: 10, padding: 12,
+    backgroundColor: C.bgSoft, borderRadius: 10, padding: 12,
   },
   rangeSummaryCol: { flex: 1, gap: 2 },
-  rangeSummaryVal: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  rangeSummaryVal: { fontSize: 15, fontWeight: "700", color: C.ink },
   calHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6 },
   calNavBtn: { padding: 8, borderRadius: 8 },
-  calMonth: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  calMonth: { fontSize: 15, fontWeight: "700", color: C.ink },
   calWeekRow: { flexDirection: "row" },
-  calWeekday: { flex: 1, textAlign: "center", fontSize: 11, fontWeight: "600", color: "#94A3B8", paddingVertical: 4 },
+  calWeekday: { flex: 1, textAlign: "center", fontSize: 11, fontWeight: "600", color: C.ink3, paddingVertical: 4 },
   calGrid: { flexDirection: "row", flexWrap: "wrap" },
   calCell: {
     width: `${100 / 7}%`, aspectRatio: 1, alignItems: "center", justifyContent: "center",
     marginVertical: 1,
   },
-  calCellText: { fontSize: 14, color: "#0F172A" },
-  calCellToday: { color: "#00B14F", fontWeight: "700" },
-  calCellSel: { backgroundColor: "#00B14F", borderRadius: 8 },
-  calCellTextSel: { color: "#FFFFFF", fontWeight: "700" },
-  calCellInRange: { backgroundColor: "#D1FAE5" },
+  calCellText: { fontSize: 14, color: C.ink },
+  calCellToday: { color: C.brand, fontWeight: "700" },
+  calCellSel: { backgroundColor: C.brand, borderRadius: 8 },
+  calCellTextSel: { color: C.surface, fontWeight: "700" },
+  calCellInRange: { backgroundColor: C.okTint },
   chPeriodRow: {
     flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center",
     paddingHorizontal: 12, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
 
   // ── Full-screen document scaffolding ──
-  docScreen: { flex: 1, backgroundColor: "#FFFFFF" },
+  docScreen: { flex: 1, backgroundColor: C.surface },
   docTopBar: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   docBackBtn: { flexDirection: "row", alignItems: "center", width: 70 },
-  docBackText: { fontSize: 15, color: "#0F172A", fontWeight: "600" },
-  docTopTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
-  docSaveText: { fontSize: 15, color: "#00B14F", fontWeight: "700", width: 70, textAlign: "right" },
+  docBackText: { fontSize: 15, color: C.ink, fontWeight: "600" },
+  docTopTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  docSaveText: { fontSize: 15, color: C.brand, fontWeight: "700", width: 70, textAlign: "right" },
 
   // ── Channel report ──
   docDateNav: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 24,
-    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  docDateNavText: { fontSize: 15, fontWeight: "700", color: "#00B14F" },
+  docDateNavText: { fontSize: 15, fontWeight: "700", color: C.brand },
   chTableHead: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  chHeadCell: { fontSize: 12, fontWeight: "700", color: "#64748B", textAlign: "center" },
+  chHeadCell: { fontSize: 12, fontWeight: "700", color: C.ink2Soft, textAlign: "center" },
   chRow: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  chCell: { fontSize: 13, color: "#0F172A", textAlign: "center" },
+  chCell: { fontSize: 13, color: C.ink, textAlign: "center" },
   chIcon: {
-    width: 24, height: 24, borderRadius: 6, backgroundColor: "#E5F7ED",
+    width: 24, height: 24, borderRadius: 6, backgroundColor: C.brandTint,
     alignItems: "center", justifyContent: "center",
   },
-  chName: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
-  noGpBadge: { backgroundColor: "#E5F7ED", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
-  noGpText: { fontSize: 11, color: "#00B14F", fontWeight: "700" },
+  chName: { fontSize: 13, fontWeight: "600", color: C.ink },
+  noGpBadge: { backgroundColor: C.brandTint, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
+  noGpText: { fontSize: 11, color: C.brand, fontWeight: "700" },
 
   // ── Inventory top tab bar ──
   invTabBar: {
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9", paddingVertical: 8, backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1, borderBottomColor: C.bg, paddingVertical: 8, backgroundColor: C.surface,
   },
   invTopTab: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   invTopTabActive: { backgroundColor: "#EFF6FF" },
-  invTopTabText: { fontSize: 14, fontWeight: "600", color: "#475569" },
+  invTopTabText: { fontSize: 14, fontWeight: "600", color: C.ink2 },
   invTopTabTextActive: { color: "#2563EB", fontWeight: "700" },
   invSearchRow: {
     flexDirection: "row", alignItems: "center", gap: 8, margin: 10,
-    backgroundColor: "#F1F5F9", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8,
+    backgroundColor: C.bg, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8,
   },
-  invSearchInput: { flex: 1, fontSize: 13, color: "#0F172A", padding: 0 },
+  invSearchInput: { flex: 1, fontSize: 13, color: C.ink, padding: 0 },
 
   // ── Document list ──
   docListBar: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 14, paddingVertical: 10, gap: 10,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   docDateRange: { flexDirection: "row", alignItems: "center", gap: 10 },
-  docDateRangeText: { fontSize: 13, fontWeight: "700", color: "#00B14F" },
-  docListTotal: { fontSize: 13, color: "#64748B" },
+  docDateRangeText: { fontSize: 13, fontWeight: "700", color: C.brand },
+  docListTotal: { fontSize: 13, color: C.ink2Soft },
   createDocBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 8,
   },
-  createDocBtnText: { color: "#0F172A", fontWeight: "600", fontSize: 13 },
+  createDocBtnText: { color: C.ink, fontWeight: "600", fontSize: 13 },
   docColHead: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  docColCell: { fontSize: 12, fontWeight: "600", color: "#64748B" },
+  docColCell: { fontSize: 12, fontWeight: "600", color: C.ink2Soft },
   docRow: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  docCell: { fontSize: 13, color: "#475569" },
+  docCell: { fontSize: 13, color: C.ink2 },
 
   // ── Create document form ──
-  docForm: { padding: 14, gap: 12, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  docForm: { padding: 14, gap: 12, borderBottomWidth: 1, borderBottomColor: C.bg },
   docFormRow: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
   docField: { flex: 1, minWidth: 160, gap: 4 },
-  docFieldLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
-  docFieldDate: { fontSize: 14, color: "#00B14F", fontWeight: "700", paddingVertical: 8 },
+  docFieldLabel: { fontSize: 12, color: C.ink2Soft, fontWeight: "600" },
+  docFieldDate: { fontSize: 14, color: C.brand, fontWeight: "700", paddingVertical: 8 },
   docInput: {
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: "#0F172A",
+    borderWidth: 1, borderColor: C.line, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: C.ink,
   },
   adjTypeBtn: {
     paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8,
-    borderWidth: 1, borderColor: "#E2E8F0",
+    borderWidth: 1, borderColor: C.line,
   },
-  adjTypeBtnActive: { backgroundColor: "#00B14F", borderColor: "#00B14F" },
-  adjTypeText: { fontSize: 14, fontWeight: "700", color: "#475569" },
+  adjTypeBtnActive: { backgroundColor: C.brand, borderColor: C.brand },
+  adjTypeText: { fontSize: 14, fontWeight: "700", color: C.ink2 },
 
   // ── Items table ──
   itemsHead: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#E2E8F0",
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  itemsHeadCell: { fontSize: 12, fontWeight: "600", color: "#64748B", textAlign: "center" },
+  itemsHeadCell: { fontSize: 12, fontWeight: "600", color: C.ink2Soft, textAlign: "center" },
   itemRow: {
     flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 6,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  itemCell: { fontSize: 13, color: "#0F172A", textAlign: "center" },
+  itemCell: { fontSize: 13, color: C.ink, textAlign: "center" },
   itemInput: {
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 6,
+    borderWidth: 1, borderColor: C.line, borderRadius: 6,
     paddingVertical: 6, paddingHorizontal: 6, alignItems: "center",
   },
-  itemInputText: { fontSize: 13, color: "#0F172A" },
+  itemInputText: { fontSize: 13, color: C.ink },
   itemsAddBar: {
-    backgroundColor: "#00B14F", margin: 14, borderRadius: 8,
+    backgroundColor: C.brand, margin: 14, borderRadius: 8,
     paddingVertical: 14, alignItems: "center",
   },
-  itemsAddBarText: { color: "#FFFFFF", fontWeight: "700", fontSize: 14 },
+  itemsAddBarText: { color: C.surface, fontWeight: "700", fontSize: 14 },
 
   // ── Create document footer ──
   docFooter: {
     flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: 18,
-    paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#F1F5F9",
+    paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.bg,
   },
   footToggle: { flexDirection: "row", alignItems: "center", gap: 6 },
-  footToggleLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
+  footToggleLabel: { fontSize: 12, color: C.ink2Soft, fontWeight: "600" },
   footStat: { alignItems: "center" },
-  footStatLabel: { fontSize: 11, color: "#94A3B8" },
-  footStatVal: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  footStatLabel: { fontSize: 11, color: C.ink3 },
+  footStatVal: { fontSize: 15, fontWeight: "700", color: C.ink },
 
   // ── Product picker popup ──
-  pickerOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.4)", alignItems: "center", justifyContent: "center" },
+  pickerOverlay: { flex: 1, backgroundColor: C.scrim, alignItems: "center", justifyContent: "center" },
   pickerCard: {
     width: "92%", maxWidth: 560, height: "82%",
-    backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden",
+    backgroundColor: C.surface, borderRadius: 16, overflow: "hidden",
   },
   pickerHead: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  pickerTitle: { fontSize: 16, fontWeight: "700", color: "#0F172A" },
-  pickerDone: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
+  pickerTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  pickerDone: { fontSize: 15, fontWeight: "700", color: C.ink },
   pickerCatRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    margin: 14, marginBottom: 8, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    margin: 14, marginBottom: 8, borderWidth: 1, borderColor: C.line, borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 12,
   },
-  pickerCatText: { fontSize: 14, color: "#0F172A" },
+  pickerCatText: { fontSize: 14, color: C.ink },
   pickerCatList: {
     marginHorizontal: 14, marginTop: -4, marginBottom: 8,
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, overflow: "hidden",
+    borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: "hidden",
   },
-  pickerCatItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
-  pickerCatItemText: { fontSize: 13, color: "#0F172A" },
+  pickerCatItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.bg },
+  pickerCatItemText: { fontSize: 13, color: C.ink },
   pickerSearchRow: {
     flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 14,
-    backgroundColor: "#F1F5F9", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10,
+    backgroundColor: C.bg, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10,
   },
-  pickerSearchInput: { flex: 1, fontSize: 14, color: "#0F172A", padding: 0 },
+  pickerSearchInput: { flex: 1, fontSize: 14, color: C.ink, padding: 0 },
   pickerSortRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 12 },
   pickerRow: {
     flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    borderBottomWidth: 1, borderBottomColor: C.bg,
   },
-  pickerImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: "#F1F5F9" },
-  pickerName: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
-  pickerBarcode: { fontSize: 12, color: "#94A3B8" },
+  pickerImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: C.bg },
+  pickerName: { fontSize: 14, fontWeight: "600", color: C.ink },
+  pickerBarcode: { fontSize: 12, color: C.ink3 },
 
   // ── Amount keypad ──
-  keypadOverlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.3)", alignItems: "center", justifyContent: "center" },
-  keypadCard: { width: 300, backgroundColor: "#FFFFFF", borderRadius: 16, overflow: "hidden", paddingTop: 16 },
-  keypadTitle: { fontSize: 15, fontWeight: "700", color: "#0F172A", textAlign: "center", marginBottom: 8 },
+  keypadOverlay: { flex: 1, backgroundColor: C.scrimSoft, alignItems: "center", justifyContent: "center" },
+  keypadCard: { width: 300, backgroundColor: C.surface, borderRadius: 16, overflow: "hidden", paddingTop: 16 },
+  keypadTitle: { fontSize: 15, fontWeight: "700", color: C.ink, textAlign: "center", marginBottom: 8 },
   keypadValue: {
-    fontSize: 34, fontWeight: "700", color: "#0F172A", textAlign: "right",
-    paddingHorizontal: 24, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#F1F5F9",
+    fontSize: 34, fontWeight: "700", color: C.ink, textAlign: "right",
+    paddingHorizontal: 24, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   keypadGrid: { flexDirection: "row", flexWrap: "wrap" },
   keypadKey: {
     width: "33.333%", height: 60, alignItems: "center", justifyContent: "center",
-    borderBottomWidth: 1, borderRightWidth: 1, borderColor: "#F1F5F9",
+    borderBottomWidth: 1, borderRightWidth: 1, borderColor: C.bg,
   },
-  keypadKeyText: { fontSize: 22, fontWeight: "600", color: "#0F172A" },
-  keypadDone: { backgroundColor: "#00B14F", paddingVertical: 16, alignItems: "center" },
-  keypadDoneText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  keypadKeyText: { fontSize: 22, fontWeight: "600", color: C.ink },
+  keypadDone: { backgroundColor: C.brand, paddingVertical: 16, alignItems: "center" },
+  keypadDoneText: { color: C.surface, fontSize: 16, fontWeight: "700" },
 
   // ── Reconcile (adjust/check) form ──
   importBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8,
+    borderWidth: 1, borderColor: C.line, borderRadius: 8,
     paddingHorizontal: 12, paddingVertical: 12,
   },
-  importBtnText: { fontSize: 14, color: "#00B14F", fontWeight: "600" },
+  importBtnText: { fontSize: 14, color: C.brand, fontWeight: "600" },
   itemCellRO: {
-    fontSize: 13, color: "#64748B", textAlign: "right",
-    backgroundColor: "#F8FAFC", borderRadius: 6, paddingVertical: 6, paddingHorizontal: 6,
+    fontSize: 13, color: C.ink2Soft, textAlign: "right",
+    backgroundColor: C.bgSoft, borderRadius: 6, paddingVertical: 6, paddingHorizontal: 6,
   },
 
   // ── Select Documents popup ──
   loadDocsBtn: {
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10,
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 8,
   },
-  loadDocsText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
+  loadDocsText: { fontSize: 14, fontWeight: "600", color: C.ink },
   selDateRow: { flexDirection: "row", gap: 16, paddingHorizontal: 16, paddingVertical: 14 },
   selDateField: { flexDirection: "row", alignItems: "center", gap: 8 },
-  selDateVal: { fontSize: 14, color: "#00B14F", fontWeight: "600" },
+  selDateVal: { fontSize: 14, color: C.brand, fontWeight: "600" },
   selCalPop: {
     marginHorizontal: 16, marginBottom: 8, padding: 8,
-    borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 12, backgroundColor: "#FFFFFF",
+    borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface,
   },
 });

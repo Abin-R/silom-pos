@@ -10,6 +10,7 @@
  *   />
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { C } from "../lib/theme";
 import {
   FlatList,
   Modal,
@@ -81,7 +82,7 @@ export default function PhoneInput({
           value={local}
           onChangeText={(v) => setLocal(normalizeLocal(country, v))}
           placeholder={placeholder}
-          placeholderTextColor="#94A3B8"
+          placeholderTextColor={C.ink3}
           keyboardType="phone-pad"
           testID={testID}
           autoCorrect={false}
@@ -153,36 +154,36 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#FFFFFF',
+    borderColor: C.line,
+    backgroundColor: C.surface,
     minWidth: 96,
   },
   flag: { fontSize: 18 },
-  dial: { fontSize: 14, fontWeight: '600', color: '#0F172A' },
-  chev: { fontSize: 12, color: '#94A3B8', marginLeft: 2 },
+  dial: { fontSize: 14, fontWeight: '600', color: C.ink },
+  chev: { fontSize: 12, color: C.ink3, marginLeft: 2 },
   input: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: C.line,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 12,
     fontSize: 14,
-    color: '#0F172A',
-    backgroundColor: '#FFFFFF',
+    color: C.ink,
+    backgroundColor: C.surface,
   },
   feedback: { fontSize: 12, marginTop: 4, marginLeft: 4 },
-  feedbackOk: { color: '#10B981' },
-  feedbackErr: { color: '#EF4444' },
+  feedbackOk: { color: C.ok },
+  feedbackErr: { color: C.danger },
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: C.scrim,
     justifyContent: 'center',
     padding: 20,
   },
   modalSheet: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: C.surface,
     borderRadius: 16,
     maxHeight: '70%',
     overflow: 'hidden',
@@ -190,10 +191,10 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#0F172A',
+    color: C.ink,
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: C.bg,
   },
   countryRow: {
     flexDirection: 'row',
@@ -202,9 +203,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#F8FAFC',
+    borderBottomColor: C.bgSoft,
   },
-  countryRowActive: { backgroundColor: '#F0FDF4' },
-  rowName: { flex: 1, fontSize: 14, color: '#0F172A', fontWeight: '500' },
-  rowDial: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+  countryRowActive: { backgroundColor: C.brandTintSoft },
+  rowName: { flex: 1, fontSize: 14, color: C.ink, fontWeight: '500' },
+  rowDial: { fontSize: 13, color: C.ink2Soft, fontWeight: '600' },
 });

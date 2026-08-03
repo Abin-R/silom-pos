@@ -4,6 +4,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
 import { Text, TextInput } from "react-native";
 import * as Sentry from "@sentry/react-native";
+import { C } from "../lib/theme";
 
 // Error + performance monitoring. Only active when EXPO_PUBLIC_SENTRY_DSN is
 // set (see .env.production), so local dev stays quiet. tracesSampleRate drives
@@ -37,7 +38,7 @@ function RootLayout() {
         screenOptions={{
           headerShown: false,
           animation: "fade",
-          contentStyle: { backgroundColor: "#F1F5F9" },
+          contentStyle: { backgroundColor: C.bg },
         }}
       />
     </SafeAreaProvider>

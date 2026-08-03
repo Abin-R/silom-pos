@@ -23,6 +23,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
+import { C } from "../lib/theme";
 
 export type SidebarItem = {
   key: string;
@@ -91,12 +92,12 @@ export function SidebarDrawer({
         >
           <View style={s.avatarBox}>
             <View style={s.avatarCircle}>
-              <Ionicons name="person" size={32} color="#475569" />
+              <Ionicons name="person" size={32} color={C.ink2} />
             </View>
             <Text style={s.avatarText}>{staff || "Admin"}</Text>
             {!!branchName && (
               <View style={s.branchChip}>
-                <Ionicons name="storefront-outline" size={12} color="#00B14F" />
+                <Ionicons name="storefront-outline" size={12} color={C.brand} />
                 <Text style={s.branchChipText} numberOfLines={1}>
                   {branchName}
                 </Text>
@@ -115,7 +116,7 @@ export function SidebarDrawer({
                 <Ionicons
                   name={it.icon}
                   size={20}
-                  color={activeKey === it.key ? "#00B14F" : "#475569"}
+                  color={activeKey === it.key ? C.brand : C.ink2}
                 />
                 <Text
                   style={[s.label, activeKey === it.key && s.labelActive]}
@@ -131,12 +132,12 @@ export function SidebarDrawer({
             onPress={onLogout}
             testID="sidebar-logout"
           >
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" />
+            <Ionicons name="log-out-outline" size={18} color={C.danger} />
             <Text style={s.logoutText}>Log out</Text>
           </TouchableOpacity>
 
           <View style={s.footer}>
-            <Ionicons name="refresh-circle-outline" size={14} color="#94A3B8" />
+            <Ionicons name="refresh-circle-outline" size={14} color={C.ink3} />
             <Text style={s.footerDate}>
               {new Date().toLocaleDateString("en-GB", {
                 day: "2-digit",
@@ -187,13 +188,13 @@ const s = StyleSheet.create({
   overlay: {
     flex: 1,
     flexDirection: "row",
-    backgroundColor: "rgba(15,23,42,0.4)",
+    backgroundColor: C.scrim,
   },
   panel: {
     width: 240,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: C.surface,
     borderRightWidth: 1,
-    borderRightColor: "#E2E8F0",
+    borderRightColor: C.line,
     paddingHorizontal: 12,
   },
   avatarBox: { alignItems: "center", marginBottom: 16 },
@@ -202,24 +203,24 @@ const s = StyleSheet.create({
     height: 56,
     borderRadius: 28,
     borderWidth: 2,
-    borderColor: "#CBD5E1",
+    borderColor: C.lineStrong,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F1F5F9",
+    backgroundColor: C.bg,
   },
-  avatarText: { fontSize: 14, color: "#475569", marginTop: 6, fontWeight: "600" },
+  avatarText: { fontSize: 14, color: C.ink2, marginTop: 6, fontWeight: "600" },
   branchChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 3,
-    backgroundColor: "#ECFDF5",
+    backgroundColor: C.okTint,
     borderRadius: 12,
     marginTop: 6,
     maxWidth: 200,
   },
-  branchChipText: { fontSize: 11, color: "#00B14F", fontWeight: "600" },
+  branchChipText: { fontSize: 11, color: C.brand, fontWeight: "600" },
   item: {
     flexDirection: "row",
     alignItems: "center",
@@ -228,16 +229,16 @@ const s = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 4,
   },
-  itemActive: { backgroundColor: "#E5F7ED" },
-  label: { fontSize: 14, color: "#475569", fontWeight: "500" },
-  labelActive: { color: "#00B14F", fontWeight: "700" },
+  itemActive: { backgroundColor: C.brandTint },
+  label: { fontSize: 14, color: C.ink2, fontWeight: "500" },
+  labelActive: { color: C.brand, fontWeight: "700" },
   logoutBtn: {
     flexDirection: "row",
     gap: 8,
     padding: 12,
     alignItems: "center",
   },
-  logoutText: { color: "#EF4444", fontSize: 13, fontWeight: "600" },
+  logoutText: { color: C.danger, fontSize: 13, fontWeight: "600" },
   footer: {
     flexDirection: "row",
     alignItems: "center",
@@ -246,8 +247,8 @@ const s = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 2,
     borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
+    borderTopColor: C.bg,
   },
-  footerDate: { fontSize: 10, color: "#94A3B8" },
-  version: { fontSize: 10, color: "#CBD5E1", textAlign: "center", marginTop: 4 },
+  footerDate: { fontSize: 10, color: C.ink3 },
+  version: { fontSize: 10, color: C.lineStrong, textAlign: "center", marginTop: 4 },
 });
