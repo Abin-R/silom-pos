@@ -38,13 +38,13 @@ export type SidebarItem = {
 // All tabs are visible to both roles; cashier-vs-admin gating happens at
 // the action level (e.g. product add/edit/delete is hidden for cashier).
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: "shop", label: "Shop", icon: "home-outline" },
-  { key: "transactions", label: "Transactions", icon: "swap-horizontal-outline" },
+  { key: "shop", label: "Store", icon: "home-outline" },
+  { key: "transactions", label: "Bills", icon: "swap-horizontal-outline" },
   { key: "reports", label: "Reports", icon: "pie-chart-outline" },
-  { key: "inventory", label: "Inventory", icon: "cube-outline" },
+  { key: "inventory", label: "Stock", icon: "cube-outline" },
   { key: "customers", label: "Customers", icon: "people-outline" },
-  { key: "products", label: "Products", icon: "gift-outline" },
-  { key: "drawer", label: "Drawer", icon: "calculator-outline" },
+  { key: "products", label: "Menu", icon: "gift-outline" },
+  { key: "drawer", label: "Cash", icon: "calculator-outline" },
   { key: "settings", label: "Settings", icon: "settings-outline" },
 ];
 
@@ -94,7 +94,7 @@ export function SidebarDrawer({
           <View style={s.avatarBox}>
             <View style={s.badge}>
               <Image
-                source={require("../assets/images/rolling-pinn-logo.png")}
+                source={require("../assets/images/icon.png")}
                 style={s.badgeLogo}
                 resizeMode="contain"
               />
@@ -202,13 +202,12 @@ const s = StyleSheet.create({
   },
   avatarBox: { alignItems: "center", marginBottom: 16 },
   badge: {
-    width: 52,
-    height: 52,
-    borderRadius: 15,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: C.surface,
-    padding: 6,
+    overflow: "hidden",
   },
   badgeLogo: { width: "100%", height: "100%" },
   avatarText: { fontSize: 14, color: C.surface, marginTop: 8, fontWeight: "700" },

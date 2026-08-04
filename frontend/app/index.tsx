@@ -478,9 +478,9 @@ export default function Login() {
             <View style={s.brandTop}>
               <View style={s.brandBadge}>
                 <Image
-                  source={require("../assets/images/rolling-pinn-logo.png")}
+                  source={require("../assets/images/icon.png")}
                   style={s.brandLogo}
-                  resizeMode="contain"
+                  resizeMode="cover"
                 />
               </View>
               <Text style={s.brandName}>The Rolling Pinn</Text>
@@ -615,13 +615,12 @@ const s = StyleSheet.create({
   },
   brandTop: { flexDirection: "row", alignItems: "center", gap: 14 },
   brandBadge: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: C.surface,
+    width: 64,
+    height: 64,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    padding: 6,
+    overflow: "hidden",
   },
   brandLogo: { width: "100%", height: "100%" },
   brandName: { fontSize: 22, fontWeight: "800", color: C.surface, letterSpacing: -0.3 },

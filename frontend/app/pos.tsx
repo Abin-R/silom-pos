@@ -498,7 +498,7 @@ export default function POS() {
 
   return (
     <SafeAreaView style={styles.root} edges={["bottom"]}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       {/* ============ TOP BAR ============ */}
       <View style={[styles.topBar, { height: 60 + insets.top, paddingTop: insets.top }]} testID="top-bar">
         <TouchableOpacity
@@ -506,15 +506,24 @@ export default function POS() {
           onPress={() => setSidebarOpen(true)}
           testID="menu-btn"
         >
-          <Ionicons name="menu" size={24} color={C.surface} />
+          <Ionicons name="menu" size={24} color={C.ink} />
         </TouchableOpacity>
+
+        <View style={styles.topBrand}>
+          <Image
+            source={require("../assets/images/icon.png")}
+            style={styles.topBrandLogo}
+            resizeMode="cover"
+          />
+          {isWide && <Text style={styles.topBrandName}>The Rolling Pinn</Text>}
+        </View>
 
         {isMid && (
           <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color="rgba(255,255,255,0.55)" />
+            <Ionicons name="search" size={18} color={C.ink3} />
             <TextInput
               placeholder="Search Products"
-              placeholderTextColor="rgba(255,255,255,0.5)"
+              placeholderTextColor={C.ink3}
               style={styles.searchInput}
               value={search}
               onChangeText={setSearch}
@@ -526,7 +535,7 @@ export default function POS() {
 
         <ToolbarIcon
           icon="globe-outline"
-          label="Order Hub"
+          label="Orders"
           badge={orderHubCount}
           onPress={() => setShowOrderHub(true)}
           testId="toolbar-order-hub"
@@ -534,14 +543,14 @@ export default function POS() {
         />
         <ToolbarIcon
           icon="albums-outline"
-          label="Drawer"
+          label="Cash"
           onPress={() => setShowDrawer(true)}
           testId="toolbar-drawer"
           compact={!isWide}
         />
         <ToolbarIcon
           icon="bookmark-outline"
-          label="Save"
+          label="Hold"
           badge={parkedCount}
           onPress={() => setShowParked(true)}
           testId="toolbar-parked"
@@ -558,13 +567,13 @@ export default function POS() {
             it moves into the mobile search row to avoid overflowing the bar. */}
         {isMid && !!activeBranchName && (
           <View style={styles.branchChip} testID="branch-chip">
-            <Ionicons name="storefront-outline" size={16} color={C.surface} />
+            <Ionicons name="storefront-outline" size={16} color={C.brand} />
             <Text style={styles.branchChipText} numberOfLines={1}>{activeBranchName}</Text>
           </View>
         )}
         {isWide && (
           <View style={styles.staffChip}>
-            <Ionicons name="person-circle" size={22} color={C.surface} />
+            <Ionicons name="person-circle" size={22} color={C.brand} />
             <Text style={styles.staffText}>{staff || "Admin"}</Text>
           </View>
         )}
@@ -573,7 +582,7 @@ export default function POS() {
           onPress={async () => { await doLogout(); router.replace("/"); }}
           testID="logout-btn"
         >
-          <Ionicons name="log-out-outline" size={20} color="rgba(255,255,255,0.75)" />
+          <Ionicons name="log-out-outline" size={20} color={C.danger} />
         </TouchableOpacity>
       </View>
 
@@ -957,7 +966,7 @@ function ToolbarIcon({
       testID={testId}
     >
       <View>
-        <Ionicons name={icon} size={compact ? 20 : 22} color={C.surface} />
+        <Ionicons name={icon} size={compact ? 20 : 22} color={C.ink} />
         {badge && badge > 0 ? (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
@@ -2963,22 +2972,24 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   // Top bar
-  // Dark command bar (the Toast/Lightspeed pattern) rather than the white
-  // icon toolbar every other till ships with. It also stops the top strip
-  // competing with the red order rail for attention.
   topBar: {
     height: 60,
-    backgroundColor: C.ink,
+    backgroundColor: C.surface,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
     gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line,
   },
   menuBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  topBrand: { flexDirection: "row", alignItems: "center", gap: 9, marginRight: 4 },
+  topBrandLogo: { width: 36, height: 36, borderRadius: 10 },
+  topBrandName: { fontSize: 14, fontWeight: "800", color: C.ink, letterSpacing: -0.2 },
   searchWrap: {
     flex: 1,
     height: 40,
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: C.bg,
     borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
@@ -2986,10 +2997,10 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 360,
   },
-  searchInput: { flex: 1, fontSize: 14, color: C.surface, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
+  searchInput: { flex: 1, fontSize: 14, color: C.ink, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   tbItem: { alignItems: "center", paddingHorizontal: 12, minWidth: 64 },
   tbItemCompact: { minWidth: 40, paddingHorizontal: 6 },
-  tbLabel: { fontSize: 10, color: "rgba(255,255,255,0.7)", marginTop: 2, fontWeight: "500" },
+  tbLabel: { fontSize: 10, color: C.ink2, marginTop: 2, fontWeight: "500" },
   badge: {
     position: "absolute",
     top: -4,
@@ -3010,9 +3021,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: C.brandTint,
   },
-  staffText: { fontSize: 12, color: C.surface, fontWeight: "600" },
+  staffText: { fontSize: 12, color: C.brand, fontWeight: "600" },
   branchChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -3020,10 +3031,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: C.line,
+    backgroundColor: C.surface,
     maxWidth: 200,
   },
-  branchChipText: { fontSize: 12, color: C.surface, fontWeight: "600" },
+  branchChipText: { fontSize: 12, color: C.ink, fontWeight: "600" },
   mobileTopRow: {
     flexDirection: "row",
     alignItems: "center",

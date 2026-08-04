@@ -240,13 +240,13 @@ export default function Admin() {
   const { reprint: reprintReceipt, ReceiptOverlay: PrinterOverlay } = useStarPrinter();
 
   const allItems: { key: Section | "shop"; label: string; icon: any; adminOnly?: boolean }[] = [
-    { key: "shop", label: "Shop", icon: "home-outline" },
-    { key: "transactions", label: "Transactions", icon: "swap-horizontal-outline" },
+    { key: "shop", label: "Store", icon: "home-outline" },
+    { key: "transactions", label: "Bills", icon: "swap-horizontal-outline" },
     { key: "reports", label: "Reports", icon: "pie-chart-outline" },
-    { key: "inventory", label: "Inventory", icon: "cube-outline" },
+    { key: "inventory", label: "Stock", icon: "cube-outline" },
     { key: "customers", label: "Customers", icon: "people-outline" },
-    { key: "products", label: "Products", icon: "gift-outline" },
-    { key: "drawer", label: "Drawer", icon: "calculator-outline" },
+    { key: "products", label: "Menu", icon: "gift-outline" },
+    { key: "drawer", label: "Cash", icon: "calculator-outline" },
     { key: "settings", label: "Settings", icon: "settings-outline" },
   ];
   const items = allItems.filter((it) => !it.adminOnly || isAdmin);
@@ -287,7 +287,7 @@ export default function Admin() {
       <View style={styles.avatarBox}>
         <View style={styles.sideBadge}>
           <Image
-            source={require("../assets/images/rolling-pinn-logo.png")}
+            source={require("../assets/images/icon.png")}
             style={styles.sideBadgeLogo}
             resizeMode="contain"
           />
@@ -888,9 +888,9 @@ type DateFilter = "today" | "yesterday" | "week" | "all";
 type ProductRef = { image: string; barcode: string };
 
 // Translate a date chip into the ``from``/``to`` window the server filters on.
-// Boundaries come from the *device's* local day so "Today" matches the wall
-// clock the cashier reads, not UTC; they're sent as full ISO strings (with
-// offset) so the server doesn't have to guess the till's timezone.
+// Boundaries are the *device's* local day so "Today" matches the wall clock the
+// cashier reads; they go over the wire as absolute UTC instants, so the server
+// never has to guess the till's timezone.  ``to`` is exclusive.
 function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
   if (filter === "all") return {};
   const now = new Date();
@@ -3729,7 +3729,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
   };
   useEffect(() => { load(); }, []);
 
-  // Pull the reason-code list for whichever side (Paid In / Paid Out) is open.
+  // Pull the reason-code list for whichever side (Cash In / Cash Out) is open.
   useEffect(() => {
     if (!moveDlg) return;
     apiFetch(`${API}/shift-categories?type=${moveDlg}&active=true`)
@@ -3832,16 +3832,16 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
               </View>
               <View style={styles.shiftCard}>
                 <ShiftRow label="Total Sales (cash)" value={current.total_sales_cash.toFixed(2)} />
-                <ShiftRow label="Total Paid In" value={current.total_paid_in.toFixed(2)} />
-                <ShiftRow label="Total Paid Out" value={current.total_paid_out.toFixed(2)} />
+                <ShiftRow label="Total Cash In" value={current.total_paid_in.toFixed(2)} />
+                <ShiftRow label="Total Cash Out" value={current.total_paid_out.toFixed(2)} />
                 <ShiftRow label="Expected in Drawer" value={expected.toFixed(2)} />
               </View>
               <View style={styles.inOutRow}>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_in")} testID="paid-in">
-                  <Text style={[styles.inOutText, { color: C.ok }]}>Paid In</Text>
+                  <Text style={[styles.inOutText, { color: C.ok }]}>Cash In</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_out")} testID="paid-out">
-                  <Text style={[styles.inOutText, { color: C.danger }]}>Paid Out</Text>
+                  <Text style={[styles.inOutText, { color: C.danger }]}>Cash Out</Text>
                 </TouchableOpacity>
               </View>
               <TouchableOpacity style={styles.closeShiftBtn} onPress={() => setCloseDlg(true)} testID="close-shift">
@@ -3922,7 +3922,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={closeMoveDlg}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text><View style={{ width: 24 }} />
+              <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Cash In" : "Cash Out"}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
               <View style={styles.moveRow}>
@@ -3960,14 +3960,14 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
                 onPress={addMovement}
                 testID="confirm-movement"
               >
-                <Text style={styles.primaryBtnText}>{moveDlg === "paid_in" ? "Paid In" : "Paid Out"}</Text>
+                <Text style={styles.primaryBtnText}>{moveDlg === "paid_in" ? "Cash In" : "Cash Out"}</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Category picker — slides over the Paid In/Out dialog */}
+      {/* Category picker — slides over the Cash In/Out dialog */}
       <Modal visible={showCatPicker} transparent animationType="fade" onRequestClose={() => setShowCatPicker(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCatPicker(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
@@ -4122,14 +4122,14 @@ function ShiftHistory({
         <ShiftRow label="Total Sales (cash)" value={(selected.total_sales_cash || 0).toFixed(2)} />
         <ShiftRow label="Start Drawer" value={(selected.start_cash || 0).toFixed(2)} />
         <View style={styles.shiftRow}>
-          <Text style={styles.shiftLabel}>Paid In</Text>
+          <Text style={styles.shiftLabel}>Cash In</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Text style={styles.shiftVal}>{(selected.total_paid_in || 0).toFixed(2)}</Text>
             <Ionicons name="chevron-forward" size={14} color={C.ink3} />
           </View>
         </View>
         <View style={styles.shiftRow}>
-          <Text style={styles.shiftLabel}>Paid Out</Text>
+          <Text style={styles.shiftLabel}>Cash Out</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Text style={[styles.shiftVal, { color: C.danger }]}>{(selected.total_paid_out || 0).toFixed(2)}</Text>
             <Ionicons name="chevron-forward" size={14} color={C.ink3} />
@@ -4349,8 +4349,8 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
 
 function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branchId: string; branchName: string }) {
   const sections: { name: string; icon: any; color: string }[] = [
-    { name: "Shop", icon: "home", color: C.danger },
-    { name: "Floor plan", icon: "grid", color: "#3B82F6" },
+    { name: "Store profile", icon: "home", color: C.danger },
+    { name: "Tables & zones", icon: "grid", color: "#3B82F6" },
     { name: "Language", icon: "language", color: "#8B5CF6" },
     { name: "Receipt", icon: "receipt", color: C.danger },
     // No Payment section: gateway credentials and the test/live lane are
@@ -4358,16 +4358,16 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
     // merchant account or changing where money lands. /api/settings strips the
     // payment fields in both directions, so there is nothing here to edit.
     { name: "Self-Order QR", icon: "qr-code", color: C.brand },
-    { name: "Drawer", icon: "calculator", color: "#06B6D4" },
-    { name: "Sales channels", icon: "link", color: "#EC4899" },
+    { name: "Cash drawer", icon: "calculator", color: "#06B6D4" },
+    { name: "Delivery partners", icon: "link", color: "#EC4899" },
     { name: "Printers", icon: "print", color: C.ok },
-    { name: "Customer display", icon: "tv", color: "#3B82F6" },
+    { name: "Second screen", icon: "tv", color: "#3B82F6" },
     { name: "Users", icon: "person", color: "#F97316" },
-    { name: "Advance Settings", icon: "settings", color: C.ink2Soft },
+    { name: "Advanced", icon: "settings", color: C.ink2Soft },
     { name: "Backup & Restore", icon: "cloud-upload", color: "#A855F7" },
-    { name: "Data synchronization", icon: "sync", color: "#06B6D4" },
-    { name: "CRM System", icon: "star", color: "#EAB308" },
-    { name: "Plugins", icon: "extension-puzzle", color: "#14B8A6" },
+    { name: "Sync", icon: "sync", color: "#06B6D4" },
+    { name: "Loyalty", icon: "star", color: "#EAB308" },
+    { name: "Add-ons", icon: "extension-puzzle", color: "#14B8A6" },
   ];
   const [active, setActive] = useState("Shop");
   const [s, setS] = useState<Settings | null>(null);
@@ -4587,7 +4587,7 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
   );
 }
 
-// ── Settings → Drawer: manage Paid In / Paid Out reason codes ──
+// ── Settings → Drawer: manage Cash In / Cash Out reason codes ──
 function DrawerCategoriesSection() {
   const [type, setType] = useState<"paid_in" | "paid_out">("paid_in");
   const [rows, setRows] = useState<DrawerCat[]>([]);
@@ -4637,7 +4637,7 @@ function DrawerCategoriesSection() {
       <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
         <Text style={styles.h2}>Drawer Categories</Text>
         <View style={{ flexDirection: "row", gap: 8 }}>
-          {([["paid_in", "Paid In"], ["paid_out", "Paid Out"]] as const).map(([k, label]) => (
+          {([["paid_in", "Cash In"], ["paid_out", "Cash Out"]] as const).map(([k, label]) => (
             <TouchableOpacity
               key={k}
               style={[styles.bizBtn, type === k && styles.bizBtnActive]}
@@ -5316,9 +5316,9 @@ const styles = StyleSheet.create({
   },
   avatarBox: { alignItems: "center", marginBottom: 20 },
   sideBadge: {
-    width: 52, height: 52, borderRadius: 15,
+    width: 56, height: 56, borderRadius: 16,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: C.surface, padding: 6,
+    overflow: "hidden",
   },
   sideBadgeLogo: { width: "100%", height: "100%" },
   avatarText: { fontSize: 14, color: C.surface, marginTop: 8, fontWeight: "700" },
@@ -5786,7 +5786,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   closeShiftText: { color: C.surface, fontSize: 16, fontWeight: "700", letterSpacing: 1 },
-  // Paid In / Paid Out form rows (label left, value/input right)
+  // Cash In / Cash Out form rows (label left, value/input right)
   moveRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     backgroundColor: C.bgSoft, borderRadius: 10,
