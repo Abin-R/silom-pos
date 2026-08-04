@@ -16,6 +16,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
@@ -496,23 +497,24 @@ export default function POS() {
   }
 
   return (
-    <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+    <SafeAreaView style={styles.root} edges={["bottom"]}>
+      <StatusBar style="light" />
       {/* ============ TOP BAR ============ */}
-      <View style={styles.topBar} testID="top-bar">
+      <View style={[styles.topBar, { height: 60 + insets.top, paddingTop: insets.top }]} testID="top-bar">
         <TouchableOpacity
           style={styles.menuBtn}
           onPress={() => setSidebarOpen(true)}
           testID="menu-btn"
         >
-          <Ionicons name="menu" size={24} color={C.ink} />
+          <Ionicons name="menu" size={24} color={C.surface} />
         </TouchableOpacity>
 
         {isMid && (
           <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color={C.ink3} />
+            <Ionicons name="search" size={18} color="rgba(255,255,255,0.55)" />
             <TextInput
               placeholder="Search Products"
-              placeholderTextColor={C.ink3}
+              placeholderTextColor="rgba(255,255,255,0.5)"
               style={styles.searchInput}
               value={search}
               onChangeText={setSearch}
@@ -556,13 +558,13 @@ export default function POS() {
             it moves into the mobile search row to avoid overflowing the bar. */}
         {isMid && !!activeBranchName && (
           <View style={styles.branchChip} testID="branch-chip">
-            <Ionicons name="storefront-outline" size={16} color={C.brand} />
+            <Ionicons name="storefront-outline" size={16} color={C.surface} />
             <Text style={styles.branchChipText} numberOfLines={1}>{activeBranchName}</Text>
           </View>
         )}
         {isWide && (
           <View style={styles.staffChip}>
-            <Ionicons name="person-circle" size={22} color={C.brand} />
+            <Ionicons name="person-circle" size={22} color={C.surface} />
             <Text style={styles.staffText}>{staff || "Admin"}</Text>
           </View>
         )}
@@ -571,7 +573,7 @@ export default function POS() {
           onPress={async () => { await doLogout(); router.replace("/"); }}
           testID="logout-btn"
         >
-          <Ionicons name="log-out-outline" size={20} color={C.danger} />
+          <Ionicons name="log-out-outline" size={20} color="rgba(255,255,255,0.75)" />
         </TouchableOpacity>
       </View>
 
@@ -955,7 +957,7 @@ function ToolbarIcon({
       testID={testId}
     >
       <View>
-        <Ionicons name={icon} size={compact ? 20 : 22} color={C.ink} />
+        <Ionicons name={icon} size={compact ? 20 : 22} color={C.surface} />
         {badge && badge > 0 ? (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{badge}</Text>
@@ -2961,21 +2963,22 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   // Top bar
+  // Dark command bar (the Toast/Lightspeed pattern) rather than the white
+  // icon toolbar every other till ships with. It also stops the top strip
+  // competing with the red order rail for attention.
   topBar: {
-    height: 64,
-    backgroundColor: C.surface,
+    height: 60,
+    backgroundColor: C.ink,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
     gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
   },
   menuBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   searchWrap: {
     flex: 1,
     height: 40,
-    backgroundColor: C.bg,
+    backgroundColor: "rgba(255,255,255,0.10)",
     borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
@@ -2983,15 +2986,15 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 360,
   },
-  searchInput: { flex: 1, fontSize: 14, color: C.ink, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
+  searchInput: { flex: 1, fontSize: 14, color: C.surface, ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}) },
   tbItem: { alignItems: "center", paddingHorizontal: 12, minWidth: 64 },
   tbItemCompact: { minWidth: 40, paddingHorizontal: 6 },
-  tbLabel: { fontSize: 10, color: C.ink2, marginTop: 2, fontWeight: "500" },
+  tbLabel: { fontSize: 10, color: "rgba(255,255,255,0.7)", marginTop: 2, fontWeight: "500" },
   badge: {
     position: "absolute",
     top: -4,
     right: -8,
-    backgroundColor: C.danger,
+    backgroundColor: C.brand,
     minWidth: 16,
     height: 16,
     borderRadius: 8,
@@ -3005,11 +3008,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 20,
-    backgroundColor: C.brandTint,
+    backgroundColor: "rgba(255,255,255,0.12)",
   },
-  staffText: { fontSize: 12, color: C.brand, fontWeight: "600" },
+  staffText: { fontSize: 12, color: C.surface, fontWeight: "600" },
   branchChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -3017,12 +3020,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: C.line,
-    backgroundColor: C.surface,
+    backgroundColor: "rgba(255,255,255,0.12)",
     maxWidth: 200,
   },
-  branchChipText: { fontSize: 12, color: C.ink, fontWeight: "600" },
+  branchChipText: { fontSize: 12, color: C.surface, fontWeight: "600" },
   mobileTopRow: {
     flexDirection: "row",
     alignItems: "center",

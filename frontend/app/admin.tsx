@@ -930,16 +930,14 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
     setSelected((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
   }, []);
 
+  // Catalogue + settings are filter-independent, so they load once and are not
+  // refetched when the cashier switches date bucket.
   useEffect(() => {
     (async () => {
-      const [res, prodRes, setRes] = await Promise.all([
-        apiFetch(`${API}/orders`),
+      const [prodRes, setRes] = await Promise.all([
         apiFetch(`${API}/products`).catch(() => null),
         apiFetch(`${API}/settings`).catch(() => null),
       ]);
-      const o: Order[] = await res.json();
-      setOrders(o);
-      if (o[0] && isWide) setSelected(o[0]);
       if (prodRes?.ok) {
         const prods: any[] = await prodRes.json();
         const map: Record<string, ProductRef> = {};
@@ -952,9 +950,36 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
         const s = await setRes.json();
         if (s?.tax_percent != null) setTaxPercent(Number(s.tax_percent) || 7);
       }
-      setLoading(false);
     })();
-  }, [isWide]);
+  }, []);
+
+  // Orders are fetched per date bucket so the wire only ever carries the rows
+  // the chip actually shows.  A stale flag drops the response of a superseded
+  // request — tapping through the chips quickly used to let a slow "All" land
+  // after a fast "Today" and repopulate the list.
+  useEffect(() => {
+    let stale = false;
+    setLoading(true);
+    (async () => {
+      const { from, to } = dateFilterRange(dateFilter);
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      const qs = params.toString();
+      try {
+        const res = await apiFetch(`${API}/orders${qs ? `?${qs}` : ""}`);
+        const o: Order[] = await res.json();
+        if (stale) return;
+        setOrders(o);
+        setSelected((cur) => (cur ? cur : o[0] && isWide ? o[0] : null));
+      } catch {
+        if (!stale) setOrders([]);
+      } finally {
+        if (!stale) setLoading(false);
+      }
+    })();
+    return () => { stale = true; };
+  }, [dateFilter, isWide]);
 
   // Filter by order number (case-insensitive substring) and the chosen
   // date bucket.  Buckets are computed from the local-day boundary of the
@@ -986,8 +1011,6 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       setSelected(isWide ? (filteredOrders[0] ?? null) : null);
     }
   }, [filteredOrders, selected, isWide]);
-
-  if (loading) return <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />;
 
   // Mobile drill-down: show list OR detail
   if (!isWide && showDetail && selected) {
@@ -1055,7 +1078,11 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
             );
           })}
         </View>
-        {filteredOrders.length === 0 ? (
+        {/* The chips stay mounted while a bucket loads so switching filters
+            doesn't blank the whole pane out from under the cashier's finger. */}
+        {loading ? (
+          <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} testID="tx-loading" />
+        ) : filteredOrders.length === 0 ? (
           <View style={styles.txEmpty}>
             <Text style={styles.emptyText}>No matching transactions</Text>
           </View>
