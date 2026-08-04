@@ -887,13 +887,35 @@ type ReprintFn = (
 type DateFilter = "today" | "yesterday" | "week" | "all";
 type ProductRef = { image: string; barcode: string };
 
+// Translate a date chip into the ``from``/``to`` window the server filters on.
+// Boundaries come from the *device's* local day so "Today" matches the wall
+// clock the cashier reads, not UTC; they're sent as full ISO strings (with
+// offset) so the server doesn't have to guess the till's timezone.
+function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
+  if (filter === "all") return {};
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (filter === "today") return { from: startOfToday.toISOString() };
+  if (filter === "yesterday") {
+    return {
+      from: new Date(startOfToday.getTime() - dayMs).toISOString(),
+      to: startOfToday.toISOString(),
+    };
+  }
+  return { from: new Date(startOfToday.getTime() - 6 * dayMs).toISOString() };
+}
+
 function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: ReprintFn; staff: string }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDetail, setShowDetail] = useState(false);
   const [query, setQuery] = useState("");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  // Defaults to Today: "All" pulled every bill the branch had ever rung up on
+  // every visit, which left the screen on a spinner for seconds.  The cashier
+  // almost always wants the current day; the other buckets refetch on tap.
+  const [dateFilter, setDateFilter] = useState<DateFilter>("today");
   // Order items only snapshot name/price/qty, so we join to the live
   // product catalogue (by product_id) to show the thumbnail + barcode on
   // each receipt line — matching the reference Sale Transactions screen.

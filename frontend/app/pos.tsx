@@ -682,12 +682,22 @@ export default function POS() {
                 activeOpacity={0.85}
                 testID={`product-${item.id}`}
               >
+                {/* Photo-first card: the picture is the card, not a thumbnail
+                    stuck above a caption. Name sits on a scrim so it stays
+                    legible over any photo; price rides a brand badge. */}
                 <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.productImg} />
-                <View style={styles.productInfo}>
+                {!item.image_base64 && !item.image_url && (
+                  <View style={styles.productNoImg}>
+                    <Ionicons name="cafe-outline" size={26} color="rgba(255,255,255,0.5)" />
+                  </View>
+                )}
+                <View style={styles.priceTag}>
+                  <Text style={styles.priceTagText}>{THB(item.price)}</Text>
+                </View>
+                <View style={styles.productFooter}>
                   <Text style={styles.productName} numberOfLines={2}>
                     {item.name}
                   </Text>
-                  <Text style={styles.productPrice}>{THB(item.price)}</Text>
                 </View>
               </TouchableOpacity>
             )}
@@ -3177,20 +3187,50 @@ const styles = StyleSheet.create({
   center: { flex: 1 },
   productCard: {
     flex: 1,
-    backgroundColor: C.surface,
-    borderRadius: 14,
+    height: 168,
+    backgroundColor: C.ink,
+    borderRadius: 16,
     overflow: "hidden",
     maxWidth: "24%",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  productImg: { width: "100%", height: 110, backgroundColor: C.bg },
-  productInfo: { padding: 10 },
-  productName: { fontSize: 13, fontWeight: "600", color: C.ink, minHeight: 34 },
-  productPrice: { fontSize: 15, fontWeight: "700", color: C.brand, marginTop: 4 },
+  productImg: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    width: "100%", height: "100%",
+    backgroundColor: C.ink,
+  },
+  productNoImg: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  priceTag: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    backgroundColor: C.brand,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 9,
+  },
+  priceTagText: { fontSize: 12, fontWeight: "800", color: C.surface },
+  productFooter: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 10,
+    paddingTop: 14,
+    paddingBottom: 10,
+    backgroundColor: "rgba(20,20,22,0.62)",
+  },
+  productName: { fontSize: 13, fontWeight: "700", color: C.surface, lineHeight: 17 },
   scanBar: {
     height: 44,
     backgroundColor: C.surface,
