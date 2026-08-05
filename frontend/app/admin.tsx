@@ -1012,6 +1012,44 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
     }
   }, [filteredOrders, selected, isWide]);
 
+  // Bills hang off a day timeline rather than sitting in a flat list, so the
+  // rail needs day headers interleaved with the rows — and each day's takings
+  // must be known before its header renders.
+  const timeline = useMemo(() => {
+    const dayTotal = new Map<string, number>();
+    for (const o of filteredOrders) {
+      const k = new Date(o.created_at).toDateString();
+      if (o.status !== "cancel") dayTotal.set(k, (dayTotal.get(k) ?? 0) + o.total);
+    }
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 864e5).toDateString();
+    const rows: ({ kind: "day"; key: string; label: string; total: number }
+               | { kind: "bill"; key: string; o: Order })[] = [];
+    let seen = "";
+    for (const o of filteredOrders) {
+      const k = new Date(o.created_at).toDateString();
+      if (k !== seen) {
+        seen = k;
+        rows.push({
+          kind: "day",
+          key: `day-${k}`,
+          label: k === today ? "Today" : k === yesterday ? "Yesterday"
+            : new Date(o.created_at).toLocaleDateString("en-GB", {
+                weekday: "short", day: "2-digit", month: "short",
+              }),
+          total: dayTotal.get(k) ?? 0,
+        });
+      }
+      rows.push({ kind: "bill", key: o.id, o });
+    }
+    return rows;
+  }, [filteredOrders]);
+
+  const takings = useMemo(
+    () => filteredOrders.reduce((n, o) => (o.status === "cancel" ? n : n + o.total), 0),
+    [filteredOrders],
+  );
+
   // Mobile drill-down: show list OR detail
   if (!isWide && showDetail && selected) {
     return (
@@ -1035,7 +1073,14 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   return (
     <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="transactions-section">
       <View style={[styles.txList, !isWide && styles.fullCol]}>
-        <Text style={styles.sectionHeader}>Sale Transactions</Text>
+        <View style={styles.billsHead}>
+          <Text style={styles.billsTitle}>Bills</Text>
+          <Text style={styles.billsSummary}>
+            {filteredOrders.length} {filteredOrders.length === 1 ? "bill" : "bills"}
+            {"  ·  "}
+            <Text style={styles.billsSummaryAmt}>{THB(takings)}</Text>
+          </Text>
+        </View>
         <View style={styles.searchBoxRow}>
           <Ionicons name="search" size={16} color={C.ink3} />
           <TextInput
@@ -1069,7 +1114,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                 testID={`tx-date-${opt.key}`}
               >
                 <Text
-                  style={[styles.txDateChipText, active && { color: C.surface }]}
+                  style={[styles.txDateChipText, active && styles.txDateChipTextActive]}
                   numberOfLines={1}
                 >
                   {opt.label}
@@ -1088,30 +1133,47 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           </View>
         ) : (
           <FlatList
-            data={filteredOrders}
-            keyExtractor={(i) => i.id}
-            ItemSeparatorComponent={() => <View style={styles.divider} />}
-            renderItem={({ item }) => {
+            data={timeline}
+            keyExtractor={(r) => r.key}
+            renderItem={({ item: row }) => {
+              if (row.kind === "day") {
+                return (
+                  <View style={styles.billsDay}>
+                    <Text style={styles.billsDayLabel}>{row.label}</Text>
+                    <View style={styles.billsDayRule} />
+                    <Text style={styles.billsDayTotal}>{THB(row.total)}</Text>
+                  </View>
+                );
+              }
+              const item = row.o;
               const voided = item.status === "cancel";
+              const active = selected?.id === item.id && isWide;
               return (
-              <TouchableOpacity
-                style={[
-                  styles.txRow,
-                  selected?.id === item.id && isWide && styles.txRowActive,
-                ]}
-                onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
-                testID={`tx-${item.order_number}`}
-              >
-                <Ionicons name="folder-outline" size={18} color={voided ? C.dangerDark : C.ink3} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.txNum, voided && styles.txVoided]}>{item.order_number}</Text>
-                  <Text style={styles.txTime}>
-                    {item.created_time}
-                    {voided && <Text style={styles.txVoided}>   Voided</Text>}
-                  </Text>
-                </View>
-                <Text style={[styles.txAmount, voided && styles.txVoided]}>{THB(item.total)}</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.billRow, active && styles.billRowActive]}
+                  onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
+                  testID={`tx-${item.order_number}`}
+                >
+                  <Text style={[styles.billTime, voided && styles.txVoided]}>{item.created_time}</Text>
+                  {/* The rail: a continuous hairline with one dot per bill. */}
+                  <View style={styles.billRail}>
+                    <View style={styles.billRailLine} />
+                    <View
+                      style={[
+                        styles.billDot,
+                        voided && styles.billDotVoided,
+                        active && styles.billDotActive,
+                      ]}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.billNum, voided && styles.txVoided]}>{item.order_number}</Text>
+                    <Text style={styles.billMeta} numberOfLines={1}>
+                      {voided ? "Voided" : (item.payment_method || item.source || "—")}
+                    </Text>
+                  </View>
+                  <Text style={[styles.billAmount, voided && styles.txVoided]}>{THB(item.total)}</Text>
+                </TouchableOpacity>
               );
             }}
           />
@@ -5469,23 +5531,51 @@ const styles = StyleSheet.create({
   // Transactions
   txList: { width: 320, backgroundColor: C.surface, borderRightWidth: 1, borderRightColor: C.line },
   txDetail: { flex: 1 },
+  // Bills: a day timeline rather than a flat list of folder rows.
+  billsHead: {
+    paddingHorizontal: 14, paddingTop: 16, paddingBottom: 10,
+    backgroundColor: C.surface,
+  },
+  billsTitle: { fontSize: 24, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
+  billsSummary: { fontSize: 12, color: C.ink3, marginTop: 3, fontWeight: "500" },
+  billsSummaryAmt: { color: C.ink, fontWeight: "700" },
+  billsDay: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 14, paddingTop: 16, paddingBottom: 6,
+  },
+  billsDayLabel: {
+    fontSize: 11, fontWeight: "800", color: C.ink2,
+    letterSpacing: 0.6, textTransform: "uppercase",
+  },
+  billsDayRule: { flex: 1, height: 1, backgroundColor: C.line },
+  billsDayTotal: { fontSize: 11, fontWeight: "700", color: C.ink3 },
+  billRow: { flexDirection: "row", alignItems: "center", paddingRight: 14, paddingLeft: 14 },
+  billRowActive: { backgroundColor: C.brandTintSoft },
+  billTime: { width: 44, fontSize: 11, color: C.ink3, fontWeight: "600" },
+  billRail: { width: 22, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
+  billRailLine: {
+    position: "absolute", top: 0, bottom: 0, width: 1, backgroundColor: C.line,
+  },
+  billDot: {
+    width: 9, height: 9, borderRadius: 5,
+    backgroundColor: C.surface, borderWidth: 2, borderColor: C.lineStrong,
+  },
+  billDotActive: { borderColor: C.brand, backgroundColor: C.brand },
+  billDotVoided: { borderColor: C.danger, backgroundColor: C.dangerTint },
+  billNum: { fontSize: 13, color: C.ink, fontWeight: "700", paddingVertical: 10 },
+  billMeta: { fontSize: 11, color: C.ink3, marginTop: -8, marginBottom: 10 },
+  billAmount: { fontSize: 14, color: C.ink, fontWeight: "700" },
+
   txDateChips: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    paddingHorizontal: 10, paddingBottom: 10,
+    flexDirection: "row", alignItems: "center", gap: 18,
+    paddingHorizontal: 14, paddingBottom: 2,
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
-  txDateChip: {
-    flex: 1, height: 34, borderRadius: 17,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: C.line, backgroundColor: C.surface,
-  },
-  txDateChipText: { fontSize: 11, color: C.ink, fontWeight: "600" },
-  txDateChipActive: { backgroundColor: C.brand, borderColor: C.brand },
+  txDateChip: { paddingBottom: 8, borderBottomWidth: 2, borderBottomColor: "transparent" },
+  txDateChipActive: { borderBottomColor: C.brand },
+  txDateChipText: { fontSize: 12, color: C.ink3, fontWeight: "600" },
+  txDateChipTextActive: { color: C.brand, fontWeight: "800" },
   txEmpty: { padding: 24, alignItems: "center" },
-  txRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
-  txRowActive: { backgroundColor: C.brandTint },
-  txNum: { fontSize: 13, color: "#3B82F6", fontWeight: "600" },
-  txTime: { fontSize: 11, color: C.ink3, marginTop: 2 },
-  txAmount: { fontSize: 14, color: C.ink, fontWeight: "700" },
   txVoided: { color: C.dangerDark, fontWeight: "700" },
   divider: { height: 1, backgroundColor: C.bg },
   voidedBy: { fontSize: 13, color: C.dangerDark, fontWeight: "700", marginTop: 4 },
