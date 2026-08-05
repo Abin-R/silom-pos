@@ -240,14 +240,14 @@ export default function Admin() {
   const { reprint: reprintReceipt, ReceiptOverlay: PrinterOverlay } = useStarPrinter();
 
   const allItems: { key: Section | "shop"; label: string; icon: any; adminOnly?: boolean }[] = [
-    { key: "shop", label: "Store", icon: "home-outline" },
-    { key: "transactions", label: "Bills", icon: "swap-horizontal-outline" },
-    { key: "reports", label: "Reports", icon: "pie-chart-outline" },
-    { key: "inventory", label: "Stock", icon: "cube-outline" },
-    { key: "customers", label: "Customers", icon: "people-outline" },
-    { key: "products", label: "Menu", icon: "gift-outline" },
-    { key: "drawer", label: "Cash", icon: "calculator-outline" },
-    { key: "settings", label: "Settings", icon: "settings-outline" },
+    { key: "shop", label: "Store", icon: "storefront-outline" },
+    { key: "transactions", label: "Bills", icon: "receipt-outline" },
+    { key: "reports", label: "Reports", icon: "trending-up-outline" },
+    { key: "inventory", label: "Stock", icon: "layers-outline" },
+    { key: "customers", label: "Customers", icon: "heart-outline" },
+    { key: "products", label: "Menu", icon: "pricetags-outline" },
+    { key: "drawer", label: "Cash", icon: "cash-outline" },
+    { key: "settings", label: "Settings", icon: "options-outline" },
   ];
   const items = allItems.filter((it) => !it.adminOnly || isAdmin);
 
@@ -1369,16 +1369,50 @@ function TransactionDetail({
   return (
     <View style={styles.txDetailWrap}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.txDetailScroll}>
-        {/* ── Header: order # + grand total ── */}
+        {/* ── Header: what happened, for how much, and what you can do ── */}
         <View style={styles.tdHeadRow}>
-          <Text style={[styles.tdOrderNo, isVoided && styles.txVoided]}>{order.order_number}</Text>
-          <Text style={[styles.tdGrand, isVoided && styles.txVoided]}>{THB(order.total)}</Text>
+          <View style={{ flex: 1 }}>
+            <View style={styles.tdEyebrowRow}>
+              <Text style={styles.tdOrderNo}>{order.order_number}</Text>
+              <View style={[styles.tdStatus, isVoided && styles.tdStatusVoid]}>
+                <Text style={[styles.tdStatusText, isVoided && styles.tdStatusTextVoid]}>
+                  {isVoided ? "Voided" : "Paid"}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.tdGrand, isVoided && styles.txVoided]}>{THB(order.total)}</Text>
+          </View>
+
+          {/* Actions live with the bill, not as two coloured slabs pinned to
+              the bottom of the pane. */}
+          <View style={styles.tdActions}>
+            <TouchableOpacity
+              style={[styles.tdReprintBtn, reprintBusy && { opacity: 0.6 }]}
+              onPress={() => setMenuOpen(true)}
+              disabled={reprintBusy}
+              testID={`reprint-${order.order_number}`}
+            >
+              <Ionicons name="print-outline" size={15} color={C.surface} />
+              <Text style={styles.tdReprintText}>{reprintBusy ? "Printing…" : "Re-print"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tdCancelBtn, (isVoided || voidBusy) && styles.tdCancelBtnDisabled]}
+              onPress={onVoid}
+              disabled={isVoided || voidBusy}
+              testID={`void-${order.order_number}`}
+            >
+              <Text style={styles.tdCancelText}>{voidBusy ? "Voiding…" : "Cancel bill"}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        <Text style={styles.tdMeta}>{formatThaiDateTime(order.created_at)}</Text>
-        <Text style={styles.tdMeta}>Cashier: {order.staff || "—"}</Text>
-        {isVoided && (
-          <Text style={styles.voidedBy}>Voided by: {order.voided_by || "—"}</Text>
-        )}
+
+        {/* Meta reads as labelled facts, not a stack of grey sentences. */}
+        <View style={styles.tdMetaGrid}>
+          <TdFact label="When" value={formatThaiDateTime(order.created_at)} />
+          <TdFact label="Cashier" value={order.staff || "—"} />
+          <TdFact label="Channel" value={channelLabel(order.source)} />
+          {isVoided && <TdFact label="Voided by" value={order.voided_by || "—"} danger />}
+        </View>
         {!!order.pos_tax_invoice && (
           <Text style={styles.tdTaxIssued}>
             Tax invoice issued to {order.pos_tax_invoice.name}
@@ -1386,8 +1420,7 @@ function TransactionDetail({
           </Text>
         )}
 
-        {/* ── Description ── */}
-        <SectionLabel text="Description" />
+        <Text style={styles.tdHeading}>{order.items.length} {order.items.length === 1 ? "item" : "items"}</Text>
         {order.items.map((it: any, i: number) => {
           const ref = it.product_id ? productMap[it.product_id] : undefined;
           const img = ref?.image;
@@ -1419,40 +1452,10 @@ function TransactionDetail({
           <TdLine label={`Tax ${taxPercent} %`} value={THB(tax)} />
         </View>
 
-        {/* ── Payment ── */}
-        <SectionLabel text="Payment" />
+        <Text style={styles.tdHeading}>Payment</Text>
         <TdLine label={order.payment_method || "Cash"} value={THB(paid)} />
         <TdLine label="Change" value={THB(change)} bold />
-
-        {/* ── Sales channels ── */}
-        <SectionLabel text="Sales channels" />
-        <View style={styles.tdChannelRow}>
-          <View style={styles.tdChannelBadge}>
-            <Ionicons name="storefront" size={14} color={C.brand} />
-            <Text style={styles.tdChannelText}>{channelLabel(order.source)}</Text>
-          </View>
-        </View>
       </ScrollView>
-
-      {/* ── Fixed action bar ── */}
-      <View style={styles.tdActionBar}>
-        <TouchableOpacity
-          style={[styles.tdCancelBtn, (isVoided || voidBusy) && styles.tdCancelBtnDisabled]}
-          onPress={onVoid}
-          disabled={isVoided || voidBusy}
-          testID={`void-${order.order_number}`}
-        >
-          <Text style={styles.tdActionText}>{voidBusy ? "Voiding…" : "Cancel Bill"}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tdReprintBtn, reprintBusy && { opacity: 0.6 }]}
-          onPress={() => setMenuOpen(true)}
-          disabled={reprintBusy}
-          testID={`reprint-${order.order_number}`}
-        >
-          <Text style={styles.tdActionText}>{reprintBusy ? "Printing…" : "Re-Print"}</Text>
-        </TouchableOpacity>
-      </View>
 
       <ReprintMenu
         visible={menuOpen}
@@ -2053,6 +2056,19 @@ function SectionLabel({ text }: { text: string }) {
 }
 
 // One right-aligned label/value line in the totals + payment blocks.
+// One labelled fact in the bill header — label above, value below, so the
+// meta reads as a scannable grid rather than a stack of grey sentences.
+function TdFact({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <View style={styles.tdFact}>
+      <Text style={styles.tdFactLabel}>{label}</Text>
+      <Text style={[styles.tdFactValue, danger && styles.tdFactValueDanger]} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 function TdLine({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
     <View style={styles.tdLineRow}>
@@ -5583,10 +5599,32 @@ const styles = StyleSheet.create({
   // ── Transaction detail (reference "Sale Transactions" layout) ──
   txDetailWrap: { flex: 1, backgroundColor: C.surface },
   txDetailScroll: { padding: 24, paddingBottom: 32 },
-  tdHeadRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  tdOrderNo: { fontSize: 26, fontWeight: "700", color: C.ink, flexShrink: 1 },
-  tdGrand: { fontSize: 26, fontWeight: "700", color: C.ink, marginLeft: 12 },
-  tdMeta: { fontSize: 13, color: C.ink3, marginTop: 4 },
+  tdHeadRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
+  tdEyebrowRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  tdOrderNo: { fontSize: 13, fontWeight: "700", color: C.ink3, letterSpacing: 0.3 },
+  tdStatus: {
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999,
+    backgroundColor: C.okTint,
+  },
+  tdStatusVoid: { backgroundColor: C.dangerTint },
+  tdStatusText: { fontSize: 10, fontWeight: "800", color: C.okDark, letterSpacing: 0.4 },
+  tdStatusTextVoid: { color: C.danger },
+  tdGrand: { fontSize: 34, fontWeight: "800", color: C.ink, letterSpacing: -1, marginTop: 2 },
+  tdActions: { flexDirection: "row", alignItems: "center", gap: 8, paddingTop: 4 },
+  tdMetaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 24, marginTop: 18 },
+  tdFact: { minWidth: 110 },
+  tdFactLabel: {
+    fontSize: 10, fontWeight: "800", color: C.ink3,
+    letterSpacing: 0.6, textTransform: "uppercase",
+  },
+  tdFactValue: { fontSize: 13, color: C.ink, fontWeight: "600", marginTop: 3 },
+  tdFactValueDanger: { color: C.danger },
+  tdHeading: {
+    fontSize: 11, fontWeight: "800", color: C.ink2,
+    letterSpacing: 0.6, textTransform: "uppercase",
+    marginTop: 26, marginBottom: 8,
+    borderBottomWidth: 1, borderBottomColor: C.line, paddingBottom: 8,
+  },
   tdSectionRow: { flexDirection: "row", alignItems: "center", marginVertical: 16 },
   tdSectionLine: { flex: 1, height: 1, backgroundColor: C.line },
   tdSectionText: { fontSize: 13, color: C.ink2Soft, fontWeight: "600", marginHorizontal: 12 },
@@ -5602,14 +5640,19 @@ const styles = StyleSheet.create({
   tdLineLabel: { fontSize: 14, color: C.ink2Soft, marginRight: 24 },
   tdLineValue: { fontSize: 14, color: C.ink, fontWeight: "500", minWidth: 80, textAlign: "right" },
   tdLineBold: { fontWeight: "700", color: C.ink },
-  tdChannelRow: { flexDirection: "row", justifyContent: "flex-end" },
-  tdChannelBadge: { flexDirection: "row", alignItems: "center", gap: 6 },
-  tdChannelText: { fontSize: 14, color: C.ink, fontWeight: "500" },
-  tdActionBar: { flexDirection: "row" },
-  tdCancelBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: C.dangerDark },
-  tdCancelBtnDisabled: { backgroundColor: "#F9A8C4" },
-  tdReprintBtn: { flex: 1, height: 60, alignItems: "center", justifyContent: "center", backgroundColor: C.okDark },
-  tdActionText: { fontSize: 16, fontWeight: "700", color: C.surface },
+  tdReprintBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 14, height: 36, borderRadius: 10,
+    backgroundColor: C.brand,
+  },
+  tdReprintText: { fontSize: 13, fontWeight: "700", color: C.surface },
+  tdCancelBtn: {
+    paddingHorizontal: 14, height: 36, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: C.lineStrong,
+  },
+  tdCancelBtnDisabled: { opacity: 0.4 },
+  tdCancelText: { fontSize: 13, fontWeight: "700", color: C.danger },
   tdTaxIssued: { fontSize: 13, color: C.okDark, fontWeight: "600", marginTop: 4 },
 
   // ── Reprint document menu (reference POS's พิมพ์ซ้ำ popup) ──

@@ -38,14 +38,14 @@ export type SidebarItem = {
 // All tabs are visible to both roles; cashier-vs-admin gating happens at
 // the action level (e.g. product add/edit/delete is hidden for cashier).
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: "shop", label: "Store", icon: "home-outline" },
-  { key: "transactions", label: "Bills", icon: "swap-horizontal-outline" },
-  { key: "reports", label: "Reports", icon: "pie-chart-outline" },
-  { key: "inventory", label: "Stock", icon: "cube-outline" },
-  { key: "customers", label: "Customers", icon: "people-outline" },
-  { key: "products", label: "Menu", icon: "gift-outline" },
-  { key: "drawer", label: "Cash", icon: "calculator-outline" },
-  { key: "settings", label: "Settings", icon: "settings-outline" },
+  { key: "shop", label: "Store", icon: "storefront-outline" },
+  { key: "transactions", label: "Bills", icon: "receipt-outline" },
+  { key: "reports", label: "Reports", icon: "trending-up-outline" },
+  { key: "inventory", label: "Stock", icon: "layers-outline" },
+  { key: "customers", label: "Customers", icon: "heart-outline" },
+  { key: "products", label: "Menu", icon: "pricetags-outline" },
+  { key: "drawer", label: "Cash", icon: "cash-outline" },
+  { key: "settings", label: "Settings", icon: "options-outline" },
 ];
 
 type Props = {
