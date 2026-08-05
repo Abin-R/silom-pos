@@ -1038,10 +1038,6 @@ function CartSidebar({
   return (
     <View style={[styles.orderPanel, embedded && styles.orderPanelEmbedded]} testID="cart-sidebar">
       <View style={styles.cartHeader}>
-        <View style={styles.tablePill}>
-          <Ionicons name="restaurant-outline" size={14} color={C.ink} />
-          <Text style={styles.tableText}>Tables</Text>
-        </View>
         {customer && (
           <View style={styles.custChip}>
             <View style={[styles.custDot, { backgroundColor: customer.color }]}>
@@ -3257,17 +3253,6 @@ const styles = StyleSheet.create({
     borderRightWidth: 0,
   },
   cartHeader: { alignItems: "center", marginBottom: 8 },
-  tablePill: {
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: C.bg,
-  },
-  tableText: { fontSize: 11, fontWeight: "600", color: C.ink },
   custChip: {
     flexDirection: "row",
     alignItems: "center",
