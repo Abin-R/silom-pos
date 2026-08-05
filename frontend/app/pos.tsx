@@ -713,12 +713,6 @@ export default function POS() {
               </TouchableOpacity>
             )}
           />
-          {isWide && (
-            <View style={styles.scanBar}>
-              <Ionicons name="barcode-outline" size={20} color={C.ink2} />
-              <Text style={styles.scanText}>Scan Barcode</Text>
-            </View>
-          )}
         </View>
 
         {/* Phone: the order rides in a bottom sheet behind this button. */}
@@ -3245,17 +3239,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(20,20,22,0.62)",
   },
   productName: { fontSize: 13, fontWeight: "700", color: C.surface, lineHeight: 17 },
-  scanBar: {
-    height: 44,
-    backgroundColor: C.surface,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderTopWidth: 1,
-    borderTopColor: C.line,
-  },
-  scanText: { fontSize: 13, color: C.ink2, fontWeight: "500" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 10 },
   emptyText: { color: C.ink3, fontSize: 14 },
 
