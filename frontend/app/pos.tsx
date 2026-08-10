@@ -13,7 +13,6 @@ import {
   ActivityIndicator,
   Platform,
   useWindowDimensions,
-  Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -23,15 +22,19 @@ import PhoneInput from "../components/PhoneInput";
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
-import { SidebarDrawer } from "../components/SidebarDrawer";
+import { listJobs } from "../lib/printerQueue";
+import { AppShell, TopBar, WIDE, railWidth } from "../components/AppShell";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
-import { C } from "../lib/theme";
+import { C, MONO, R } from "../lib/theme";
+import { showAlert } from "../lib/dialog";
+import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
+const RAIL_KEY = "bravepos:rail-collapsed:v1";
 
 async function doLogout(): Promise<void> {
   try {
@@ -142,12 +145,61 @@ export default function POS() {
       }
     })();
   }, [router]);
-  const { width } = useWindowDimensions();
-  const isWide = width >= 720;
+  const { width, height } = useWindowDimensions();
+  const [railPref, setRailPref] = useState<boolean | null>(null);
+  useEffect(() => {
+    AsyncStorage.getItem(RAIL_KEY)
+      .then((v) => setRailPref(v === null ? null : v === "1"))
+      .catch(() => {});
+  }, []);
+  // Default to collapsed on a typical tablet, where the 195px rail is exactly
+  // what the category column needs.
+  const railCollapsed = railPref ?? width < 1280;
+  const toggleRail = () => {
+    const next = !railCollapsed;
+    setRailPref(next);
+    AsyncStorage.setItem(RAIL_KEY, next ? "1" : "0").catch(() => {});
+  };
+  // `isWide` is the four-zone layout: navy rail, categories, grid, cart. It
+  // must match the shell's own threshold or the rail and the columns disagree
+  // about which layout is on screen.
+  const isWide = width >= WIDE;
   const isMid = width >= 600;
-  // The vertical category rail used to eat 112px of the grid; with categories
-  // on top there is room for a fifth column on a full-size tablet.
-  const gridCols = width >= 1100 ? 5 : isWide ? 4 : isMid ? 3 : 2;
+  // Real tablets are not the 1536px the design was drawn at — a Galaxy Tab is
+  // 1138. Holding the mockup's fixed 262 + 466 there leaves ~170px for the
+  // grid and crushes the cards, so the furniture is derived from the viewport
+  // and only *reaches* the design's numbers on a screen wide enough for them.
+  const railW = railWidth(isWide, railCollapsed);
+  const L = useMemo(() => {
+    const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+    if (!isWide) {
+      return {
+        cart: 0,
+        cat: 0,
+        showCat: false,
+        cols: isMid ? 3 : 2,
+        actionBar: 0,
+        tight: false,
+      };
+    }
+    const cart = Math.round(clamp(width * 0.32, 320, 466));
+    const cat = Math.round(clamp(width * 0.18, 196, 262));
+    // The column only earns its width if the grid still has room for two
+    // readable cards beside it; otherwise the categories become a strip.
+    const free = width - railW - cart - 32;
+    const showCat = free - cat - 14 - 44 >= 340;
+    const gridW = free - (showCat ? cat + 14 : 0);
+    return {
+      cart,
+      cat,
+      showCat,
+      cols: clamp(Math.round((gridW - 44) / 175), 2, 4),
+      // Short tablets (712px tall) can't spare 88px for the action bar.
+      actionBar: height < 800 ? 68 : 88,
+      tight: (gridW - 44) / 4 < 150,
+    };
+  }, [width, height, isWide, isMid, railW]);
+  const gridCols = L.cols;
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -184,7 +236,6 @@ export default function POS() {
     | { state: "printed" }
     | { state: "queued"; error?: string }
   >(null);
-  const [showDrawer, setShowDrawer] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Selling gate: until a shift is open, the product grid / cart are blocked.
@@ -193,6 +244,32 @@ export default function POS() {
   const [showOpenShift, setShowOpenShift] = useState(false);
   const [startCash, setStartCash] = useState("0");
   const [openingShift, setOpeningShift] = useState(false);
+
+  // Receipts sitting in the retry queue = prints that silently failed. Polled
+  // rather than pushed, because the queue is drained by a background timer in
+  // useStarPrinter that this screen doesn't own.
+  const [queuedPrints, setQueuedPrints] = useState(0);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      try {
+        const jobs = await listJobs();
+        if (!stop) setQueuedPrints(jobs.length);
+      } catch {
+        // Queue unreadable (web, or first run) — leave the count alone.
+      }
+    };
+    tick();
+    const t = setInterval(tick, 15_000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
+
+  // Wall clock for the top bar. A minute is plenty — this is not a stopwatch.
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   const loadShift = useCallback(async () => {
     try {
@@ -283,6 +360,26 @@ export default function POS() {
     }
     return list;
   }, [products, activeCat, search]);
+
+  // Per-category counts for the category column. Shown beside each row so a
+  // cashier knows an empty grid means "nothing in here" rather than "still
+  // loading" before they tap.
+  const catCounts = useMemo(() => {
+    const m: Record<string, number> = { favorite: 0 };
+    for (const p of products) {
+      if (p.is_favorite) m.favorite += 1;
+      m[p.category_id] = (m[p.category_id] || 0) + 1;
+    }
+    return m;
+  }, [products]);
+
+  // Name of the category currently on screen — the grid header states what
+  // you are looking at, which matters once the strip became a column.
+  const activeCatName = useMemo(() => {
+    if (search.trim()) return `Results for “${search.trim()}”`;
+    if (activeCat === "favorite") return "Favorites";
+    return categories.find((c) => c.id === activeCat)?.name || "Products";
+  }, [activeCat, categories, search]);
 
   // Subtotal is the gross line value; discounts are per-product only (no
   // common/order-level discount). A line discount is clamped to its line total.
@@ -452,7 +549,7 @@ export default function POS() {
       });
       // Keep the cart intact: the cashier can retry the save once the network
       // is back, and clearing it would destroy the only record of the sale.
-      Alert.alert(
+      showAlert(
         "Order NOT saved",
         "The payment went through but the order could not be saved to the server.\n\n" +
           "Do NOT take payment again. Write this order down, then tell an admin.",
@@ -476,6 +573,20 @@ export default function POS() {
     refreshBadges();
   };
 
+  // A product card is flex:1, so a lone item on the last row stretches to the
+  // full grid width. Pad the row out with invisible cards to hold the shape.
+  const gridData = useMemo(() => {
+    const rem = filteredProducts.length % gridCols;
+    if (filteredProducts.length === 0 || rem === 0) return filteredProducts;
+    return [
+      ...filteredProducts,
+      ...Array.from({ length: gridCols - rem }, (_, i) => ({
+        id: `__pad_${i}`,
+        __pad: true,
+      })),
+    ] as Product[];
+  }, [filteredProducts, gridCols]);
+
   if (loading) {
     return (
       <View style={[styles.root, { alignItems: "center", justifyContent: "center" }]}>
@@ -496,223 +607,353 @@ export default function POS() {
     );
   }
 
+  // Navigation is identical on every screen; only what a key *means* differs.
+  // Here "shop" is already the current screen, so it just closes the drawer.
+  const navProps = {
+    staff: staff || "Admin",
+    role: role || "",
+    branchName: activeBranchName || undefined,
+    activeKey: "shop",
+    onNavigate: (key: string) => {
+      setSidebarOpen(false);
+      if (key === "shop") return; // already here
+      router.push({
+        pathname: "/admin",
+        params: {
+          staff: staff || "Admin",
+          role: role || "",
+          branch_id: activeBranchId,
+          branch_name: activeBranchName,
+          section: key,
+        },
+      });
+    },
+    onLogout: async () => {
+      setSidebarOpen(false);
+      // Full logout: backend session + in-memory token + AsyncStorage.
+      // Just clearing the in-memory token leaves AUTH_KEY on disk, so
+      // index.tsx's /auth/me check succeeds and bounces back to /pos.
+      await doLogout();
+      router.replace("/");
+    },
+  };
+
+  // The four things a cashier reaches for that aren't a product. On the tablet
+  // they get the action bar under the grid; on phone they ride the top bar as
+  // icons, because 88px of tiles would cost a row of products.
+  const actions = [
+    {
+      icon: "person-outline",
+      label: "Customer",
+      short: "Customer",
+      onPress: () => setShowCustomer(true),
+      testId: "toolbar-customer",
+    },
+    {
+      icon: "bookmark-outline",
+      label: "Hold Sale",
+      short: "Hold",
+      badge: parkedCount,
+      onPress: () => setShowParked(true),
+      testId: "toolbar-parked",
+    },
+    {
+      icon: "globe-outline",
+      label: "Online Orders",
+      short: "Orders",
+      badge: orderHubCount,
+      onPress: () => setShowOrderHub(true),
+      testId: "toolbar-order-hub",
+    },
+    {
+      icon: "albums-outline",
+      label: "Cash Drawer",
+      short: "Cash",
+      onPress: () => navProps.onNavigate("drawer"),
+      testId: "toolbar-drawer",
+    },
+  ];
+
+  const productGrid = (
+    <FlatList
+      key={`grid-${gridCols}`}
+      data={gridData}
+      keyExtractor={(i) => i.id}
+      numColumns={gridCols}
+      contentContainerStyle={styles.gridContent}
+      columnWrapperStyle={{ gap: 16 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[C.brand]}
+          tintColor={C.brand}
+        />
+      }
+      ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
+      ListEmptyComponent={
+        <Empty
+          icon="search-outline"
+          title="No products here"
+          note={
+            search.trim()
+              ? "Nothing matches that search. Check the spelling, or clear it to browse by category."
+              : "This category has no products yet."
+          }
+        />
+      }
+      renderItem={({ item }) =>
+        (item as any).__pad ? (
+          <View style={{ flex: 1 }} />
+        ) : (
+          <ProductCard item={item} onPress={() => addToCart(item)} />
+        )
+      }
+    />
+  );
+
   return (
-    <SafeAreaView style={styles.root} edges={["bottom"]}>
+    <AppShell
+      nav={navProps}
+      drawerOpen={sidebarOpen}
+      onDrawerChange={setSidebarOpen}
+      railCollapsed={railCollapsed}
+      onToggleRail={toggleRail}
+      testID="pos-screen"
+    >
       <StatusBar style="dark" />
+
       {/* ============ TOP BAR ============ */}
-      <View style={[styles.topBar, { height: 60 + insets.top, paddingTop: insets.top }]} testID="top-bar">
-        <TouchableOpacity
-          style={styles.menuBtn}
-          onPress={() => setSidebarOpen(true)}
-          testID="menu-btn"
-        >
-          <Ionicons name="menu" size={24} color={C.ink} />
-        </TouchableOpacity>
-
-        <View style={styles.topBrand}>
-          <Image
-            source={require("../assets/images/icon.png")}
-            style={styles.topBrandLogo}
-            resizeMode="cover"
-          />
-          {isWide && <Text style={styles.topBrandName}>The Rolling Pinn</Text>}
-        </View>
-
-        {isMid && (
-          <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color={C.ink3} />
-            <TextInput
-              placeholder="Search Products"
-              placeholderTextColor={C.ink3}
-              style={styles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              testID="product-search"
-            />
-          </View>
-        )}
-        {!isMid && <View style={{ flex: 1 }} />}
-
-        <ToolbarIcon
-          icon="globe-outline"
-          label="Orders"
-          badge={orderHubCount}
-          onPress={() => setShowOrderHub(true)}
-          testId="toolbar-order-hub"
-          compact={!isWide}
-        />
-        <ToolbarIcon
-          icon="albums-outline"
-          label="Cash"
-          onPress={() => setShowDrawer(true)}
-          testId="toolbar-drawer"
-          compact={!isWide}
-        />
-        <ToolbarIcon
-          icon="bookmark-outline"
-          label="Hold"
-          badge={parkedCount}
-          onPress={() => setShowParked(true)}
-          testId="toolbar-parked"
-          compact={!isWide}
-        />
-        <ToolbarIcon
-          icon="person-outline"
-          label="Customer"
-          onPress={() => setShowCustomer(true)}
-          testId="toolbar-customer"
-          compact={!isWide}
-        />
-        {/* Branch chip lives in the top bar only on tablet/desktop; on phone
-            it moves into the mobile search row to avoid overflowing the bar. */}
-        {isMid && !!activeBranchName && (
-          <View style={styles.branchChip} testID="branch-chip">
-            <Ionicons name="storefront-outline" size={16} color={C.brand} />
-            <Text style={styles.branchChipText} numberOfLines={1}>{activeBranchName}</Text>
-          </View>
-        )}
-        {isWide && (
-          <View style={styles.staffChip}>
-            <Ionicons name="person-circle" size={22} color={C.brand} />
-            <Text style={styles.staffText}>{staff || "Admin"}</Text>
-          </View>
-        )}
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={async () => { await doLogout(); router.replace("/"); }}
-          testID="logout-btn"
-        >
-          <Ionicons name="log-out-outline" size={20} color={C.danger} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Mobile search bar (below top bar on narrow) + branch chip */}
-      {!isMid && (
-        <View style={styles.mobileTopRow}>
-          <View style={[styles.mobileSearchWrap, { flex: 1, marginRight: 0 }]}>
-            <Ionicons name="search" size={18} color={C.ink3} />
-            <TextInput
-              placeholder="Search Products"
-              placeholderTextColor={C.ink3}
-              style={styles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              testID="product-search-mobile"
-            />
-          </View>
-          {!!activeBranchName && (
-            <View style={styles.branchChipMobile} testID="branch-chip">
-              <Ionicons name="storefront-outline" size={14} color={C.brand} />
-              <Text style={styles.branchChipMobileText} numberOfLines={1}>{activeBranchName}</Text>
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* ============ MAIN LAYOUT ============ */}
-      <View style={{ flex: 1 }}>
-      <View style={[styles.main, !isWide && styles.mainStacked]}>
-        {/* Order panel — pinned to the left edge on tablet, so the running
-            order is the first thing in reading order rather than an
-            afterthought parked on the right. On phone it collapses into the
-            bottom sheet behind the cart button. */}
-        {isWide && (
-          <CartSidebar
-            cart={cart}
-            customer={customer}
-            subtotal={subtotal}
-            discountAmount={discountAmount}
-            total={total}
-            cartCount={cartCount}
-            onClear={clearCart}
-            onRemoveCustomer={() => setCustomer(null)}
-            onPay={() => setShowPayment(true)}
-            onInc={(pid) => updateQty(pid, 1)}
-            onDec={(pid) => updateQty(pid, -1)}
-            onRemove={removeItem}
-            onEdit={setEditItem}
-          />
-        )}
-
-        {/* Products — categories run across the top at every width, grid below. */}
-        <View style={styles.center}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={[styles.catStrip, !isMid && styles.catStripStacked]}
-            contentContainerStyle={{ paddingHorizontal: 12, gap: 8, alignItems: "center" }}
-            testID="category-rail"
-          >
-            <CatChip
-              label="Favorite"
-              active={activeCat === "favorite"}
-              onPress={() => {
-                setActiveCat("favorite");
-                setSearch("");
-              }}
-              testId="cat-favorite"
-            />
-            {categories
-              .filter((c) => c.name !== "Favorite")
-              .map((c) => (
-                <CatChip
-                  key={c.id}
-                  label={c.name}
-                  sub={isWide ? c.name_th : undefined}
-                  active={activeCat === c.id}
-                  onPress={() => {
-                    setActiveCat(c.id);
-                    setSearch("");
-                  }}
-                  testId={`cat-${c.id}`}
-                />
-              ))}
-          </ScrollView>
-
-          <FlatList
-            key={`grid-${gridCols}`}
-            data={filteredProducts}
-            keyExtractor={(i) => i.id}
-            numColumns={gridCols}
-            contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
-            columnWrapperStyle={{ gap: 10 }}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
+      <TopBar
+        onMenu={() => (isWide ? toggleRail() : setSidebarOpen(true))}
+        menuOpen={isWide ? !railCollapsed : sidebarOpen}
+        search={
+          <SearchField
+            rounded
+            height={isWide ? 52 : 44}
+            value={search}
+            onChangeText={setSearch}
+            placeholder={
+              isWide ? "Search products by name or Thai name…" : "Search products"
             }
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Ionicons name="search-outline" size={40} color={C.lineStrong} />
-                <Text style={styles.emptyText}>No products found</Text>
-              </View>
-            }
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[styles.productCard, { maxWidth: `${100 / gridCols - 2}%` }]}
-                onPress={() => addToCart(item)}
-                activeOpacity={0.85}
-                testID={`product-${item.id}`}
-              >
-                {/* Photo-first card: the picture is the card, not a thumbnail
-                    stuck above a caption. Name sits on a scrim so it stays
-                    legible over any photo; price rides a brand badge. */}
-                <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.productImg} />
-                {!item.image_base64 && !item.image_url && (
-                  <View style={styles.productNoImg}>
-                    <Ionicons name="cafe-outline" size={26} color="rgba(255,255,255,0.5)" />
-                  </View>
-                )}
-                <View style={styles.priceTag}>
-                  <Text style={styles.priceTagText}>{THB(item.price)}</Text>
-                </View>
-                <View style={styles.productFooter}>
-                  <Text style={styles.productName} numberOfLines={2}>
-                    {item.name}
+            testID="product-search"
+          />
+        }
+        actions={
+          isWide ? (
+            // The right of the bar carries state the cashier would otherwise
+            // only discover at the worst moment: no open shift, or receipts
+            // that failed to print. Both are actionable, so both are buttons.
+            <>
+              {queuedPrints > 0 && (
+                <TouchableOpacity
+                  style={styles.statusPill}
+                  onPress={() =>
+                    showAlert(
+                      `${queuedPrints} receipt${queuedPrints === 1 ? "" : "s"} waiting to print`,
+                      "The printer was unreachable, so these were queued and are retried automatically. Check the printer is on and connected.",
+                    )
+                  }
+                  testID="status-print-queue"
+                >
+                  <Ionicons name="print-outline" size={16} color={C.warnDark} />
+                  <Text style={[styles.statusText, { color: C.warnDark }]}>
+                    {`${queuedPrints} queued`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {shiftOpen === false ? (
+                <TouchableOpacity
+                  style={[styles.statusPill, { backgroundColor: C.warnTint }]}
+                  onPress={() => setShowOpenShift(true)}
+                  testID="status-shift"
+                >
+                  <Ionicons name="lock-closed-outline" size={16} color={C.warnDark} />
+                  <Text style={[styles.statusText, { color: C.warnDark }]}>
+                    No shift open
+                  </Text>
+                </TouchableOpacity>
+              ) : shiftOpen === true ? (
+                <View style={[styles.statusPill, { backgroundColor: C.okTint }]}>
+                  <View style={styles.statusDot} />
+                  <Text style={[styles.statusText, { color: C.okDark }]}>
+                    Shift open
                   </Text>
                 </View>
-              </TouchableOpacity>
+              ) : null}
+
+              <Money style={styles.topClock}>
+                {`${String(clock.getHours()).padStart(2, "0")}:${String(clock.getMinutes()).padStart(2, "0")}`}
+              </Money>
+            </>
+          ) : (
+            <>
+              {actions.map((a) => (
+                <ToolbarIcon
+                  key={a.testId}
+                  icon={a.icon}
+                  label={a.label}
+                  badge={a.badge}
+                  onPress={a.onPress}
+                  testId={a.testId}
+                  compact
+                />
+              ))}
+            </>
+          )
+        }
+      />
+
+      {/* ============ MAIN LAYOUT ============ */}
+      <View style={{ flex: 1, minHeight: 0 }}>
+        <View style={styles.saleBody}>
+          <View style={styles.saleLeft}>
+            <View style={styles.saleCols}>
+              {/* Categories: a column on the tablet, where there is room to
+                  show the Thai name and a count; a strip on phone. */}
+              {L.showCat ? (
+                <ScrollView
+                  style={[styles.catCol, { width: L.cat }]}
+                  contentContainerStyle={{ gap: 2 }}
+                  showsVerticalScrollIndicator={false}
+                  testID="category-rail"
+                >
+                  <CatRow
+                    label="Favorites"
+                    emoji="★"
+                    count={catCounts.favorite}
+                    active={activeCat === "favorite" && !search.trim()}
+                    onPress={() => {
+                      setActiveCat("favorite");
+                      setSearch("");
+                    }}
+                    testId="cat-favorite"
+                  />
+                  {categories
+                    .filter((c) => c.name !== "Favorite")
+                    .map((c) => (
+                      <CatRow
+                        key={c.id}
+                        label={c.name}
+                        sub={c.name_th}
+                        color={c.color}
+                        count={catCounts[c.id] || 0}
+                        active={activeCat === c.id && !search.trim()}
+                        onPress={() => {
+                          setActiveCat(c.id);
+                          setSearch("");
+                        }}
+                        testId={`cat-${c.id}`}
+                      />
+                    ))}
+                </ScrollView>
+              ) : null}
+
+              <View style={styles.prodCol}>
+                {L.showCat ? (
+                  <View style={styles.prodHead}>
+                    <Text style={styles.prodHeadTitle} numberOfLines={1}>
+                      {activeCatName}
+                    </Text>
+                    <View style={{ flex: 1 }} />
+                    <Text style={styles.prodHeadCount}>
+                      {filteredProducts.length}{" "}
+                      {filteredProducts.length === 1 ? "item" : "items"}
+                    </Text>
+                  </View>
+                ) : (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.catStrip}
+                    contentContainerStyle={{
+                      paddingHorizontal: 12,
+                      gap: 8,
+                      alignItems: "center",
+                    }}
+                    testID="category-rail"
+                  >
+                    <CatChip
+                      label="Favorites"
+                      active={activeCat === "favorite"}
+                      onPress={() => {
+                        setActiveCat("favorite");
+                        setSearch("");
+                      }}
+                      testId="cat-favorite"
+                    />
+                    {categories
+                      .filter((c) => c.name !== "Favorite")
+                      .map((c) => (
+                        <CatChip
+                          key={c.id}
+                          label={c.name}
+                          active={activeCat === c.id}
+                          onPress={() => {
+                            setActiveCat(c.id);
+                            setSearch("");
+                          }}
+                          testId={`cat-${c.id}`}
+                        />
+                      ))}
+                  </ScrollView>
+                )}
+
+                {productGrid}
+              </View>
+            </View>
+
+            {/* Action bar — tablet only; the phone carries these in the bar. */}
+            {isWide && (
+              <View style={[styles.actionBar, { height: L.actionBar }]}>
+                {actions.map((a) => (
+                  <TouchableOpacity
+                    key={a.testId}
+                    style={styles.act}
+                    onPress={a.onPress}
+                    activeOpacity={0.8}
+                    testID={a.testId}
+                  >
+                    <Ionicons name={a.icon as any} size={L.tight ? 20 : 22} color={C.ink2} />
+                    <Text
+                      style={[styles.actText, L.tight && { fontSize: 13.5 }]}
+                      numberOfLines={1}
+                    >
+                      {L.tight ? a.short : a.label}
+                    </Text>
+                    {!!a.badge && a.badge > 0 && (
+                      <View style={styles.actBadge}>
+                        <Text style={styles.actBadgeText}>{a.badge}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
             )}
-          />
+          </View>
+
+          {/* Order panel — right-hand column on the tablet, per the design;
+              on phone it collapses into the sheet behind the cart button. */}
+          {isWide && (
+            <CartSidebar
+              width={L.cart}
+              cart={cart}
+              customer={customer}
+              subtotal={subtotal}
+              discountAmount={discountAmount}
+              total={total}
+              cartCount={cartCount}
+              onClear={clearCart}
+              onRemoveCustomer={() => setCustomer(null)}
+              onPay={() => setShowPayment(true)}
+              onInc={(pid) => updateQty(pid, 1)}
+              onDec={(pid) => updateQty(pid, -1)}
+              onRemove={removeItem}
+              onEdit={setEditItem}
+            />
+          )}
         </View>
 
         {/* Phone: the order rides in a bottom sheet behind this button. */}
@@ -733,26 +974,35 @@ export default function POS() {
               <Text style={styles.fabTotal}>{THB(total)}</Text>
             </View>
             <View style={styles.fabRight}>
-              <Text style={styles.fabView}>View</Text>
+              <Text style={styles.fabView}>Checkout</Text>
               <Ionicons name="chevron-up" size={18} color={C.surface} />
             </View>
           </TouchableOpacity>
         )}
-      </View>
 
         {/* Selling gate — blocks the grid/cart until a shift is open. The top
-            bar (and its sidebar → admin/reports) stays reachable above this. */}
+            bar (and its rail → admin) stays reachable above this. */}
         {shiftOpen === false && (
           <View style={styles.shiftGate} testID="shift-gate">
-            <Ionicons name="lock-closed-outline" size={44} color={C.lineStrong} />
-            <Text style={styles.shiftGateText}>Open shift to continue</Text>
-            <TouchableOpacity
-              style={styles.shiftGateBtn}
-              onPress={() => setShowOpenShift(true)}
-              testID="gate-open-shift"
-            >
-              <Text style={styles.shiftGateBtnText}>OPEN SHIFT</Text>
-            </TouchableOpacity>
+            <View style={styles.shiftGateCard}>
+              <View style={styles.shiftGateIcon}>
+                <Ionicons name="lock-closed-outline" size={32} color={C.brand} />
+              </View>
+              <Text style={styles.shiftGateText}>Open shift to continue</Text>
+              <Text style={styles.shiftGateNote}>
+                Count the drawer first — the figure you enter is what the close
+                is measured against.
+              </Text>
+              <Btn
+                label="Open shift"
+                variant="blue"
+                icon="play-outline"
+                height={56}
+                style={{ marginTop: 20, alignSelf: "stretch" }}
+                onPress={() => setShowOpenShift(true)}
+                testID="gate-open-shift"
+              />
+            </View>
           </View>
         )}
       </View>
@@ -887,46 +1137,12 @@ export default function POS() {
           clearCart();
         }}
       />
-      <DrawerModal visible={showDrawer} onClose={() => setShowDrawer(false)} />
-      {/* Shared sidebar drawer — opens via the top-bar hamburger.  Picking
-          "Shop" just closes it (we're already here); other sections push
-          to /admin with that section's key so admin lands directly on the
-          chosen page without an intermediate Reports flash. */}
-      <SidebarDrawer
-        visible={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        staff={staff || "Admin"}
-        role={role || ""}
-        branchName={activeBranchName || undefined}
-        activeKey="shop"
-        onNavigate={(key) => {
-          setSidebarOpen(false);
-          if (key === "shop") return; // already here
-          router.push({
-            pathname: "/admin",
-            params: {
-              staff: staff || "Admin",
-              role: role || "",
-              branch_id: activeBranchId,
-              branch_name: activeBranchName,
-              section: key,
-            },
-          });
-        }}
-        onLogout={async () => {
-          setSidebarOpen(false);
-          // Full logout: backend session + in-memory token + AsyncStorage.
-          // Just clearing the in-memory token leaves AUTH_KEY on disk, so
-          // index.tsx's /auth/me check succeeds and bounces back to /pos.
-          await doLogout();
-          router.replace("/");
-        }}
-      />
+      {/* The rail handles its own drawer on phone — see AppShell. */}
       {/* Off-screen receipt rendering target for view-shot capture.
           Only mounts when a print is in flight; invisible to the user. */}
       <ReceiptOverlay />
 
-    </SafeAreaView>
+    </AppShell>
   );
 }
 
@@ -972,15 +1188,15 @@ function ToolbarIcon({
   );
 }
 
+// Phone-width category chip. The tablet uses CatRow instead — a horizontal
+// strip on a 195px-narrower screen would hide most of the categories.
 function CatChip({
   label,
-  sub,
   active,
   onPress,
   testId,
 }: {
   label: string;
-  sub?: string;
   active: boolean;
   onPress: () => void;
   testId: string;
@@ -991,20 +1207,129 @@ function CatChip({
       onPress={onPress}
       testID={testId}
     >
-      <Text style={[styles.catChipText, active && styles.catChipTextActive]} numberOfLines={1}>
+      <Text
+        style={[styles.catChipText, active && styles.catChipTextActive]}
+        numberOfLines={1}
+      >
         {label}
       </Text>
-      {!!sub && (
-        <Text style={[styles.catChipSub, active && styles.catChipSubActive]} numberOfLines={1}>
-          {sub}
+    </TouchableOpacity>
+  );
+}
+
+// Tablet category row. Carries the Thai name and a count, so choosing a
+// category is a decision made before the grid redraws rather than after.
+function CatRow({
+  label,
+  sub,
+  emoji,
+  color,
+  count,
+  active,
+  onPress,
+  testId,
+}: {
+  label: string;
+  sub?: string;
+  emoji?: string;
+  color?: string;
+  count?: number;
+  active: boolean;
+  onPress: () => void;
+  testId: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.catRow, active && styles.catRowActive]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      testID={testId}
+    >
+      {emoji ? (
+        <Text style={[styles.catEmoji, active && { color: C.brand }]}>
+          {emoji}
         </Text>
+      ) : (
+        <View
+          style={[
+            styles.catDot,
+            { backgroundColor: color || C.lineStrong },
+          ]}
+        />
+      )}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          style={[styles.catRowText, active && styles.catRowTextActive]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+        {!!sub && (
+          <Text style={styles.catRowSub} numberOfLines={1}>
+            {sub}
+          </Text>
+        )}
+      </View>
+      {count !== undefined && (
+        <Money style={[styles.catCount, active && { color: C.brand }]}>
+          {count}
+        </Money>
       )}
     </TouchableOpacity>
   );
 }
 
-// ---------- Cart Sidebar (shared between desktop sidebar + mobile sheet) ----------
+// Product tile. Image block on top, names below, price and an explicit add
+// button in the footer — the whole card is still tappable, but the blue
+// button tells a new cashier where to aim.
+function ProductCard({
+  item,
+  onPress,
+}: {
+  item: Product;
+  onPress: () => void;
+}) {
+  const img = item.image_base64 || item.image_url;
+  return (
+    <TouchableOpacity
+      style={styles.pcard}
+      onPress={onPress}
+      activeOpacity={0.85}
+      testID={`product-${item.id}`}
+    >
+      <View style={styles.pimg}>
+        {img ? (
+          <Image source={{ uri: img }} style={styles.pimgPhoto} />
+        ) : (
+          <Ionicons name="cafe-outline" size={38} color={C.ink3} />
+        )}
+      </View>
+      {item.is_favorite && (
+        <View style={styles.pbadge}>
+          <Tag tone="low" icon="star">Favorite</Tag>
+        </View>
+      )}
+      <Text style={styles.pname} numberOfLines={2}>
+        {item.name}
+      </Text>
+      {!!item.name_th && (
+        <Text style={styles.pnameTh} numberOfLines={1}>
+          {item.name_th}
+        </Text>
+      )}
+      <View style={styles.pfoot}>
+        <Money style={styles.pprice}>{THB(item.price)}</Money>
+        <View style={styles.padd}>
+          <Ionicons name="add" size={20} color={C.surface} />
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ---------- Cart Sidebar (shared between the tablet column + phone sheet) ----------
 function CartSidebar({
+  width,
   cart,
   customer,
   subtotal,
@@ -1020,6 +1345,8 @@ function CartSidebar({
   onEdit,
   embedded,
 }: {
+  /** Fixed column width on tablet; the phone sheet ignores it. */
+  width?: number;
   cart: CartItem[];
   customer: Customer | null;
   subtotal: number;
@@ -1035,60 +1362,51 @@ function CartSidebar({
   onEdit: (item: CartItem) => void;
   embedded?: boolean;
 }) {
+  // Prices already include VAT (see the shop's tax setup), so the tax line is
+  // the portion carved out of the total, not something added on top of it.
+  const vat = total > 0 ? (total * 7) / 107 : 0;
+
   return (
-    <View style={[styles.orderPanel, embedded && styles.orderPanelEmbedded]} testID="cart-sidebar">
-      <View style={styles.cartHeader}>
-        {customer && (
-          <View style={styles.custChip}>
-            <View style={[styles.custDot, { backgroundColor: customer.color }]}>
-              <Text style={styles.custInitial}>
-                {customer.name?.[0]?.toUpperCase()}
-              </Text>
-            </View>
-            <Text style={styles.custName} numberOfLines={1}>
-              {customer.name}
-            </Text>
-            <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer">
-              <Ionicons name="close" size={16} color={C.ink3} />
+    <View
+      style={[
+        styles.cart,
+        !!width && { width },
+        embedded && styles.cartEmbedded,
+      ]}
+      testID="cart-sidebar"
+    >
+      {!embedded && (
+        <View style={styles.cartHead}>
+          <Text style={styles.cartTitle}>
+            Cart <Text style={styles.cartCountText}>({cartCount})</Text>
+          </Text>
+          <View style={{ flex: 1 }} />
+          {cart.length > 0 && (
+            <TouchableOpacity
+              style={styles.clearBtn}
+              onPress={onClear}
+              testID="clear-cart"
+            >
+              <Ionicons name="trash-outline" size={18} color={C.danger} />
+              <Text style={styles.clearText}>Clear</Text>
             </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* TODO: unify toFixed(2) → THB() formatting across cart summary for consistency */}
-      <View style={styles.totalBox}>
-        <View style={styles.sumTotalRow}>
-          <Text style={styles.totalLabel}>Sub Total</Text>
-          <Text style={styles.subTotalVal}>{subtotal.toFixed(2)}</Text>
+          )}
         </View>
-        {discountAmount > 0 && (
-          <View style={styles.discRow}>
-            <Text style={styles.discLabel}>Discount</Text>
-            <Text style={styles.discVal}>-{THB(discountAmount)}</Text>
+      )}
+
+      {!!customer && (
+        <View style={styles.custChip}>
+          <View style={[styles.custDot, { backgroundColor: customer.color }]}>
+            <Text style={styles.custInitial}>
+              {customer.name?.[0]?.toUpperCase()}
+            </Text>
           </View>
-        )}
-        <View style={styles.totalRow}>
-          <Text style={styles.thbText}>THB</Text>
-          <Text style={styles.totalVal} testID="cart-total">
-            {total.toFixed(2)}
+          <Text style={styles.custName} numberOfLines={1}>
+            {customer.name}
           </Text>
-        </View>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.payBtn, cart.length === 0 && styles.payBtnDisabled]}
-        disabled={cart.length === 0}
-        onPress={onPay}
-        testID="pay-btn"
-      >
-        <Text style={styles.payBtnText}>Pay</Text>
-      </TouchableOpacity>
-
-      {cart.length > 0 && (
-        <View style={styles.cartListHeader}>
-          <Text style={styles.cartListCount}>
-            {`${cart.length} Item${cart.length !== 1 ? "s" : ""} / ${cartCount} pcs.`}
-          </Text>
+          <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer" hitSlop={8}>
+            <Ionicons name="close" size={16} color={C.ink3} />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1097,68 +1415,108 @@ function CartSidebar({
         keyExtractor={(i) => i.product_id}
         style={{ flex: 1 }}
         contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
+        showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          <View style={styles.emptyCart}>
-            <MaterialCommunityIcons name="cart-outline" size={40} color={C.lineStrong} />
-            <Text style={styles.emptyCartText}>Cart is empty</Text>
-            <Text style={styles.emptyCartSub}>Tap a product to add</Text>
-          </View>
+          <Empty
+            icon="cart-outline"
+            title="Cart is empty"
+            note="Tap a product to start the order."
+          />
         }
         renderItem={({ item }) => (
-          <View style={styles.cartItem} testID={`cart-item-${item.product_id}`}>
+          <View style={styles.crow} testID={`cart-item-${item.product_id}`}>
             <TouchableOpacity
-              style={{ flex: 1 }}
+              style={styles.crowInfo}
               onPress={() => onEdit(item)}
               testID={`cart-item-edit-${item.product_id}`}
             >
-              <Text style={styles.cartItemName} numberOfLines={2}>
+              <Text style={styles.crowName} numberOfLines={2}>
                 {item.name}
               </Text>
-              <Text style={styles.cartItemPrice}>
-                {THB(item.price)} × {item.qty}
-              </Text>
+              <Money style={styles.crowUnit}>{`${THB(item.price)} / ea`}</Money>
               {!!item.discount && item.discount > 0 && (
-                <Text style={styles.cartItemDisc}>Discount -{THB(item.discount)}</Text>
+                <Money style={styles.crowDisc}>
+                  {`Discount −${THB(item.discount)}`}
+                </Money>
               )}
             </TouchableOpacity>
-            <View style={styles.qtyCtrl}>
+
+            <View style={styles.qty}>
               <TouchableOpacity
                 style={styles.qtyBtn}
                 onPress={() => onDec(item.product_id)}
                 testID={`qty-dec-${item.product_id}`}
               >
-                <Ionicons name="remove" size={16} color={C.ink} />
+                <Ionicons name="remove" size={17} color={C.ink2} />
               </TouchableOpacity>
-              <Text style={styles.qtyText}>{item.qty}</Text>
+              <Money style={styles.qtyText}>{item.qty}</Money>
               <TouchableOpacity
                 style={styles.qtyBtn}
                 onPress={() => onInc(item.product_id)}
                 testID={`qty-inc-${item.product_id}`}
               >
-                <Ionicons name="add" size={16} color={C.ink} />
+                <Ionicons name="add" size={17} color={C.ink2} />
               </TouchableOpacity>
             </View>
+
+            <Money style={styles.crowLine}>
+              {THB(item.price * item.qty - (item.discount || 0))}
+            </Money>
+
             <TouchableOpacity
               onPress={() => onRemove(item.product_id)}
-              style={styles.trashBtn}
+              style={styles.crowRm}
               testID={`remove-${item.product_id}`}
+              hitSlop={6}
             >
-              <Ionicons name="trash-outline" size={18} color={C.danger} />
+              <Ionicons name="close" size={17} color={C.ink3} />
             </TouchableOpacity>
           </View>
         )}
       />
 
-      {cart.length > 0 && (
-        <View style={styles.cartFooterRow}>
-          <TouchableOpacity onPress={onClear} style={styles.footerTrash} testID="clear-cart">
-            <Ionicons name="trash-outline" size={18} color={C.danger} />
-          </TouchableOpacity>
+      <View style={styles.totals}>
+        <View style={styles.tr}>
+          <Text style={styles.trLabel}>Subtotal</Text>
+          <Money style={styles.trValue}>{THB(subtotal)}</Money>
         </View>
-      )}
+        {discountAmount > 0 && (
+          <View style={styles.tr}>
+            <Text style={styles.trLabel}>Discount</Text>
+            <Money style={[styles.trValue, { color: C.ok }]}>
+              {`−${THB(discountAmount)}`}
+            </Money>
+          </View>
+        )}
+        <View style={styles.tr}>
+          <Text style={styles.trLabel}>VAT 7% (included)</Text>
+          <Money style={styles.trValue}>{THB(vat)}</Money>
+        </View>
+        <View style={styles.dash} />
+        <View style={styles.trBig}>
+          <Text style={styles.trBigLabel}>Total</Text>
+          <Money style={styles.trBigValue} numberOfLines={1}>
+            <Text testID="cart-total">{THB(total)}</Text>
+          </Money>
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.checkout, cart.length === 0 && styles.checkoutOff]}
+        disabled={cart.length === 0}
+        onPress={onPay}
+        activeOpacity={0.85}
+        testID="pay-btn"
+      >
+        <Ionicons name="lock-closed-outline" size={20} color={C.surface} />
+        <Text style={styles.checkoutText}>Checkout</Text>
+        <View style={{ flex: 1 }} />
+        <Money style={styles.checkoutAmt}>{THB(total)}</Money>
+      </TouchableOpacity>
     </View>
   );
 }
+
 
 // ---------- Payment Method Constants ----------
 const PAYMENT_METHODS = {
@@ -1201,11 +1559,16 @@ function PaymentModal({
 }) {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
+  // The keypad is opt-in. Quick-tender chips cover almost every cash sale, so
+  // showing twelve keys by default puts arithmetic in front of a task that
+  // rarely needs it.
+  const [showPad, setShowPad] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setAmount("");
       setMethod("Cash");
+      setShowPad(false);
     }
   }, [visible]);
 
@@ -1311,7 +1674,20 @@ function PaymentModal({
     } else setAmount((a) => (a === "0" ? k : a + k));
   };
 
-  const quicks = [1000, 500, 100, 50, 20];
+
+  // Quick-tender chips — what a guest actually hands over: the next round
+  // twenty, the next hundred, then the notes above that. A normal cash sale
+  // becomes two taps and no arithmetic.
+  const tenders = useMemo(() => {
+    const out: number[] = [];
+    for (const step of [20, 100, 500, 1000]) {
+      const v = Math.ceil(total / step) * step;
+      if (v > 0 && !out.includes(v)) out.push(v);
+    }
+    return out.sort((a, b) => a - b).slice(0, 4);
+  }, [total]);
+
+  const change = Math.max(0, paid - total);
 
   // Create a Beam QR charge and start polling for completion.
   // `referenceId` is a temporary client-side ref (e.g. POS-<timestamp>) — the real order
@@ -1572,49 +1948,108 @@ function PaymentModal({
     onPay(finalMethod, finalPaid);
   };
 
+  // Icon tint per method — cash green, QR blue, card purple. The tints are
+  // the same ones the Orders list uses for a paid row, so "how was this paid"
+  // reads the same colour on both screens.
+  const methodTint: Record<string, { bg: string; fg: string }> = {
+    [PAYMENT_METHODS.CASH]: { bg: C.okTint, fg: C.okDark },
+    [PAYMENT_METHODS.BEAM]: { bg: C.brandTintSoft, fg: C.brand },
+    [PAYMENT_METHODS.PROMPTPAY]: { bg: C.brandTintSoft, fg: C.brand },
+    [PAYMENT_METHODS.QR_KBANK]: { bg: C.brandTintSoft, fg: C.brand },
+    [PAYMENT_METHODS.CARD_LINK]: { bg: C.accentTint, fg: C.accentDark },
+    [PAYMENT_METHODS.BEAM_CARD]: { bg: C.accentTint, fg: C.accentDark },
+  };
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.paymentModal} testID="payment-modal">
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={onClose} testID="close-payment">
-              <Ionicons name="close" size={26} color={C.ink2} />
+        <View
+          style={[styles.payModal, isNarrow && styles.payModalNarrow]}
+          testID="payment-modal"
+        >
+          {/* ── Header ── */}
+          <View style={styles.payHead}>
+            <Text style={styles.payHeadTitle}>Checkout</Text>
+            {!isNarrow && (
+              // Tag defaults to flex-start so it never stretches in a column;
+              // in this centred row it has to opt back in.
+              <Tag tone="info" mono style={{ alignSelf: "center" }}>
+                {`${itemsCount} item${itemsCount !== 1 ? "s" : ""} · ${cartCount} pcs`}
+              </Tag>
+            )}
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              style={styles.xbtn}
+              onPress={onClose}
+              testID="close-payment"
+            >
+              <Ionicons name="close" size={18} color={C.ink2Soft} />
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Payment</Text>
-            <View style={{ width: 26 }} />
           </View>
 
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={[
-              styles.paymentBody,
-              isNarrow && { flex: 0, flexDirection: "column", gap: 12, padding: 12 },
-            ]}
-          >
-            {/* Methods */}
-            <View style={[styles.methodsCol, isNarrow && styles.methodsColNarrow]}>
-              {methods.map((m) => (
-                <TouchableOpacity
-                  key={m.key}
-                  style={[styles.methodBtn, method === m.key && styles.methodBtnActive]}
-                  onPress={() => setMethod(m.key)}
-                  testID={`pay-method-${m.key}`}
-                >
-                  <Ionicons
-                    name={m.icon}
-                    size={24}
-                    color={method === m.key ? C.brand : C.ink2}
-                  />
-                  <Text
-                    style={[styles.methodText, method === m.key && styles.methodTextActive]}
+          <View style={[styles.paySplit, isNarrow && { flexDirection: "column" }]}>
+            {/* ── Method column ── */}
+            <ScrollView
+              style={isNarrow ? styles.payLeftNarrow : styles.payLeftWrap}
+              contentContainerStyle={
+                isNarrow ? styles.payLeftNarrowInner : styles.payLeft
+              }
+              horizontal={isNarrow}
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+            >
+              {methods.map((m) => {
+                const on = method === m.key;
+                const tint = methodTint[m.key] || { bg: C.neutralTint, fg: C.ink2Soft };
+                return (
+                  <TouchableOpacity
+                    key={m.key}
+                    style={[
+                      styles.pm,
+                      on && styles.pmOn,
+                      isNarrow && styles.pmNarrow,
+                    ]}
+                    onPress={() => setMethod(m.key)}
+                    activeOpacity={0.8}
+                    testID={`pay-method-${m.key}`}
                   >
-                    {m.key}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                    <View style={[styles.pmIcon, { backgroundColor: tint.bg }]}>
+                      <Ionicons name={m.icon} size={20} color={tint.fg} />
+                    </View>
+                    <Text
+                      style={[styles.pmText, on && styles.pmTextOn]}
+                      numberOfLines={1}
+                    >
+                      {m.key}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
 
-            {/* Dynamic center content per method */}
+              {!isNarrow && (
+                <View style={styles.payNote}>
+                  <Text style={styles.payNoteText}>
+                    Splitting the bill? Take one method now and charge the
+                    remainder after.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            {/* ── Detail column ── */}
+            <View style={styles.payRight}>
+              <View style={styles.due}>
+                <Text style={styles.dueLabel}>AMOUNT DUE</Text>
+                <Money style={styles.dueVal} numberOfLines={1}>
+                  {THB(total)}
+                </Money>
+              </View>
+
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={styles.payPane}
+                showsVerticalScrollIndicator={false}
+              >
             {method === PAYMENT_METHODS.EASY_PAY ? (
               <View style={styles.easyPayPane} testID="easypay-pane">
                 <Text style={styles.easyPayThai}>ชำระเงินครบวงจร</Text>
@@ -2078,132 +2513,144 @@ function PaymentModal({
                 </View>
               </ScrollView>
             ) : (
-              <View style={[styles.padCol, isNarrow && { width: "100%", minHeight: 0 }]}>
-                <View style={[styles.amountDisplay, isNarrow && { padding: 12 }]}>
-                  <Text style={styles.thbSmall}>THB</Text>
-                  <Text style={[styles.amountText, isNarrow && { fontSize: 26 }]} testID="amount-display">
-                    {amount || "0"}
-                  </Text>
-                </View>
-                {/* On phone the quicks row above the keypad gives each pad
-                    button the full width instead of squeezing it into ~70%. */}
-                {isNarrow && (
-                  <View style={styles.quickRowMobile}>
-                    {quicks.map((q) => (
-                      <TouchableOpacity
-                        key={q}
-                        style={styles.quickChipMobile}
-                        onPress={() =>
-                          setAmount((a) => {
-                            const cur = parseFloat(a || "0");
-                            return String(cur + q);
-                          })
-                        }
-                        testID={`quick-${q}`}
-                      >
-                        <Text style={styles.quickChipMobileText}>+{q}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                {/* Numpad + (on tablet/desktop only) quick amounts side by side */}
-                <View style={styles.padWithQuicks}>
-                  <View style={styles.padGridWrap}>
-                    <View style={styles.padGrid}>
-                      {["7", "8", "9", "4", "5", "6", "1", "2", "3", "0", "."].map((k) => (
+              <View style={styles.cashPane} testID="cash-pane">
+                  <Text style={styles.paneLbl}>CASH RECEIVED</Text>
+                  <View style={styles.quickGrid}>
+                    {tenders.map((t) => {
+                      const on = amount !== "" && parseFloat(amount) === t;
+                      return (
                         <TouchableOpacity
-                          key={k}
-                          style={[styles.padBtn, isNarrow && { paddingVertical: 12 }]}
-                          onPress={() => onKey(k)}
-                          testID={`pad-${k}`}
+                          key={t}
+                          style={[styles.qk, on && styles.qkOn]}
+                          onPress={() => setAmount(String(t))}
+                          testID={`tender-${t}`}
                         >
-                          <Text style={[styles.padText, isNarrow && { fontSize: 22 }]}>{k}</Text>
+                          <Money style={[styles.qkText, on && styles.qkTextOn]}>
+                            {`฿${t.toLocaleString("en-US")}`}
+                          </Money>
                         </TouchableOpacity>
-                      ))}
-                    </View>
-                    {/* Clear + Backspace row */}
-                    <View style={styles.padBottomRow}>
+                      );
+                    })}
+                  </View>
+                  <View style={[styles.quickGrid, { marginTop: 10 }]}>
+                    <TouchableOpacity
+                      style={[
+                        styles.qk,
+                        { flexBasis: "48%" },
+                        amount !== "" && parseFloat(amount) === total && styles.qkOn,
+                      ]}
+                      onPress={() => setAmount(String(total))}
+                      testID="tender-exact"
+                    >
+                      <Money
+                        style={[
+                          styles.qkText,
+                          amount !== "" && parseFloat(amount) === total && styles.qkTextOn,
+                        ]}
+                      >
+                        {`Exact ${THB(total)}`}
+                      </Money>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.qk, { flexBasis: "48%" }, showPad && styles.qkOn]}
+                      onPress={() => setShowPad((v) => !v)}
+                      testID="tender-other"
+                    >
+                      <Text
+                        style={[styles.qkText, showPad && styles.qkTextOn, { fontWeight: "600" }]}
+                      >
+                        Other amount
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Keypad — only when the chips don't cover what was handed
+                      over, so the common case stays two taps. */}
+                  {showPad && (
+                    <View style={styles.padWrap}>
+                      <View style={styles.padDisplay}>
+                        <Text style={styles.padDisplayLbl}>THB</Text>
+                        <Money style={styles.padDisplayVal} testID="amount-display">
+                          {amount || "0"}
+                        </Money>
+                      </View>
+                      <View style={styles.padGrid}>
+                        {["7", "8", "9", "4", "5", "6", "1", "2", "3", "0", ".", "back"].map(
+                          (k) => (
+                            <TouchableOpacity
+                              key={k}
+                              style={styles.padBtn}
+                              onPress={() => onKey(k)}
+                              testID={`pad-${k}`}
+                            >
+                              {k === "back" ? (
+                                <Ionicons
+                                  name="backspace-outline"
+                                  size={22}
+                                  color={C.ink2}
+                                />
+                              ) : (
+                                <Money style={styles.padText}>{k}</Money>
+                              )}
+                            </TouchableOpacity>
+                          ),
+                        )}
+                      </View>
                       <TouchableOpacity
-                        style={[styles.clearPadBtnHalf, isNarrow && { paddingVertical: 8 }]}
+                        style={styles.padClear}
                         onPress={() => onKey("clear")}
                         testID="pad-clear"
                       >
-                        <Text style={styles.clearPadText}>Clear</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.backspacePadBtn, isNarrow && { paddingVertical: 8 }]}
-                        onPress={() => onKey("back")}
-                        testID="pad-back"
-                      >
-                        <Ionicons name="backspace-outline" size={22} color={C.danger} />
+                        <Text style={styles.padClearText}>Clear</Text>
                       </TouchableOpacity>
                     </View>
-                  </View>
-                  {/* Quick amounts column — only on tablet/desktop */}
-                  {!isNarrow && (
-                  <View style={styles.quickColInline}>
-                    {quicks.map((q) => (
-                      <TouchableOpacity
-                        key={q}
-                        style={styles.quickBtnInline}
-                        onPress={() =>
-                          setAmount((a) => {
-                            const cur = parseFloat(a || "0");
-                            return String(cur + q);
-                          })
-                        }
-                        testID={`quick-${q}`}
-                      >
-                        <Text style={styles.quickTextInline}>{q.toLocaleString()}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
                   )}
-                </View>
-              </View>
-            )}
 
-            {/* Right column: totals */}
-            <View style={[styles.quickCol, isNarrow && { width: "100%" }]}>
-              <View style={styles.netBoxV2}>
-                <View style={styles.rightPanelTop}>
-                  <View style={styles.guestRow}>
-                    <Ionicons name="person-outline" size={14} color={C.ink2} />
-                    <Text style={styles.guestText}>Guest</Text>
-                  </View>
-                  <View style={styles.netRowV2}>
-                    <Text style={styles.netLabelV2}>Net Total</Text>
-                    <Text style={styles.netValV2}>{THB(total)}</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => setAmount(String(total))} testID="net-total">
-                    <View style={styles.tapEqualRow}>
-                      <Text style={styles.tapEqualLabel}>Tap to equal Total</Text>
-                      <Text style={styles.tapEqualVal}>{THB(total)}</Text>
+                  {/* Change is the answer, so change is the biggest number. */}
+                  <View style={styles.tender}>
+                    <View style={styles.tenderRow}>
+                      <Text style={styles.tenderLbl}>Received</Text>
+                      <Money style={styles.tenderVal}>
+                        {amount ? THB(parseFloat(amount) || 0) : "—"}
+                      </Money>
                     </View>
-                  </TouchableOpacity>
+                    <View style={styles.tenderRow}>
+                      <Text style={styles.tenderLbl}>Bill total</Text>
+                      <Money style={styles.tenderValSoft}>{THB(total)}</Money>
+                    </View>
+                    <View style={[styles.tenderRow, styles.tenderChange]}>
+                      <Text style={styles.tenderChangeLbl}>Change to give</Text>
+                      <Money style={styles.tenderChangeVal} numberOfLines={1}>
+                        {THB(change)}
+                      </Money>
+                    </View>
+                  </View>
                 </View>
+            )}
+              </ScrollView>
 
-                <View style={styles.rightPanelMiddle}>
-                  <TouchableOpacity
-                    style={[styles.payConfirmBtn, !canConfirm && styles.payBtnDisabled]}
-                    disabled={!canConfirm}
-                    onPress={handleConfirmPayment}
-                    testID="confirm-payment-right"
-                  >
-                    <Text style={styles.payConfirmText}>{confirmLabel}</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.itemCountText}>{itemsCount} Item{itemsCount !== 1 ? "s" : ""} / {cartCount} pcs.</Text>
-                </View>
-
-                {/* Sticky footer recap — intentionally repeats total for at-a-glance confirmation
-                   when the panel is tall and "Net Total" scrolls out of view */}
-                <View style={styles.summaryCard}>
-                  <Text style={styles.summaryLabel}>Summary</Text>
-                  <Text style={styles.summaryValue}>{THB(total)}</Text>
-                </View>
+              {/* ── Footer ── */}
+              <View style={styles.payFoot}>
+                <Btn
+                  label="Back"
+                  icon="arrow-back"
+                  height={60}
+                  onPress={onClose}
+                  style={{ flexGrow: 0, flexShrink: 0, width: isNarrow ? 120 : 170 }}
+                />
+                <Btn
+                  label={confirmLabel}
+                  variant="blue"
+                  height={60}
+                  disabled={!canConfirm}
+                  onPress={handleConfirmPayment}
+                  style={{ flex: 1 }}
+                  textStyle={{ fontSize: 17 }}
+                  testID="confirm-payment-right"
+                />
               </View>
             </View>
-          </ScrollView>
+          </View>
         </View>
       </View>
     </Modal>
@@ -2399,13 +2846,13 @@ function CustomerModal({
       }
       c = await res.json();
     } catch (e: any) {
-      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert("Couldn't save customer", e?.message || "Please try again.");
       return;
     }
     // Guard against a success response missing the required field — never select
     // an object the cart can't render (it reads customer.name[0]).
     if (!c || !c.name) {
-      Alert.alert("Couldn't save customer", "Unexpected response from server.");
+      showAlert("Couldn't save customer", "Unexpected response from server.");
       return;
     }
     setCustomers((list) => [c!, ...list]);
@@ -2832,39 +3279,57 @@ function SuccessModal({
   printStatus: PrintStatus;
   onClose: () => void;
 }) {
+  // The cashier already knows it worked. What they need in that second is the
+  // number to count back into a hand — so change is the headline, and the word
+  // "successful" is demoted to the tick.
+  const hasChange = !!data && data.change > 0.005;
+
   return (
     <Modal visible={!!data} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         {data && (
           <View style={styles.successModal} testID="success-modal">
             <View style={styles.successIcon}>
-              <Ionicons name="checkmark" size={56} color={C.surface} />
+              <Ionicons name="checkmark" size={38} color={C.ok} />
             </View>
-            <Text style={styles.successTitle}>Payment Successful</Text>
-            <Text style={styles.successOrder}>{data.order_number}</Text>
 
-            <View style={styles.successRow}>
-              <Text style={styles.successLabel}>Method</Text>
-              <Text style={styles.successVal}>{data.method}</Text>
+            <Text style={styles.successTitle}>
+              {hasChange ? `Give ${THB(data.change)} change` : "Paid in full"}
+            </Text>
+            <Text style={styles.successOrder}>
+              {`${data.order_number} · ${data.method}`}
+            </Text>
+
+            <View style={styles.successTotal}>
+              <Text style={styles.successTotalLbl}>BILL TOTAL</Text>
+              <Money style={styles.successTotalVal} numberOfLines={1}>
+                {THB(data.total)}
+              </Money>
             </View>
-            <View style={styles.successRow}>
-              <Text style={styles.successLabel}>Total</Text>
-              <Text style={styles.successVal}>{THB(data.total)}</Text>
-            </View>
+
+            {/* Received/change stay available for the cashier who wants to
+                check the arithmetic, just not at headline size. */}
             <View style={styles.successRow}>
               <Text style={styles.successLabel}>Received</Text>
-              <Text style={styles.successVal}>{THB(data.paid)}</Text>
+              <Money style={styles.successVal}>{THB(data.paid)}</Money>
             </View>
-            <View style={[styles.successRow, styles.changeRow]}>
-              <Text style={styles.changeRowLabel}>Change Due</Text>
-              <Text style={styles.changeRowVal}>{THB(data.change)}</Text>
+            <View style={styles.successRow}>
+              <Text style={styles.successLabel}>Change</Text>
+              <Money style={styles.successVal}>{THB(data.change)}</Money>
             </View>
 
             <PrintStatusPill status={printStatus} />
 
-            <TouchableOpacity style={styles.successBtn} onPress={onClose} testID="success-done">
-              <Text style={styles.successBtnText}>Done · New Order</Text>
-            </TouchableOpacity>
+            <Btn
+              label="New sale"
+              icon="add"
+              variant="blue"
+              height={64}
+              onPress={onClose}
+              style={{ alignSelf: "stretch", marginTop: 20 }}
+              textStyle={{ fontSize: 17 }}
+              testID="success-done"
+            />
           </View>
         )}
       </View>
@@ -2909,49 +3374,6 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
 }
 
 // ---------- Drawer Modal ----------
-function DrawerModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.drawerOverlay} onPress={onClose} activeOpacity={1}>
-        <TouchableOpacity activeOpacity={1} style={styles.drawerPanel} testID="drawer-panel">
-          <Text style={styles.drawerTitle}>Cash Drawer</Text>
-          <Text style={styles.drawerSub}>{"Today's quick view"}</Text>
-
-          <View style={styles.drawerStats}>
-            <StatCard label="Sales" value="฿12,480.00" icon="trending-up" color={C.brand} />
-            <StatCard label="Orders" value="24" icon="receipt-outline" color="#3B82F6" />
-            <StatCard label="Avg Ticket" value="฿520.00" icon="pulse" color={C.warn} />
-          </View>
-
-          <Text style={styles.drawerNote}>More reports coming soon.</Text>
-          <TouchableOpacity style={styles.drawerClose} onPress={onClose}>
-            <Text style={styles.drawerCloseText}>Close</Text>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon,
-  color,
-}: {
-  label: string;
-  value: string;
-  icon: any;
-  color: string;
-}) {
-  return (
-    <View style={[styles.statCard, { borderLeftColor: color }]}>
-      <Ionicons name={icon} size={20} color={color} />
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
-    </View>
-  );
-}
 
 // ============ STYLES ============
 
@@ -2960,6 +3382,526 @@ const MARGIN_TOP_AUTO = { marginTop: "auto" as any };
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+
+  // ── Sale floor ─────────────────────────────────────────────────────────
+  // Four zones on the tablet: rail (in the shell), category column, product
+  // grid, cart. The left group and the cart are siblings so the cart keeps a
+  // fixed width while the grid absorbs whatever is left.
+  saleBody: { flex: 1, minHeight: 0, flexDirection: "row" },
+  saleLeft: { flex: 1, minWidth: 0, padding: 16, gap: 14 },
+  saleCols: { flex: 1, minHeight: 0, flexDirection: "row", gap: 14 },
+
+  catCol: {
+    width: 262,
+    flexGrow: 0,
+    flexShrink: 0,
+    backgroundColor: C.surface,
+    borderRadius: R.card,
+    padding: 12,
+  },
+  catRow: {
+    minHeight: 56,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  catRowActive: { backgroundColor: C.brandTintSoft },
+  catEmoji: { fontSize: 20, width: 24, textAlign: "center", color: C.ink2 },
+  catDot: { width: 12, height: 12, borderRadius: 6, marginHorizontal: 6 },
+  catRowText: { fontSize: 15, fontWeight: "600", color: C.ink2 },
+  catRowTextActive: { color: C.brand, fontWeight: "700" },
+  catRowSub: { fontSize: 12, color: C.ink3, marginTop: 2 },
+  catCount: { fontSize: 12, color: C.ink3 },
+
+  prodCol: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: C.surface,
+    borderRadius: R.card,
+    overflow: "hidden",
+  },
+  prodHead: {
+    height: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 22,
+    gap: 12,
+  },
+  prodHeadTitle: {
+    fontSize: 19,
+    fontWeight: "700",
+    color: C.ink,
+    letterSpacing: -0.42,
+    flexShrink: 1,
+  },
+  prodHeadCount: { fontSize: 13.5, color: C.ink3 },
+  gridContent: { paddingHorizontal: 22, paddingTop: 4, paddingBottom: 22 },
+
+  // Product tile
+  pcard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 13,
+    padding: 14,
+    backgroundColor: C.surface,
+  },
+  pimg: {
+    height: 118,
+    borderRadius: 10,
+    backgroundColor: C.sunk,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+    overflow: "hidden",
+  },
+  pimgPhoto: { width: "100%", height: "100%" },
+  pbadge: { position: "absolute", top: 22, left: 22 },
+  pname: {
+    fontSize: 15.5,
+    fontWeight: "600",
+    color: C.ink,
+    letterSpacing: -0.23,
+    lineHeight: 19,
+  },
+  pnameTh: { fontSize: 12.5, color: C.ink3, marginTop: 3 },
+  pfoot: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pprice: { fontSize: 15.5, fontWeight: "700", color: C.ink2 },
+  padd: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: C.brand,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Action bar under the grid
+  actionBar: { height: 88, flexDirection: "row", gap: 14 },
+  act: {
+    flex: 1,
+    backgroundColor: C.surface,
+    borderRadius: R.card,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  actText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: C.ink2,
+    letterSpacing: -0.24,
+  },
+  actBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    backgroundColor: C.brand,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actBadgeText: { color: C.surface, fontSize: 12, fontWeight: "700" },
+
+  // ── Cart ───────────────────────────────────────────────────────────────
+  cart: {
+    width: 466,
+    flexGrow: 0,
+    flexShrink: 0,
+    backgroundColor: C.surface,
+    borderLeftWidth: 1,
+    borderLeftColor: C.line2,
+  },
+  cartEmbedded: { width: "100%", flex: 1, borderLeftWidth: 0 },
+  cartHead: {
+    height: 80,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  cartTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -0.55,
+  },
+  cartCountText: { color: C.ink2Soft, fontWeight: "700" },
+  clearBtn: { flexDirection: "row", alignItems: "center", gap: 8 },
+  clearText: { fontSize: 15, fontWeight: "700", color: C.danger },
+
+  crow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  crowInfo: { flex: 1, minWidth: 0 },
+  crowName: {
+    fontSize: 15.5,
+    fontWeight: "600",
+    color: C.ink,
+    letterSpacing: -0.23,
+  },
+  crowUnit: { fontSize: 13, color: C.ink2Soft, marginTop: 4 },
+  crowDisc: { fontSize: 12.5, color: C.ok, marginTop: 3 },
+  qty: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 9,
+    overflow: "hidden",
+  },
+  qtyBtn: {
+    width: 32,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyText: {
+    width: 44,
+    height: 34,
+    textAlign: "center",
+    lineHeight: 34,
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.ink,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: C.line,
+  },
+  crowLine: {
+    width: 84,
+    textAlign: "right",
+    fontSize: 15.5,
+    fontWeight: "700",
+    color: C.ink,
+  },
+  crowRm: { width: 22, alignItems: "center" },
+
+  totals: {
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+  },
+  tr: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  trLabel: { fontSize: 15, color: C.ink2Soft },
+  trValue: { fontSize: 15, fontWeight: "600", color: C.ink2 },
+  dash: {
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    borderStyle: "dashed",
+    marginVertical: 14,
+  },
+  trBig: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    paddingBottom: 4,
+  },
+  trBigLabel: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -0.5,
+  },
+  trBigValue: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: C.brand,
+    letterSpacing: -1.05,
+  },
+  checkout: {
+    margin: 20,
+    marginTop: 16,
+    height: 72,
+    borderRadius: R.card,
+    backgroundColor: C.brand,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 26,
+    gap: 16,
+  },
+  checkoutOff: { backgroundColor: C.lineStrong },
+  checkoutText: {
+    fontSize: 19,
+    fontWeight: "700",
+    color: C.surface,
+    letterSpacing: -0.38,
+  },
+  checkoutAmt: { fontSize: 21, fontWeight: "800", color: C.surface },
+
+  // ── Top-bar status cluster ─────────────────────────────────────────────
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: 36,
+    paddingHorizontal: 14,
+    borderRadius: R.pill,
+    backgroundColor: C.warnTint,
+  },
+  statusText: { fontSize: 13.5, fontWeight: "700" },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.ok,
+  },
+  topClock: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: C.ink2,
+    letterSpacing: -0.5,
+  },
+
+  // ── Checkout modal ─────────────────────────────────────────────────────
+  payModal: {
+    width: "94%",
+    maxWidth: 1000,
+    height: "90%",
+    maxHeight: 800,
+    backgroundColor: C.surface,
+    borderRadius: R.modal,
+    overflow: "hidden",
+  },
+  payModalNarrow: { width: "100%", height: "100%", maxHeight: "100%", borderRadius: 0 },
+  payHead: {
+    height: 76,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 26,
+    gap: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  payHeadTitle: {
+    fontSize: 21,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -0.53,
+  },
+  xbtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: C.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  paySplit: { flex: 1, minHeight: 0, flexDirection: "row" },
+
+  payLeftWrap: {
+    width: 274,
+    flexGrow: 0,
+    flexShrink: 0,
+    borderRightWidth: 1,
+    borderRightColor: C.line2,
+  },
+  payLeft: { padding: 18, gap: 10, flexGrow: 1 },
+  payLeftNarrow: {
+    maxHeight: 88,
+    flexGrow: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  payLeftNarrowInner: { padding: 14, gap: 10, alignItems: "center" },
+  pm: {
+    height: 68,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: C.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+  },
+  pmNarrow: { height: 60, paddingHorizontal: 14 },
+  pmOn: {
+    borderWidth: 2,
+    borderColor: C.brand,
+    backgroundColor: C.brandTintSoft,
+    paddingHorizontal: 15,
+  },
+  pmIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pmText: { fontSize: 16, fontWeight: "700", color: C.ink2 },
+  pmTextOn: { color: C.brand },
+  payNote: {
+    marginTop: "auto",
+    padding: 16,
+    borderRadius: 13,
+    backgroundColor: C.sunk,
+  },
+  payNoteText: { fontSize: 13.5, color: C.ink2Soft, lineHeight: 21 },
+
+  payRight: { flex: 1, minWidth: 0 },
+  due: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
+    marginHorizontal: 28,
+    paddingTop: 22,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  dueLabel: {
+    ...MONO,
+    fontSize: 10,
+    letterSpacing: 1.3,
+    color: C.ink2Soft,
+  },
+  dueVal: {
+    fontSize: 38,
+    fontWeight: "800",
+    color: C.brand,
+    letterSpacing: -1.4,
+    flexShrink: 1,
+  },
+  payPane: { padding: 24, paddingTop: 18, flexGrow: 1 },
+
+  cashPane: { flex: 1 },
+  paneLbl: {
+    ...MONO,
+    fontSize: 10,
+    letterSpacing: 1.3,
+    color: C.ink2Soft,
+    marginBottom: 12,
+  },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  qk: {
+    flexGrow: 1,
+    flexBasis: "22%",
+    height: 60,
+    borderRadius: R.control,
+    borderWidth: 1,
+    borderColor: C.line,
+    backgroundColor: C.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qkOn: { backgroundColor: C.brand, borderColor: C.brand },
+  qkText: { fontSize: 16, fontWeight: "700", color: C.ink2 },
+  qkTextOn: { color: C.surface },
+
+  padWrap: { marginTop: 16, gap: 10 },
+  padDisplay: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "flex-end",
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: R.control,
+    backgroundColor: C.sunk,
+  },
+  padDisplayLbl: { fontSize: 13, fontWeight: "700", color: C.ink3 },
+  padDisplayVal: { fontSize: 28, fontWeight: "700", color: C.ink, letterSpacing: -0.9 },
+  padClear: {
+    height: 44,
+    borderRadius: R.control,
+    borderWidth: 1,
+    borderColor: C.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  padClearText: { fontSize: 14, fontWeight: "700", color: C.ink2Soft },
+
+  tender: {
+    marginTop: 18,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 13,
+    backgroundColor: C.sunk,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    gap: 12,
+  },
+  tenderRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  tenderLbl: { fontSize: 15.5, color: C.ink2Soft },
+  tenderVal: { fontSize: 18, fontWeight: "700", color: C.ink },
+  tenderValSoft: { fontSize: 15.5, color: C.ink2 },
+  tenderChange: {
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    paddingTop: 14,
+  },
+  tenderChangeLbl: { fontSize: 16, fontWeight: "700", color: C.ok },
+  tenderChangeVal: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: C.ok,
+    letterSpacing: -1.1,
+    flexShrink: 1,
+  },
+
+  payFoot: {
+    flexDirection: "row",
+    gap: 12,
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+  },
+
+  // ── Shift gate ─────────────────────────────────────────────────────────
+  shiftGateCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: C.surface,
+    borderRadius: R.modal,
+    padding: 32,
+    alignItems: "center",
+  },
+  shiftGateIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.brandTintSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  shiftGateNote: {
+    fontSize: 14.5,
+    color: C.ink2Soft,
+    textAlign: "center",
+    lineHeight: 21,
+    marginTop: 8,
+  },
 
   // Top bar
   topBar: {
@@ -3082,19 +4024,15 @@ const styles = StyleSheet.create({
   // Horizontal category strip — sits above the grid at every width now that
   // the vertical rail is gone.
   catStrip: {
-    maxHeight: 64,
-    backgroundColor: C.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line,
-    paddingVertical: 10,
+    maxHeight: 62,
+    paddingVertical: 12,
     flexGrow: 0,
   },
-  catStripStacked: { marginTop: 12 },
   catChip: {
+    height: 38,
     paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: 12,
-    backgroundColor: C.bg,
+    borderRadius: 10,
+    backgroundColor: C.surface,
     borderWidth: 1,
     borderColor: C.line,
     alignItems: "center",
@@ -3102,10 +4040,8 @@ const styles = StyleSheet.create({
     minWidth: 72,
   },
   catChipActive: { backgroundColor: C.brand, borderColor: C.brand },
-  catChipText: { fontSize: 13, fontWeight: "700", color: C.ink2 },
-  catChipTextActive: { color: C.surface },
-  catChipSub: { fontSize: 10, fontWeight: "500", color: C.ink3, marginTop: 1 },
-  catChipSubActive: { color: C.brandTint },
+  catChipText: { fontSize: 14, fontWeight: "600", color: C.ink2 },
+  catChipTextActive: { color: C.surface, fontWeight: "700" },
 
   // FAB cart (mobile)
   fabCart: {
@@ -3116,14 +4052,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: C.brand,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
     gap: 14,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
+    shadowColor: "#0B2050",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
     elevation: 8,
   },
   fabLeft: { flexDirection: "row", alignItems: "center" },
@@ -3140,10 +4076,10 @@ const styles = StyleSheet.create({
   },
   fabBadgeText: { color: C.brand, fontSize: 11, fontWeight: "700" },
   fabMid: { flex: 1 },
-  fabTotalLabel: { color: "rgba(255,255,255,0.8)", fontSize: 10, fontWeight: "600" },
-  fabTotal: { color: C.surface, fontSize: 18, fontWeight: "700" },
+  fabTotalLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontWeight: "600" },
+  fabTotal: { ...MONO, color: C.surface, fontSize: 19, fontWeight: "800" },
   fabRight: { flexDirection: "row", alignItems: "center", gap: 4 },
-  fabView: { color: C.surface, fontSize: 13, fontWeight: "700" },
+  fabView: { color: C.surface, fontSize: 14, fontWeight: "700" },
 
   // Mobile cart bottom sheet
   cartSheetOverlay: { flex: 1, backgroundColor: C.scrim, justifyContent: "flex-end" },
@@ -3167,12 +4103,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 8,
+    paddingHorizontal: 24,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: C.bg,
+    borderBottomColor: C.line2,
   },
-  cartSheetTitle: { fontSize: 17, fontWeight: "700", color: C.ink },
+  cartSheetTitle: { fontSize: 20, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
   mobileDiscBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -3256,21 +4192,23 @@ const styles = StyleSheet.create({
   custChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: C.brandTint,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 10,
+    gap: 10,
+    backgroundColor: C.brandTintSoft,
+    marginHorizontal: 24,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 11,
   },
   custDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  custInitial: { color: C.surface, fontWeight: "700", fontSize: 11 },
-  custName: { flex: 1, fontSize: 12, fontWeight: "600", color: C.ink },
+  custInitial: { color: C.surface, fontWeight: "700", fontSize: 12 },
+  custName: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink },
 
   totalBox: {
     backgroundColor: C.surface,
@@ -3338,29 +4276,8 @@ const styles = StyleSheet.create({
   },
   cartItemName: { fontSize: 12, color: C.ink, fontWeight: "600" },
   cartItemPrice: { fontSize: 11, color: C.ink3, marginTop: 2 },
-  qtyCtrl: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: C.bg,
-    borderRadius: 8,
-    padding: 2,
-  },
-  qtyBtn: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
-  qtyText: { fontSize: 13, fontWeight: "700", minWidth: 18, textAlign: "center" },
-  trashBtn: { padding: 4 },
-  emptyCart: { alignItems: "center", paddingVertical: 40, gap: 6 },
-  emptyCartText: { fontSize: 13, color: C.ink3, fontWeight: "600" },
-  emptyCartSub: { fontSize: 11, color: C.lineStrong },
-  clearBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
-    marginTop: 8,
-  },
-  clearBtnText: { color: C.danger, fontSize: 12, fontWeight: "600" },
+  // (The old cart-row styles lived here; the cart now uses the crow/qty/
+  //  totals set defined at the top of this sheet.)
 
   // Generic modal
   overlay: {
@@ -3510,16 +4427,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   padBtn: {
-    width: "31.5%",
+    // Four across — 0-9, a decimal point and backspace fit one clean block.
     flexGrow: 1,
-    maxWidth: "33.33%",
-    paddingVertical: 14,
-    backgroundColor: C.bgSoft,
-    borderRadius: 12,
+    flexBasis: "22%",
+    height: 56,
+    backgroundColor: C.sunk,
+    borderRadius: R.control,
     alignItems: "center",
     justifyContent: "center",
   },
-  padText: { fontSize: 24, fontWeight: "600", color: C.ink },
+  padText: { fontSize: 22, fontWeight: "600", color: C.ink },
 
   // Bottom row: Clear + Backspace side-by-side
   padBottomRow: {
@@ -4164,46 +5081,62 @@ const styles = StyleSheet.create({
   // Success
   successModal: {
     width: "92%",
-    maxWidth: 440,
+    maxWidth: 520,
     backgroundColor: C.surface,
-    borderRadius: 24,
-    padding: 28,
-    alignItems: "center",
+    borderRadius: R.modal,
+    padding: 36,
   },
+  // Green means money that actually landed — it appears here and nowhere
+  // earlier in the flow, so the tick is unambiguous.
   successIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: C.brand,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: C.okTint,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
   },
-  successTitle: { fontSize: 20, fontWeight: "700", color: C.ink },
-  successOrder: { fontSize: 14, color: C.ink3, marginTop: 4, marginBottom: 20 },
+  successTitle: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -1,
+    marginTop: 24,
+  },
+  successOrder: { fontSize: 15.5, color: C.ink2Soft, marginTop: 8 },
+  successTotal: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 12,
+    marginVertical: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  successTotalLbl: {
+    ...MONO,
+    fontSize: 10,
+    letterSpacing: 1.3,
+    color: C.ink2Soft,
+  },
+  successTotalVal: {
+    fontSize: 34,
+    fontWeight: "800",
+    color: C.brand,
+    letterSpacing: -1.2,
+    flexShrink: 1,
+  },
   successRow: {
     width: "100%",
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: C.bg,
+    paddingVertical: 7,
   },
-  successLabel: { fontSize: 13, color: C.ink2 },
-  successVal: { fontSize: 13, color: C.ink, fontWeight: "600" },
-  changeRow: { borderBottomWidth: 0, marginTop: 8, paddingTop: 12 },
-  changeRowLabel: { fontSize: 14, color: C.ink, fontWeight: "700" },
-  changeRowVal: { fontSize: 18, color: C.brand, fontWeight: "700" },
-  successBtn: {
-    backgroundColor: C.brand,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    marginTop: 20,
-    width: "100%",
-    alignItems: "center",
-  },
-  successBtnText: { color: C.surface, fontSize: 15, fontWeight: "700" },
+  successLabel: { fontSize: 14.5, color: C.ink2Soft },
+  successVal: { fontSize: 14.5, color: C.ink, fontWeight: "600" },
 
   // Print status pill shown inside SuccessModal — tells the cashier
   // whether the local printer actually printed the receipt or whether
@@ -4212,28 +5145,33 @@ const styles = StyleSheet.create({
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginTop: 12,
-    borderWidth: 1,
+    gap: 11,
+    paddingVertical: 14,
+    paddingHorizontal: 17,
+    borderRadius: R.control,
+    marginTop: 16,
   },
-  printPillNeutral: { backgroundColor: C.bg, borderColor: C.line },
-  printPillOk: { backgroundColor: C.okTint, borderColor: C.okBorder },
-  printPillWarn: { backgroundColor: C.warnTint, borderColor: "#FCD34D" },
-  printPillText: { fontSize: 13, color: C.ink2, fontWeight: "600" },
+  printPillNeutral: { backgroundColor: C.sunk },
+  printPillOk: { backgroundColor: C.okTint },
+  printPillWarn: { backgroundColor: C.warnTint },
+  printPillText: { fontSize: 14.5, color: C.ink2, fontWeight: "700" },
   printPillSub: { fontSize: 11, color: C.warnDark, marginTop: 2 },
 
   // Selling gate (no open shift)
   shiftGate: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(244,244,246,0.92)",
+    backgroundColor: "rgba(245,247,250,0.94)",
     alignItems: "center",
     justifyContent: "center",
-    gap: 14,
+    padding: 24,
   },
-  shiftGateText: { fontSize: 17, color: C.ink2, fontWeight: "600" },
+  shiftGateText: {
+    fontSize: 21,
+    color: C.ink,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+    textAlign: "center",
+  },
   shiftGateBtn: {
     backgroundColor: C.brand,
     paddingHorizontal: 40,

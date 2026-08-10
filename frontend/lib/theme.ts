@@ -1,10 +1,10 @@
 // Single source of truth for app colours.
 //
-// The palette is lifted from the customer self-ordering pages
-// (backend_django/bravepos/templates/selforder/base.html) so the till and the
-// customer-facing screens read as one product: Rolling Pinn red on a warm
-// grey surface, with green reserved for "this went through" and a deep brick
-// for destructive/error states so nothing is mistaken for the primary action.
+// The palette is the approved POS design system: a deep navy rail carrying the
+// product identity, a single blue reserved for the one commit action on each
+// screen, and white cards floating on a cool grey surface. Green means money
+// actually landed, amber means "notice this", red means destructive, purple
+// marks refunds so they are never mistaken for voids.
 //
 // Nothing here is imported for its own sake — screens should reference these
 // tokens instead of inlining hex, so a rebrand is one file.
@@ -13,49 +13,90 @@
 // pin a variable to whichever token happened to be assigned first.
 export const C: Record<string, string> = {
   // Brand — primary actions, active tabs, links, focus rings.
-  brand: "#D61222",
-  brandDark: "#A40D1A",
-  brandTint: "#FCE9EB",
-  brandTintSoft: "#FEF4F5",
-  // Secondary brand accent (the self-order pink). Use sparingly, for
-  // highlights that must not read as a primary action.
-  accent: "#FFACEF",
+  brand: "#2563EB",
+  brandDark: "#1D4ED8",
+  brandTint: "#DBE7FE",
+  brandTintSoft: "#EFF5FF",
+  // Secondary brand accent. Use sparingly, for highlights that must not read
+  // as a primary action — refunds, the third slice of a mix chart.
+  accent: "#7C3AED",
+  accentTint: "#F3E8FF",
+  accentDark: "#6D28D9",
+
+  // The navigation rail. Deliberately outside the blue ramp: the rail is
+  // chrome and must never compete with the blue commit button sitting on it.
+  nav: "#102A63",
+  navDark: "#0B2050",
+  navText: "#DCE4F4",
+  navIcon: "#AEBFDF",
+  navMuted: "#9FB2D6",
 
   // Type.
-  ink: "#1C1C1E",
-  inkStrong: "#141416",
-  ink2: "#5A5A60",
-  ink2Soft: "#6B6B70",
-  ink3: "#9A9AA0",
+  ink: "#111827",
+  inkStrong: "#0B1220",
+  ink2: "#374151",
+  ink2Soft: "#6B7280",
+  ink3: "#9AA3B2",
 
-  // Surfaces and rules.
+  // Surfaces and rules. `line2` is the hairline used *inside* a card, where
+  // `line` would read as a second border against the card's own edge.
   surface: "#FFFFFF",
-  bg: "#F4F4F6",
-  bgSoft: "#FAFAFB",
-  line: "#ECECEF",
-  lineStrong: "#D9D9DE",
+  bg: "#F5F7FA",
+  bgSoft: "#F7F9FC",
+  sunk: "#F7F9FC",
+  line: "#E7EBF1",
+  line2: "#F0F3F7",
+  lineStrong: "#D6DBE3",
 
   // Success — paid, completed, positive movement. Never a primary action.
-  ok: "#1A9C5B",
-  okDark: "#147A46",
-  okTint: "#E9F6EF",
-  okBorder: "#B9E3CD",
+  ok: "#16A34A",
+  okDark: "#15803D",
+  okTint: "#DCFCE7",
+  okBorder: "#BBF7D0",
 
-  // Destructive / error. Deliberately darker and duller than `brand` so a
-  // Delete button never looks like a Save button.
-  danger: "#8C1D18",
-  dangerDark: "#6E1512",
-  dangerTint: "#FBEAE8",
-  dangerSoft: "#E7A9A4",
+  // Destructive / error.
+  danger: "#DC2626",
+  dangerDark: "#B91C1C",
+  dangerTint: "#FEE2E2",
+  dangerSoft: "#F5CFCF",
 
-  // Warning.
-  warn: "#E8930C",
-  warnDark: "#8A5A08",
-  warnTint: "#FDF3E2",
+  // Warning / "read this before you act".
+  warn: "#B45309",
+  warnDark: "#92400E",
+  warnTint: "#FEF3C7",
+  warnBorder: "#E7C88C",
+
+  // Neutral chip — sold out, inert states.
+  neutralTint: "#F3F4F6",
 
   // Scrims behind modals and sheets.
-  scrim: "rgba(28,28,30,0.45)",
-  scrimSoft: "rgba(28,28,30,0.30)",
+  scrim: "rgba(12,22,45,0.50)",
+  scrimSoft: "rgba(12,22,45,0.30)",
+};
+
+// Type faces. Sarabun carries Thai and English together; the mono face is
+// reserved for figures — money, counts, times, references — so columns of
+// numbers line up and a price never reflows as its digits change.
+export const F = {
+  ui: "Sarabun",
+  bold: "Sarabun-Bold",
+  mono: "SpaceMono",
+};
+
+// Money and any other tabular figure. Spread onto a Text style.
+export const MONO = {
+  fontFamily: F.mono,
+  fontVariant: ["tabular-nums" as const],
+  letterSpacing: -0.2,
+};
+
+// Shared geometry, so a card radius is one number rather than forty.
+export const R = {
+  chip: 8,
+  control: 12,
+  card: 14,
+  modal: 18,
+  pill: 999,
 };
 
 export default C;

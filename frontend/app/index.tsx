@@ -5,10 +5,14 @@
  *   3. Tap a user, enter a 4-digit PIN on the keypad → auto-submits.
  *   4. POST /api/auth/pin-login → backend replaces any existing
  *      BranchSession on this branch and returns a token + role.
- *   5. Both roles land on /pos; admin reaches admin screens via the sidebar.
+ *   5. Both roles land on /pos; admin reaches admin screens via the rail.
  *
- * Layout: side-by-side panels on tablet/desktop; on phone we render two
- * sequential states (user picker → PIN pad) so the keypad isn't squeezed.
+ * Layout: this is the one screen with no navigation, so the rail's navy takes
+ * the whole left panel and carries the identity. The clock is the largest
+ * element on it because that is what someone opening a shift actually checks.
+ *
+ * On phone the navy becomes a header band and the two halves stack: name
+ * first, then PIN, so the keypad is never squeezed.
  */
 import { useEffect, useState } from "react";
 import {
@@ -20,6 +24,7 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  ScrollView,
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,7 +32,8 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
-import { C } from "../lib/theme";
+import { C, MONO, R } from "../lib/theme";
+import { Btn, Tag } from "../lib/ui";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const BRANCH_KEY = "bravepos:selected-branch:v1";
@@ -45,9 +51,22 @@ const THAI_DAYS = [
   "วันอาทิตย์", "วันจันทร์", "วันอังคาร", "วันพุธ",
   "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์",
 ];
+const EN_DAYS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+const EN_MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 function formatThaiDate(d: Date): string {
   return `${THAI_DAYS[d.getDay()]}ที่ ${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
+
+// Shown beneath the Thai date — the shop reads both, and a shift-opener
+// checking the till against a delivery note is usually reading English.
+function formatEnDate(d: Date): string {
+  return `${EN_DAYS[d.getDay()]} ${d.getDate()} ${EN_MONTHS[d.getMonth()]}`;
 }
 
 function formatClock(d: Date): string {
@@ -56,10 +75,15 @@ function formatClock(d: Date): string {
   return `${h}:${m}`;
 }
 
+function initial(name: string): string {
+  const t = (name || "").trim();
+  return t ? Array.from(t)[0].toUpperCase() : "?";
+}
+
 export default function Login() {
   const router = useRouter();
   const { width, height } = useWindowDimensions();
-  const isWide = width >= 700;
+  const isWide = width >= 900;
   const insets = useSafeAreaInsets();
   // Pack things tighter on shorter phones so the keypad never hits the
   // gesture-nav strip. Tested visually against ~640px-tall androids.
@@ -111,6 +135,7 @@ export default function Login() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branch, setBranch] = useState<Branch | null>(null);
   const [showBranchPicker, setShowBranchPicker] = useState(false);
+  const [showStaffPicker, setShowStaffPicker] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState<string>("");
   const [branchLoading, setBranchLoading] = useState(true);
 
@@ -127,8 +152,9 @@ export default function Login() {
       const list: Branch[] = await r.json();
       setBranches(list);
       const saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
-      const initial = (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
-      setBranch(initial);
+      const initialBranch =
+        (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
+      setBranch(initialBranch);
     } catch (e: any) {
       setBranchLoadError(`${e?.message || String(e)}\nURL: ${API}`);
     } finally {
@@ -231,6 +257,7 @@ export default function Login() {
 
   const onDigit = (d: string) => {
     if (submitting) return;
+    setShowStaffPicker(false);
     if (!selectedUser) {
       setError("Please choose a user first.");
       return;
@@ -253,145 +280,235 @@ export default function Login() {
 
   if (checkingSession) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: C.nav }}>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color={C.brand} />
+          <ActivityIndicator color={C.surface} />
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── Shared sub-renderers ───────────────────────────────────────────────
-  const BranchButton = ({ onBrand }: { onBrand?: boolean }) => (
-    <>
+  // ── Pieces ─────────────────────────────────────────────────────────────
+
+  // The branch chip doubles as the picker — on the navy panel it reads as a
+  // fact about this terminal, and taps through when a shop has more than one.
+  const BranchChip = () => (
+    <View>
       <TouchableOpacity
-        style={s.branchBtn}
+        style={s.branchChip}
         onPress={() => setShowBranchPicker(true)}
         disabled={branches.length <= 1}
         testID="branch-picker-btn"
       >
-        <Ionicons name="storefront-outline" size={16} color={C.ink} />
-        <Text style={s.branchLabel} numberOfLines={1}>
+        <Ionicons name="location-outline" size={17} color={C.navMuted} />
+        <Text style={s.branchChipText} numberOfLines={1}>
           {branch?.name
             || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
         </Text>
         {branches.length > 1 && (
-          <Ionicons name="chevron-down" size={14} color={C.ink3} />
+          <Ionicons name="chevron-down" size={15} color={C.navMuted} />
         )}
       </TouchableOpacity>
       {!!branchLoadError && (
-        <View style={{ marginBottom: 12 }}>
-          <Text style={[s.branchLoadError, onBrand && s.branchLoadErrorOnBrand]}>{branchLoadError}</Text>
-          <TouchableOpacity
+        <View style={{ marginTop: 10, gap: 8, alignItems: "flex-start" }}>
+          <Text style={s.branchErr}>{branchLoadError}</Text>
+          <Btn
+            label="Retry"
+            height={38}
             onPress={loadBranches}
-            style={[s.retryBtn, onBrand && s.retryBtnOnBrand]}
+            style={{
+              backgroundColor: "rgba(255,255,255,0.12)",
+              borderColor: "rgba(255,255,255,0.3)",
+            }}
+            textStyle={{ color: C.surface }}
             testID="branch-retry"
-          >
-            <Text style={[s.retryText, onBrand && s.retryTextOnBrand]}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </>
-  );
-
-  const UserRow = ({ item }: { item: BranchUser }) => {
-    const active = selectedUser?.id === item.id;
-    return (
-      <TouchableOpacity
-        style={[s.userRow, active && s.userRowActive]}
-        onPress={() => {
-          setSelectedUser(item);
-          setPin("");
-          setError("");
-        }}
-        testID={`user-${item.role}`}
-      >
-        <View style={s.avatar}>
-          <Ionicons name="person-outline" size={20} color={C.ink2} />
-        </View>
-        <Text style={s.userName}>{item.name}</Text>
-        <Ionicons name="chevron-forward" size={18} color={C.ink3} />
-      </TouchableOpacity>
-    );
-  };
-
-  const UserList = () => (
-    <>
-      <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
-      {usersLoading ? (
-        <View style={{ paddingVertical: 24 }}>
-          <ActivityIndicator color={C.brand} />
-        </View>
-      ) : isWide ? (
-        <FlatList
-          data={users}
-          keyExtractor={(u) => u.id}
-          renderItem={({ item }) => <UserRow item={item} />}
-          ListEmptyComponent={
-            <Text style={s.empty}>No users assigned to this branch yet.</Text>
-          }
-        />
-      ) : users.length === 0 ? (
-        <Text style={s.empty}>No users assigned to this branch yet.</Text>
-      ) : (
-        users.map((u) => <UserRow key={u.id} item={u} />)
-      )}
-    </>
-  );
-
-  const keySize = isWide || !isShort ? 72 : 62;
-  const keypadWidth = keySize * 3 + 24;
-  const PinPad = () => (
-    <View style={s.pinPad}>
-      <Text style={s.rightTitle}>เข้า ใช้งาน</Text>
-      <Text style={s.rightSubtitle} numberOfLines={1}>
-        {selectedUser ? selectedUser.name : "เลือกพนักงาน"}
-      </Text>
-      <View style={s.dotsRow}>
-        {Array.from({ length: PIN_LENGTH }).map((_, i) => (
-          <View
-            key={i}
-            style={[s.dot, i < pin.length && s.dotFilled]}
-            testID={`pin-dot-${i}`}
           />
-        ))}
-      </View>
-      {error ? (
-        <Text style={s.error} testID="login-error">{error}</Text>
-      ) : (
-        <View style={{ height: 18 }} />
-      )}
-      <View style={[s.keypad, { width: keypadWidth }]}>
-        {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
-          <KeyButton
-            key={d}
-            label={d}
-            size={keySize}
-            onPress={() => onDigit(d)}
-            disabled={submitting || !selectedUser}
-          />
-        ))}
-        <View style={{ width: keySize, height: keySize }} />
-        <KeyButton
-          label="0"
-          size={keySize}
-          onPress={() => onDigit("0")}
-          disabled={submitting || !selectedUser}
-        />
-        <KeyButton
-          icon="backspace-outline"
-          size={keySize}
-          onPress={onBackspace}
-          disabled={submitting || pin.length === 0}
-        />
-      </View>
-      {submitting && (
-        <View style={{ marginTop: 12 }}>
-          <ActivityIndicator color={C.brand} />
         </View>
       )}
     </View>
   );
+
+  // A dropdown should open where it is, not throw a sheet over the middle of
+  // the screen. The list drops directly under the control, anchored to it.
+  const StaffSelect = () => {
+    const open = showStaffPicker;
+    const disabled = usersLoading || users.length === 0;
+    return (
+      <View style={s.selectWrap}>
+        <TouchableOpacity
+          style={[s.select, open && s.selectOpen, !!selectedUser && !open && s.selectOn]}
+          onPress={() => setShowStaffPicker((v) => !v)}
+          activeOpacity={0.8}
+          disabled={disabled}
+          testID="staff-select"
+        >
+          {selectedUser ? (
+            <>
+              <View style={[s.sAv, s.sAvOn]}>
+                <Text style={[s.sAvText, { color: C.surface }]}>
+                  {initial(selectedUser.name)}
+                </Text>
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.selectName} numberOfLines={1}>
+                  {selectedUser.name}
+                </Text>
+                <Text style={s.selectRole} numberOfLines={1}>
+                  {selectedUser.role === "admin" ? "Admin" : "Cashier"}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={s.sAv}>
+                <Ionicons name="people-outline" size={19} color={C.ink2Soft} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.selectPlaceholder}>
+                  {usersLoading
+                    ? "Loading staff\u2026"
+                    : users.length === 0
+                      ? "No staff at this branch"
+                      : "Select your name"}
+                </Text>
+                {!disabled && (
+                  <Text style={s.selectHint}>
+                    {`${users.length} on this branch`}
+                  </Text>
+                )}
+              </View>
+            </>
+          )}
+          <Ionicons
+            name={open ? "chevron-up" : "chevron-down"}
+            size={20}
+            color={open ? C.brand : C.ink3}
+          />
+        </TouchableOpacity>
+
+        {open && (
+          <View style={s.popover}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {users.map((u, i) => {
+                const on = selectedUser?.id === u.id;
+                return (
+                  <TouchableOpacity
+                    key={u.id}
+                    style={[
+                      s.sRow,
+                      on && s.sRowOn,
+                      i === users.length - 1 && { borderBottomWidth: 0 },
+                    ]}
+                    onPress={() => {
+                      setSelectedUser(u);
+                      setPin("");
+                      setError("");
+                      setShowStaffPicker(false);
+                    }}
+                    testID={`user-${u.role}`}
+                  >
+                    <View style={[s.sAv, on && s.sAvOn]}>
+                      <Text style={[s.sAvText, on && { color: C.surface }]}>
+                        {initial(u.name)}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text
+                        style={[s.sName, on && { color: C.brand }]}
+                        numberOfLines={1}
+                      >
+                        {u.name}
+                      </Text>
+                      <Text style={s.sRole} numberOfLines={1}>
+                        {u.role === "admin" ? "Admin" : "Cashier"}
+                      </Text>
+                    </View>
+                    {on && <Ionicons name="checkmark" size={19} color={C.brand} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const keyH = isWide
+    ? height < 780
+      ? 58
+      : height < 900
+        ? 68
+        : 84
+    : isShort
+      ? 60
+      : 72;
+  // Below ~780 the staff grid and the pad are competing for the same pixels,
+  // so the cards give up their padding first — the pad has to stay tappable.
+  const compact = isWide && height < 780;
+
+  const Pad = () => (
+    <View style={[s.pad, compact && { maxWidth: 380 }]}>
+      {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+        <Key
+          key={d}
+          label={d}
+          h={keyH}
+          onPress={() => onDigit(d)}
+          disabled={submitting || !selectedUser}
+        />
+      ))}
+      <Key
+        label="Switch staff"
+        secondary
+        h={keyH}
+        onPress={() => {
+          setSelectedUser(null);
+          setPin("");
+          setError("");
+        }}
+        disabled={submitting || !selectedUser}
+      />
+      <Key
+        label="0"
+        h={keyH}
+        onPress={() => onDigit("0")}
+        disabled={submitting || !selectedUser}
+      />
+      <Key
+        icon="backspace-outline"
+        h={keyH}
+        onPress={onBackspace}
+        disabled={submitting || pin.length === 0}
+      />
+    </View>
+  );
+
+  const Dots = () => (
+    <View style={[s.dots, compact && { marginTop: 18, marginBottom: 8 }]}>
+      {Array.from({ length: PIN_LENGTH }).map((_, i) => (
+        <View
+          key={i}
+          style={[s.dot, i < pin.length && s.dotOn]}
+          testID={`pin-dot-${i}`}
+        />
+      ))}
+    </View>
+  );
+
+  const Status = () =>
+    error ? (
+      <Text style={s.error} testID="login-error">{error}</Text>
+    ) : submitting ? (
+      <View style={{ height: 20, justifyContent: "center" }}>
+        <ActivityIndicator color={C.brand} size="small" />
+      </View>
+    ) : (
+      <View style={{ height: 20 }} />
+    );
 
   const BranchPickerModal = () => (
     <Modal
@@ -401,108 +518,91 @@ export default function Login() {
       onRequestClose={() => setShowBranchPicker(false)}
     >
       <TouchableOpacity
-        style={s.branchModalOverlay}
+        style={s.modalOverlay}
         activeOpacity={1}
         onPress={() => setShowBranchPicker(false)}
       >
-        <View style={s.branchModalSheet}>
-          <Text style={s.branchModalTitle}>Choose Branch</Text>
+        <View style={s.modalSheet}>
+          <Text style={s.modalTitle}>Choose branch</Text>
           <FlatList
             data={branches}
             keyExtractor={(b) => b.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[s.branchRow, branch?.id === item.id && s.branchRowActive]}
-                onPress={() => {
-                  setBranch(item);
-                  setShowBranchPicker(false);
-                }}
-                testID={`branch-pick-${item.id}`}
-              >
-                <Ionicons name="storefront-outline" size={18} color={C.ink} />
-                <Text style={s.branchRowName}>{item.name}</Text>
-                {branch?.id === item.id && (
-                  <Ionicons name="checkmark-circle" size={18} color={C.ok} />
-                )}
-              </TouchableOpacity>
-            )}
+            renderItem={({ item }) => {
+              const on = branch?.id === item.id;
+              return (
+                <TouchableOpacity
+                  style={[s.branchRow, on && { backgroundColor: C.brandTintSoft }]}
+                  onPress={() => {
+                    setBranch(item);
+                    setShowBranchPicker(false);
+                  }}
+                  testID={`branch-pick-${item.id}`}
+                >
+                  <Ionicons
+                    name="storefront-outline"
+                    size={18}
+                    color={on ? C.brand : C.ink2}
+                  />
+                  <Text style={[s.branchRowName, on && { color: C.brand }]}>
+                    {item.name}
+                  </Text>
+                  {on && <Tag tone="info">Current</Tag>}
+                </TouchableOpacity>
+              );
+            }}
           />
         </View>
       </TouchableOpacity>
     </Modal>
   );
 
-  // Wide sign-in: staff pick themselves from a row of chips rather than a
-  // list column, so the whole left half is free for the shop's own mark.
-  const StaffStrip = () => (
-    <View style={s.staffStrip}>
-      {usersLoading ? (
-        <ActivityIndicator color={C.brand} />
-      ) : users.length === 0 ? (
-        <Text style={s.empty}>No users assigned to this branch yet.</Text>
-      ) : (
-        users.map((u) => {
-          const active = selectedUser?.id === u.id;
-          return (
-            <TouchableOpacity
-              key={u.id}
-              style={[s.staffChip, active && s.staffChipActive]}
-              onPress={() => {
-                setSelectedUser(u);
-                setPin("");
-                setError("");
-              }}
-              testID={`user-${u.role}`}
-            >
-              <View style={[s.staffChipAvatar, active && s.staffChipAvatarActive]}>
-                <Ionicons name="person" size={18} color={active ? C.surface : C.ink2} />
-              </View>
-              <Text style={[s.staffChipName, active && s.staffChipNameActive]} numberOfLines={1}>
-                {u.name}
-              </Text>
-            </TouchableOpacity>
-          );
-        })
-      )}
-    </View>
-  );
-
-  // ── Tablet: brand panel + sign-in card ─────────────────────────────────
+  // ── Tablet: navy identity panel + sign-in half ─────────────────────────
   if (isWide) {
     return (
-      <SafeAreaView style={s.container} testID="login-screen">
-        <View style={s.tabletLayout}>
-          {/* The shop's own mark owns half the screen — the first thing staff
-              see should say whose system this is. */}
-          <View style={s.brandPanel}>
-            <View style={s.brandTop}>
-              <View style={s.brandBadge}>
+      <SafeAreaView style={s.root} testID="login-screen">
+        <View style={s.split}>
+          <View style={s.navyPanel}>
+            <View>
+              <View style={s.mark}>
                 <Image
                   source={require("../assets/images/icon.png")}
-                  style={s.brandLogo}
+                  style={s.markImg}
                   resizeMode="cover"
                 />
               </View>
-              <Text style={s.brandName}>The Rolling Pinn</Text>
+              <Text style={s.brand}>The Rolling Pinn</Text>
+              <View style={{ marginTop: 16, alignItems: "flex-start" }}>
+                <BranchChip />
+              </View>
             </View>
 
             <View>
-              <Text style={s.clockOnBrand}>{formatClock(now)}</Text>
-              <Text style={s.dateOnBrand}>{formatThaiDate(now)}</Text>
-            </View>
-
-            <View>
-              <Text style={s.brandBranchLabel}>สาขา</Text>
-              <BranchButton onBrand />
+              <Text style={s.clock}>{formatClock(now)}</Text>
+              <Text style={s.date}>{formatThaiDate(now)}</Text>
+              <Text style={s.dateEn}>{formatEnDate(now)}</Text>
             </View>
           </View>
 
-          <View style={s.tabletRight}>
-            <View style={s.authCard}>
-              <Text style={s.staffHeading}>รายชื่อพนักงาน</Text>
-              <StaffStrip />
-              <PinPad />
-            </View>
+          <View style={[s.padCol, compact && { paddingVertical: 24 }]}>
+            {showStaffPicker && (
+              <TouchableOpacity
+                style={s.popoverBackdrop}
+                activeOpacity={1}
+                onPress={() => setShowStaffPicker(false)}
+              />
+            )}
+            <Text style={[s.h1, compact && { fontSize: 24 }]} numberOfLines={1}>
+              {selectedUser ? `Hi, ${selectedUser.name}` : "Who's on the till?"}
+            </Text>
+            <Text style={s.h1sub}>
+              {selectedUser
+                ? "รหัส 4 หลัก — enter your PIN to sign in"
+                : "รายชื่อพนักงาน — choose your name, then enter your PIN"}
+            </Text>
+            <StaffSelect />
+            <Dots />
+            <Status />
+            <Pad />
           </View>
         </View>
         <BranchPickerModal />
@@ -510,295 +610,401 @@ export default function Login() {
     );
   }
 
-  // ── Phone: two-state flow (user picker → PIN pad) ──────────────────────
+  // ── Phone: navy band, then name → PIN in two states ────────────────────
   return (
     <SafeAreaView
-      style={s.container}
+      style={s.root}
       edges={["top", "left", "right"]}
       testID="login-screen"
     >
-      <View
-        style={[
-          s.phoneRoot,
-          { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+      <View style={s.phoneBand}>
+        <View style={s.phoneBandTop}>
+          <View style={s.markSm}>
+            <Image
+              source={require("../assets/images/icon.png")}
+              style={s.markImg}
+              resizeMode="cover"
+            />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={s.brandSm} numberOfLines={1}>The Rolling Pinn</Text>
+            <Text style={s.dateSm} numberOfLines={1}>{formatThaiDate(now)}</Text>
+          </View>
+          <Text style={s.clockSm}>{formatClock(now)}</Text>
+        </View>
+        <View style={{ marginTop: 12, alignItems: "flex-start" }}>
+          <BranchChip />
+        </View>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={[
+          s.phoneBody,
+          { paddingBottom: Math.max(insets.bottom, 12) + 16 },
         ]}
+        keyboardShouldPersistTaps="handled"
       >
         {!selectedUser ? (
-          // State 1: pick a user
-          <View style={{ flex: 1 }}>
-            <Text style={[s.clock, isShort && { fontSize: 44 }]}>{formatClock(now)}</Text>
-            <Text style={s.date}>{formatThaiDate(now)}</Text>
-            <View style={{ marginTop: 12 }}>
-              <BranchButton />
-            </View>
-            <View style={{ flex: 1 }}>
-              <UserList />
-            </View>
-          </View>
+          <>
+            <Text style={s.h1}>Who&apos;s on the till?</Text>
+            <Text style={s.h1sub}>รายชื่อพนักงาน — choose your name</Text>
+            <StaffSelect />
+          </>
         ) : (
-          // State 2: enter PIN
-          <View style={{ flex: 1 }}>
-            <View style={s.phonePinHeader}>
-              <TouchableOpacity
-                style={s.backBtn}
-                onPress={() => {
-                  setSelectedUser(null);
-                  setPin("");
-                  setError("");
-                }}
-                testID="pin-back"
-              >
-                <Ionicons name="chevron-back" size={18} color={C.ink} />
-                <Text style={s.backText}>เปลี่ยนพนักงาน</Text>
-              </TouchableOpacity>
-              {!!branch && (
-                <View style={s.phoneBranchTag}>
-                  <Ionicons name="storefront-outline" size={12} color={C.brand} />
-                  <Text style={s.phoneBranchText} numberOfLines={1}>{branch.name}</Text>
-                </View>
-              )}
-            </View>
-            <View style={{ flex: 1, justifyContent: "center" }}>
-              <PinPad />
-            </View>
-          </View>
+          <>
+            <TouchableOpacity
+              style={s.backRow}
+              onPress={() => {
+                setSelectedUser(null);
+                setPin("");
+                setError("");
+              }}
+              testID="pin-back"
+            >
+              <Ionicons name="chevron-back" size={18} color={C.ink2} />
+              <Text style={s.backText}>เปลี่ยนพนักงาน · Switch staff</Text>
+            </TouchableOpacity>
+            <Text style={s.h1}>{selectedUser.name}</Text>
+            <Text style={s.h1sub}>Enter your 4-digit PIN</Text>
+            <Dots />
+            <Status />
+            <Pad />
+          </>
         )}
-      </View>
+      </ScrollView>
       <BranchPickerModal />
     </SafeAreaView>
   );
 }
 
-function KeyButton({
+function Key({
   label,
   icon,
-  size,
+  h,
+  secondary,
   onPress,
   disabled,
 }: {
   label?: string;
   icon?: any;
-  size: number;
+  h: number;
+  secondary?: boolean;
   onPress: () => void;
   disabled?: boolean;
 }) {
   return (
-    <TouchableOpacity
-      style={[
-        s.key,
-        { width: size, height: size, borderRadius: size / 2 },
-        disabled && { opacity: 0.4 },
-      ]}
-      onPress={onPress}
-      disabled={disabled}
-      testID={`key-${label ?? "backspace"}`}
-    >
-      {icon ? (
-        <Ionicons name={icon} size={Math.round(size * 0.36)} color={C.ink} />
-      ) : (
-        <Text style={[s.keyLabel, { fontSize: Math.round(size * 0.36) }]}>{label}</Text>
-      )}
-    </TouchableOpacity>
+    <View style={s.keySlot}>
+      <TouchableOpacity
+        style={[
+          s.key,
+          { height: h },
+          secondary && s.keySec,
+          disabled && { opacity: 0.4 },
+        ]}
+        onPress={onPress}
+        disabled={disabled}
+        activeOpacity={0.7}
+        testID={`key-${label ?? "backspace"}`}
+      >
+        {icon ? (
+          <Ionicons name={icon} size={26} color={C.ink2} />
+        ) : (
+          <Text
+            style={secondary ? s.keySecText : [s.keyText, { fontSize: Math.round(h * 0.36) }]}
+            numberOfLines={1}
+          >
+            {label}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bgSoft },
+  root: { flex: 1, backgroundColor: C.surface },
+  split: { flex: 1, flexDirection: "row" },
 
-  // ── Tablet layout ──
-  tabletLayout: { flex: 1, flexDirection: "row" },
-  brandPanel: {
-    flex: 1,
-    backgroundColor: C.brand,
-    padding: 40,
+  // ── Navy identity panel ──
+  navyPanel: {
+    width: 430,
+    maxWidth: "40%",
+    backgroundColor: C.nav,
+    paddingHorizontal: 36,
+    paddingVertical: 44,
     justifyContent: "space-between",
   },
-  brandTop: { flexDirection: "row", alignItems: "center", gap: 14 },
-  brandBadge: {
+  mark: {
     width: 64,
     height: 64,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
+    borderRadius: 17,
     overflow: "hidden",
+    backgroundColor: C.brand,
   },
-  brandLogo: { width: "100%", height: "100%" },
-  brandName: { fontSize: 22, fontWeight: "800", color: C.surface, letterSpacing: -0.3 },
-  clockOnBrand: { fontSize: 72, fontWeight: "800", color: C.surface, letterSpacing: -2 },
-  dateOnBrand: { fontSize: 16, color: C.brandTint, marginTop: 2 },
-  brandBranchLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: C.brandTint,
-    marginBottom: 8,
-    letterSpacing: 0.4,
+  markImg: { width: "100%", height: "100%" },
+  brand: {
+    fontSize: 31,
+    fontWeight: "800",
+    color: C.surface,
+    letterSpacing: -1,
+    marginTop: 26,
   },
-  tabletRight: {
-    flex: 1,
-    padding: 32,
+  branchChip: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: C.bg,
+    gap: 9,
+    backgroundColor: "rgba(255,255,255,0.11)",
+    borderRadius: 11,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    maxWidth: "100%",
   },
-  authCard: {
-    width: "100%",
-    maxWidth: 420,
-    backgroundColor: C.surface,
-    borderRadius: 20,
+  branchChipText: {
+    fontSize: 15,
+    color: "#C9D6EE",
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  branchErr: { color: "#FFC9C9", fontSize: 12, lineHeight: 17 },
+  clock: {
+    ...MONO,
+    fontSize: 80,
+    fontWeight: "300",
+    color: C.surface,
+    letterSpacing: -3.4,
+    lineHeight: 84,
+  },
+  date: { fontSize: 16, color: C.navMuted, marginTop: 14 },
+  dateEn: { fontSize: 14, color: "rgba(159,178,214,0.7)", marginTop: 3 },
+
+  // ── Sign-in half ──
+  signPanel: { flex: 1, minWidth: 0, backgroundColor: C.surface },
+  // Centred while it fits, scrollable the moment it doesn't — with five staff
+  // the fixed-height column used to push the heading off the top and cut the
+  // bottom row of the keypad.
+  signPanelInner: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 48,
+    paddingVertical: 44,
+  },
+  h1: { fontSize: 28, fontWeight: "800", color: C.ink, letterSpacing: -0.78 },
+  h1sub: { fontSize: 15, color: C.ink2Soft, marginTop: 7, lineHeight: 21 },
+
+  // ── Staff select ──
+  // The wrapper owns the stacking context so the popover paints over the dots
+  // and keypad below it rather than being clipped by them.
+  selectWrap: { marginTop: 24, zIndex: 20 },
+  select: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: R.card,
     borderWidth: 1,
     borderColor: C.line,
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 24,
+    backgroundColor: C.surface,
   },
-  staffStrip: {
+  selectOn: {
+    borderWidth: 2,
+    borderColor: C.brand,
+    backgroundColor: C.brandTintSoft,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+  },
+  // Open: square off the bottom corners so the control and the list read as
+  // one object rather than two stacked cards.
+  selectOpen: {
+    borderWidth: 2,
+    borderColor: C.brand,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+  },
+  selectName: { fontSize: 16, fontWeight: "700", color: C.ink },
+  selectRole: { fontSize: 12.5, color: C.ink2Soft, marginTop: 2 },
+  selectPlaceholder: { fontSize: 16, fontWeight: "600", color: C.ink3 },
+  selectHint: { fontSize: 12, color: C.ink3, marginTop: 2 },
+
+  popover: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    marginTop: -2,
+    maxHeight: 250,
+    backgroundColor: C.surface,
+    borderWidth: 2,
+    borderTopWidth: 0,
+    borderColor: C.brand,
+    borderBottomLeftRadius: R.card,
+    borderBottomRightRadius: R.card,
+    overflow: "hidden",
+    shadowColor: "#0B2050",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  sRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  sRowOn: { backgroundColor: C.brandTintSoft },
+  sAv: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#E8EDF5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sAvOn: { backgroundColor: C.brand },
+  sAvText: { fontSize: 15, fontWeight: "700", color: C.ink2 },
+  sName: { fontSize: 15, fontWeight: "700", color: C.ink },
+  sRole: { fontSize: 12, color: C.ink2Soft, marginTop: 1 },
+
+  // ── Keypad column ──
+  popoverBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 10,
+  },
+  padCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 56,
+    paddingVertical: 40,
+    justifyContent: "center",
+    backgroundColor: C.surface,
+  },
+
+  emptyStaff: {
+    marginTop: 24,
+    padding: 20,
+    borderRadius: R.control,
+    backgroundColor: C.sunk,
+    color: C.ink2Soft,
+    fontSize: 14,
+    textAlign: "center",
+  },
+
+  dots: {
+    flexDirection: "row",
+    gap: 16,
+    justifyContent: "center",
+    marginTop: 30,
+    marginBottom: 14,
+  },
+  dot: {
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: C.line,
+  },
+  dotOn: { backgroundColor: C.brand, borderColor: C.brand },
+  error: {
+    color: C.danger,
+    fontSize: 13.5,
+    textAlign: "center",
+    height: 20,
+  },
+
+  pad: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 4,
+    maxWidth: 440,
+    width: "100%",
+    alignSelf: "center",
+    marginTop: 12,
+    marginHorizontal: -6,
   },
-  staffChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingLeft: 6,
-    paddingRight: 14,
-    paddingVertical: 6,
-    borderRadius: 999,
+  keySlot: { width: "33.333%", padding: 6 },
+  key: {
+    borderRadius: R.card,
     borderWidth: 1,
     borderColor: C.line,
-    backgroundColor: C.bg,
-  },
-  staffChipActive: { borderColor: C.brand, backgroundColor: C.brandTintSoft },
-  staffChipAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: C.line,
+    backgroundColor: C.surface,
     alignItems: "center",
     justifyContent: "center",
   },
-  staffChipAvatarActive: { backgroundColor: C.brand },
-  staffChipName: { fontSize: 14, fontWeight: "600", color: C.ink2 },
-  staffChipNameActive: { color: C.brand, fontWeight: "700" },
+  keySec: { borderColor: "transparent", backgroundColor: "transparent" },
+  keyText: { ...MONO, fontWeight: "500", color: C.ink },
+  keySecText: { fontSize: 14, fontWeight: "700", color: C.ink2Soft },
 
-  // ── Phone layout ──
-  phoneRoot: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
-  phonePinHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
+  // ── Phone ──
+  phoneBand: {
+    backgroundColor: C.nav,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 18,
   },
-  backBtn: {
+  phoneBandTop: { flexDirection: "row", alignItems: "center", gap: 12 },
+  markSm: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: C.brand,
+  },
+  brandSm: { fontSize: 17, fontWeight: "800", color: C.surface, letterSpacing: -0.4 },
+  dateSm: { fontSize: 12, color: C.navMuted, marginTop: 2 },
+  clockSm: { ...MONO, fontSize: 30, fontWeight: "300", color: C.surface, letterSpacing: -1.4 },
+  phoneBody: { paddingHorizontal: 20, paddingTop: 22 },
+  backRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     paddingVertical: 6,
-    paddingRight: 8,
+    marginBottom: 8,
+    alignSelf: "flex-start",
   },
-  backText: { fontSize: 13, fontWeight: "600", color: C.ink },
-  phoneBranchTag: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: C.line,
+  backText: { fontSize: 13.5, fontWeight: "600", color: C.ink2 },
+
+  // ── Branch picker ──
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: C.scrim,
+    justifyContent: "center",
+    padding: 24,
+  },
+  modalSheet: {
     backgroundColor: C.surface,
-    maxWidth: 160,
+    borderRadius: R.modal,
+    maxHeight: "70%",
+    overflow: "hidden",
+    maxWidth: 440,
+    alignSelf: "center",
+    width: "100%",
   },
-  phoneBranchText: { fontSize: 12, fontWeight: "600", color: C.ink },
-
-  // ── Header / branch ──
-  clock: { fontSize: 56, fontWeight: "700", color: C.ink, letterSpacing: -1 },
-  date: { fontSize: 16, color: C.ink2, marginTop: 4, marginBottom: 12 },
-  branchBtn: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999,
-    borderWidth: 1, borderColor: C.line,
-    backgroundColor: C.surface, alignSelf: "flex-start",
-    marginBottom: 12, maxWidth: "100%",
-  },
-  branchLabel: { fontSize: 13, fontWeight: "600", color: C.ink },
-  branchLoadError: { color: C.danger, fontSize: 11, marginBottom: 6 },
-  branchLoadErrorOnBrand: { color: C.surface },
-  retryBtn: {
-    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
-    borderWidth: 1, borderColor: C.danger, alignSelf: "flex-start",
-  },
-  retryText: { color: C.danger, fontSize: 12, fontWeight: "600" },
-  retryBtnOnBrand: { borderColor: C.surface, backgroundColor: "rgba(255,255,255,0.12)" },
-  retryTextOnBrand: { color: C.surface },
-
-  // ── User list ──
-  staffHeading: {
-    fontSize: 13, fontWeight: "600", color: C.ink2Soft,
-    marginBottom: 8, marginTop: 8,
-  },
-  userRow: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    paddingHorizontal: 14, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: C.line,
-  },
-  userRowActive: { backgroundColor: C.brandTintSoft },
-  avatar: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: C.bg,
-    alignItems: "center", justifyContent: "center",
-  },
-  userName: { flex: 1, fontSize: 16, color: C.ink, fontWeight: "500" },
-  empty: { padding: 16, color: C.ink3, textAlign: "center" },
-
-  // ── PIN pad ──
-  pinPad: { alignItems: "center" },
-  rightTitle: { fontSize: 22, fontWeight: "700", color: C.ink },
-  rightSubtitle: {
-    fontSize: 14, color: C.ink2Soft,
-    marginTop: 4, marginBottom: 20,
-    maxWidth: 280, textAlign: "center",
-  },
-  dotsRow: { flexDirection: "row", gap: 14, marginBottom: 4 },
-  dot: {
-    width: 14, height: 14, borderRadius: 7,
-    borderWidth: 1.5, borderColor: C.lineStrong, backgroundColor: "transparent",
-  },
-  dotFilled: { backgroundColor: C.brand, borderColor: C.brand },
-  error: { color: C.danger, fontSize: 13, marginTop: 4, marginBottom: 4, textAlign: "center" },
-  keypad: {
-    flexDirection: "row", flexWrap: "wrap",
-    justifyContent: "space-between",
-    marginTop: 4,
-  },
-  key: {
-    alignItems: "center", justifyContent: "center",
-    marginVertical: 4,
-    backgroundColor: C.bgSoft,
-    borderWidth: 1, borderColor: C.line,
-  },
-  keyLabel: { fontWeight: "500", color: C.ink },
-
-  // ── Branch picker modal ──
-  branchModalOverlay: {
-    flex: 1, backgroundColor: C.scrim,
-    justifyContent: "center", padding: 24,
-  },
-  branchModalSheet: {
-    backgroundColor: C.surface, borderRadius: 16,
-    maxHeight: "70%", overflow: "hidden",
-    maxWidth: 420, alignSelf: "center", width: "100%",
-  },
-  branchModalTitle: {
-    fontSize: 15, fontWeight: "700", color: C.ink, padding: 16,
-    borderBottomWidth: 1, borderBottomColor: C.bg,
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: C.ink,
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
   },
   branchRow: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: C.bgSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
   },
-  branchRowActive: { backgroundColor: C.brandTintSoft },
-  branchRowName: { flex: 1, fontSize: 14, color: C.ink, fontWeight: "500" },
+  branchRowName: { flex: 1, fontSize: 15, color: C.ink, fontWeight: "600" },
 });

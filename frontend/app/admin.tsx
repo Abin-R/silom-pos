@@ -14,7 +14,6 @@ import {
   useWindowDimensions,
   Platform,
   Switch,
-  Alert,
   Linking,
   Share,
 } from "react-native";
@@ -35,7 +34,8 @@ import {
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useShiftSummaryPrint } from "../lib/useShiftSummaryPrint";
 import { usePrinterStatus } from "../lib/usePrinterStatus";
-import { SidebarDrawer } from "../components/SidebarDrawer";
+import { AppShell, TopBar, Body, WIDE } from "../components/AppShell";
+import { SIDEBAR_ITEMS } from "../components/NavRail";
 import {
   loadLocalPrinterConfig,
   saveLocalPrinterConfig,
@@ -43,7 +43,12 @@ import {
 import * as printerQueue from "../lib/printerQueue";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { C } from "../lib/theme";
+import { C, MONO, R } from "../lib/theme";
+import { showAlert } from "../lib/dialog";
+import {
+  Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
+  Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
+} from "../lib/ui";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
@@ -51,6 +56,7 @@ const BACKOFFICE_URL = `${process.env.EXPO_PUBLIC_BACKEND_URL}/backoffice/`;
 // The customer self-ordering site is served at the host root: /order/<branchId>/.
 const SELF_ORDER_BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/order`;
 const AUTH_KEY = "bravepos:auth:v1";
+const RAIL_KEY = "bravepos:rail-collapsed:v1";
 
 // Render a string as a QR-code PNG data URI for <Image>. Mirrors pos.tsx's
 // helper (error-correction "M", auto type/size).
@@ -207,7 +213,23 @@ export default function Admin() {
   }, [router]);
 
   const { width } = useWindowDimensions();
-  const isWide = width >= 720;
+  // Must match the shell's threshold, or the rail and the page columns
+  // disagree about which layout is on screen.
+  const isWide = width >= WIDE;
+  // Shares the Sale screen's preference key, so the rail doesn't expand again
+  // the moment you cross into the back office.
+  const [railPref, setRailPref] = useState<boolean | null>(null);
+  useEffect(() => {
+    AsyncStorage.getItem(RAIL_KEY)
+      .then((v) => setRailPref(v === null ? null : v === "1"))
+      .catch(() => {});
+  }, []);
+  const railCollapsed = railPref ?? width < 1280;
+  const toggleRail = () => {
+    const next = !railCollapsed;
+    setRailPref(next);
+    AsyncStorage.setItem(RAIL_KEY, next ? "1" : "0").catch(() => {});
+  };
   // When the Shop screen's hamburger pushes us here, it passes
   // `sidebar=open` so the user sees the full menu immediately instead of
   // landing on Reports.  Only meaningful on narrow screens (the wide
@@ -239,17 +261,10 @@ export default function Admin() {
   // reprint() is exposed to Transactions for the per-row Reprint button.
   const { reprint: reprintReceipt, ReceiptOverlay: PrinterOverlay } = useStarPrinter();
 
-  const allItems: { key: Section | "shop"; label: string; icon: any; adminOnly?: boolean }[] = [
-    { key: "shop", label: "Store", icon: "storefront-outline" },
-    { key: "transactions", label: "Bills", icon: "receipt-outline" },
-    { key: "reports", label: "Reports", icon: "trending-up-outline" },
-    { key: "inventory", label: "Stock", icon: "layers-outline" },
-    { key: "customers", label: "Customers", icon: "heart-outline" },
-    { key: "products", label: "Menu", icon: "pricetags-outline" },
-    { key: "drawer", label: "Cash", icon: "cash-outline" },
-    { key: "settings", label: "Settings", icon: "options-outline" },
-  ];
-  const items = allItems.filter((it) => !it.adminOnly || isAdmin);
+  // The rail is the single source of truth for labels — this screen only needs
+  // them to title the header, and a second list is how "Orders" in the rail
+  // ended up sitting above a header that said "Bills".
+  const items = SIDEBAR_ITEMS.filter((it) => !it.adminOnly || isAdmin);
 
   const navigate = (k: Section | "shop") => {
     setSidebarOpen(false);
@@ -278,77 +293,6 @@ export default function Admin() {
 
   const insets = useSafeAreaInsets();
 
-  // Render-function version of the sidebar so we can pass `extraStyle`
-  // (inset padding) when it's rendered inside the modal on narrow screens.
-  // Sharing the same JSX between desktop + modal previously required a
-  // SafeAreaView wrapper that broke height inheritance and hid the items.
-  const renderSidebar = (extraStyle?: any) => (
-    <View style={[styles.sidebar, extraStyle]} testID="admin-sidebar">
-      <View style={styles.avatarBox}>
-        <View style={styles.sideBadge}>
-          <Image
-            source={require("../assets/images/icon.png")}
-            style={styles.sideBadgeLogo}
-            resizeMode="contain"
-          />
-        </View>
-        <Text style={styles.avatarText} numberOfLines={1}>{staff || "Admin"}</Text>
-        {!!activeBranchName && (
-          <View style={styles.sideBranchChip} testID="admin-branch-chip">
-            <Ionicons name="storefront-outline" size={12} color={C.surface} />
-            <Text style={styles.sideBranchChipText} numberOfLines={1}>{activeBranchName}</Text>
-          </View>
-        )}
-      </View>
-      {/* Scrollable so the lower items (Settings / Branches) and the logout
-          footer never get clipped when the sidebar is taller than the screen
-          (landscape, short devices, etc.). */}
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
-        {items.map((it) => (
-          <TouchableOpacity
-            key={it.key}
-            style={[styles.sideItem, section === it.key && styles.sideItemActive]}
-            onPress={() => navigate(it.key)}
-            testID={`side-${it.key}`}
-          >
-            <Ionicons
-              name={it.icon}
-              size={20}
-              color={section === it.key ? C.brand : "rgba(255,255,255,0.85)"}
-            />
-            <Text
-              style={[styles.sideLabel, section === it.key && styles.sideLabelActive]}
-            >
-              {it.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-      <TouchableOpacity
-        style={styles.logoutSide}
-        onPress={async () => { await doLogout(); router.replace("/"); }}
-        testID="admin-logout"
-      >
-        <Ionicons name="log-out-outline" size={18} color={C.surface} />
-        <Text style={styles.logoutSideText}>Log out</Text>
-      </TouchableOpacity>
-      <View style={styles.sideFooter}>
-        <Ionicons name="refresh-circle-outline" size={14} color="rgba(255,255,255,0.6)" />
-        <Text style={styles.sideFooterDate}>
-          {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
-          {" "}
-          {new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
-        </Text>
-      </View>
-      <Text style={styles.versionText}>
-        Version {require("expo-constants").default.expoConfig?.version || "?"}
-      </Text>
-    </View>
-  );
-
-  // Backwards-compat alias so JSX below can stay readable.
-  const Sidebar = renderSidebar();
-
   if (!authLoaded) {
     return (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -359,89 +303,68 @@ export default function Admin() {
     );
   }
 
+  const current = items.find((i) => i.key === section);
+
   return (
-    <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
-      <View style={[styles.rootRow, !isWide && { flexDirection: "column" }]}>
-        {isWide ? (
-          Sidebar
-        ) : (
-          <>
-            <View style={styles.mobileTop}>
-              <TouchableOpacity onPress={() => setSidebarOpen(true)} testID="open-sidebar">
-                <Ionicons name="menu" size={26} color={C.ink} />
-              </TouchableOpacity>
-              <Text style={styles.mobileTitle}>
-                {items.find((i) => i.key === section)?.label}
-              </Text>
-              <TouchableOpacity onPress={async () => { await doLogout(); router.replace("/"); }}>
-                <Ionicons name="log-out-outline" size={22} color={C.danger} />
-              </TouchableOpacity>
-            </View>
-            {/* Use the SHARED SidebarDrawer so the menu looks and behaves
-                identically to the one Shop opens.  Replaces the previous
-                inline Modal that wrapped renderSidebar. */}
-            <SidebarDrawer
-              visible={sidebarOpen}
-              onClose={() => setSidebarOpen(false)}
-              staff={staff || "Admin"}
-              role={role || ""}
-              branchName={activeBranchName || undefined}
-              activeKey={section}
-              onNavigate={(key) => {
-                setSidebarOpen(false);
-                navigate(key as Section | "shop");
-              }}
-              onLogout={async () => {
-                setSidebarOpen(false);
-                await doLogout();
-                router.replace("/");
-              }}
-            />
-            {/* Old inline modal (replaced by SidebarDrawer above) — kept
-                below as a no-op to preserve the rest of the JSX structure. */}
-            <Modal
-              visible={false}
-              animationType="slide"
-              transparent
-              onRequestClose={() => setSidebarOpen(false)}
-            >
-              <View style={styles.mobileSidebarOverlay}>
-                {renderSidebar({
-                  paddingTop: 20 + insets.top,
-                  paddingBottom: 20 + insets.bottom,
-                })}
-                <TouchableOpacity
-                  style={{ flex: 1 }}
-                  onPress={() => setSidebarOpen(false)}
-                />
-              </View>
-            </Modal>
-          </>
+    <AppShell
+      nav={{
+        staff: staff || "Admin",
+        role: role || "",
+        branchName: activeBranchName || undefined,
+        activeKey: section,
+        onNavigate: (key) => navigate(key as Section | "shop"),
+        onLogout: async () => {
+          setSidebarOpen(false);
+          await doLogout();
+          router.replace("/");
+        },
+      }}
+      drawerOpen={sidebarOpen}
+      onDrawerChange={setSidebarOpen}
+      railCollapsed={railCollapsed}
+      onToggleRail={toggleRail}
+      testID="admin-screen"
+    >
+      {/* One header for every back-office page. Sections supply their own
+          subtitle and actions through `sectionHeader`, so the bar reads the
+          same on all six rather than each page inventing its own. */}
+      <TopBar
+        title={current?.label}
+        subtitle={activeBranchName || undefined}
+        onMenu={() => (isWide ? toggleRail() : setSidebarOpen(true))}
+        menuOpen={isWide ? !railCollapsed : sidebarOpen}
+      />
+
+      <View style={styles.content}>
+        {section === "reports" && <Reports isWide={isWide} />}
+        {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} staff={staff || "Admin"} />}
+        {section === "inventory" && <Inventory isWide={isWide} />}
+        {section === "customers" && <Customers isWide={isWide} />}
+        {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
+        {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
+        {section === "settings" && (
+          <SettingsView
+            isWide={isWide}
+            branchId={activeBranchId}
+            branchName={activeBranchName}
+          />
         )}
-        <View style={styles.content}>
-          {section === "reports" && <Reports isWide={isWide} />}
-          {section === "transactions" && <Transactions isWide={isWide} reprint={reprintReceipt} staff={staff || "Admin"} />}
-          {section === "inventory" && <Inventory isWide={isWide} />}
-          {section === "customers" && <Customers isWide={isWide} />}
-          {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
-          {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
-          {section === "settings" && (
-            <SettingsView
-              isWide={isWide}
-              branchId={activeBranchId}
-              branchName={activeBranchName}
-            />
-          )}
-        </View>
       </View>
+
       {/* Off-screen receipt render target — view-shot captures this. */}
       <PrinterOverlay />
-    </SafeAreaView>
+    </AppShell>
   );
 }
 
+
 // =================== REPORTS / DASHBOARD ===================
 function Reports({ isWide }: { isWide: boolean }) {
+  // A 731px-tall tablet can't show four full stat cards *and* a 210px chart.
+  // Scrolling past them is what made this page look empty, so it densifies
+  // rather than overflowing.
+  const { height: winH } = useWindowDimensions();
+  const dense = winH < 820;
   const [period, setPeriod] = useState("month");
   const [range, setRange] = useState<DateRange>({ start: "", end: "" });
   const [showRange, setShowRange] = useState(false);
@@ -459,32 +382,45 @@ function Reports({ isWide }: { isWide: boolean }) {
   }, [period, range]);
   useEffect(() => { load(); }, [load]);
 
-  const maxBar = Math.max(1, ...(data?.timeline || []).map((t) => t.value));
+  const timeline = data?.timeline ?? [];
+  const maxBar = Math.max(1, ...timeline.map((t) => t.value));
   const topProdTotal = (data?.top_products || []).reduce((s, p) => s + p.total, 0) || 1;
   const topCatTotal = (data?.top_categories || []).reduce((s, c) => s + c.total, 0) || 1;
-  const palette = [C.brand, "#3B82F6", C.warn, C.ok, "#8B5CF6"];
+  const mixPalette = [C.brand, C.ok, C.accent, C.warn, C.ink2Soft];
+
+  // The chart's own conclusion, in words. The sentence is what changes a
+  // staffing decision; the bars are only the evidence for it.
+  const peak = useMemo(() => {
+    if (timeline.length === 0) return null;
+    const total = timeline.reduce((s, t) => s + t.value, 0);
+    if (total <= 0) return null;
+    let best = 0;
+    for (let i = 1; i < timeline.length; i++) {
+      if (timeline[i].value > timeline[best].value) best = i;
+    }
+    // Share carried by the best three consecutive buckets.
+    let bestWindow = 0;
+    let windowAt = 0;
+    for (let i = 0; i + 3 <= timeline.length; i++) {
+      const sum = timeline[i].value + timeline[i + 1].value + timeline[i + 2].value;
+      if (sum > bestWindow) { bestWindow = sum; windowAt = i; }
+    }
+    return {
+      label: timeline[best].label,
+      pct: Math.round((bestWindow / total) * 100),
+      from: timeline[windowAt]?.label,
+      to: timeline[Math.min(windowAt + 2, timeline.length - 1)]?.label,
+    };
+  }, [timeline]);
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} testID="reports-section">
-      <View style={styles.reportsHeader}>
-        <Text style={styles.h1}>Sales Dashboard</Text>
-        <TouchableOpacity
-          style={styles.reportsBtn}
-          onPress={() => setShowChannels(true)}
-          testID="open-channel-report"
-        >
-          <Ionicons name="bar-chart-outline" size={16} color={C.brand} />
-          <Text style={styles.reportsBtnText}>Reports</Text>
-        </TouchableOpacity>
-      </View>
-
+    <Body style={!isWide && { paddingHorizontal: 14 }}>
       <ChannelReportModal
         visible={showChannels}
         period={period}
         range={range}
         onClose={() => setShowChannels(false)}
       />
-
       <DateRangeModal
         visible={showRange}
         initial={range}
@@ -492,142 +428,200 @@ function Reports({ isWide }: { isWide: boolean }) {
         onApply={(r) => { setRange(r); setPeriod("custom"); setShowRange(false); }}
       />
 
-      <View style={styles.periodRow}>
+      {/* Period filter + the two things you do with a report. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={{ gap: 10, alignItems: "center" }}
+      >
         {PERIODS.map((p) => (
-          <TouchableOpacity
+          <Pill
             key={p.k}
-            style={[styles.periodBtn, period === p.k && styles.periodBtnActive]}
+            label={p.k === "custom" && period === "custom" && range.start ? rangeLabel(range) : p.l}
+            active={period === p.k}
             onPress={() => (p.k === "custom" ? setShowRange(true) : setPeriod(p.k))}
             testID={`period-${p.k}`}
-          >
-            <Text style={[styles.periodText, period === p.k && styles.periodTextActive]}>
-              {p.k === "custom" && period === "custom" && range.start ? rangeLabel(range) : p.l}
-            </Text>
-          </TouchableOpacity>
+          />
         ))}
-      </View>
+        <View style={{ width: 6 }} />
+        <Btn
+          label="Channels"
+          icon="pie-chart-outline"
+          height={40}
+          onPress={() => setShowChannels(true)}
+          testID="open-channel-report"
+        />
+        <Btn
+          label="Back office"
+          icon="desktop-outline"
+          height={40}
+          onPress={() => Linking.openURL(BACKOFFICE_URL)}
+          testID="open-backoffice"
+        />
+      </ScrollView>
 
       {loading || !data ? (
         <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
       ) : (
-        <>
-          <View style={styles.kpiRow}>
-            <KPI label="Sales" value={THB(data.total_sales)} color={C.brand} icon="cash-outline" />
-            <KPI label="Profit" value={THB(data.profit)} color="#3B82F6" icon="trending-up" />
-            <KPI label="Transactions" value={String(data.tx_count ?? 0)} color={C.warn} icon="receipt-outline" />
-            <KPI label="Avg/bill" value={THB(data.avg_bill)} color="#8B5CF6" icon="stats-chart" />
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ gap: 16, paddingBottom: 8 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Only the headline metric gets the blue sparkline — if every card
+              is blue the eye has nowhere to land first. */}
+          <View style={[styles.statRow, !isWide && { flexWrap: "wrap" }]}>
+            <Stat
+              icon="bar-chart-outline"
+              tint={C.brandTintSoft}
+              tintFg={C.brand}
+              label="Net sales"
+              value={THB(data.total_sales)}
+              delta={`GP ${(data.gp_percent ?? 0).toFixed(1)}%`}
+              deltaDir={(data.gp_percent ?? 0) >= 60 ? "up" : "down"}
+              spark={timeline.map((t) => t.value)}
+              sparkAccent
+              dense={dense}
+              style={!isWide ? { minWidth: "46%" } : undefined}
+            />
+            <Stat
+              icon="receipt-outline"
+              tint={C.okTint}
+              tintFg={C.ok}
+              label="Orders"
+              dense={dense}
+              value={String(data.tx_count ?? 0)}
+              delta={`${THB(data.avg_bill)} average bill`}
+              style={!isWide ? { minWidth: "46%" } : undefined}
+            />
+            <Stat
+              icon="trending-up-outline"
+              tint={C.accentTint}
+              tintFg={C.accentDark}
+              label="Profit"
+              dense={dense}
+              value={THB(data.profit)}
+              delta={`after ${THB(data.cost)} cost`}
+              style={!isWide ? { minWidth: "46%" } : undefined}
+            />
+            <Stat
+              icon="shield-checkmark-outline"
+              tint={C.warnTint}
+              tintFg={C.warn}
+              label="VAT collected"
+              dense={dense}
+              value={THB((data.total_sales * 7) / 107)}
+              delta="7% included in prices"
+              style={!isWide ? { minWidth: "46%" } : undefined}
+            />
           </View>
 
-          <View style={styles.gpRow}>
-            <GPStat label="Before GP" value={THB(data.total_sales)} />
-            <GPStat label="Cost" value={THB(data.cost)} />
-            <GPStat label="GP %" value={`${(data.gp_percent ?? 0).toFixed(1)}%`} accent />
-            <GPStat label="Profit" value={THB(data.profit)} accent />
-          </View>
-
-          <View style={styles.chartsRow}>
-            <View style={styles.chartCard} testID="sales-chart">
-              <Text style={styles.chartTitle}>Sales Trend</Text>
-              <View style={styles.chart}>
-                {(data.timeline ?? []).length === 0 ? (
-                  <Text style={styles.emptyChart}>No data for this period</Text>
+          <View style={[styles.reportCols, !isWide && { flexDirection: "column" }]}>
+            <Panel style={{ flex: isWide ? 1.55 : undefined }}>
+              <PanelHead
+                title="Sales trend"
+                right={peak ? <Tag tone="info">{`Peak ${peak.label}`}</Tag> : undefined}
+              />
+              <View
+                style={[styles.bars, dense && { height: 150, paddingTop: 12 }]}
+                testID="sales-chart"
+              >
+                {timeline.length === 0 ? (
+                  <Empty icon="bar-chart-outline" title="No data for this period" />
                 ) : (
-                  (data.timeline ?? []).map((t, i) => (
-                    <View key={i} style={styles.barCol}>
+                  timeline.map((t, i) => (
+                    <View key={i} style={{ flex: 1, justifyContent: "flex-end" }}>
                       <View
                         style={[
                           styles.bar,
-                          { height: Math.max(4, (t.value / maxBar) * 140) },
+                          t.value === maxBar && { backgroundColor: C.brand },
+                          { height: Math.max(4, (t.value / maxBar) * (dense ? 118 : 170)) },
                         ]}
                       />
-                      <Text style={styles.barLabel}>{t.label.slice(5)}</Text>
                     </View>
                   ))
                 )}
               </View>
-            </View>
-
-            <View style={styles.chartCard} testID="top-products">
-              <Text style={styles.chartTitle}>Top 5 Products</Text>
-              {(data.top_products ?? []).length === 0 ? (
-                <Text style={styles.emptyChart}>No sales yet</Text>
-              ) : (
-                (data.top_products ?? []).map((p, i) => (
-                  <View key={p.product_id} style={styles.rankRow}>
-                    <View style={[styles.rankDot, { backgroundColor: palette[i] }]} />
-                    <Text style={styles.rankName} numberOfLines={1}>{p.name}</Text>
-                    <View style={styles.rankBarBg}>
-                      <View
-                        style={[styles.rankBar, {
-                          width: `${(p.total / topProdTotal) * 100}%`,
-                          backgroundColor: palette[i],
-                        }]}
-                      />
-                    </View>
-                    <Text style={styles.rankVal}>{THB(p.total)}</Text>
-                  </View>
-                ))
+              {timeline.length > 0 && (
+                <View style={styles.baxis}>
+                  {timeline.map((t, i) => (
+                    <Money key={i} style={styles.baxisText} numberOfLines={1}>
+                      {t.label.slice(5)}
+                    </Money>
+                  ))}
+                </View>
               )}
-            </View>
-
-            <View style={styles.chartCard} testID="top-categories">
-              <Text style={styles.chartTitle}>Top 5 Categories</Text>
-              {(data.top_categories ?? []).length === 0 ? (
-                <Text style={styles.emptyChart}>No sales yet</Text>
-              ) : (
-                (data.top_categories ?? []).map((c, i) => (
-                  <View key={c.name} style={styles.rankRow}>
-                    <View style={[styles.rankDot, { backgroundColor: palette[i] }]} />
-                    <Text style={styles.rankName} numberOfLines={1}>{c.name}</Text>
-                    <View style={styles.rankBarBg}>
-                      <View
-                        style={[styles.rankBar, {
-                          width: `${(c.total / topCatTotal) * 100}%`,
-                          backgroundColor: palette[i],
-                        }]}
-                      />
-                    </View>
-                    <Text style={styles.rankVal}>{THB(c.total)}</Text>
-                  </View>
-                ))
+              {!!peak && peak.pct > 0 && (
+                <View style={styles.chartNote}>
+                  <View style={styles.chartNoteKey} />
+                  <Text style={styles.chartNoteText}>
+                    {`${peak.pct}% of the period's takings land between ${peak.from} and ${peak.to}.`}
+                  </Text>
+                </View>
               )}
+            </Panel>
+
+            <View style={{ flex: 1, gap: 16, minWidth: 0 }}>
+              <Panel testID="top-categories">
+                <PanelHead title="Top categories" />
+                <View style={{ padding: 20 }}>
+                  {(data.top_categories ?? []).length === 0 ? (
+                    <Empty icon="pie-chart-outline" title="No sales yet" />
+                  ) : (
+                    (data.top_categories ?? []).map((c, i) => (
+                      <MixRow
+                        key={c.name}
+                        label={c.name}
+                        value={`${THB(c.total)} · ${Math.round((c.total / topCatTotal) * 100)}%`}
+                        pct={(c.total / topCatTotal) * 100}
+                        color={mixPalette[i % mixPalette.length]}
+                      />
+                    ))
+                  )}
+                </View>
+              </Panel>
+
+              <Panel testID="top-products">
+                <PanelHead title="Top products" />
+                {(data.top_products ?? []).length === 0 ? (
+                  <Empty icon="cube-outline" title="No sales yet" />
+                ) : (
+                  <>
+                    <THead cols={TOP_PROD_COLS} />
+                    {(data.top_products ?? []).map((p, i, arr) => (
+                      <TRow key={p.product_id} last={i === arr.length - 1}>
+                        <TCell col={TOP_PROD_COLS[0]}>
+                          <View style={styles.rankRow}>
+                            <Rank n={i + 1} />
+                            <TText strong numberOfLines={1}>{p.name}</TText>
+                          </View>
+                        </TCell>
+                        <TCell col={TOP_PROD_COLS[1]}>
+                          <TText mono>{p.qty}</TText>
+                        </TCell>
+                        <TCell col={TOP_PROD_COLS[2]}>
+                          <TText mono strong>{THB(p.total)}</TText>
+                        </TCell>
+                      </TRow>
+                    ))}
+                  </>
+                )}
+              </Panel>
             </View>
           </View>
-        </>
+        </ScrollView>
       )}
-
-      <TouchableOpacity
-        style={styles.backofficeBtn}
-        onPress={() => Linking.openURL(BACKOFFICE_URL)}
-        testID="open-backoffice"
-      >
-        <Ionicons name="desktop-outline" size={18} color={C.brand} />
-        <Text style={styles.backofficeBtnText}>Back office</Text>
-      </TouchableOpacity>
-    </ScrollView>
+    </Body>
   );
 }
 
-function KPI({ label, value, color, icon }: { label: string; value: string; color: string; icon: any }) {
-  return (
-    <View style={[styles.kpiCard, { borderTopColor: color }]}>
-      <View style={styles.kpiHead}>
-        <Ionicons name={icon} size={18} color={color} />
-        <Text style={styles.kpiLabel}>{label}</Text>
-      </View>
-      <Text style={styles.kpiValue}>{value}</Text>
-    </View>
-  );
-}
+const TOP_PROD_COLS: Col[] = [
+  { key: "name", title: "Product", flex: 2 },
+  { key: "qty", title: "Sold", flex: 1, right: true },
+  { key: "total", title: "Revenue", flex: 1.2, right: true },
+];
 
-function GPStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <View style={[styles.gpStat, accent && { backgroundColor: C.brandTint }]}>
-      <Text style={styles.gpLabel}>{label}</Text>
-      <Text style={[styles.gpValue, accent && { color: C.brand }]}>{value}</Text>
-    </View>
-  );
-}
 
 // ── Shared period filter helpers (dashboard + channel report) ──
 type DateRange = { start: string; end: string };
@@ -1045,6 +1039,10 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
     return rows;
   }, [filteredOrders]);
 
+  const { width: winW } = useWindowDimensions();
+  const ORDER_COLS = winW >= 1440 ? ORDER_COLS_FULL : ORDER_COLS_COMPACT;
+  const ocol = (k: string) => ORDER_COLS.find((c) => c.key === k)!;
+
   const takings = useMemo(
     () => filteredOrders.reduce((n, o) => (o.status === "cancel" ? n : n + o.total), 0),
     [filteredOrders],
@@ -1056,7 +1054,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       <View style={{ flex: 1 }}>
         <TouchableOpacity style={styles.backRow} onPress={() => setShowDetail(false)}>
           <Ionicons name="chevron-back" size={22} color={C.brand} />
-          <Text style={styles.backText}>Back to transactions</Text>
+          <Text style={styles.backText}>Back to orders</Text>
         </TouchableOpacity>
         <TransactionDetail
           order={selected}
@@ -1071,135 +1069,214 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   }
 
   return (
-    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="transactions-section">
-      <View style={[styles.txList, !isWide && styles.fullCol]}>
-        <View style={styles.billsHead}>
-          <Text style={styles.billsTitle}>Bills</Text>
-          <Text style={styles.billsSummary}>
-            {filteredOrders.length} {filteredOrders.length === 1 ? "bill" : "bills"}
-            {"  ·  "}
-            <Text style={styles.billsSummaryAmt}>{THB(takings)}</Text>
-          </Text>
-        </View>
-        <View style={styles.searchBoxRow}>
-          <Ionicons name="search" size={16} color={C.ink3} />
-          <TextInput
-            placeholder="Search order #"
-            style={styles.searchBoxInput}
-            value={query}
-            onChangeText={setQuery}
-            placeholderTextColor={C.ink3}
-            autoCapitalize="characters"
-            testID="tx-search"
-          />
-          {!!query && (
-            <TouchableOpacity onPress={() => setQuery("")} testID="tx-search-clear">
-              <Ionicons name="close-circle" size={16} color={C.ink3} />
-            </TouchableOpacity>
-          )}
-        </View>
-        <View style={styles.txDateChips}>
+    <Body
+      style={!isWide && { paddingHorizontal: 14 }}
+      testID="transactions-section"
+    >
+      {/* Filters, then a search that narrows what the filter returned. */}
+      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0, flexShrink: 1 }}
+          contentContainerStyle={{ gap: 10 }}
+        >
           {([
             { key: "today", label: "Today" },
             { key: "yesterday", label: "Yesterday" },
             { key: "week", label: "Last 7 days" },
             { key: "all", label: "All" },
-          ] as { key: DateFilter; label: string }[]).map((opt) => {
-            const active = dateFilter === opt.key;
-            return (
-              <TouchableOpacity
-                key={opt.key}
-                style={[styles.txDateChip, active && styles.txDateChipActive]}
-                onPress={() => setDateFilter(opt.key)}
-                testID={`tx-date-${opt.key}`}
-              >
-                <Text
-                  style={[styles.txDateChipText, active && styles.txDateChipTextActive]}
-                  numberOfLines={1}
-                >
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        {/* The chips stay mounted while a bucket loads so switching filters
-            doesn't blank the whole pane out from under the cashier's finger. */}
-        {loading ? (
-          <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} testID="tx-loading" />
-        ) : filteredOrders.length === 0 ? (
-          <View style={styles.txEmpty}>
-            <Text style={styles.emptyText}>No matching transactions</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={timeline}
-            keyExtractor={(r) => r.key}
-            renderItem={({ item: row }) => {
-              if (row.kind === "day") {
-                return (
-                  <View style={styles.billsDay}>
-                    <Text style={styles.billsDayLabel}>{row.label}</Text>
-                    <View style={styles.billsDayRule} />
-                    <Text style={styles.billsDayTotal}>{THB(row.total)}</Text>
-                  </View>
-                );
-              }
-              const item = row.o;
-              const voided = item.status === "cancel";
-              const active = selected?.id === item.id && isWide;
-              return (
-                <TouchableOpacity
-                  style={[styles.billRow, active && styles.billRowActive]}
-                  onPress={() => { setSelected(item); if (!isWide) setShowDetail(true); }}
-                  testID={`tx-${item.order_number}`}
-                >
-                  <Text style={[styles.billTime, voided && styles.txVoided]}>{item.created_time}</Text>
-                  {/* The rail: a continuous hairline with one dot per bill. */}
-                  <View style={styles.billRail}>
-                    <View style={styles.billRailLine} />
-                    <View
-                      style={[
-                        styles.billDot,
-                        voided && styles.billDotVoided,
-                        active && styles.billDotActive,
-                      ]}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.billNum, voided && styles.txVoided]}>{item.order_number}</Text>
-                    <Text style={styles.billMeta} numberOfLines={1}>
-                      {voided ? "Voided" : (item.payment_method || item.source || "—")}
-                    </Text>
-                  </View>
-                  <Text style={[styles.billAmount, voided && styles.txVoided]}>{THB(item.total)}</Text>
-                </TouchableOpacity>
-              );
-            }}
+          ] as { key: DateFilter; label: string }[]).map((opt) => (
+            <Pill
+              key={opt.key}
+              label={opt.label}
+              active={dateFilter === opt.key}
+              onPress={() => setDateFilter(opt.key)}
+              testID={`tx-date-${opt.key}`}
+            />
+          ))}
+        </ScrollView>
+        <Spacer />
+        <SearchField
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Order no."
+          height={40}
+          style={{ width: isWide ? 230 : "100%" }}
+          testID="tx-search"
+        />
+      </View>
+
+      <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
+        <Panel style={{ flex: 1, minWidth: 0 }}>
+          {/* Takings sit in the panel header, so the number that matters is
+              beside the rows it was computed from. */}
+          <PanelHead
+            title={`${filteredOrders.length} ${filteredOrders.length === 1 ? "order" : "orders"}`}
+            right={<Money style={styles.takings}>{THB(takings)}</Money>}
           />
+          {loading ? (
+            <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} testID="tx-loading" />
+          ) : filteredOrders.length === 0 ? (
+            <Empty
+              icon="receipt-outline"
+              title="No matching orders"
+              note="Try a wider date range, or clear the search."
+            />
+          ) : (
+            <>
+              {isWide && <THead cols={ORDER_COLS} />}
+              <FlatList
+                data={timeline}
+                keyExtractor={(r) => r.key}
+                showsVerticalScrollIndicator={false}
+                renderItem={({ item: row }) => {
+                  // Day headers stay: they carry each day's takings, which a
+                  // flat table would otherwise make you total by hand.
+                  if (row.kind === "day") {
+                    return (
+                      <View style={styles.billsDay}>
+                        <Text style={styles.billsDayLabel}>{row.label}</Text>
+                        <View style={styles.billsDayRule} />
+                        <Money style={styles.billsDayTotal}>{THB(row.total)}</Money>
+                      </View>
+                    );
+                  }
+                  const o = row.o;
+                  // Voided orders stay in the list, struck through. A missing
+                  // order number is what makes staff distrust a till.
+                  const voided = o.status === "cancel";
+                  const active = selected?.id === o.id && isWide;
+                  const qty = (o.items || []).reduce(
+                    (n: number, it: any) => n + (Number(it.qty) || 0), 0,
+                  );
+
+                  if (!isWide) {
+                    return (
+                      <TouchableOpacity
+                        style={[styles.billRow, active && styles.billRowActive]}
+                        onPress={() => { setSelected(o); setShowDetail(true); }}
+                        testID={`tx-${o.order_number}`}
+                      >
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Money style={[styles.billNum, voided && styles.txVoided]}>
+                            {o.order_number}
+                          </Money>
+                          <Text style={styles.billMeta} numberOfLines={1}>
+                            {`${o.created_time} · ${voided ? "Voided" : (o.payment_method || o.source || "—")}`}
+                          </Text>
+                        </View>
+                        <Money style={[styles.billAmount, voided && styles.txVoided]}>
+                          {THB(o.total)}
+                        </Money>
+                      </TouchableOpacity>
+                    );
+                  }
+
+                  return (
+                    <TRow
+                      selected={active}
+                      onPress={() => setSelected(o)}
+                      testID={`tx-${o.order_number}`}
+                    >
+                      <TCell col={ocol("num")}>
+                        <TText
+                          mono
+                          strong
+                          muted={voided}
+                          color={active ? C.brand : undefined}
+                        >
+                          {o.order_number}
+                        </TText>
+                      </TCell>
+                      <TCell col={ocol("time")}>
+                        <TText mono muted={voided}>{o.created_time}</TText>
+                      </TCell>
+                      {ORDER_COLS.length === ORDER_COLS_FULL.length && (
+                        <>
+                          <TCell col={ocol("customer")}>
+                            <TText muted={!o.customer_name || voided}>
+                              {o.customer_name || "Walk-in"}
+                            </TText>
+                          </TCell>
+                          <TCell col={ocol("staff")}>
+                            <TText muted={voided}>{o.staff || "—"}</TText>
+                          </TCell>
+                        </>
+                      )}
+                      <TCell col={ocol("pay")}>
+                        <TText muted={voided}>
+                          {o.payment_method || o.source || "—"}
+                        </TText>
+                      </TCell>
+                      <TCell col={ocol("items")}>
+                        <TText mono muted={voided}>{qty || "—"}</TText>
+                      </TCell>
+                      <TCell col={ocol("total")}>
+                        <TText mono strong muted={voided} strike={voided}>
+                          {THB(o.total)}
+                        </TText>
+                      </TCell>
+                      <TCell col={ocol("status")}>
+                        {voided ? (
+                          <Tag tone="red">Voided</Tag>
+                        ) : o.pos_tax_invoice ? (
+                          <Tag tone="purple">Tax inv.</Tag>
+                        ) : (
+                          <Tag tone="ok">Paid</Tag>
+                        )}
+                      </TCell>
+                    </TRow>
+                  );
+                }}
+              />
+            </>
+          )}
+        </Panel>
+
+        {isWide && (
+          <View style={styles.detailCol}>
+            {!selected ? (
+              <Panel style={{ flex: 1 }}>
+                <Empty
+                  icon="document-text-outline"
+                  title="Select an order"
+                  note="Its lines, totals and reprint options open here."
+                />
+              </Panel>
+            ) : (
+              <TransactionDetail
+                order={selected}
+                reprint={reprint}
+                staff={staff}
+                onOrderUpdated={handleOrderUpdated}
+                productMap={productMap}
+                taxPercent={taxPercent}
+              />
+            )}
+          </View>
         )}
       </View>
-      {isWide && (
-        <View style={styles.txDetail}>
-          {!selected ? (
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyText}>Please select bill</Text>
-            </View>
-          ) : (
-            <TransactionDetail
-              order={selected}
-              reprint={reprint}
-              staff={staff}
-              onOrderUpdated={handleOrderUpdated}
-              productMap={productMap}
-              taxPercent={taxPercent}
-            />
-          )}
-        </View>
-      )}
-    </View>
+    </Body>
   );
 }
+
+const ORDER_COLS_FULL: Col[] = [
+  { key: "num", title: "Order", flex: 1.5 },
+  { key: "time", title: "Time", flex: 0.9 },
+  { key: "customer", title: "Customer", flex: 1.6 },
+  { key: "staff", title: "Cashier", flex: 1.1 },
+  { key: "pay", title: "Payment", flex: 1.2 },
+  { key: "items", title: "Items", flex: 0.7, right: true },
+  { key: "total", title: "Total", flex: 1.3, right: true },
+  { key: "status", title: "Status", flex: 1.1, right: true },
+];
+// Customer and cashier are the first to go — the order number, total and
+// status are what the row is actually scanned for.
+const ORDER_COLS_COMPACT: Col[] = ORDER_COLS_FULL.filter(
+  (c) => !["customer", "staff"].includes(c.key),
+);
+
 
 const RECEIPT_MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -1294,7 +1371,7 @@ function TransactionDetail({
     if (order.branch_name) shop.branch = order.branch_name;
     const r = await reprint(receipt, shop);
     if (!r.ok) {
-      Alert.alert(
+      showAlert(
         "Print failed",
         `${r.error}\n\nCheck the printer under Settings → Local Printer (it must be enabled and connected on this device).`,
       );
@@ -1307,7 +1384,7 @@ function TransactionDetail({
     try {
       await sendPrint(toReceiptOrder(isVoided));
     } catch (e: any) {
-      Alert.alert("Print failed", e?.message || String(e));
+      showAlert("Print failed", e?.message || String(e));
     } finally {
       setReprintBusy(false);
     }
@@ -1323,7 +1400,7 @@ function TransactionDetail({
     try {
       await sendPrint(toReceiptOrder(isVoided, undefined, data));
     } catch (e: any) {
-      Alert.alert("Print failed", e?.message || String(e));
+      showAlert("Print failed", e?.message || String(e));
     } finally {
       setReprintBusy(false);
     }
@@ -1349,14 +1426,14 @@ function TransactionDetail({
       // Auto-print the void receipt (fires the "Printing…" overlay).
       await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
-      Alert.alert("Void failed", e?.message || String(e));
+      showAlert("Void failed", e?.message || String(e));
     } finally {
       setVoidBusy(false);
     }
   };
 
   const onVoid = () => {
-    Alert.alert(
+    showAlert(
       "Void bill",
       "Are you sure you want to void this bill? Can't undo this action.",
       [
@@ -1636,7 +1713,7 @@ function TaxInvoiceFlow({
 
   const createCustomer = async () => {
     if (!add.name.trim() || !add.last_name.trim()) {
-      Alert.alert("Missing details", "First name and last name are required.");
+      showAlert("Missing details", "First name and last name are required.");
       return;
     }
     setBusy("Saving customer…");
@@ -1663,7 +1740,7 @@ function TaxInvoiceFlow({
       setCustomers((list) => [created, ...list]);
       pick(created);
     } catch (e: any) {
-      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert("Couldn't save customer", e?.message || "Please try again.");
     } finally {
       setBusy(null);
     }
@@ -1690,18 +1767,18 @@ function TaxInvoiceFlow({
   const saveAndPrint = async () => {
     setAttempted(true);
     if (!form.name.trim()) {
-      Alert.alert("Missing details", "Taxpayer or company name is required.");
+      showAlert("Missing details", "Taxpayer or company name is required.");
       return;
     }
     if (taxDigits.length !== 13) {
-      Alert.alert(
+      showAlert(
         "Invalid tax ID",
         `A Thai tax ID is 13 digits — this has ${taxDigits.length}. Check it against the buyer's paperwork.`,
       );
       return;
     }
     if (!form.address.trim()) {
-      Alert.alert("Missing details", "Address is required.");
+      showAlert("Missing details", "Address is required.");
       return;
     }
 
@@ -1750,7 +1827,7 @@ function TaxInvoiceFlow({
       // never disagree with the buyer of record.
       onPrint(updated.pos_tax_invoice ?? payload);
     } catch (e: any) {
-      Alert.alert("Couldn't save tax invoice", e?.message || "Please try again.");
+      showAlert("Couldn't save tax invoice", e?.message || "Please try again.");
     } finally {
       setBusy(null);
     }
@@ -2556,7 +2633,7 @@ function CreateStockDocModal({
   const confirmSave = () => {
     if (!lines.length) return;
     if (Platform.OS === "web") { save(); return; }
-    Alert.alert("Confirm Save Document", "Are you sure you want to save document.", [
+    showAlert("Confirm Save Document", "Are you sure you want to save document.", [
       { text: "Cancel", style: "cancel" },
       { text: "Save", style: "destructive", onPress: save },
     ]);
@@ -3117,11 +3194,11 @@ function Customers({ isWide }: { isWide: boolean }) {
       }
       c = await r.json();
     } catch (e: any) {
-      Alert.alert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert("Couldn't save customer", e?.message || "Please try again.");
       return;
     }
     if (!c || !c.name) {
-      Alert.alert("Couldn't save customer", "Unexpected response from server.");
+      showAlert("Couldn't save customer", "Unexpected response from server.");
       return;
     }
     setList((l) => [c, ...l]);
@@ -3129,131 +3206,204 @@ function Customers({ isWide }: { isWide: boolean }) {
   };
 
   return (
-    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="customers-section">
-      <View style={[styles.leftNav, !isWide && styles.leftNavStacked]}>
-        <View style={styles.custHeader}>
-          <Text style={styles.sectionHeader}>Customers</Text>
-          <TouchableOpacity onPress={() => setAddOpen(true)} testID="add-customer-admin">
-            <Text style={styles.addLink}>Add</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.searchBoxRow}>
-          <Ionicons name="search" size={16} color={C.ink3} />
-          <TextInput
-            placeholder="Search"
-            style={styles.searchBoxInput}
-            value={q}
-            onChangeText={setQ}
-            placeholderTextColor={C.ink3}
-            testID="cust-admin-search"
-          />
-        </View>
-        <FlatList
-          data={filtered}
-          keyExtractor={(i) => i.id}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.custAdminRow, sel?.id === item.id && styles.custAdminActive]}
-              onPress={() => setSel(item)}
-              testID={`cust-admin-${item.id}`}
-            >
-              <View style={[styles.custAv, { backgroundColor: item.color }]}>
-                <Text style={styles.custAvText}>
-                  {item.name[0]?.toUpperCase() || "?"}
-                </Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.custAdminName} numberOfLines={1}>{item.name}</Text>
-                {!!item.phone && <Text style={styles.custAdminPhone}>{item.phone}</Text>}
-              </View>
-            </TouchableOpacity>
-          )}
+    <Body
+      style={!isWide && { paddingHorizontal: 14 }}
+      testID="customers-section"
+    >
+      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+        <SearchField
+          value={q}
+          onChangeText={setQ}
+          placeholder="Phone number or name"
+          height={40}
+          style={{ flex: 1, maxWidth: isWide ? 340 : undefined, minWidth: 200 }}
+          testID="cust-admin-search"
+        />
+        <Spacer />
+        <Btn
+          label="Add customer"
+          icon="add"
+          variant="blue"
+          height={40}
+          onPress={() => setAddOpen(true)}
+          testID="add-customer-admin"
         />
       </View>
-      <View style={{ flex: 1, padding: 20 }}>
-        {!sel ? (
-          <View style={styles.emptyBox}><Text style={styles.emptyText}>Select a customer</Text></View>
-        ) : (
-          <>
-            <View style={styles.custProfile}>
-              <View style={[styles.custAvLarge, { backgroundColor: sel.color }]}>
-                <Text style={styles.custAvLargeText}>
-                  {sel.name[0]?.toUpperCase() || "?"}
-                </Text>
-              </View>
-              <Text style={styles.custProfileName}>{sel.name}</Text>
-              <Text style={styles.custPoints}>
-                <Text style={{ fontSize: 22, fontWeight: "700" }}>0</Text>{" "}
-                <Text style={{ color: C.ink3 }}>Point</Text>
-              </Text>
-            </View>
-            <View style={styles.statsRow}>
-              <View style={styles.statCell}>
-                <Text style={{ color: C.ok, fontWeight: "600", fontSize: 12 }}>Success</Text>
-                {statsLoading ? (
-                  <ActivityIndicator size="small" color={C.brand} />
-                ) : (
-                  <>
-                    <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.success_total ?? 0)}</Text>
-                    <Text style={styles.statSub}>{stats?.bill_count ?? 0} Bills</Text>
-                  </>
-                )}
-              </View>
-              <View style={styles.statCell}>
-                <Text style={{ color: C.warn, fontWeight: "600", fontSize: 12 }}>Avg/bill</Text>
-                {statsLoading ? (
-                  <ActivityIndicator size="small" color={C.warn} />
-                ) : (
-                  <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.avg_bill ?? 0)}</Text>
-                )}
-              </View>
-              <View style={styles.statCell}>
-                <Text style={{ color: C.danger, fontWeight: "600", fontSize: 12 }}>Outstanding</Text>
-                {statsLoading ? (
-                  <ActivityIndicator size="small" color={C.danger} />
-                ) : (
-                  <>
-                    <Text style={{ fontSize: 24, fontWeight: "700" }}>{THB(stats?.outstanding_total ?? 0)}</Text>
-                    <Text style={styles.statSub}>{stats?.outstanding_count ?? 0} Bills</Text>
-                  </>
-                )}
-              </View>
-            </View>
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 20 }}>
-              <View style={styles.topBox}>
-                <Text style={styles.chartTitle}>Top Products</Text>
-                {statsLoading ? (
-                  <ActivityIndicator size="small" color={C.ink3} style={{ marginTop: 12 }} />
-                ) : stats?.top_products?.length ? (
-                  stats.top_products.map((p, i) => (
-                    <View key={p.product_id} style={styles.topRow}>
-                      <Text style={styles.topRank}>#{i + 1}</Text>
-                      <Text style={styles.topName} numberOfLines={1}>{p.name}</Text>
-                      <Text style={styles.topValue}>{THB(p.total)}</Text>
+
+      <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
+        <Panel style={{ flex: 1, minWidth: 0 }}>
+          {isWide && <THead cols={CUST_COLS} />}
+          {filtered.length === 0 ? (
+            <Empty
+              icon="people-outline"
+              title="No customers"
+              note={q ? "Nothing matches that search." : "Add a customer to start tracking their usual."}
+            />
+          ) : (
+            <FlatList
+              data={filtered}
+              keyExtractor={(i) => i.id}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => {
+                const on = sel?.id === item.id;
+                if (!isWide) {
+                  return (
+                    <TouchableOpacity
+                      style={[styles.custAdminRow, on && styles.custAdminActive]}
+                      onPress={() => setSel(item)}
+                      testID={`cust-admin-${item.id}`}
+                    >
+                      <View style={[styles.custAv, { backgroundColor: item.color }]}>
+                        <Text style={styles.custAvText}>
+                          {item.name[0]?.toUpperCase() || "?"}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.custAdminName} numberOfLines={1}>{item.name}</Text>
+                        {!!item.phone && (
+                          <Money style={styles.custAdminPhone}>{item.phone}</Money>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }
+                return (
+                  <TRow
+                    selected={on}
+                    onPress={() => setSel(item)}
+                    testID={`cust-admin-${item.id}`}
+                  >
+                    <TCell col={CUST_COLS[0]}>
+                      <View style={styles.rankRow}>
+                        <View style={[styles.custAv, { backgroundColor: item.color }]}>
+                          <Text style={styles.custAvText}>
+                            {item.name[0]?.toUpperCase() || "?"}
+                          </Text>
+                        </View>
+                        <TText strong numberOfLines={1}>{item.name}</TText>
+                      </View>
+                    </TCell>
+                    <TCell col={CUST_COLS[1]}>
+                      <TText mono muted={!item.phone}>{item.phone || "—"}</TText>
+                    </TCell>
+                    <TCell col={CUST_COLS[2]}>
+                      <TText muted>{item.group || "—"}</TText>
+                    </TCell>
+                    <TCell col={CUST_COLS[3]}>
+                      <TText mono muted={!item.last_visit}>
+                        {item.last_visit
+                          ? new Date(item.last_visit).toLocaleDateString("en-GB", {
+                              day: "2-digit", month: "short",
+                            })
+                          : "Never"}
+                      </TText>
+                    </TCell>
+                  </TRow>
+                );
+              }}
+            />
+          )}
+        </Panel>
+
+        {isWide && (
+          <View style={styles.detailCol}>
+            <Panel style={{ flex: 1 }}>
+              {!sel ? (
+                <Empty
+                  icon="person-outline"
+                  title="Select a customer"
+                  note="Their spend, usual order and recent bills open here."
+                />
+              ) : (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <View style={styles.custProfile}>
+                    <View style={[styles.avBig, { backgroundColor: sel.color }]}>
+                      <Text style={styles.avBigText}>
+                        {sel.name[0]?.toUpperCase() || "?"}
+                      </Text>
                     </View>
-                  ))
-                ) : (
-                  <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
-                )}
-              </View>
-              <View style={styles.topBox}>
-                <Text style={styles.chartTitle}>Top Categories</Text>
-                {statsLoading ? (
-                  <ActivityIndicator size="small" color={C.ink3} style={{ marginTop: 12 }} />
-                ) : stats?.top_categories?.length ? (
-                  stats.top_categories.map((c, i) => (
-                    <View key={c.name} style={styles.topRow}>
-                      <Text style={styles.topRank}>#{i + 1}</Text>
-                      <Text style={styles.topName} numberOfLines={1}>{c.name}</Text>
-                      <Text style={styles.topValue}>{THB(c.total)}</Text>
+                    <Text style={styles.custProfileName}>{customerFullName(sel)}</Text>
+                    {!!sel.phone && (
+                      <Money style={styles.custProfileSub}>{sel.phone}</Money>
+                    )}
+                  </View>
+
+                  {/* Three figures that answer "is this a good customer". */}
+                  <View style={styles.kpis}>
+                    <View style={styles.kpi}>
+                      {statsLoading ? (
+                        <ActivityIndicator size="small" color={C.brand} />
+                      ) : (
+                        <Money style={styles.kpiVal}>{String(stats?.bill_count ?? 0)}</Money>
+                      )}
+                      <Text style={styles.kpiLbl}>Bills</Text>
                     </View>
-                  ))
-                ) : (
-                  <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
-                )}
-              </View>
-            </View>
-          </>
+                    <View style={styles.kpi}>
+                      {statsLoading ? (
+                        <ActivityIndicator size="small" color={C.brand} />
+                      ) : (
+                        <Money style={styles.kpiVal}>{THB(stats?.avg_bill ?? 0)}</Money>
+                      )}
+                      <Text style={styles.kpiLbl}>Avg bill</Text>
+                    </View>
+                    <View style={[styles.kpi, { borderRightWidth: 0 }]}>
+                      {statsLoading ? (
+                        <ActivityIndicator size="small" color={C.brand} />
+                      ) : (
+                        <Money style={styles.kpiVal}>{THB(stats?.success_total ?? 0)}</Money>
+                      )}
+                      <Text style={styles.kpiLbl}>Lifetime</Text>
+                    </View>
+                  </View>
+
+                  {/* Money still owed is the one figure that needs chasing, so
+                      it gets a standing red notice rather than a stat cell. */}
+                  {!statsLoading && (stats?.outstanding_total ?? 0) > 0 && (
+                    <View style={{ padding: 18 }}>
+                      <Notice tone="danger">
+                        {`${THB(stats!.outstanding_total)} outstanding across ${stats!.outstanding_count} ${stats!.outstanding_count === 1 ? "bill" : "bills"}.`}
+                      </Notice>
+                    </View>
+                  )}
+
+                  {/* "The usual" is the feature — real loyalty at a shop this
+                      size is a cashier who remembers. */}
+                  <View style={styles.dsec}>
+                    <Lbl style={{ marginBottom: 12 }}>Usual order</Lbl>
+                    {statsLoading ? (
+                      <ActivityIndicator size="small" color={C.ink3} />
+                    ) : stats?.top_products?.length ? (
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                        {stats.top_products.slice(0, 5).map((p) => (
+                          <Tag key={p.product_id} tone="info">{p.name}</Tag>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.dsecEmpty}>Nothing bought yet.</Text>
+                    )}
+                  </View>
+
+                  <View style={styles.dsec}>
+                    <Lbl style={{ marginBottom: 12 }}>Top categories</Lbl>
+                    {statsLoading ? (
+                      <ActivityIndicator size="small" color={C.ink3} />
+                    ) : stats?.top_categories?.length ? (
+                      stats.top_categories.map((c, i) => (
+                        <KV
+                          key={c.name}
+                          k={`${i + 1}. ${c.name}`}
+                          v={THB(c.total)}
+                          mono
+                        />
+                      ))
+                    ) : (
+                      <Text style={styles.dsecEmpty}>No sales yet.</Text>
+                    )}
+                  </View>
+                </ScrollView>
+              )}
+            </Panel>
+          </View>
         )}
       </View>
 
@@ -3264,7 +3414,7 @@ function Customers({ isWide }: { isWide: boolean }) {
               <TouchableOpacity onPress={() => setAddOpen(false)}>
                 <Ionicons name="close" size={24} color={C.ink2} />
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>New Customer</Text>
+              <Text style={styles.modalTitle}>New customer</Text>
               <View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -3276,21 +3426,28 @@ function Customers({ isWide }: { isWide: boolean }) {
                 defaultCountryCode="TH"
                 testID="admin-cust-phone"
               />
-              <TouchableOpacity
-                style={[styles.primaryBtn, (!name.trim() || !phoneValid) && { opacity: 0.4 }]}
+              <Btn
+                label="Save"
+                variant="blue"
+                height={52}
                 onPress={save}
                 disabled={!name.trim() || !phoneValid}
                 testID="admin-cust-save"
-              >
-                <Text style={styles.primaryBtnText}>Save</Text>
-              </TouchableOpacity>
+              />
             </View>
           </View>
         </View>
       </Modal>
-    </View>
+    </Body>
   );
 }
+
+const CUST_COLS: Col[] = [
+  { key: "name", title: "Customer", flex: 2 },
+  { key: "phone", title: "Phone", flex: 1.3 },
+  { key: "group", title: "Group", flex: 1 },
+  { key: "seen", title: "Last seen", width: 96, right: true },
+];
 
 
 // =================== PRODUCTS ===================
@@ -3343,183 +3500,258 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
     load();
   };
 
+  // Margin sits next to price because that is the actual decision — nobody
+  // edits a price in isolation, they are asking whether it still earns.
+  const margin = (p: Product) =>
+    p.price > 0 && p.cost > 0 ? ((p.price - p.cost) / p.price) * 100 : null;
+
+  const { width: winW } = useWindowDimensions();
+  const PROD_COLS = winW >= 1360 ? PROD_COLS_FULL : PROD_COLS_COMPACT;
+  const col = (k: string) => PROD_COLS.find((c) => c.key === k)!;
+
+  const unpriced = prods.filter((p) => p.price === 0).length;
+  const uncosted = prods.filter((p) => p.cost === 0 && p.price !== 0).length;
+
   return (
-    <View style={[styles.twoCol, !isWide && styles.stackedCol]} testID="products-section">
-      {/* On narrow, swap the vertical category rail for a compact horizontal
-          chip strip + search above the products grid.  Otherwise the rail's
-          ~600px height would push the FlatList off-screen entirely. */}
-      {isWide ? (
-        <View style={styles.leftNav}>
-          <View style={styles.custHeader}>
-            <Text style={styles.sectionHeader}>Products</Text>
-          </View>
-          <View style={styles.searchBoxRow}>
-            <Ionicons name="search" size={16} color={C.ink3} />
-            <TextInput
-              placeholder="Search Products"
-              style={styles.searchBoxInput}
-              value={q}
-              onChangeText={setQ}
-              placeholderTextColor={C.ink3}
-              testID="admin-prod-search"
-            />
-          </View>
-          <ScrollView>
-            <Text style={styles.allCatsLabel}>All Categories</Text>
+    <Body
+      style={!isWide && { paddingHorizontal: 14 }}
+      testID="products-section"
+    >
+      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+        <SearchField
+          value={q}
+          onChangeText={setQ}
+          placeholder="Name or Thai name"
+          height={40}
+          style={{ flex: 1, maxWidth: isWide ? 320 : undefined, minWidth: 200 }}
+          testID="admin-prod-search"
+        />
+        <Spacer />
+        {/* One toggle, not two mutually exclusive pills — "custom order" is
+            just the catalogue's own order, which is the default. */}
+        <Pill
+          label="Sort A–Z"
+          active={sort === "name"}
+          onPress={() => setSort(sort === "name" ? "custom" : "name")}
+          testID="sort-name"
+        />
+        {isAdmin && (
+          <Btn
+            label="Add product"
+            icon="add"
+            variant="blue"
+            height={40}
+            onPress={() => setEdit("new")}
+            testID="add-product"
+          />
+        )}
+      </View>
+
+      {/* A standing count, not a dialog shown once — a product with no price
+          rings up as free, so it must stay visible until it's fixed. */}
+      {(unpriced > 0 || uncosted > 0) && (
+        <Notice tone="warn">
+          {[
+            unpriced > 0 && `${unpriced} ${unpriced === 1 ? "product has" : "products have"} no price and would ring up as free.`,
+            uncosted > 0 && `${uncosted} ${uncosted === 1 ? "has" : "have"} no cost, so their margin can't be calculated.`,
+          ].filter(Boolean).join(" ")}
+        </Notice>
+      )}
+
+      <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
+        {isWide ? (
+          <ScrollView
+            style={styles.catColAdmin}
+            contentContainerStyle={{ gap: 3, paddingBottom: 8 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <Lbl style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 }}>
+              Categories
+            </Lbl>
             {cats.map((c) => {
-              const active = activeCat === c.id;
-              const hasItems = prods.some((p) => c.name === "Favorite" ? p.is_favorite : p.category_id === c.id);
+              const active = activeCat === c.id && !q;
+              const count = prods.filter((p) =>
+                c.name === "Favorite" ? p.is_favorite : p.category_id === c.id,
+              ).length;
               return (
                 <TouchableOpacity
                   key={c.id}
-                  style={[styles.catMgmtRow, active && styles.leftNavRowActive]}
+                  style={[styles.catRowAdmin, active && styles.catRowAdminOn]}
                   onPress={() => { setActiveCat(c.id); setQ(""); }}
+                  activeOpacity={0.8}
                   testID={`admin-cat-${c.id}`}
                 >
-                  <Ionicons
-                    name={hasItems ? "checkmark-circle" : "ellipse-outline"}
-                    size={18}
-                    color={hasItems ? c.color : C.lineStrong}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.catMgmtName}>{c.name}</Text>
-                    {c.source && <Text style={styles.catMgmtSource}>Source: {c.source}</Text>}
-                  </View>
-                  <Ionicons name="chevron-forward" size={14} color={C.ink3} />
+                  <View style={[styles.catDot, { backgroundColor: c.color }]} />
+                  <Text
+                    style={[styles.catRowAdminText, active && { color: C.brand, fontWeight: "700" }]}
+                    numberOfLines={1}
+                  >
+                    {c.name}
+                  </Text>
+                  <Money style={[styles.catRowAdminCount, active && { color: C.brand }]}>
+                    {count}
+                  </Money>
                 </TouchableOpacity>
               );
             })}
           </ScrollView>
-        </View>
-      ) : (
-        <View style={styles.narrowCatBar}>
-          <View style={styles.searchBoxRow}>
-            <Ionicons name="search" size={16} color={C.ink3} />
-            <TextInput
-              placeholder="Search Products"
-              style={styles.searchBoxInput}
-              value={q}
-              onChangeText={setQ}
-              placeholderTextColor={C.ink3}
-              testID="admin-prod-search"
-            />
-          </View>
+        ) : (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
+            style={{ flexGrow: 0 }}
+            contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
           >
-            {cats.map((c) => {
-              const active = activeCat === c.id;
-              return (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
-                  onPress={() => { setActiveCat(c.id); setQ(""); }}
-                  testID={`admin-cat-${c.id}`}
-                >
-                  <Text style={[styles.catChipText, active && { color: C.surface }]}>{c.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
+            {cats.map((c) => (
+              <Pill
+                key={c.id}
+                label={c.name}
+                active={activeCat === c.id && !q}
+                onPress={() => { setActiveCat(c.id); setQ(""); }}
+                testID={`admin-cat-${c.id}`}
+              />
+            ))}
           </ScrollView>
-        </View>
-      )}
-      <View style={{ flex: 1 }}>
-        <View style={styles.prodHeader}>
-          <Text style={styles.sectionHeader}>
-            {q ? `Search` : curCat?.name}({filtered.length})
-          </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-            <Text style={{ fontSize: 12, color: C.ink3 }}>Sort</Text>
-            <View style={styles.sortGroup}>
-              <TouchableOpacity
-                style={[styles.sortBtn, sort === "custom" && styles.sortBtnActive]}
-                onPress={() => setSort("custom")}
-                testID="sort-custom"
-              >
-                <Text style={[styles.sortText, sort === "custom" && { color: C.brand }]}>
-                  Custom
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.sortBtn, sort === "name" && styles.sortBtnActive]}
-                onPress={() => setSort("name")}
-                testID="sort-name"
-              >
-                <Text style={[styles.sortText, sort === "name" && { color: C.brand }]}>
-                  Name
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {isAdmin && (
-              <>
-                <TouchableOpacity testID="edit-products">
-                  <Text style={styles.linkText}>Edit</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setEdit("new")} testID="add-product">
-                  <Text style={styles.linkTextBold}>Add Product</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
-        <FlatList
-          data={filtered}
-          keyExtractor={(i) => i.id}
-          contentContainerStyle={{ padding: 14 }}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
-          }
-          renderItem={({ item }) => (
-            <View style={styles.prodMgmtRow} testID={`prod-${item.id}`}>
-              <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
-                <View style={{ flexDirection: "row", gap: 10, marginTop: 4, alignItems: "center" }}>
-                  <Text style={styles.prodPriceLabel}>
-                    <Text style={{ fontWeight: "700", color: item.price === 0 ? C.danger : C.ink }}>
+        )}
+
+        <Panel style={{ flex: 1, minWidth: 0 }}>
+          <PanelHead
+            title={q ? `Results for “${q}”` : curCat?.name || "Products"}
+            right={
+              <Text style={styles.prodCount}>
+                {filtered.length} {filtered.length === 1 ? "product" : "products"}
+              </Text>
+            }
+          />
+          {isWide && <THead cols={PROD_COLS} />}
+          <FlatList
+            data={filtered}
+            keyExtractor={(i) => i.id}
+            showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
+            }
+            ListEmptyComponent={
+              <Empty
+                icon="cube-outline"
+                title="No products here"
+                note={q ? "Nothing matches that search." : "This category is empty."}
+              />
+            }
+            renderItem={({ item }) => {
+              const m = margin(item);
+              const img = item.image_base64 || item.image_url;
+
+              if (!isWide) {
+                return (
+                  <TouchableOpacity
+                    style={styles.prodMgmtRow}
+                    onPress={() => isAdmin && setEdit(item)}
+                    disabled={!isAdmin}
+                    testID={`prod-${item.id}`}
+                  >
+                    {img ? (
+                      <Image source={{ uri: img }} style={styles.thumb} />
+                    ) : (
+                      <View style={[styles.thumb, styles.thumbEmpty]}>
+                        <Ionicons name="cafe-outline" size={20} color={C.ink3} />
+                      </View>
+                    )}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.invName} numberOfLines={1}>{item.name}</Text>
+                      <Money style={styles.prodPriceLabel}>
+                        {`${THB(item.price)} · cost ${THB(item.cost)}`}
+                      </Money>
+                    </View>
+                    {item.price === 0 ? (
+                      <Tag tone="low">No price</Tag>
+                    ) : m !== null ? (
+                      <Tag tone={m >= 60 ? "ok" : "low"} mono>{`${m.toFixed(0)}%`}</Tag>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              }
+
+              return (
+                <TRow
+                  onPress={isAdmin ? () => setEdit(item) : undefined}
+                  testID={`prod-${item.id}`}
+                >
+                  <TCell col={col("name")}>
+                    <View style={styles.rankRow}>
+                      {img ? (
+                        <Image source={{ uri: img }} style={styles.thumb} />
+                      ) : (
+                        <View style={[styles.thumb, styles.thumbEmpty]}>
+                          <Ionicons name="cafe-outline" size={20} color={C.ink3} />
+                        </View>
+                      )}
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <TText strong numberOfLines={1}>{item.name}</TText>
+                        <Text style={styles.prodSub} numberOfLines={1}>
+                          {[item.name_th, item.barcode].filter(Boolean).join(" · ") || "—"}
+                        </Text>
+                      </View>
+                    </View>
+                  </TCell>
+                  <TCell col={col("price")}>
+                    <TText mono strong color={item.price === 0 ? C.danger : undefined}>
                       {THB(item.price)}
-                    </Text>
-                  </Text>
-                  {item.price === 0 && (
-                    <View style={styles.warnPill}>
-                      <Text style={styles.warnPillText}>!</Text>
-                    </View>
+                    </TText>
+                  </TCell>
+                  {PROD_COLS.length === PROD_COLS_FULL.length && (
+                    <TCell col={col("cost")}>
+                      <TText mono muted>{THB(item.cost)}</TText>
+                    </TCell>
                   )}
-                  <Text style={styles.prodPriceLabel}>Cost {THB(item.cost)}</Text>
-                  {item.cost === 0 && item.price !== 0 && (
-                    <View style={styles.warnPill}>
-                      <Text style={styles.warnPillText}>!</Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-              <TouchableOpacity
-                onPress={() => toggleFav(item)}
-                disabled={!isAdmin}
-                testID={`fav-${item.id}`}
-              >
-                <Ionicons
-                  name={item.is_favorite ? "heart" : "heart-outline"}
-                  size={22}
-                  color={item.is_favorite ? C.brand : C.lineStrong}
-                />
-              </TouchableOpacity>
-              <View style={styles.prodTags}>
-                <Text style={styles.tag}>TAX: {item.tax_type}</Text>
-                <Text style={[styles.tag, item.product_type === "BOM" && { color: C.brand, fontWeight: "700" }]}>
-                  Type: {item.product_type}
-                </Text>
-              </View>
-              {isAdmin && (
-                <TouchableOpacity style={styles.editBtn} onPress={() => setEdit(item)} testID={`edit-${item.id}`}>
-                  <Ionicons name="create-outline" size={18} color={C.ink2} />
-                </TouchableOpacity>
-              )}
+                  <TCell col={col("margin")}>
+                    {m === null ? (
+                      <TText muted>—</TText>
+                    ) : (
+                      // Amber marks anything below the 60% house target,
+                      // without shouting about it.
+                      <TText mono strong color={m >= 60 ? C.ok : C.warn}>
+                        {`${m.toFixed(0)}%`}
+                      </TText>
+                    )}
+                  </TCell>
+                  <TCell col={col("stock")}>
+                    {/* Out-of-stock products still show, greyed in place,
+                        rather than disappearing into an archive tab. */}
+                    {item.stock <= 0 ? (
+                      <Tag tone="out">Sold out</Tag>
+                    ) : item.stock <= 5 ? (
+                      <Tag tone="low" mono>{`${item.stock} left`}</Tag>
+                    ) : (
+                      <Tag tone="ok" mono>{String(item.stock)}</Tag>
+                    )}
+                  </TCell>
+                  <TCell col={col("fav")}>
+                    {/* This is `is_favorite`: it only decides whether the
+                        product shows under the Favourites filter. It does NOT
+                        take anything off sale — the design called this column
+                        "On sale screen", which would be a dangerous lie here,
+                        because the product stays sellable under its category. */}
+                    <Toggle
+                      on={item.is_favorite}
+                      onPress={() => toggleFav(item)}
+                      disabled={!isAdmin}
+                      testID={`fav-${item.id}`}
+                    />
+                  </TCell>
+                </TRow>
+              );
+            }}
+          />
+          {!isAdmin && (
+            <View style={styles.prodFootNote}>
+              <Ionicons name="shield-outline" size={16} color={C.ink2Soft} />
+              <Text style={styles.prodFootText}>
+                Price and menu changes are admin-only.
+              </Text>
             </View>
           )}
-        />
+        </Panel>
       </View>
 
       <ProductEditModal
@@ -3529,9 +3761,25 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
         onClose={() => setEdit(null)}
         onSaved={() => { setEdit(null); load(); }}
       />
-    </View>
+    </Body>
   );
 }
+
+// Fixed pixel widths were the design's, drawn at 1536 — on a narrower panel
+// they add up to more than the row has and the name column collapses to a
+// single letter. Flex lets every column shrink together instead.
+const PROD_COLS_FULL: Col[] = [
+  { key: "name", title: "Product", flex: 3 },
+  { key: "price", title: "Price", flex: 1.1, right: true },
+  { key: "cost", title: "Cost", flex: 1, right: true },
+  { key: "margin", title: "Margin", flex: 0.9, right: true },
+  { key: "stock", title: "Stock", flex: 1.1, right: true },
+  { key: "fav", title: "Favourite", flex: 1, right: true },
+];
+// Cost is the first thing to go: margin already carries it, and the name is
+// what makes a row identifiable at all.
+const PROD_COLS_COMPACT: Col[] = PROD_COLS_FULL.filter((c) => c.key !== "cost");
+
 
 function ProductEditModal({
   product, categories, defaultCat, onClose, onSaved,
@@ -3826,7 +4074,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
   const closeShift = async () => {
     const counted = parseFloat(actualCash);
     if (actualCash.trim() === "" || isNaN(counted) || counted < 0) {
-      Alert.alert("Counted cash required", "Enter the actual amount counted in the drawer before closing.");
+      showAlert("Counted cash required", "Enter the actual amount counted in the drawer before closing.");
       return;
     }
     const res = await apiFetch(`${API}/shifts/close`, {
@@ -4495,7 +4743,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        Alert.alert("Save failed", `Settings did not save (HTTP ${res.status}). ${detail.slice(0, 200)}`);
+        showAlert("Save failed", `Settings did not save (HTTP ${res.status}). ${detail.slice(0, 200)}`);
         return;
       }
       // Refresh from the server response so saved (and masked) values are
@@ -4503,37 +4751,63 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
       const saved = await res.json().catch(() => null);
       if (saved) setS(saved);
     } catch (e: any) {
-      Alert.alert("Save failed", e?.message || "Could not reach the server.");
+      showAlert("Save failed", e?.message || "Could not reach the server.");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <View style={styles.twoCol} testID="settings-section">
+    <Body
+      style={!isWide && { paddingHorizontal: 14 }}
+      testID="settings-section"
+    >
+      <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
       {showList && (
-        <View style={[styles.leftNav, !isWide && styles.fullCol]}>
-          <Text style={styles.sectionHeader}>Settings</Text>
-          <ScrollView>
-            {visibleSections.map((sec) => (
-              <TouchableOpacity
-                key={sec.name}
-                style={[styles.settingsRow, isWide && active === sec.name && styles.leftNavRowActive]}
-                onPress={() => { setActive(sec.name); setDrilled(true); }}
-                testID={`settings-${sec.name}`}
-              >
-                <Ionicons name={sec.icon} size={18} color={sec.color} style={{ marginRight: 10 }} />
-                <Text style={[styles.settingsLabel, { flex: 1 }, isWide && active === sec.name && { color: C.brand, fontWeight: "700" }]}>
-                  {sec.name}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={C.ink3} />
-              </TouchableOpacity>
-            ))}
+        <Panel style={[styles.setNav, !isWide && { width: "100%", flex: 1 }]}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {visibleSections.map((sec, i) => {
+              const on = isWide && active === sec.name;
+              return (
+                <TouchableOpacity
+                  key={sec.name}
+                  style={[
+                    styles.setRow,
+                    on && { backgroundColor: C.brandTintSoft },
+                    i === visibleSections.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                  onPress={() => { setActive(sec.name); setDrilled(true); }}
+                  activeOpacity={0.8}
+                  testID={`settings-${sec.name}`}
+                >
+                  {/* Icon tile rather than a bare glyph — at a glance the tint
+                      says which part of the shop a setting belongs to. */}
+                  <View style={[styles.setIco, { backgroundColor: on ? C.brandTint : C.sunk }]}>
+                    <Ionicons
+                      name={sec.icon}
+                      size={19}
+                      color={on ? C.brand : sec.color}
+                    />
+                  </View>
+                  <Text
+                    style={[styles.setLabel, on && { color: C.brand, fontWeight: "700" }]}
+                    numberOfLines={1}
+                  >
+                    {sec.name}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={15}
+                    color={on ? C.brand : C.ink3}
+                  />
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
-        </View>
+        </Panel>
       )}
       {showDetail && (
-      <View style={{ flex: 1 }}>
+      <Panel style={{ flex: 1, minWidth: 0 }}>
         {!isWide && (
           <TouchableOpacity
             style={styles.backRow}
@@ -4644,15 +4918,16 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
         ) : active === "Drawer" ? (
           <DrawerCategoriesSection />
         ) : (
-          <View style={styles.emptyBox}>
-            <Ionicons name="construct-outline" size={40} color={C.lineStrong} />
-            <Text style={styles.emptyText}>{active}</Text>
-            <Text style={[styles.emptyText, { color: C.lineStrong }]}>Coming soon</Text>
-          </View>
+          <Empty
+            icon="construct-outline"
+            title={active}
+            note="Not built yet — this section is a placeholder."
+          />
         )}
-      </View>
+      </Panel>
       )}
-    </View>
+      </View>
+    </Body>
   );
 }
 
@@ -5380,18 +5655,159 @@ function PrintersSection({
 
 // =================== STYLES ===================
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-  rootRow: { flex: 1, flexDirection: "row" },
+  // ── Back-office page furniture ─────────────────────────────────────────
+  // Settings
+  setNav: { width: 262, flexGrow: 0, flexShrink: 0 },
+  setRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  setIco: {
+    width: 40,
+    height: 40,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  setLabel: { flex: 1, fontSize: 14.5, fontWeight: "600", color: C.ink2 },
 
-  // Sidebar — direct child of a flexDirection: "row" container in both
-  // desktop and modal layouts.  width:220 sets the fixed column width;
-  // cross-axis stretch gives it the full row height (no flex needed).
-  sidebar: {
-    width: 232,
-    backgroundColor: C.brand,
-    paddingVertical: 20,
+  // Products
+  catColAdmin: {
+    width: 236,
+    flexGrow: 0,
+    flexShrink: 0,
+    backgroundColor: C.surface,
+    borderRadius: R.card,
+    borderWidth: 1,
+    borderColor: C.line2,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  catRowAdmin: {
+    height: 48,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     paddingHorizontal: 12,
   },
+  catRowAdminOn: { backgroundColor: C.brandTintSoft },
+  catRowAdminText: { flex: 1, fontSize: 14.5, fontWeight: "600", color: C.ink2 },
+  catRowAdminCount: { fontSize: 12, color: C.ink3 },
+  catDot: { width: 10, height: 10, borderRadius: 5 },
+  prodCount: { fontSize: 13.5, color: C.ink3 },
+  prodSub: { fontSize: 12.5, color: C.ink3, marginTop: 3 },
+  thumb: {
+    width: 46,
+    height: 46,
+    borderRadius: 10,
+    backgroundColor: C.sunk,
+  },
+  thumbEmpty: { alignItems: "center", justifyContent: "center" },
+  prodFootNote: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+  },
+  prodFootText: { fontSize: 13.5, color: C.ink2Soft },
+
+  // Detail-pane furniture shared by Orders and Customers.
+  avBig: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  avBigText: { color: C.surface, fontSize: 27, fontWeight: "700" },
+  kpis: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  kpi: {
+    flex: 1,
+    paddingVertical: 18,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    borderRightWidth: 1,
+    borderRightColor: C.line2,
+  },
+  kpiVal: { fontSize: 20, fontWeight: "800", color: C.ink, letterSpacing: -0.6 },
+  kpiLbl: { marginTop: 5, fontSize: 12.5, color: C.ink2Soft },
+  dsec: {
+    padding: 18,
+    paddingHorizontal: 22,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
+  dsecEmpty: { fontSize: 14, color: C.ink3 },
+
+  filterRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  twoCol: { flex: 1, minHeight: 0, flexDirection: "row", gap: 16 },
+  stackedCol: { flexDirection: "column" },
+  detailCol: { width: 400, flexGrow: 0, flexShrink: 0 },
+  takings: { fontSize: 15, fontWeight: "700", color: C.ink },
+
+  billsHead: {
+    paddingHorizontal: 14, paddingTop: 16, paddingBottom: 10,
+    backgroundColor: C.surface,
+  },
+  h2: { fontSize: 18, fontWeight: "700", color: C.ink, marginBottom: 4 },
+  helperText: { color: C.ink3, fontSize: 13, marginBottom: 14 },
+  rangeCard: {
+    width: "92%", maxWidth: 420, backgroundColor: C.surface,
+    borderRadius: 16, overflow: "hidden",
+  },
+  root: { flex: 1, backgroundColor: C.bg },
+  sectionHeader: {
+    fontSize: 15, fontWeight: "700", color: C.ink,
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.line,
+    backgroundColor: C.surface,
+  },
+  txDetail: { flex: 1 },
+  txList: { width: 320, backgroundColor: C.surface, borderRightWidth: 1, borderRightColor: C.line },
+  // ── Reports ────────────────────────────────────────────────────────────
+  bar: { backgroundColor: "#DDE4EE", borderTopLeftRadius: 5, borderTopRightRadius: 5 },
+  baxis: { flexDirection: "row", gap: 9, paddingHorizontal: 22, paddingVertical: 10 },
+  baxisText: { flex: 1, textAlign: "center", fontSize: 10, color: C.ink3 },
+  chartNote: {
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+    paddingHorizontal: 22,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  rankRow: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
+  statRow: { flexDirection: "row", gap: 16 },
+  reportCols: { flex: 1, minHeight: 0, flexDirection: "row", gap: 16 },
+  bars: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 9,
+    height: 210,
+    paddingHorizontal: 22,
+    paddingTop: 20,
+  },
+  chartNoteKey: {
+    width: 10,
+    height: 10,
+    borderRadius: 3,
+    backgroundColor: C.brand,
+  },
+  chartNoteText: { flex: 1, fontSize: 14.5, color: C.ink2, lineHeight: 21 },
   avatarBox: { alignItems: "center", marginBottom: 20 },
   sideBadge: {
     width: 56, height: 56, borderRadius: 16,
@@ -5437,18 +5853,8 @@ const styles = StyleSheet.create({
   content: { flex: 1 },
 
   // Text
-  h1: { fontSize: 24, fontWeight: "700", color: C.ink, marginBottom: 12 },
-  h2: { fontSize: 18, fontWeight: "700", color: C.ink, marginBottom: 4 },
-  helperText: { color: C.ink3, fontSize: 13, marginBottom: 14 },
-  sectionHeader: {
-    fontSize: 15, fontWeight: "700", color: C.ink,
-    padding: 14, borderBottomWidth: 1, borderBottomColor: C.line,
-    backgroundColor: C.surface,
-  },
 
-  // Two-column layout
-  twoCol: { flex: 1, flexDirection: "row" },
-  stackedCol: { flexDirection: "column" },
+  // Two-column layout — twoCol/stackedCol now live at the top of this sheet.
   fullCol: { width: "100%", maxHeight: "100%", flex: 1, borderRightWidth: 0 },
   // leftNav variant used when the layout is column-stacked on narrow screens.
   // Replaces the fixed 280px width (which leaves wasted whitespace on the
@@ -5503,55 +5909,11 @@ const styles = StyleSheet.create({
   leftNavText: { flex: 1, fontSize: 13, color: C.ink2 },
 
   // Reports
-  periodRow: {
-    flexDirection: "row", backgroundColor: C.surface, borderRadius: 10,
-    padding: 4, gap: 4, marginBottom: 16, alignSelf: "flex-start",
-  },
   periodBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
   periodBtnActive: { backgroundColor: C.brand },
   periodText: { fontSize: 13, color: C.ink2, fontWeight: "600" },
   periodTextActive: { color: C.surface },
-  kpiRow: { flexDirection: "row", gap: 12, marginBottom: 14, flexWrap: "wrap" },
-  kpiCard: {
-    flex: 1, minWidth: 160, backgroundColor: C.surface, padding: 16,
-    borderRadius: 12, borderTopWidth: 3,
-  },
-  kpiHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 },
-  kpiLabel: { fontSize: 12, color: C.ink3, fontWeight: "600" },
-  kpiValue: { fontSize: 22, fontWeight: "700", color: C.ink },
-  gpRow: { flexDirection: "row", gap: 12, marginBottom: 16, flexWrap: "wrap" },
-  gpStat: {
-    flex: 1, minWidth: 140, padding: 14, borderRadius: 10,
-    backgroundColor: C.surface,
-  },
-  gpLabel: { fontSize: 11, color: C.ink3, fontWeight: "600" },
-  gpValue: { fontSize: 18, color: C.ink, fontWeight: "700", marginTop: 4 },
-  chartsRow: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
-  chartCard: {
-    flex: 1, minWidth: 280, backgroundColor: C.surface,
-    padding: 16, borderRadius: 12,
-  },
   chartTitle: { fontSize: 13, fontWeight: "700", color: C.ink, marginBottom: 10 },
-  chart: { flexDirection: "row", alignItems: "flex-end", height: 180, gap: 8 },
-  barCol: { flex: 1, alignItems: "center", gap: 6 },
-  bar: { width: "100%", backgroundColor: C.brand, borderRadius: 6 },
-  barLabel: { fontSize: 10, color: C.ink3 },
-  emptyChart: { color: C.ink3, fontSize: 12, padding: 20 },
-  rankRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
-  rankDot: { width: 8, height: 8, borderRadius: 4 },
-  rankName: { flex: 1, fontSize: 12, color: C.ink2 },
-  rankBarBg: { width: 80, height: 6, backgroundColor: C.bg, borderRadius: 3 },
-  rankBar: { height: 6, borderRadius: 3 },
-  rankVal: { fontSize: 11, color: C.ink, fontWeight: "600", minWidth: 70, textAlign: "right" },
-
-  // Transactions
-  txList: { width: 320, backgroundColor: C.surface, borderRightWidth: 1, borderRightColor: C.line },
-  txDetail: { flex: 1 },
-  // Bills: a day timeline rather than a flat list of folder rows.
-  billsHead: {
-    paddingHorizontal: 14, paddingTop: 16, paddingBottom: 10,
-    backgroundColor: C.surface,
-  },
   billsTitle: { fontSize: 24, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
   billsSummary: { fontSize: 12, color: C.ink3, marginTop: 3, fontWeight: "500" },
   billsSummaryAmt: { color: C.ink, fontWeight: "700" },
@@ -5808,13 +6170,26 @@ const styles = StyleSheet.create({
   custAvText: { color: C.surface, fontSize: 14, fontWeight: "700" },
   custAdminName: { fontSize: 13, fontWeight: "600", color: C.ink },
   custAdminPhone: { fontSize: 11, color: C.ink3, marginTop: 2 },
-  custProfile: { alignItems: "center", padding: 20 },
+  custProfile: {
+    alignItems: "center",
+    paddingVertical: 26,
+    paddingHorizontal: 22,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line2,
+  },
   custAvLarge: {
     width: 80, height: 80, borderRadius: 40,
     alignItems: "center", justifyContent: "center",
   },
   custAvLargeText: { color: C.surface, fontSize: 32, fontWeight: "700" },
-  custProfileName: { fontSize: 18, fontWeight: "700", color: C.ink, marginTop: 10 },
+  custProfileName: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: C.ink,
+    letterSpacing: -0.55,
+    textAlign: "center",
+  },
+  custProfileSub: { fontSize: 14, color: C.ink2Soft, marginTop: 6 },
   custPoints: { fontSize: 14, color: C.ink, marginTop: 6 },
   statsRow: {
     flexDirection: "row", gap: 12, padding: 20,
@@ -6172,23 +6547,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Reports header / Reports button ──
-  reportsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  reportsBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    borderWidth: 1, borderColor: C.brand, borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.surface,
-  },
-  reportsBtnText: { color: C.brand, fontWeight: "700", fontSize: 14 },
-  backofficeBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 20, borderWidth: 1, borderColor: C.brand, borderRadius: 12,
-    paddingVertical: 14, backgroundColor: C.surface,
-  },
-  backofficeBtnText: { color: C.brand, fontWeight: "700", fontSize: 16 },
-  rangeCard: {
-    width: "92%", maxWidth: 420, backgroundColor: C.surface,
-    borderRadius: 16, overflow: "hidden",
-  },
   rangeSummary: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     backgroundColor: C.bgSoft, borderRadius: 10, padding: 12,
