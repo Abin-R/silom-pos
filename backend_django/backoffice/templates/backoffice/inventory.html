@@ -119,7 +119,13 @@
               <span class="thumb">{{ p.name|initial }}</span>
               <div>
                 <a href="{% url 'backoffice:product_detail' p.id %}?{{ qs }}"><b style="font-weight:620">{{ p.name }}</b></a>
-                <div class="sub">{{ p.name_th|default:p.category.name|default:"" }}</div>
+                {% comment %}
+                  Not `default:p.category.name` — a filter *argument* that
+                  dereferences a null FK raises VariableDoesNotExist rather
+                  than resolving to empty, so one uncategorised product used
+                  to 500 the whole page.
+                {% endcomment %}
+                <div class="sub">{% if p.name_th %}{{ p.name_th }}{% elif p.category %}{{ p.category.name }}{% endif %}</div>
               </div>
             </div>
           </td>

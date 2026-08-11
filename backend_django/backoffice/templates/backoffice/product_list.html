@@ -103,9 +103,15 @@
           <tr>
             <td>
               <div style="display:flex;align-items:center;gap:12px">
+                {% comment %}
+                  `loading="lazy"` plus a separate URL per image: inlining the
+                  stored data: URIs here made this page 574 KB against ~20 KB
+                  for every other list in the backoffice.
+                {% endcomment %}
                 <span class="thumb">
-                  {% if p.image_url or p.image_base64 %}
-                    <img src="{{ p.image_base64|default:p.image_url }}" alt="">
+                  {% if p.image_len %}
+                    <img src="{% url 'backoffice:product_image' p.id %}"
+                         alt="" loading="lazy" width="38" height="38">
                   {% else %}{{ p.name|initial }}{% endif %}
                 </span>
                 <div>

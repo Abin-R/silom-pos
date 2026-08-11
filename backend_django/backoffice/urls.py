@@ -27,6 +27,11 @@ urlpatterns = [
     # can load it.
     path("app.css", views.backoffice_css, name="app_css"),
 
+    # Product photos as separate cacheable resources rather than base64
+    # inlined into the catalogue markup — see `views.product_image`.
+    path("products/<uuid:product_id>/image", views.product_image,
+         name="product_image"),
+
     path("", views.dashboard, name="home"),
     path("dashboard", views.dashboard, name="dashboard"),
     path("transactions", views.transactions, name="transactions"),

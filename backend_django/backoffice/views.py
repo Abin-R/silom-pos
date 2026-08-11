@@ -15,9 +15,9 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import Http404, HttpResponse, HttpResponseNotModified, HttpResponseRedirect
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Max, Min, Sum, Q
-from django.db.models.functions import Coalesce, TruncDate
+from django.db.models.functions import Coalesce, Length, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -2277,7 +2277,17 @@ def product_list(request):
     category at once)."""
     branches, branch, _, _ = _common_filters(request)
 
-    qs = Product.objects.filter(active=True).select_related("category")
+    # Product photos are stored as base64 data: URIs in `image_url`. Selecting
+    # them for a 50-row list shipped megabytes out of Postgres and pasted them
+    # into the markup — this page was 574 KB against ~20 KB for its siblings.
+    # `defer` keeps them out of the query; the annotation is all the template
+    # needs to know, and `backoffice:product_image` serves the bytes.
+    qs = (
+        Product.objects.filter(active=True)
+        .select_related("category")
+        .defer("image_url", "image_base64")
+        .annotate(image_len=Length("image_url") + Length("image_base64"))
+    )
     if branch:
         qs = qs.filter(branch=branch)
 
@@ -2520,7 +2530,15 @@ def product_bulk_edit(request):
     """Inline-editable grid for existing products. POST saves all rows."""
     branches, branch, _, _ = _common_filters(request)
 
-    qs = Product.objects.filter(active=True).select_related("category")
+    # Image columns deferred for the same reason as the catalogue — see
+    # `product_image`. The POST path below re-fetches each row in full, so
+    # saving is unaffected.
+    qs = (
+        Product.objects.filter(active=True)
+        .select_related("category")
+        .defer("image_url", "image_base64")
+        .annotate(image_len=Length("image_url") + Length("image_base64"))
+    )
     if branch:
         qs = qs.filter(branch=branch)
     qs = qs.order_by("name")
@@ -2980,6 +2998,47 @@ def backoffice_css(request):
     # a new URL rather than a stale hit.
     response["Cache-Control"] = "public, max-age=31536000, immutable"
     response["ETag"] = f'"{version}"'
+    return response
+
+
+@login_required
+def product_image(request, product_id):
+    """Serve one product's photo as its own cacheable resource.
+
+    Same lesson as ``public_views.product_image``, relearned on the Catalogue:
+    images are stored as base64 ``data:`` URIs, and pasting them into the list
+    markup made that one page 574 KB against ~20 KB for its siblings. Because
+    they are markup, nothing renders until all of it arrives and every visit
+    re-downloads the lot.
+
+    Served from here the browser fetches them lazily, in parallel, and keeps
+    them. The ``?v=`` the template appends is a content hash, so a changed
+    photo gets a new URL and this one caches immutably.
+    """
+    product = get_object_or_404(Product, id=product_id)
+    raw = product.image_url or product.image_base64 or ""
+    if not raw:
+        raise Http404
+    decoded = images.decode(raw)
+    if decoded is None:
+        # A hosted URL rather than a stored data: URI. Redirect instead of
+        # 404ing: the catalogue defers the image columns (they are what made
+        # the page enormous), so it cannot tell the two apart and always
+        # points here.
+        return HttpResponseRedirect(raw)
+
+    data, mime = decoded
+    etag = f'"{images.digest(raw)}"'
+    if request.headers.get("If-None-Match") == etag:
+        return HttpResponseNotModified()
+
+    response = HttpResponse(data, content_type=mime)
+    response["ETag"] = etag
+    response["Content-Length"] = str(len(data))
+    if request.GET.get("v") == images.digest(raw):
+        response["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response["Cache-Control"] = "public, max-age=300"
     return response
 
 

@@ -45,7 +45,9 @@
             <input type="hidden" name="id" value="{{ p.id }}">
             <td>
               <span class="thumb">
-                {% if p.image_url %}<img src="{{ p.image_url }}" alt="">
+                {% if p.image_len %}
+                  <img src="{% url 'backoffice:product_image' p.id %}"
+                       alt="" loading="lazy" width="38" height="38">
                 {% else %}{{ p.name|initial }}{% endif %}
               </span>
             </td>
