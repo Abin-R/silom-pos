@@ -863,6 +863,7 @@ class PeakRequest(models.Model):
         indexes = [models.Index(fields=["-created_at"])]
 
 
+
 class ConsolidatedReceipt(models.Model):
     """The one Peak receipt that bills a whole branch-day.
 
