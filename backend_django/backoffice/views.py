@@ -128,16 +128,25 @@ def customer_receipt(request, order_number: str):
     """Public landing page for the receipt QR code.  No auth required —
     customers scan the QR on their thermal receipt and land here.
 
-    It used to be a two-button menu: "issue a full tax invoice" or "leave a
-    review".  The POS now issues full tax invoices itself at the counter, so
-    the first button only offered the customer a slower way to do what the
-    cashier already did — while standing between every scanner and the review
-    form.  So the scan goes straight to feedback.
+    Two CTAs: request a full tax invoice (ใบกำกับภาษีเต็มรูป), or leave a
+    review.
 
-    The tax-invoice views under this URL stay mounted: a customer who was
-    handed that link before, or a cashier who needs it, can still reach the
-    form directly."""
-    return HttpResponseRedirect(f"{FEEDBACK_FORM_URL}?oid={order_number}")
+    This briefly 302'd straight to the review form on the reasoning that the
+    POS issues full tax invoices at the counter anyway.  It doesn't cover the
+    case the menu exists for: a customer who only realises they need a tax
+    invoice after they've walked away, when no cashier is involved any more.
+    So the choice is back.
+
+    The two paths do not collide.  This one fills ``Order.tax_invoice_data``
+    and drives Peak; the counter flow fills ``Order.pos_tax_invoice`` and
+    drives the printer.  See that field's comment on the model for why they
+    are deliberately separate."""
+    return render(request, "backoffice/customer_receipt.html", {
+        "order_number": order_number,
+        # Passed in rather than hardcoded in the template so the form URL has
+        # one home — the redirect above used to be its only reference.
+        "feedback_url": f"{FEEDBACK_FORM_URL}?oid={order_number}",
+    })
 
 
 def create_tax_invoice(request, order_number: str):
