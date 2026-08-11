@@ -33,6 +33,7 @@ import hmac
 import os
 import time
 from datetime import datetime, timezone as dt_timezone
+from decimal import Decimal
 from typing import Any, Optional
 
 import httpx
@@ -40,6 +41,7 @@ import httpx
 from django.db import transaction
 
 from .models import (
+    ConsolidatedReceipt,
     Order,
     OrderItem,
     PeakClientToken,
@@ -257,6 +259,56 @@ def _build_peak_products(order: Order) -> tuple[list[dict], float]:
     return peak_products, total_item_price
 
 
+# ─── Consolidation contact ────────────────────────────────────────────────
+
+# A consolidated receipt bills a whole branch-day — hundreds of walk-in bills
+# with no single buyer to name — so it is booked to one standing platform
+# contact, exactly as the SilomPOS job books every consolidated receipt to its
+# fixed PEAK_CONTACT_ID.  This is the Brave POS equivalent: "bravepos" is to
+# our consolidation what "silompos" is to theirs.
+CONSOLIDATION_CONTACT_NAME = "bravepos"
+
+# Peak's id for that contact, once it exists.  The env var wins so prod and a
+# test Peak account can point at different contacts; the constant is the
+# fallback to paste the id into if you'd rather pin it in code the way the
+# SilomPOS job does.
+CONSOLIDATION_CONTACT_ID_ENV = "PEAK_BRAVEPOS_CONTACT_ID"
+CONSOLIDATION_CONTACT_ID = ""
+
+
+def consolidation_contact_id() -> str:
+    """The Peak contact id consolidated receipts are booked to, or ``""``
+    if the contact hasn't been created yet."""
+    return (
+        os.environ.get(CONSOLIDATION_CONTACT_ID_ENV, "")
+        or CONSOLIDATION_CONTACT_ID
+    ).strip()
+
+
+def create_consolidation_contact(name: str = CONSOLIDATION_CONTACT_NAME) -> str:
+    """Create the standing consolidation contact in Peak, return its id.
+
+    Run ONCE per Peak account, deliberately — Peak does not upsert on contact
+    name, so a second call silently creates a second "bravepos" contact and
+    the branch-days issued after it point at a different customer than the
+    ones before.  Callers must therefore gate this behind an explicit flag and
+    persist the returned id (``PEAK_BRAVEPOS_CONTACT_ID`` in .env), never call
+    it lazily per run.
+
+    ``type: 5`` matches what the per-order tax-invoice contact sends.
+    """
+    resp = make_peak_request("/contacts", "POST", {
+        "PeakContacts": {"contacts": [{"name": name, "type": 5}]},
+    })
+    try:
+        return resp["PeakContacts"]["contacts"][0]["id"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(
+            f"Peak /contacts did not return a contact id for {name!r}. "
+            f"Response: {resp!r}"
+        )
+
+
 def _build_peak_contact(form_data: dict) -> dict:
     """Translate the customer-facing tax-invoice form into Peak's
     ``contacts`` payload shape.  Optional fields are omitted when blank
@@ -306,6 +358,17 @@ def _document_link_from_response(peak_response: Optional[dict]) -> Optional[str]
     return None
 
 
+def _payment_method(account_code: str, amount: float) -> dict:
+    """Per-branch Peak payment method.  A branch left on the default "BSV003"
+    is sent as Peak's generic payment-method ``code``; a branch configured
+    with a real chart-of-accounts code (e.g. "113105") is sent as an
+    ``accountCode`` instead."""
+    code = (account_code or "BSV003").strip() or "BSV003"
+    if code == "BSV003":
+        return {"code": "BSV003", "amount": amount}
+    return {"accountCode": code, "amount": amount}
+
+
 def _enqueue_peak_receipt(order: Order) -> str:
     """Build the receipt payload and POST it to Peak's queue.  Returns the
     ``queueId`` Peak hands back.  Performs no DB writes — the caller persists
@@ -318,15 +381,8 @@ def _enqueue_peak_receipt(order: Order) -> str:
     total_discount = max(total_item_price - amount, 0)
     issued_date = order.created_at.astimezone().strftime("%Y%m%d")
 
-    # Per-branch Peak payment method.  A branch left on the default "BSV003"
-    # is sent as Peak's generic payment-method ``code``; a branch configured
-    # with a real chart-of-accounts code (e.g. "113105") is sent as an
-    # ``accountCode`` instead.
-    account_code = (getattr(order.branch, "peak_account_code", "") or "BSV003").strip() or "BSV003"
-    if account_code == "BSV003":
-        payment_method = {"code": "BSV003", "amount": amount}
-    else:
-        payment_method = {"accountCode": account_code, "amount": amount}
+    account_code = getattr(order.branch, "peak_account_code", "")
+    payment_method = _payment_method(account_code, amount)
 
     receipt = {
         "contact": {"id": contact_id},
@@ -414,3 +470,264 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
 
     # Subsequent poll: a single quick status check, outside the lock.
     return _check_peak_receipt(order, queue_id)
+
+
+# ─── Consolidated receipts (one per branch-day) ───────────────────────────
+#
+# Where the flow above bills ONE order to the customer who asked for a full
+# tax invoice, this bills a whole branch-day to the standing "bravepos"
+# contact.  Both end up at POST /receipts/queue; the difference is what goes
+# in the products list and who the contact is.
+
+# Peak's "Receipt not found" on a void.  There is no live document under this
+# code — already voided, or never materialised — so nothing is left billing
+# and the reissue may proceed.  Treating it as a failure would strand a
+# branch-day forever: every retry would block on re-voiding a document that
+# is already gone.
+VOID_NOT_FOUND = "384"
+
+
+class PeakVoidFailed(Exception):
+    """The superseded receipt could not be voided, so no new one may issue.
+
+    Issuing anyway leaves two live receipts for one branch-day — the day is
+    double-counted in Peak, and since the new document overwrites the stored
+    response, the old code is no longer recorded anywhere and nothing detects
+    it.  Failing here instead leaves the branch-day billed by its (stale)
+    original receipt, which the next run retries.
+    """
+
+
+def void_receipt(code: str) -> Optional[dict]:
+    """Void a Peak receipt.  Returns ``None`` when Peak reports no such
+    document, the response otherwise, and raises :class:`PeakVoidFailed` on
+    anything else."""
+    resp = make_peak_request("/receipts/void", "POST", {
+        "PeakReceipts": {"code": code},
+    })
+    peak = resp.get("PeakReceipts") or {}
+    res_code = str(peak.get("resCode") or resp.get("resCode") or "")
+    if res_code == VOID_NOT_FOUND:
+        return None
+    if res_code and res_code != "200":
+        raise PeakVoidFailed(
+            f"void of {code} returned resCode {res_code}: "
+            f"{peak.get('resDesc') or resp.get('resDesc')}"
+        )
+    return resp
+
+
+def ensure_consolidated_product_codes(rows: list[dict]) -> dict[str, str]:
+    """Map every distinct product on a branch-day to a Peak product code.
+
+    ``rows`` are the item rows from the consolidation payload. Known products
+    come from :class:`PeakProductMap`; whatever Peak has never seen is created
+    in a single POST /products, the same round-trip the per-order path makes.
+
+    Keys are ``str(product_id)``, or ``name:<name>`` for a row whose Product
+    was deleted. Those orphan rows have nothing to cache against — the map
+    keys on the Product FK — so they cost one Peak product per run. That only
+    happens after a product delete, and the cost is a duplicate entry in
+    Peak's catalogue, never a duplicated sale.
+    """
+    ids = {r["product_id"] for r in rows if r["product_id"]}
+    codes: dict[str, str] = {
+        str(m.product_id): m.peak_code
+        for m in PeakProductMap.objects.filter(product_id__in=ids)
+    }
+
+    # Deduplicate first: the same product appears once per price it sold at.
+    to_create: dict[str, str] = {}
+    for row in rows:
+        key = row["product_id"] or f"name:{row['name']}"
+        if key in codes or key in to_create:
+            continue
+        to_create[key] = row["name"] or key
+
+    if not to_create:
+        return codes
+
+    resp = make_peak_request("/products", "POST", {"PeakProducts": {"products": [
+        # Peak caps product names at 100 chars and rejects longer ones
+        # outright (resCode 400), which would leave the product uncreated and
+        # the whole branch-day unissuable.  The marker round-trips our key
+        # through ``description`` so the response can be correlated back.
+        {"name": name[:100], "description": key}
+        for key, name in to_create.items()
+    ]}})
+
+    new_maps = []
+    for product in (resp.get("PeakProducts") or {}).get("products") or []:
+        key = str(product.get("description") or "").strip()
+        if not key:
+            continue
+        if not product.get("code"):
+            # Rejected product. Skip it rather than crash: the caller's
+            # missing-code guard then refuses just this branch-day.
+            print(f"Peak product create failed for {key}: {product.get('resDesc')}")
+            continue
+        codes[key] = product["code"]
+        if not key.startswith("name:"):
+            new_maps.append(PeakProductMap(
+                product_id=key, peak_code=product["code"],
+            ))
+
+    if new_maps:
+        PeakProductMap.objects.bulk_create(new_maps, ignore_conflicts=True)
+
+    return codes
+
+
+def build_consolidated_receipt(
+    day, branch_payload: dict, contact_id: str, codes: dict[str, str],
+) -> dict:
+    """Return the Peak receipt body for one branch-day.
+
+    Shaped exactly like the SilomPOS consolidation: every product goes in at
+    its gross price and one ``discountTotal`` reconciles the products total
+    down to the money actually taken, so
+    ``products_total - discountTotal == the amount we send``.
+
+    Raises :class:`ValueError` when the branch-day has no items or a product
+    Peak never accepted — the caller skips that branch-day and reports it.
+    """
+    rows = branch_payload["items"]
+    if not rows:
+        raise ValueError("no items")
+
+    missing = sorted({
+        (r["product_id"] or f"name:{r['name']}") for r in rows
+        if (r["product_id"] or f"name:{r['name']}") not in codes
+    })
+    if missing:
+        raise ValueError(f"unmapped products: {missing}")
+
+    issued_date = day.strftime("%Y%m%d")
+    products = [
+        {
+            "productCode": codes[r["product_id"] or f"name:{r['name']}"],
+            "name": r["name"],
+            "description": r["name"],
+            "quantity": r["qty"],
+            "price": r["unit_price"],
+            "discount": 0,
+            "vatType": 3,
+            "accountCode": "410107",
+        }
+        for r in rows
+    ]
+
+    amount = Decimal(str(branch_payload["grand_total"]))
+    products_total = Decimal(str(branch_payload["items_gross"]))
+    # Derived from the already-rounded amount so that
+    # products_total - discountTotal == the amount we send, exactly as the
+    # SilomPOS job does it.  On a day whose card processing fees exceed the
+    # discounts given, the money taken is more than the products are worth and
+    # this goes negative; it is sent as-is rather than clamped, so the receipt
+    # still totals to what was actually taken.  If Peak rejects it, the caller
+    # reports that branch-day and the rest of the day still bills.
+    discount_total = products_total - amount
+
+    branch_name = branch_payload["branch_name"]
+    branch_id = branch_payload["branch_id"]
+    payment_method = _payment_method(
+        branch_payload["peak_account_code"], float(amount),
+    )
+
+    return {
+        "contact": {"id": contact_id},
+        "issuedDate": issued_date,
+        "discountTotal": float(discount_total),
+        "taxStatus": 1,
+        "remark": f"{issued_date}-{branch_name}({branch_id})",
+        "tags": [
+            f"Brave POS consolidated receipt {issued_date}",
+            f"branch_name:{branch_name}",
+            f"branch_id:{branch_id}",
+        ],
+        "isTaxInvoice": 1,
+        "products": products,
+        "paidPayments": {
+            "paymentDate": issued_date,
+            "payments": [{**payment_method, "paymentMethod": payment_method}],
+        },
+    }
+
+
+def poll_consolidated_receipt(cr: ConsolidatedReceipt, attempts: int = 5,
+                              interval: float = 2.0) -> Optional[str]:
+    """Poll the queue until Peak materialises the document, then store the
+    payload and return its receipt code.  ``None`` while still processing.
+
+    The response is only written once Peak has actually produced a receipt.
+    Storing the enqueue acknowledgement instead would overwrite the code of
+    the document this one replaces — leaving a branch-day whose live Peak
+    receipt is recorded nowhere.
+    """
+    if not cr.peak_queue_id:
+        return None
+
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(interval)
+        resp = make_peak_request(
+            "/receipts/queue", "GET", {"queueId": cr.peak_queue_id},
+        )
+        receipts = (resp.get("PeakReceipts") or {}).get("receipts") or []
+        if receipts:
+            cr.response = resp
+            cr.save(update_fields=["response", "updated_at"])
+            return receipts[0].get("code") or ""
+    return None
+
+
+def issue_consolidated_receipt(day, branch, branch_payload: dict,
+                               contact_id: str, reissue: bool = False,
+                               poll_attempts: int = 5) -> tuple[ConsolidatedReceipt, str]:
+    """Issue (or resume) the one Peak receipt for ``branch`` on ``day``.
+
+    Returns ``(row, action)`` where action is one of ``issued``, ``polled``,
+    ``already-issued``.  Idempotent by design — the (branch, date) row is the
+    record of what has been billed, so a second run polls or no-ops instead of
+    enqueuing a second receipt for the same sales.
+    """
+    cr = ConsolidatedReceipt.objects.filter(branch=branch, date=day).first()
+
+    if cr and cr.peak_code and not reissue:
+        return cr, "already-issued"
+
+    # Enqueued earlier but never confirmed: finish that attempt rather than
+    # start a new one, or the branch-day ends up with two live documents.
+    if cr and cr.peak_queue_id and not cr.peak_code and not reissue:
+        poll_consolidated_receipt(cr, attempts=poll_attempts)
+        return cr, "polled"
+
+    # Void first, issue second.  The other order double-bills the branch-day
+    # whenever the void fails.
+    if cr and cr.peak_code:
+        void_receipt(cr.peak_code)
+
+    codes = ensure_consolidated_product_codes(branch_payload["items"])
+    receipt = build_consolidated_receipt(day, branch_payload, contact_id, codes)
+
+    resp = make_peak_request("/receipts/queue", "POST", {
+        "PeakReceipts": {"receipts": [receipt]},
+    })
+    queue_id = resp.get("queueId")
+    if not queue_id:
+        raise RuntimeError(f"Peak did not return a queueId: {resp!r}")
+
+    with transaction.atomic():
+        cr, _ = ConsolidatedReceipt.objects.get_or_create(branch=branch, date=day)
+        cr.peak_queue_id = queue_id
+        cr.needs_reissue = False
+        # response deliberately left alone until the poll confirms — see
+        # poll_consolidated_receipt.
+        cr.save(update_fields=["peak_queue_id", "needs_reissue", "updated_at"])
+        # set(), not add(): the link table must hold exactly the bills this
+        # receipt covers, or a reissued day shows bills its live document
+        # never counted.
+        cr.orders.set(Order.objects.filter(id__in=branch_payload["order_ids"]))
+
+    poll_consolidated_receipt(cr, attempts=poll_attempts)
+    return cr, "issued"

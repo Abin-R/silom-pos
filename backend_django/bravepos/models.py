@@ -808,6 +808,59 @@ class PeakRequest(models.Model):
         indexes = [models.Index(fields=["-created_at"])]
 
 
+
+class ConsolidatedReceipt(models.Model):
+    """The one Peak receipt that bills a whole branch-day.
+
+    This row is what makes ``consolidate_daily --issue`` safe to re-run: it is
+    the only record of whether a branch-day has already been billed. Without
+    it a second run enqueues a second receipt for the same sales and nothing
+    detects the double-count — Peak accepts both, and the first document's
+    code is nowhere to void from.
+
+    ``unique_together`` on (branch, date) is the hard guarantee; the queue id
+    and response are the soft state of one issuance attempt:
+
+    * ``peak_queue_id`` set, ``response`` null — enqueued, not yet confirmed.
+      A re-run polls this queue id instead of enqueuing again.
+    * ``response`` set — Peak materialised the document; its ``code`` is what
+      a later reissue must void first.
+    * ``needs_reissue`` — a late or voided bill landed in a day already
+      billed, so the figures are stale. SilomPOS calls this
+      ``is_reconsolidate``.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="consolidated_receipts",
+    )
+    date = models.DateField(db_index=True)
+    peak_queue_id = models.CharField(max_length=128, blank=True, default="")
+    response = models.JSONField(null=True, blank=True)
+    needs_reissue = models.BooleanField(default=False)
+    # Exactly the bills this receipt covers. Set (not added to) on every
+    # issuance so a reissued receipt never keeps links to bills the live
+    # document doesn't count.
+    orders = models.ManyToManyField(
+        Order, related_name="consolidated_receipts", blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date"]
+        unique_together = [("branch", "date")]
+
+    def __str__(self):
+        return f"{self.date} {self.branch_id} ({self.peak_code or 'pending'})"
+
+    @property
+    def peak_code(self) -> str:
+        """The live Peak document code, once the queue has materialised it.
+        Empty while the receipt is still queued."""
+        receipts = (self.response or {}).get("PeakReceipts", {}).get("receipts") or []
+        return receipts[0].get("code") or "" if receipts else ""
+
+
 class PeakClientToken(models.Model):
     """Singleton-ish row holding Peak's rotating client token.  On a
     fresh install seed it from the env var PEAK_CLIENT_TOKEN.  The token
