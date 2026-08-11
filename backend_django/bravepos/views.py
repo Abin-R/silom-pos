@@ -713,6 +713,10 @@ def orders_list_create(request):
         delivery_provider=payload.get('delivery_provider', '') or '',
         delivery_status=payload.get('delivery_status', '') or '',
     )
+    # A cash sale just changed what is in the drawer.  Update the shift's cached
+    # totals now so any reader — the Cash Drawer screen, the backoffice
+    # unreconciled-cash tile — sees the sale without waiting for the round to close.
+    refresh_shift_cash(order.shift)
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -804,6 +808,9 @@ def order_update_status(request, order_id):
         order.voided_at = None
         update_fields += ['voided_by', 'voided_at']
     order.save(update_fields=update_fields)
+    # Cancelling (or un-cancelling) a cash bill moves the drawer, so the shift's
+    # cash totals have to be recomputed against the new status.
+    refresh_shift_cash(order.shift)
     return Response(OrderSerializer(order).data)
 
 
@@ -892,6 +899,10 @@ def shift_current(request):
         # so the wire shape is the JSON literal `null`.
         from django.http import JsonResponse
         return JsonResponse(None, safe=False)
+    # Recompute before serialising.  The stored totals are a cache, and this is
+    # the read the Cash Drawer screen polls, so it must never hand back a figure
+    # that predates the last sale.
+    refresh_shift_cash(s)
     return Response(ShiftSerializer(s).data)
 
 
@@ -932,6 +943,8 @@ def shift_movement(request):
     else:
         s.total_paid_out = (s.total_paid_out or 0) + amount
     s.save(update_fields=['total_paid_in', 'total_paid_out'])
+    # Paid in/out moves the drawer, so the expected figure has to follow it.
+    refresh_shift_cash(s)
     return Response(ShiftMovementSerializer(mv).data, status=201)
 
 
@@ -942,27 +955,59 @@ def shift_close(request):
     s = Shift.objects.filter(branch=branch, status='open').first()
     if not s:
         return Response({'detail': 'No open shift'}, status=400)
-    from django.db.models import Sum
-    # Same order set the summary slip uses — prefers the stamped shift FK so a
-    # sale confirmed just after the round closed still counts against it.
-    cash_total = (
-        shift_orders(s)
-        .filter(payment_method__in=CASH_METHODS)
-        .aggregate(t=Sum('total'))['t'] or Decimal('0')
-    )
-    expected = (s.start_cash or 0) + cash_total + (s.total_paid_in or 0) - (s.total_paid_out or 0)
     s.status = 'closed'
     s.closed_at = djtz.now()
     s.closed_by = request.data.get('closed_by', 'Admin') or 'Admin'
     s.actual_in_drawer = Decimal(str(request.data.get('actual_in_drawer', 0) or 0))
-    s.total_sales_cash = cash_total
-    s.expected_in_drawer = expected
     s.save()
+    # Stamp the final cash figures *after* closed_at exists, so the window
+    # fallback in ``shift_orders`` is bounded by the real close time.
+    refresh_shift_cash(s)
     return Response({**ShiftSerializer(s).data, 'summary': _shift_summary(s)})
 
 
 # Cash-equivalent payment methods — money that actually lands in the drawer.
 CASH_METHODS = ['Cash', 'Easy Pay']
+
+
+def shift_cash_sales(shift):
+    """Cash that this round's sales put in the drawer.
+
+    Excludes cancelled bills — a voided cash sale is money handed back, so
+    counting it would overstate the drawer.  This is the same order set the
+    printed summary's ``cash_sales`` line uses; they must agree or the slip
+    doesn't add up.
+    """
+    from django.db.models import Sum
+    return (
+        shift_orders(shift)
+        .exclude(status='cancel')
+        .filter(payment_method__in=CASH_METHODS)
+        .aggregate(t=Sum('total'))['t'] or Decimal('0')
+    )
+
+
+def refresh_shift_cash(shift):
+    """Recompute and persist ``total_sales_cash`` / ``expected_in_drawer``.
+
+    Both columns are a *cache* of an aggregate over orders and movements.  They
+    used to be written only by ``shift_close``, so for the whole life of an open
+    round they read back as their 0 defaults: the Cash Drawer screen showed
+    "Total Sales (cash) 0.00" no matter how many bills were rung up, and the
+    backoffice's unreconciled-cash figure was always ฿0.  Call this from every
+    path that moves drawer cash so the stored numbers stay true between opens
+    and closes.
+    """
+    if shift is None:
+        return None
+    cash_total = shift_cash_sales(shift)
+    shift.total_sales_cash = cash_total
+    shift.expected_in_drawer = (
+        (shift.start_cash or 0) + cash_total
+        + (shift.total_paid_in or 0) - (shift.total_paid_out or 0)
+    )
+    shift.save(update_fields=['total_sales_cash', 'expected_in_drawer'])
+    return shift
 
 
 def shift_orders(shift):
