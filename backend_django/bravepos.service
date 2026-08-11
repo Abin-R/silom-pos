@@ -1,0 +1,30 @@
+# Canonical copy of the production systemd unit, kept in the repo so the
+# service definition is reviewable and reproducible instead of living only
+# on the box.
+#
+# Install:
+#   sudo cp backend_django/bravepos.service /etc/systemd/system/bravepos.service
+#   sudo systemctl daemon-reload && sudo systemctl restart bravepos.service
+#
+# Differs from the pre-2026-08-11 unit in one way: gunicorn now reads
+# gunicorn.conf.py, which sets preload_app. That is the fix for the deploy
+# race that produced 1,041 identical ImportError events -- see wsgi.py.
+
+[Unit]
+Description=Brave POS Django backend (gunicorn)
+After=network.target
+
+[Service]
+Type=notify
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/silom-pos/backend_django
+EnvironmentFile=/home/azureuser/silom-pos/backend_django/.env
+ExecStart=/home/azureuser/.local/share/virtualenvs/backend_django-43C1HBFU/bin/gunicorn \
+  --config /home/azureuser/silom-pos/backend_django/gunicorn.conf.py \
+  bravepos_api.wsgi:application
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

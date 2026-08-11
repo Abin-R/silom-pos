@@ -6,10 +6,13 @@ auth and is unaffected. Filtering is via query string:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import HttpResponse, HttpResponseRedirect
@@ -23,11 +26,16 @@ from bravepos.models import (
     AuditLog,
     Branch,
     Category,
+    Customer,
     Order,
     OrderItem,
     Product,
     Settings,
+    Shift,
     Staff,
+    StockDocument,
+    StockDocumentItem,
+    StockMovement,
     Unit,
 )
 from bravepos import images
@@ -57,6 +65,18 @@ def _money(value) -> float:
     if value is None:
         return 0.0
     return float(value)
+
+
+def _pct_change(now, before):
+    """Percentage change, or None when there is nothing to compare against.
+
+    None and 0 must stay distinguishable: "no data last month" is not
+    "flat on last month", and a template that renders +0.0% for the first
+    one is lying about a figure the owner will act on.
+    """
+    if not before:
+        return None
+    return float((Decimal(now) - Decimal(before)) / Decimal(before) * 100)
 
 
 def _common_filters(request):
@@ -126,18 +146,25 @@ FEEDBACK_FORM_URL = "https://rollingpinn.formaloo.me/zg8zkq"
 
 def customer_receipt(request, order_number: str):
     """Public landing page for the receipt QR code.  No auth required —
-    customers scan the QR on their thermal receipt and land here.
+    customers scan the QR on their thermal receipt and land here.  Two CTAs:
+    request a full tax invoice (ใบกำกับภาษีเต็มรูป), or leave a review.
 
-    It used to be a two-button menu: "issue a full tax invoice" or "leave a
-    review".  The POS now issues full tax invoices itself at the counter, so
-    the first button only offered the customer a slower way to do what the
-    cashier already did — while standing between every scanner and the review
-    form.  So the scan goes straight to feedback.
+    This briefly 302'd straight to the review form on the reasoning that the
+    POS issues full tax invoices at the counter anyway.  It doesn't cover the
+    case the menu exists for: a customer who only realises they need a tax
+    invoice after they've walked away, when no cashier is involved any more.
+    So the choice is back.
 
-    The tax-invoice views under this URL stay mounted: a customer who was
-    handed that link before, or a cashier who needs it, can still reach the
-    form directly."""
-    return HttpResponseRedirect(f"{FEEDBACK_FORM_URL}?oid={order_number}")
+    The two paths do not collide.  This one fills ``Order.tax_invoice_data``
+    and drives Peak; the counter flow fills ``Order.pos_tax_invoice`` and
+    drives the printer.  See that field's comment on the model for why they
+    are deliberately separate."""
+    return render(request, "backoffice/customer_receipt.html", {
+        "order_number": order_number,
+        # Passed in rather than hardcoded in the template so the form URL has
+        # one home — the redirect above used to be its only reference.
+        "feedback_url": f"{FEEDBACK_FORM_URL}?oid={order_number}",
+    })
 
 
 def create_tax_invoice(request, order_number: str):
@@ -438,12 +465,123 @@ def dashboard(request):
         "time_total_seconds": 0,
     }
 
+    # ── The same window, one window earlier ──────────────────────────────
+    # Growth is the whole question a dashboard answers. Every headline figure
+    # carries its change against the immediately preceding window of equal
+    # length, and the trend chart draws that window behind this one in grey.
+    span = (dto - dfrom).days + 1
+    prev_from, prev_to = dfrom - timedelta(days=span), dfrom - timedelta(days=1)
+    prev_start, prev_end = _date_window(prev_from, prev_to)
+    prev_orders = Order.objects.filter(
+        created_at__gte=prev_start, created_at__lte=prev_end,
+    ).exclude(status="cancel")
+    if branch:
+        prev_orders = prev_orders.filter(branch=branch)
+    prev_agg = prev_orders.aggregate(sales=Sum("total"), bills=Count("id"))
+    prev_sales = prev_agg["sales"] or Decimal(0)
+    prev_bills = prev_agg["bills"] or 0
+    prev_avg = (prev_sales / prev_bills) if prev_bills else Decimal(0)
+
+    # Cancelled bills are money that was rung up and then wasn't. Shown as a
+    # share of sales because ฿4,120 means nothing without the denominator.
+    void_value = orders_all.filter(status="cancel").aggregate(
+        v=Sum("total"))["v"] or Decimal(0)
+
+    # Both series share one bucket layout so the two lines are comparable
+    # point for point; the previous window is re-indexed onto this one's days.
+    prev_buckets = [0.0] * len(buckets)
+    for created_at, total in prev_orders.values_list("created_at", "total"):
+        if dfrom == dto:
+            prev_buckets[timezone.localtime(created_at).hour] += _money(total)
+        else:
+            idx = (timezone.localtime(created_at).date() - prev_from).days
+            if 0 <= idx < len(prev_buckets):
+                prev_buckets[idx] += _money(total)
+    sales_chart["previous"] = prev_buckets
+
+    # ── Branches in this window ──────────────────────────────────────────
+    # Rendered even when one branch is selected: seeing the others is how you
+    # tell "quiet morning" from "quiet at this shop".
+    branch_totals = {
+        row["branch"]: row
+        for row in Order.objects.filter(created_at__gte=start, created_at__lte=end)
+        .exclude(status="cancel")
+        .values("branch")
+        .annotate(sales=Sum("total"), bills=Count("id"))
+    }
+    open_shifts = {
+        s.branch_id: s for s in Shift.objects.filter(status="open").select_related("branch")
+    }
+    branch_rows = []
+    for b in branches:
+        row = branch_totals.get(b.id, {})
+        branch_rows.append({
+            "branch": b,
+            "sales": row.get("sales") or Decimal(0),
+            "bills": row.get("bills") or 0,
+            "shift": open_shifts.get(b.id),
+        })
+    branch_rows.sort(key=lambda r: r["sales"], reverse=True)
+    branch_peak = branch_rows[0]["sales"] if branch_rows else Decimal(0)
+    for row in branch_rows:
+        row["share"] = float(row["sales"] / branch_peak * 100) if branch_peak else 0
+
+    # A shift open since before today is unreconciled cash sitting in a
+    # drawer nobody has counted. It leads the page, above every number.
+    today_start, _ = _date_window(today, today)
+    stale_shifts = [s for s in open_shifts.values() if s.opened_at < today_start]
+    stale_cash = sum((s.total_sales_cash for s in stale_shifts), Decimal(0))
+
+    # ── Needs attention ──────────────────────────────────────────────────
+    out_of_stock = products.filter(stock__lte=0).count()
+    low_stock = products.filter(stock__gt=0, par_level__gt=0,
+                                stock__lt=F("par_level")).count()
+
+    payment_total = sum((r["total"] or Decimal(0) for r in payment_rows), Decimal(0))
+    payment_mix = [
+        {
+            "name": (r["payment_method"] or "Unknown").title(),
+            "total": r["total"] or Decimal(0),
+            "pct": float((r["total"] or 0) / payment_total * 100) if payment_total else 0,
+        }
+        for r in payment_rows
+    ]
+
     context = {
         "active": "dashboard",
+        "page_title": "Dashboard",
         "branches": branches,
         "branch": branch,
         "date_from": dfrom.isoformat(),
         "date_to": dto.isoformat(),
+        "now": timezone.localtime(),
+        # Headline comparison
+        "prev_sales": prev_sales,
+        "prev_bills": prev_bills,
+        "sales_delta": _pct_change(sales, prev_sales),
+        "bills_delta": _pct_change(bills, prev_bills),
+        "avg_delta": _pct_change(avg_per_bill, prev_avg),
+        "span_days": span,
+        # Named rather than "vs previous period" so the comparison is a fact,
+        # not a promise: the reader can check it against the date picker.
+        "compare_label": (
+            "vs " + prev_from.strftime("%-d %b") if span == 1
+            else f"vs {prev_from:%-d %b} – {prev_to:%-d %b}"
+        ),
+        "qs": _filter_qs(request),
+        "void_value": void_value,
+        "void_share": float(void_value / sales * 100) if sales else 0,
+        # Panels
+        "branch_rows": branch_rows,
+        "payment_mix": payment_mix,
+        "latest_orders": list(
+            orders_all.select_related("branch").order_by("-created_at")[:6]
+        ),
+        "stale_shifts": stale_shifts,
+        "stale_cash": stale_cash,
+        "out_of_stock": out_of_stock,
+        "low_stock": low_stock,
+        "open_shift_count": len(open_shifts),
         # Tiles
         "sales": sales,
         "profit": profit,
@@ -485,17 +623,49 @@ def dashboard(request):
 # ─── Transactions ───────────────────────────────────────────────────────
 def _transactions_qs(request):
     """Filtered, prefetched order queryset shared by the page and the
-    CSV export so both honour the same ?branch=&from=&to= filters."""
+    CSV export so both honour the same filters — branch, date window, status,
+    payment method and free-text search.
+
+    The export reading the *same* function is the point: a filtered screen
+    that exports something else is how a reconciliation goes wrong quietly.
+    """
     branches, branch, dfrom, dto = _common_filters(request)
     start, end = _date_window(dfrom, dto)
 
     qs = (
         Order.objects.filter(created_at__gte=start, created_at__lte=end)
+        .select_related("branch", "customer")
         .prefetch_related("items", "items__product")
         .order_by("-created_at")
     )
     if branch:
         qs = qs.filter(branch=branch)
+
+    status = request.GET.get("status") or "all"
+    if status == "paid":
+        qs = qs.exclude(status="cancel")
+    elif status == "voided":
+        qs = qs.filter(status="cancel")
+
+    payment = (request.GET.get("payment") or "").strip()
+    if payment:
+        qs = qs.filter(payment_method__icontains=payment)
+
+    query = (request.GET.get("q") or "").strip()
+    if query:
+        # Bill number, who it was for, or the exact amount — the three things
+        # someone holding a paper receipt or a phone can actually type.
+        match = (Q(order_number__icontains=query)
+                 | Q(customer_name__icontains=query)
+                 | Q(customer__phone__icontains=query)
+                 | Q(customer__name__icontains=query)
+                 | Q(staff__icontains=query))
+        try:
+            match |= Q(total=Decimal(query))
+        except (InvalidOperation, ValueError):
+            pass
+        qs = qs.filter(match)
+
     return branches, branch, dfrom, dto, qs
 
 
@@ -587,17 +757,42 @@ def transactions(request):
         for o in page_obj.object_list
     ]
 
+    # The bill shown in the detail pane. Defaults to the first row so the pane
+    # is never an empty box waiting to be clicked.
+    selected_id = request.GET.get("o") or ""
+    selected = next((r for r in rows if str(r["order"].id) == selected_id), None)
+    if selected is None and rows:
+        selected = rows[0]
+
+    # Whatever is currently filtered, totalled. A page of results whose footer
+    # totals something else is worse than no footer.
+    window_totals = qs.exclude(status="cancel").aggregate(
+        bills=Count("id"), total=Sum("total"),
+        discount=Sum("discount_amount"), vat=Sum("vat_amount"),
+    )
+
     context = {
         "active": "transactions",
+        "page_title": "Transactions",
         "branches": branches,
         "branch": branch,
         "date_from": dfrom.isoformat(),
         "date_to": dto.isoformat(),
         "rows": rows,
+        "selected": selected,
         "page_obj": page_obj,
         "paginator": paginator,
         "qs": _filter_qs(request),
         "tax_percent": tax_percent,
+        "status": request.GET.get("status") or "all",
+        "statuses": [("all", "All"), ("paid", "Paid"), ("voided", "Voided")],
+        "payment": request.GET.get("payment") or "",
+        "payments": ["Cash", "PromptPay", "Card"],
+        "query": (request.GET.get("q") or "").strip(),
+        "window_bills": window_totals["bills"] or 0,
+        "window_total": window_totals["total"] or Decimal(0),
+        "window_discount": window_totals["discount"] or Decimal(0),
+        "window_vat": window_totals["vat"] or Decimal(0),
     }
     return render(request, "backoffice/transactions.html", context)
 
@@ -899,6 +1094,20 @@ def _report_daily_rows(branch, dfrom, dto):
             "n": entry["n"] or 0,
         })
 
+    # Voided bills, per day. Net alone hides why a day was soft, so the row
+    # carries gross, discount and refunds beside it — the arithmetic that
+    # produced the figure, not just the figure.
+    voided = Order.objects.filter(
+        created_at__gte=start, created_at__lte=end, status="cancel",
+    )
+    if branch:
+        voided = voided.filter(branch=branch)
+    refund_map = {
+        entry["date_only"]: (entry["amount"] or Decimal(0))
+        for entry in voided.annotate(date_only=TruncDate("created_at"))
+        .values("date_only").annotate(amount=Sum("total"))
+    }
+
     rows = []
     for entry in daily:
         d = entry["date_only"]
@@ -909,17 +1118,32 @@ def _report_daily_rows(branch, dfrom, dto):
             tax_amount = taxable * tax_percent / (Decimal(100) + tax_percent)
         else:
             tax_amount = taxable * tax_percent / Decimal(100)
+        bills = entry["bill_count"] or 0
+        total = entry["total"] or Decimal(0)
         rows.append({
             "date": d,
             "subtotal": sub,
             "discount": disc,
+            "refunds": refund_map.get(d, Decimal(0)),
             "tax_amount": tax_amount,
             "service_charge": Decimal(0),
             "profit": profit_map.get(d, Decimal(0)),
-            "grand_total": entry["total"] or Decimal(0),
-            "bill_count": entry["bill_count"] or 0,
+            "grand_total": total,
+            "bill_count": bills,
+            "avg_bill": (total / bills) if bills else Decimal(0),
+            # A bakery's week has a shape, and it should never take arithmetic
+            # to spot: weekends are coloured in the chart and the day label.
+            "weekend": d.weekday() >= 5,
             "payments": payments_map.get(d, []),
         })
+
+    # Each day against the same weekday a week earlier — the only comparison
+    # that isn't confounded by Saturday being three times Tuesday.
+    by_date = {r["date"]: r["grand_total"] for r in rows}
+    for row in rows:
+        row["vs_prev_week"] = _pct_change(
+            row["grand_total"], by_date.get(row["date"] - timedelta(days=7)),
+        )
     return rows
 
 
@@ -930,13 +1154,55 @@ def report_daily(request):
     branches, branch, dfrom, dto = _common_filters(request)
     rows = _report_daily_rows(branch, dfrom, dto)
 
+    gross = sum((r["subtotal"] for r in rows), Decimal(0))
+    discount = sum((r["discount"] for r in rows), Decimal(0))
+    refunds = sum((r["refunds"] for r in rows), Decimal(0))
+    net = sum((r["grand_total"] for r in rows), Decimal(0))
+    bills = sum(r["bill_count"] for r in rows)
+
+    # The same window, one window back — so "9.8% up" names what it is up on.
+    span = (dto - dfrom).days + 1
+    prev_rows = _report_daily_rows(
+        branch, dfrom - timedelta(days=span), dfrom - timedelta(days=1),
+    )
+    prev_net = sum((r["grand_total"] for r in prev_rows), Decimal(0))
+    prev_gross = sum((r["subtotal"] for r in prev_rows), Decimal(0))
+
+    # Bars are days, oldest on the left — the table reads newest first, but a
+    # chart that ran backwards in time would be unreadable.
+    chart_rows = sorted(rows, key=lambda r: r["date"])
+    peak = max((r["grand_total"] for r in chart_rows), default=Decimal(0)) or Decimal(1)
+
     context = {
         "active": "report_daily",
+        "page_title": "Sales",
         "branches": branches,
         "branch": branch,
         "date_from": dfrom.isoformat(),
         "date_to": dto.isoformat(),
         "rows": rows,
+        "chart_rows": [
+            {
+                "date": r["date"],
+                "weekend": r["weekend"],
+                "height": float(r["grand_total"] / peak * 100),
+                "total": r["grand_total"],
+            }
+            for r in chart_rows
+        ],
+        "gross": gross,
+        "discount": discount,
+        "discount_share": float(discount / gross * 100) if gross else 0,
+        "refunds": refunds,
+        "refund_bills": sum(1 for r in rows if r["refunds"]),
+        "net": net,
+        "bills": bills,
+        "vat": sum((r["tax_amount"] for r in rows), Decimal(0)),
+        "avg_bill": (net / bills) if bills else Decimal(0),
+        "net_delta": _pct_change(net, prev_net),
+        "gross_delta": _pct_change(gross, prev_gross),
+        "compare_label": f"vs {dfrom - timedelta(days=span):%-d %b} – {dfrom - timedelta(days=1):%-d %b}",
+        "span_days": span,
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/report_daily.html", context)
@@ -1060,21 +1326,35 @@ _PAYMENT_COLUMNS = [
 
 _PAYMENT_BUCKETS = {
     "cash": "cash",
+    # Card rails.  Both providers land in Credit: the column is the payment
+    # *instrument*, and a shop reconciling card settlements wants one figure.
     "credit": "credit",
+    "credit card": "credit",     # gateways.CARD_METHOD_PREFIX — Omise card link
+    "beam card": "credit",       # gateways.BEAM_CARD_METHOD
+    # QR rails.
     "promptpay": "promptpay",
-    "qr kbank": "kbank",
-    "custom": "custom",
     "beam": "beam",
+    "beam qr": "beam",           # gateways.BEAM_QR_METHOD — till *and* self-order
+    "qr kbank": "kbank",
     "easy pay": "easypay",
     "edc": "edc",
+    "custom": "custom",
 }
 
 
 def _payment_bucket(payment_method: str) -> str:
     """Map a stored payment_method string to one of `_PAYMENT_COLUMNS`.
+
     Methods carry an optional ` · detail` suffix (e.g. 'Credit · VISA',
     'Custom · EDC Kbank') — only the part before the dot decides the column.
-    Anything unrecognised falls into Custom Pay."""
+    Anything unrecognised falls into Custom Pay.
+
+    The keys must track the strings the POS actually writes, not the tidier
+    names in `frontend/lib/payments.ts`.  They drifted once already: the till
+    stores 'Beam QR' / 'Beam Card' / 'Credit Card', none of which matched, so
+    every QR and card sale — i.e. every non-cash method the payment modal
+    exposes — was reported under Custom Pay.
+    """
     base = (payment_method or "").split("·")[0].strip().lower()
     return _PAYMENT_BUCKETS.get(base, "custom")
 
@@ -1305,16 +1585,47 @@ def report_tax(request):
     prescribed layout, one row per day of abbreviated tax invoices."""
     branches, branch, dfrom, dto = _common_filters(request)
     rows = _report_tax_rows(branch, dfrom, dto)
+    totals = _report_tax_totals(rows)
+
+    # The receipt sequence audit is the quiet centrepiece: "1,392 issued,
+    # 1,392 accounted for" is what a revenue officer asks first, and it should
+    # be answerable before anyone asks. Voided bills keep their numbers, so a
+    # cancelled invoice stays visibly accounted for rather than leaving a gap.
+    voided = sum(len(r["voided"]) for r in rows)
+    issued = totals["bills"] + voided
+
+    # This window split by branch, so a filing pack can be reconciled shop by
+    # shop without changing the picker and losing the total.
+    start, end = _date_window(dfrom, dto)
+    tax_percent = _report_tax_header(branch)["tax_percent"]
+    by_branch = []
+    for entry in (Order.objects.filter(created_at__range=(start, end))
+                  .exclude(status="cancel")
+                  .values("branch__id", "branch__name")
+                  .annotate(receipts=Count("id"), total=Sum("total"))
+                  .order_by("-total")):
+        total = entry["total"] or Decimal(0)
+        by_branch.append({
+            "id": entry["branch__id"],
+            "name": entry["branch__name"] or "Unassigned",
+            "receipts": entry["receipts"] or 0,
+            "total": total,
+            "vat": total * tax_percent / (Decimal(100) + tax_percent),
+        })
 
     context = {
         "active": "report_tax",
+        "page_title": "Tax & VAT",
         "branches": branches,
         "branch": branch,
         "date_from": dfrom.isoformat(),
         "date_to": dto.isoformat(),
         "rows": rows,
-        "totals": _report_tax_totals(rows),
+        "totals": totals,
         "header": _report_tax_header(branch),
+        "voided_count": voided,
+        "issued_count": issued,
+        "by_branch": by_branch,
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/report_tax.html", context)
@@ -1519,11 +1830,56 @@ def report_sku(request):
     branches, branch, dfrom, dto = _common_filters(request)
     rows = _report_sku_rows(branch, dfrom, dto)
 
+    query = (request.GET.get("q") or "").strip()
+    if query:
+        needle = query.lower()
+        rows = [r for r in rows
+                if needle in r["name"].lower() or needle in (r["barcode"] or "").lower()]
+
+    units = sum(r["quantity"] for r in rows)
+    revenue = sum((r["sales"] for r in rows), Decimal(0))
+    cost = sum((r["cost"] for r in rows), Decimal(0))
+    profit = sum((r["profit"] for r in rows), Decimal(0))
+    peak = max((r["sales"] for r in rows), default=Decimal(0)) or Decimal(1)
+
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = index
+        row["share"] = float(row["sales"] / revenue * 100) if revenue else 0
+        row["bar"] = float(row["sales"] / peak * 100)
+        row["margin"] = float(row["profit"] / row["sales"] * 100) if row["sales"] else 0
+
+    # Revenue by category, for the mix panel. Grouped here rather than in a
+    # second query because the per-product rows already carry the category.
+    by_category: dict = {}
+    for row in rows:
+        name = row["category"] or "Uncategorised"
+        by_category[name] = by_category.get(name, Decimal(0)) + row["sales"]
+    categories = sorted(
+        (
+            {"name": name, "sales": total,
+             "pct": float(total / revenue * 100) if revenue else 0}
+            for name, total in by_category.items()
+        ),
+        key=lambda c: c["sales"], reverse=True,
+    )[:6]
+
+    # Products with a catalogue row but no sale in the window. A zero is not
+    # in the aggregation at all, so it has to be asked for separately — and
+    # it's the fact this page is least able to show without asking.
+    sold_names = {r["name"] for r in rows}
+    unsold = Product.objects.filter(active=True)
+    if branch:
+        unsold = unsold.filter(branch=branch)
+    unsold_count = unsold.exclude(name__in=sold_names).count()
+
     paginator = Paginator(rows, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
 
+    best = rows[0] if rows else None
+
     context = {
         "active": "report_sku",
+        "page_title": "Product performance",
         "branches": branches,
         "branch": branch,
         "date_from": dfrom.isoformat(),
@@ -1531,7 +1887,17 @@ def report_sku(request):
         "rows": page_obj.object_list,
         "page_obj": page_obj,
         "paginator": paginator,
-        "qs": _filter_qs(request),
+        "query": query,
+        "units": units,
+        "revenue": revenue,
+        "cost": cost,
+        "profit": profit,
+        "margin": float(profit / revenue * 100) if revenue else 0,
+        "categories": categories,
+        "best": best,
+        "unsold_count": unsold_count,
+        "product_count": len(rows),
+        "qs": _filter_qs(request, q=query or None),
     }
     return render(request, "backoffice/report_sku.html", context)
 
@@ -1621,25 +1987,96 @@ def inventory_summary(request):
     the SilomPOS options)."""
     branches, branch, field, q, sort, qs = _inventory_qs(request)
 
+    # "Needs attention" first, because that is what the page is opened for.
+    # `all` is a click away, and the tab says which one you're looking at.
+    level = request.GET.get("level") or "attention"
+    if level == "out":
+        qs = qs.filter(stock__lte=0)
+    elif level == "low":
+        qs = qs.filter(stock__gt=0, par_level__gt=0, stock__lt=F("par_level"))
+    elif level == "attention":
+        qs = qs.filter(Q(stock__lte=0)
+                       | Q(par_level__gt=0, stock__lt=F("par_level")))
+
+    # Whole-branch figures, not the filtered page: "4 out of stock" must not
+    # become "4 of 4" because you're standing on the out-of-stock tab.
+    _, _, _, _, _, all_products = _inventory_qs(request)
+    totals = all_products.aggregate(
+        skus=Count("id"), value=Sum(F("cost") * F("stock")),
+    )
+    out_of_stock = all_products.filter(stock__lte=0).count()
+    below_par = all_products.filter(
+        stock__gt=0, par_level__gt=0, stock__lt=F("par_level")).count()
+    untracked = all_products.filter(par_level__lte=0).count()
+
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
+    products = list(page_obj.object_list)
+
+    # Days cover is the column that decides anything: "4 on hand" is
+    # meaningless without the sell-through rate beside it. Measured over the
+    # last seven days, so a weekend spike doesn't dominate a single day.
+    week_start, week_end = _date_window(
+        timezone.localdate() - timedelta(days=6), timezone.localdate())
+    sold = {
+        row["product_id"]: row["qty"] or 0
+        for row in OrderItem.objects.filter(
+            product__in=products,
+            order__created_at__range=(week_start, week_end),
+        ).exclude(order__status="cancel").values("product_id").annotate(qty=Sum("qty"))
+    }
+    received = {
+        row["product_id"]: row["last"]
+        for row in StockMovement.objects.filter(product__in=products, type="in")
+        .values("product_id").annotate(last=Max("created_at"))
+    }
+
+    for p in products:
+        p.sold_7d = sold.get(p.id, 0)
+        daily = p.sold_7d / 7 if p.sold_7d else 0
+        p.days_cover = (p.stock / daily) if daily else None
+        p.value = p.cost * p.stock
+        p.last_received = received.get(p.id)
+        if p.stock <= 0:
+            p.level_label, p.level_class, p.level_colour, p.fill = "Out", "t-red", "var(--red)", 0
+        elif p.par_level and p.stock < p.par_level:
+            p.level_label, p.level_class, p.level_colour = "Low", "t-low", "var(--amber)"
+            p.fill = round(p.stock * 100 / p.par_level)
+        elif p.par_level:
+            p.level_label, p.level_class, p.level_colour = "Good", "t-ok", "var(--green)"
+            p.fill = min(100, round(p.stock * 100 / p.par_level))
+        else:
+            # No par level set, so there is no "enough" to compare against.
+            # Saying so beats inventing a threshold and flagging on it.
+            p.level_label, p.level_class, p.level_colour, p.fill = "Untracked", "t-out", "var(--mut2)", 0
 
     context = {
         "active": "inventory",
+        "page_title": "Inventory",
         "branches": branches,
         "branch": branch,
-        "products": page_obj.object_list,
+        "products": products,
         "page_obj": page_obj,
         "paginator": paginator,
         "field": field,
         "q": q,
         "sort": sort,
+        "level": level,
+        "levels": [("attention", "Needs attention"), ("out", "Out of stock"),
+                   ("low", "Below par"), ("all", "All")],
+        "sku_count": totals["skus"] or 0,
+        "stock_value": totals["value"] or Decimal(0),
+        "out_of_stock": out_of_stock,
+        "below_par": below_par,
+        "untracked": untracked,
         "qs": _filter_qs(
             request,
             sort=sort if sort != "name" else None,
             field=field if field != "all" else None,
             q=q or None,
+            level=level if level != "attention" else None,
         ),
+        "hide_dates": True,
         "today": timezone.localdate(),
     }
     return render(request, "backoffice/inventory.html", context)
@@ -1681,6 +2118,151 @@ def inventory_export(request):
             p.category.name if p.category_id else "",
             balance,
         ])
+
+    return response
+
+
+# ─── Stock movement export (รายงานการ รับเข้า-จ่ายออก แยกตามสินค้า) ──────────
+# Column layout is copied from the SilomPOS export the shop already reconciles
+# against, so the file drops into their existing spreadsheet without rework.
+# Indexes are 0-based into the data rows built below.
+_STOCK_EXPORT_HEADERS = [
+    "ลำดับ",            # 0  No.
+    "รหัส",             # 1  Code / barcode
+    "สินค้า",            # 2  Product
+    "เอกสารรับเข้า",      # 3  Stock-in documents
+    "เอกสารจ่ายออก",     # 4  Stock-out documents
+    "จำนวนรับเข้า",       # 5  Qty in
+    "จำนวนจ่ายออก",      # 6  Qty out
+    "มูลค่ารับเข้า",       # 7  Value in
+    "มูลค่าจ่ายออก",      # 8  Value out
+    "ส่วนลดรับเข้า",      # 9  Discount in
+    "ส่วนลดจ่ายออก",     # 10 Discount out
+    "เหตุผล",            # 11 Reason — our addition, absent from the SilomPOS file
+]
+# The totals row puts "รวม" here and sums only the numeric block after it,
+# exactly like the sample (document counts and the per-day columns are left
+# blank — a count of documents doesn't total meaningfully across products).
+_STOCK_TOTAL_LABEL_COL = 4
+_STOCK_TOTAL_COLS = range(5, 11)
+
+
+def _stock_qty(v) -> str:
+    """Quantities print as integers when whole (3, not 3.00) to match the
+    sample; fractional units still show their decimals."""
+    d = Decimal(v or 0)
+    return str(d.quantize(Decimal(1))) if d == d.to_integral_value() else f"{d:.2f}"
+
+
+@login_required
+def stock_movement_export(request):
+    """CSV of stock in/out aggregated per product, in the SilomPOS layout.
+
+    ``?type=out`` (the default) reports stock-out only, which is what the
+    provided sample is; ``in`` and ``all`` are also accepted.
+
+    The trailing per-day columns hold the quantity moved on that date **in the
+    direction being reported** — for ``type=out`` that is the qty out, which is
+    what the sample shows.  With ``type=all`` a day is the net (in − out), the
+    only reading that stays meaningful once both directions are in scope.
+    """
+    _branches, branch, dfrom, dto = _common_filters(request)
+    start, end = _date_window(dfrom, dto)
+    kind = request.GET.get("type") or "out"
+    if kind not in ("in", "out", "all"):
+        kind = "out"
+    types = ["in", "out"] if kind == "all" else [kind]
+
+    items = (
+        StockDocumentItem.objects
+        .filter(
+            document__branch=branch,
+            document__type__in=types,
+            document__created_at__gte=start,
+            document__created_at__lte=end,
+        )
+        .select_related("document", "product")
+        .order_by("document__created_at", "id")
+    )
+
+    days = [dfrom + timedelta(days=i) for i in range((dto - dfrom).days + 1)]
+    day_index = {d: i for i, d in enumerate(days)}
+
+    # Aggregate in Python rather than SQL: the per-day pivot and the distinct
+    # reason list are both awkward as an ORM annotation, and a branch-day holds
+    # a handful of stock documents, not a table scan.
+    rows: dict[object, dict] = {}
+    for it in items:
+        doc = it.document
+        # Deleted products still have their name/barcode snapshotted on the
+        # line, so the report keeps reporting them rather than dropping stock
+        # that genuinely moved.
+        key = it.product_id or (it.barcode, it.product_name)
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = {
+                "code": it.barcode or (it.product.barcode if it.product else ""),
+                "name": it.product_name or (it.product.name if it.product else ""),
+                "docs_in": set(), "docs_out": set(),
+                "qty_in": Decimal(0), "qty_out": Decimal(0),
+                "val_in": Decimal(0), "val_out": Decimal(0),
+                "disc_in": Decimal(0), "disc_out": Decimal(0),
+                "reasons": [],
+                "per_day": [Decimal(0)] * len(days),
+            }
+        side = "in" if doc.type == "in" else "out"
+        row[f"docs_{side}"].add(doc.id)
+        row[f"qty_{side}"] += Decimal(it.qty or 0)
+        row[f"val_{side}"] += Decimal(it.total or 0)
+        row[f"disc_{side}"] += Decimal(it.discount or 0)
+        if doc.reason and doc.reason not in row["reasons"]:
+            row["reasons"].append(doc.reason)
+        i = day_index.get(timezone.localtime(doc.created_at).date())
+        if i is not None:
+            if kind == "all":
+                row["per_day"][i] += Decimal(it.qty or 0) * (1 if side == "in" else -1)
+            else:
+                row["per_day"][i] += Decimal(it.qty or 0)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    response, writer = _csv_response(
+        f"stock_{kind}_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    )
+    # The sample keeps this generic report name even when it was exported with
+    # a stock-out filter applied, so the title does not vary with ``type``.
+    _write_export_header(
+        writer, "รายงานการ รับเข้า-จ่ายออก แยกตามสินค้า", branch, dfrom, dto,
+    )
+    writer.writerow(_STOCK_EXPORT_HEADERS + [d.strftime("%d/%m/%Y") for d in days])
+
+    totals = {k: Decimal(0) for k in
+              ("qty_in", "qty_out", "val_in", "val_out", "disc_in", "disc_out")}
+    for no, row in enumerate(rows.values(), start=1):
+        for k in totals:
+            totals[k] += row[k]
+        writer.writerow([
+            no,
+            row["code"],
+            row["name"],
+            len(row["docs_in"]),
+            len(row["docs_out"]),
+            _stock_qty(row["qty_in"]),
+            _stock_qty(row["qty_out"]),
+            _csv_num(row["val_in"]),
+            _csv_num(row["val_out"]),
+            _csv_num(row["disc_in"]),
+            _csv_num(row["disc_out"]),
+            ", ".join(row["reasons"]),
+        ] + [_stock_qty(v) for v in row["per_day"]])
+
+    total_cells = [""] * (len(_STOCK_EXPORT_HEADERS) + len(days))
+    total_cells[_STOCK_TOTAL_LABEL_COL] = "รวม"
+    for col, key in zip(_STOCK_TOTAL_COLS,
+                        ("qty_in", "qty_out", "val_in", "val_out", "disc_in", "disc_out")):
+        total_cells[col] = (
+            _stock_qty(totals[key]) if key.startswith("qty") else _csv_num(totals[key])
+        )
+    writer.writerow(total_cells)
 
     return response
 
@@ -1727,18 +2309,58 @@ def product_list(request):
     }
     qs = qs.order_by(sort_map.get(sort, "name"))
 
+    # The left column of the catalogue: every category with how much is in it,
+    # counted before the category filter is applied so the numbers don't all
+    # collapse to the one you clicked.
+    category_qs = Category.objects.all()
+    if branch:
+        category_qs = category_qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    counts = {
+        row["category"]: row["n"]
+        for row in (Product.objects.filter(active=True, branch=branch)
+                    if branch else Product.objects.filter(active=True))
+        .values("category").annotate(n=Count("id"))
+    }
+    categories = [
+        {"obj": c, "count": counts.get(c.id, 0)}
+        for c in category_qs.order_by("order", "name")
+    ]
+    total_products = sum(counts.values())
+
+    selected_category = request.GET.get("cat") or ""
+    if selected_category:
+        qs = qs.filter(category_id=selected_category)
+
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
+
+    # Sold in the last 30 days, so a row shows whether it earns its listing.
+    products = list(page_obj.object_list)
+    month_start, month_end = _date_window(
+        timezone.localdate() - timedelta(days=29), timezone.localdate())
+    sold = {
+        row["product_id"]: row["qty"] or 0
+        for row in OrderItem.objects.filter(
+            product__in=products, order__created_at__range=(month_start, month_end),
+        ).exclude(order__status="cancel").values("product_id").annotate(qty=Sum("qty"))
+    }
+    for p in products:
+        p.sold_30d = sold.get(p.id, 0)
+        p.margin = float((p.price - p.cost) / p.price * 100) if p.price else 0
 
     view = request.GET.get("view", "grid")  # grid | list
 
     context = {
         "active": "products",
+        "page_title": "Catalogue",
         "branches": branches,
         "branch": branch,
         "field": field,
         "q": q,
-        "products": page_obj.object_list,
+        "products": products,
+        "categories": categories,
+        "selected_category": selected_category,
+        "total_products": total_products,
         "page_obj": page_obj,
         "paginator": paginator,
         "sort": sort,
@@ -1750,6 +2372,7 @@ def product_list(request):
             field=field if field != "all" else None,
             q=q or None,
             view=view,
+            cat=selected_category or None,
         ),
     }
     return render(request, "backoffice/product_list.html", context)
@@ -1780,6 +2403,9 @@ def _apply_product_form(product, post, branch):
     product.price = Decimal(post.get("price") or "0")
     product.cost = Decimal(post.get("cost") or "0")
     product.stock = int(post.get("stock") or 0)
+    # 0 means "not tracked" — Inventory says so rather than flagging the
+    # product against a threshold nobody set.
+    product.par_level = int(post.get("par_level") or 0)
     cat_id = post.get("category") or ""
     product.category_id = cat_id if cat_id else None
     product.tax_type = post.get("tax_type") or "V"
@@ -2170,21 +2796,74 @@ def _unique_staff_email(role: str, branch) -> str:
 
 @login_required
 def staff_list(request):
-    """POS staff (PIN logins) for the selected branch."""
+    """POS staff (PIN logins) and the shifts they ran.
+
+    Expected, counted, variance — in that order, every shift. A single short
+    till is a bad night; the same person short twice in a week is a pattern,
+    and only a list sorted this way makes the difference visible.
+    """
     branches, branch, _, _ = _common_filters(request)
 
-    staff = Staff.objects.all()
+    staff = Staff.objects.prefetch_related("branches")
     if branch:
         staff = staff.filter(branches=branch)
     staff = staff.order_by("role", "name")
 
+    days = int(request.GET.get("days") or 7)
+    since = timezone.now() - timedelta(days=days)
+    shifts = Shift.objects.filter(opened_at__gte=since).select_related("branch")
+    if branch:
+        shifts = shifts.filter(branch=branch)
+    shifts = list(shifts.order_by("-opened_at")[:80])
+
+    bills = {
+        entry["shift"]: entry["n"]
+        for entry in Order.objects.filter(shift__in=shifts).exclude(status="cancel")
+        .values("shift").annotate(n=Count("id"))
+    }
+    sales = {
+        entry["shift"]: entry["total"] or Decimal(0)
+        for entry in Order.objects.filter(shift__in=shifts).exclude(status="cancel")
+        .values("shift").annotate(total=Sum("total"))
+    }
+
+    for s in shifts:
+        s.bills = bills.get(s.id, 0)
+        s.sales = sales.get(s.id, Decimal(0))
+        if s.status == "open":
+            s.variance = None
+            s.state_label, s.state_class = "Open", "t-low"
+        elif s.actual_in_drawer is None:
+            s.variance = None
+            s.state_label, s.state_class = "Not counted", "t-out"
+        else:
+            s.variance = s.actual_in_drawer - s.expected_in_drawer
+            if s.variance < 0:
+                s.state_label, s.state_class = "Short", "t-red"
+            elif s.variance > 0:
+                s.state_label, s.state_class = "Over", "t-info"
+            else:
+                s.state_label, s.state_class = "Closed", "t-ok"
+
+    # A shift open since before today holds cash nobody has counted.
+    today_start, _ = _date_window(timezone.localdate(), timezone.localdate())
+    stale = [s for s in shifts if s.status == "open" and s.opened_at < today_start]
+
     context = {
         "active": "staff",
+        "page_title": "Staff & shifts",
         "branches": branches,
         "branch": branch,
         "staff_members": staff,
+        "staff_count": staff.count(),
+        "shifts": shifts,
+        "stale_shifts": stale,
+        "stale_cash": sum((s.total_sales_cash for s in stale), Decimal(0)),
+        "open_count": sum(1 for s in shifts if s.status == "open"),
+        "days": days,
+        "day_options": [7, 14, 30],
         "hide_dates": True,
-        "qs": _filter_qs(request),
+        "qs": _filter_qs(request, days=days if days != 7 else None),
     }
     return render(request, "backoffice/staff_list.html", context)
 
@@ -2260,6 +2939,243 @@ def staff_delete(request, staff_id):
     if request.method == "POST":
         member.delete()
     return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+
+
+# ─── Stylesheet ─────────────────────────────────────────────────────────
+# Served by Django rather than by `staticfiles`, deliberately.
+#
+# Production runs DJANGO_DEBUG=0, where `django.contrib.staticfiles` stops
+# serving anything, and this deployment has no STATIC_ROOT and no nginx
+# `location /static/` — the backoffice previously needed neither, because its
+# only assets were CDN Bootstrap and an inline <style> block. Reaching for
+# WhiteNoise or an nginx change to ship one stylesheet would put the whole
+# backoffice's appearance behind a server-config step that a plain `git pull`
+# and restart does not perform.
+#
+# So: read it once, hold it in memory, and hang a content hash off the URL so
+# a changed file busts the cache the moment it deploys.
+_CSS_PATH = Path(__file__).resolve().parent / "static" / "backoffice" / "app.css"
+_css_cache: dict = {}
+
+
+def _css_payload() -> tuple[bytes, str]:
+    """(bytes, version) for the stylesheet, read from disk at most once.
+
+    In DEBUG the file is re-read on every request so an edit shows up on
+    reload; in production it is read once per process, which is what makes
+    this cheaper than a static file served through the proxy anyway.
+    """
+    if not settings.DEBUG and "body" in _css_cache:
+        return _css_cache["body"], _css_cache["version"]
+    body = _CSS_PATH.read_bytes()
+    version = hashlib.sha256(body).hexdigest()[:12]
+    _css_cache.update(body=body, version=version)
+    return body, version
+
+
+def backoffice_css(request):
+    body, version = _css_payload()
+    response = HttpResponse(body, content_type="text/css")
+    # Safe to cache hard: the URL carries the content hash, so a new build is
+    # a new URL rather than a stale hit.
+    response["Cache-Control"] = "public, max-age=31536000, immutable"
+    response["ETag"] = f'"{version}"'
+    return response
+
+
+# ─── Customers ──────────────────────────────────────────────────────────
+# Who comes back, and who used to. The till can look a customer up by phone;
+# only the backoffice can see the whole history behind that name, which is
+# what makes "lapsed" and "repeat rate" answerable at all.
+
+# A customer with no bill in this many days counts as lapsed. Long enough
+# that a fortnight's holiday doesn't flag someone, short enough that a
+# monthly regular going quiet still surfaces while it's worth acting on.
+LAPSED_DAYS = 30
+# Someone is a regular once they've come back this often. Two visits is a
+# coincidence; five is a habit.
+REGULAR_VISITS = 5
+
+
+def _customer_rows(branch, tier: str, query: str):
+    """Every customer with their order history rolled up.
+
+    Aggregated in one query rather than per row — a shop with a thousand
+    customers would otherwise issue a thousand COUNT/SUM pairs to paint one
+    table. Cancelled bills are excluded from spend but the customer still
+    counts as registered.
+    """
+    paid = Q(orders__status__in=["completed", "new", "preparing"])
+    if branch:
+        paid &= Q(orders__branch=branch)
+
+    qs = Customer.objects.all()
+    if branch:
+        # The customer's home branch — where they were first registered.
+        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    if query:
+        qs = qs.filter(Q(name__icontains=query) | Q(phone__icontains=query)
+                       | Q(last_name__icontains=query))
+
+    qs = qs.annotate(
+        visits=Count("orders", filter=paid, distinct=True),
+        spend=Coalesce(Sum("orders__total", filter=paid),
+                       Decimal(0), output_field=DecimalField()),
+        first_seen=Min("orders__created_at", filter=paid),
+        last_seen=Max("orders__created_at", filter=paid),
+    ).select_related("branch")
+
+    cutoff = timezone.now() - timedelta(days=LAPSED_DAYS)
+    if tier == "members":
+        qs = qs.filter(visits__gte=REGULAR_VISITS, last_seen__gte=cutoff)
+    elif tier == "regulars":
+        qs = qs.filter(visits__gte=2, last_seen__gte=cutoff)
+    elif tier == "lapsed":
+        qs = qs.filter(last_seen__lt=cutoff)
+    elif tier == "new":
+        qs = qs.filter(first_seen__gte=timezone.now() - timedelta(days=30))
+
+    return qs.order_by("-spend", "name")
+
+
+def _customer_tier(row, cutoff) -> tuple[str, str]:
+    """(label, chip class) for a customer's standing. Lapsed wins over
+    everything: a former regular who stopped coming is the fact worth
+    surfacing, not that they were once a regular."""
+    if row.last_seen is None:
+        return "Never bought", "t-out"
+    if row.last_seen < cutoff:
+        return "Lapsed", "t-low"
+    if row.visits >= REGULAR_VISITS:
+        return "Member", "t-ok"
+    if row.visits >= 2:
+        return "Regular", "t-info"
+    return "New", "t-purple"
+
+
+@login_required
+def customer_list(request):
+    branches, branch, _, _ = _common_filters(request)
+    tier = request.GET.get("tier") or "all"
+    query = (request.GET.get("q") or "").strip()
+    selected_id = request.GET.get("c") or ""
+
+    rows = list(_customer_rows(branch, tier, query)[:400])
+    cutoff = timezone.now() - timedelta(days=LAPSED_DAYS)
+    month_ago = timezone.now() - timedelta(days=30)
+
+    for row in rows:
+        row.tier_label, row.tier_class = _customer_tier(row, cutoff)
+        row.avg_bill = (row.spend / row.visits) if row.visits else Decimal(0)
+
+    # Headline figures come from the whole customer base, not the filtered
+    # page — "1,284 registered" must not change because you typed a search.
+    everyone = list(_customer_rows(branch, "all", ""))
+    total = len(everyone)
+    repeat = sum(1 for c in everyone if c.visits >= 2)
+    lapsed = [c for c in everyone if c.last_seen is not None and c.last_seen < cutoff]
+    new_this_month = sum(1 for c in everyone
+                         if c.first_seen is not None and c.first_seen >= month_ago)
+    matched_spend = sum((c.spend for c in everyone), Decimal(0))
+    matched_visits = sum(c.visits for c in everyone)
+
+    # How much of the shop's trade is attached to a name at all. A low share
+    # is the reason to distrust every other number on this page, so it leads.
+    start, end = _date_window(timezone.localdate() - timedelta(days=29),
+                              timezone.localdate())
+    recent = Order.objects.filter(created_at__range=(start, end)).exclude(status="cancel")
+    if branch:
+        recent = recent.filter(branch=branch)
+    recent_total = recent.count()
+    recent_matched = recent.filter(customer__isnull=False).count()
+
+    selected = None
+    if rows:
+        selected = next((r for r in rows if str(r.id) == selected_id), rows[0])
+    if selected is not None:
+        selected.recent_orders = list(
+            selected.orders.exclude(status="cancel")
+            .order_by("-created_at")[:6]
+        )
+        selected.week_bars = _customer_week_bars(selected)
+
+    context = {
+        "active": "customers",
+        "page_title": "Customers",
+        "branches": branches,
+        "branch": branch,
+        "customers": rows,
+        "selected": selected,
+        "tier": tier,
+        "tiers": [
+            ("all", "All"), ("members", "Members"), ("regulars", "Regulars"),
+            ("lapsed", "Lapsed"), ("new", "New this month"),
+        ],
+        "lapsed_days": LAPSED_DAYS,
+        "query": query,
+        "total_customers": total,
+        "repeat_rate": round(repeat * 100 / total) if total else 0,
+        "new_this_month": new_this_month,
+        "lapsed_count": len(lapsed),
+        "lapsed_spend": sum((c.spend for c in lapsed), Decimal(0)),
+        "member_avg": (matched_spend / matched_visits) if matched_visits else Decimal(0),
+        "matched_share": round(recent_matched * 100 / recent_total) if recent_total else 0,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/customer_list.html", context)
+
+
+def _customer_week_bars(customer):
+    """Visits per week for the last 12 weeks, as bar heights in percent.
+
+    Lifetime spend tells you who mattered; twelve weeks of frequency tells
+    you whether they still do. The last four weeks are marked `recent` so the
+    template can colour them and a fading regular reads as a fade.
+    """
+    weeks = 12
+    start = timezone.localdate() - timedelta(weeks=weeks - 1)
+    start_dt, _ = _date_window(start, timezone.localdate())
+    counts = [0] * weeks
+    for created in (customer.orders.exclude(status="cancel")
+                    .filter(created_at__gte=start_dt)
+                    .values_list("created_at", flat=True)):
+        index = (timezone.localtime(created).date() - start).days // 7
+        if 0 <= index < weeks:
+            counts[index] += 1
+    peak = max(counts) or 1
+    return [
+        {"height": round(count * 100 / peak), "recent": i >= weeks - 4}
+        for i, count in enumerate(counts)
+    ]
+
+
+@login_required
+def customer_detail(request, customer_id):
+    """Edit the name/phone the till matches on. Everything else about a
+    customer is derived from their orders and is not editable here."""
+    branches, branch, _, _ = _common_filters(request)
+    customer = get_object_or_404(Customer, id=customer_id)
+
+    if request.method == "POST":
+        customer.name = (request.POST.get("name") or "").strip() or customer.name
+        customer.last_name = (request.POST.get("last_name") or "").strip()
+        customer.phone = (request.POST.get("phone") or "").strip()
+        customer.email = (request.POST.get("email") or "").strip()
+        customer.save()
+        return redirect(reverse("backoffice:customer_list")
+                        + f"?{_filter_qs(request, c=str(customer.id))}")
+
+    context = {
+        "active": "customers",
+        "page_title": customer.name,
+        "branches": branches,
+        "branch": branch,
+        "customer": customer,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/customer_form.html", context)
 
 
 # ─── Shops & Branches ───────────────────────────────────────────────────
@@ -2430,11 +3346,77 @@ def branch_list(request):
     for row in rows:
         row.beam_key_mask = mask_secret(row.beam_api_key)
         row.omise_key_mask = mask_secret(row.omise_secret_key)
+
+    # Comparison is the entire reason this page exists, so the cards carry
+    # trade for the selected window and the one before it, not just settings.
+    today = timezone.localdate()
+    dfrom = _parse_date(request.GET.get("from"), today.replace(day=1))
+    dto = _parse_date(request.GET.get("to"), today)
+    if dto < dfrom:
+        dfrom, dto = dto, dfrom
+    span = (dto - dfrom).days + 1
+    start, end = _date_window(dfrom, dto)
+    prev_start, prev_end = _date_window(
+        dfrom - timedelta(days=span), dfrom - timedelta(days=1))
+
+    def _totals(window_start, window_end):
+        return {
+            entry["branch"]: entry
+            for entry in Order.objects
+            .filter(created_at__range=(window_start, window_end))
+            .exclude(status="cancel")
+            .values("branch")
+            .annotate(sales=Sum("total"), bills=Count("id"))
+        }
+
+    now_totals, was_totals = _totals(start, end), _totals(prev_start, prev_end)
+    open_shifts = {s.branch_id: s for s in Shift.objects.filter(status="open")}
+    staff_counts = {
+        entry["branches"]: entry["n"]
+        for entry in Staff.objects.filter(active=True).values("branches").annotate(n=Count("id"))
+    }
+    # Cash variance: counted minus expected, summed over closed shifts. Sitting
+    # next to margin and waste is how you tell a struggling branch from a
+    # leaking one, so it is a first-class column rather than a shift detail.
+    variance = {
+        entry["branch"]: (entry["counted"] or Decimal(0)) - (entry["expected"] or Decimal(0))
+        for entry in Shift.objects
+        .filter(status="closed", closed_at__range=(start, end),
+                actual_in_drawer__isnull=False)
+        .values("branch")
+        .annotate(counted=Sum("actual_in_drawer"), expected=Sum("expected_in_drawer"))
+    }
+
+    peak = max((v["sales"] or Decimal(0) for v in now_totals.values()),
+               default=Decimal(0)) or Decimal(1)
+    for row in rows:
+        current = now_totals.get(row.id, {})
+        row.sales = current.get("sales") or Decimal(0)
+        row.bills = current.get("bills") or 0
+        row.avg_bill = (row.sales / row.bills) if row.bills else Decimal(0)
+        row.share = float(row.sales / peak * 100)
+        row.delta = _pct_change(row.sales, (was_totals.get(row.id) or {}).get("sales"))
+        row.shift = open_shifts.get(row.id)
+        row.staff_count = staff_counts.get(row.id, 0)
+        row.variance = variance.get(row.id, Decimal(0))
+    rows.sort(key=lambda r: r.sales, reverse=True)
+
+    short = [r for r in rows if r.variance < 0]
+
     context = {
         "active": "branches",
+        "page_title": "Branches",
         "branches_all": rows,
         "settings": Settings.objects.first(),
+        "total_sales": sum((r.sales for r in rows), Decimal(0)),
+        "short_branches": short,
+        "span_days": span,
         **_branch_topbar_context(),
+        # The window actually used, so the header reflects the picker.
+        "date_from": dfrom.isoformat(),
+        "date_to": dto.isoformat(),
+        "hide_branch": True,
+        "qs": _filter_qs(request),
     }
     return render(request, "backoffice/branch_list.html", context)
 
@@ -2831,9 +3813,27 @@ def user_delete(request, staff_id):
 # ─── Audit log ──────────────────────────────────────────────────────────
 AUDIT_MODEL_CHOICES = [
     "Staff", "Branch", "Settings", "Product", "Category", "Unit",
-    "DrawerCategory", "Order", "OrderItem", "SelfOrder", "StockDocument",
-    "StockDocumentItem", "StockMovement", "Shift", "ShiftMovement", "Customer",
+    "DrawerCategory", "StockOutReason", "Order", "OrderItem", "SelfOrder",
+    "StockDocument", "StockDocumentItem", "StockMovement", "Shift",
+    "ShiftMovement", "Customer",
 ]
+
+
+def _audit_value(value) -> str:
+    """One side of an audit diff, as text a human reads.
+
+    A field set to null renders as "empty", not "None": the diff is meant to
+    be read at a glance, and a stray Python repr in the middle of a money
+    trail is exactly the kind of thing that makes a log look untrustworthy.
+    Empty string and null are distinct events, so they are worded distinctly.
+    """
+    if value is None:
+        return "empty"
+    if value == "":
+        return "blank"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
 
 
 def _audit_qs(request):
@@ -2896,8 +3896,25 @@ def audit_log(request):
     paginator = Paginator(rows, 100)
     page = paginator.get_page(request.GET.get("page"))
 
+    # `changes` holds two shapes: {"field": {"from": …, "to": …}} for an
+    # update, and a flat field map for a create or delete. Flattening them
+    # here means the template renders one shape instead of guessing, and a
+    # failed lookup in a template is silent — exactly the wrong place for it.
+    for entry in page.object_list:
+        diffs = []
+        for field, change in (entry.changes or {}).items():
+            if isinstance(change, dict) and ("from" in change or "to" in change):
+                diffs.append({"field": field, "old": _audit_value(change.get("from")),
+                              "new": _audit_value(change.get("to")), "is_diff": True})
+            else:
+                diffs.append({"field": field, "old": "",
+                              "new": _audit_value(change), "is_diff": False})
+        entry.visible_changes = diffs[:3]
+        entry.hidden_changes = max(0, len(diffs) - 3)
+
     context = {
         "active": "audit",
+        "page_title": "Audit log",
         "page_obj": page,
         "paginator": paginator,
         "entries": page.object_list,
@@ -2911,10 +3928,16 @@ def audit_log(request):
             "action": request.GET.get("action") or "",
             "model": request.GET.get("model") or "",
             "actor": request.GET.get("actor") or "",
+            "branch": request.GET.get("branch") or "",
             "q": request.GET.get("q") or "",
         },
         "audit_qs": _audit_filter_qs(request),
+        # This page filters on its own terms — action, record type, actor —
+        # and its branch picker lives in that same form. Leaving the header's
+        # picker on would give two controls for one field, where using the
+        # header one would silently drop every other filter.
         "hide_dates": True,
+        "hide_branch": True,
         **_branch_topbar_context(),
     }
     return render(request, "backoffice/audit_log.html", context)

@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { C, MONO, R } from "./theme";
+import { t as tr } from "./i18n";
 
 // ── Figures ────────────────────────────────────────────────────────────────
 // Money, counts, times, reference numbers. Anything that sits in a column and
@@ -488,6 +489,10 @@ export function MixRow({
 
 export type Col = {
   key: string;
+  /** i18n key (e.g. "admin.col_product"), resolved by THead. Column arrays are
+   *  module constants, so a literal here would be captured at import time and
+   *  never follow a language change. Plain text still renders as-is — an
+   *  unknown key falls through to itself (see lib/i18n.ts). */
   title: string;
   // flex OR width — width wins when both are given.
   flex?: number;
@@ -508,7 +513,7 @@ export function THead({ cols }: { cols: Col[] }) {
           ]}
           numberOfLines={1}
         >
-          {c.title}
+          {tr(c.title)}
         </Text>
       ))}
     </View>

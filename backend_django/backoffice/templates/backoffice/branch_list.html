@@ -1,116 +1,130 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 07 — Branches.
 
-{% block title %}Shops &amp; Branches — Bravepos{% endblock %}
+  Comparison is the entire reason this page exists, so every card carries the
+  same three figures and the same bar scale: a shop's width against the
+  best-performing one is legible before any number is read.
+
+  Cash variance sits next to staff and terminals because those together are
+  how you tell a struggling branch from a leaking one. A persistent shortfall
+  gets an amber note rather than being left for someone to spot.
+{% endcomment %}
+
+{% block title %}Branches{% endblock %}
+{% block page_title %}Branches{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ branches_all|length }} shop{{ branches_all|length|pluralize }} · comparison for {{ date_from }} → {{ date_to }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn btn-blue" href="{% url 'backoffice:branch_new' %}">
+    <svg><use href="#i-plus"/></svg> Add branch</a>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <div>
-    <h4 class="mb-1">Shops &amp; Branches</h4>
-    <div class="text-muted small">{{ branches_all|length }} branch{{ branches_all|length|pluralize:"es" }}</div>
-  </div>
-  <a class="btn btn-success" href="{% url 'backoffice:branch_new' %}">
-    <i class="bi bi-plus-lg"></i> Add Branch
-  </a>
-</div>
 
-{% for b in branches_all %}
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="row align-items-center g-3">
-      <div class="col-md-4 text-center border-end">
-        <h5 class="mb-2">{{ settings.shop_name|default:"Bravepos" }}</h5>
-        {% if b.logo_url %}
-          <img src="{{ b.logo_url }}" alt="{{ b.name }}"
-               style="max-height:140px; max-width:80%; object-fit:contain;">
-        {% elif settings.logo_url %}
-          <img src="{{ settings.logo_url }}" alt="{{ settings.shop_name }}"
-               style="max-height:140px; max-width:80%; object-fit:contain;">
-        {% else %}
-          <div style="height:140px; background:#f5f7fa; display:flex; align-items:center;
-                      justify-content:center; border-radius:8px;">
-            <i class="bi bi-shop text-muted fs-1"></i>
-          </div>
-        {% endif %}
-        <div class="mt-3">
-          <span class="text-success fw-semibold fs-5">{{ b.name }}</span>
-          {% if not b.active %}<span class="badge bg-secondary ms-2">Inactive</span>{% endif %}
-        </div>
+<div class="cols c-3" style="flex:none">
+  {% for b in branches_all %}
+  <div class="panel" style="padding:20px;display:flex;flex-direction:column;border-left:3px solid {{ b|branch_color }}">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="width:40px;height:40px;border-radius:11px;background:{{ b|branch_color }}1A;color:{{ b|branch_color }};display:flex;align-items:center;justify-content:center;flex:none">
+        <svg style="width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-store"/></svg>
       </div>
-      <div class="col-md-8">
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Business Type</div>
-          <div class="col-8 text-end">{{ settings.business_type|default:"—" }}</div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Tax ID</div>
-          <div class="col-8 text-end text-success">
-            {{ b.tax_id|default:settings.tax_id|default:"—" }}
-          </div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Address</div>
-          <div class="col-8 text-end">
-            {{ b.address|default:settings.address|default:"—"|linebreaksbr }}
-          </div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Tel</div>
-          <div class="col-8 text-end">{{ b.phone|default:settings.phone|default:"—" }}</div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Open</div>
-          <div class="col-8 text-end">
-            {% if settings %}{{ settings.open_time }} - {{ settings.close_time }}{% else %}—{% endif %}
-          </div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">POS ID</div>
-          <div class="col-8 text-end">{{ b.pos_id|default:"—" }}</div>
-        </div>
-        <div class="row mb-2">
-          <div class="col-4 text-muted">Code</div>
-          <div class="col-8 text-end">{{ b.code|default:"—" }}</div>
-        </div>
-        {% comment %}
-        Payment lane + key ending, so a missing or mis-laned key is visible
-        without opening each branch. Only the last 4 digits are ever shown.
-        {% endcomment %}
-        <div class="row">
-          <div class="col-4 text-muted">Payment</div>
-          <div class="col-8 text-end">
-            {% if b.beam_sandbox %}
-              <span class="badge text-bg-warning">Test</span>
-            {% else %}
-              <span class="badge text-bg-success">Live</span>
-            {% endif %}
-            {% if b.beam_key_mask %}
-              <span class="text-muted small ms-1">Beam {{ b.beam_key_mask }}</span>
-            {% else %}
-              <span class="text-danger small ms-1">no Beam key</span>
-            {% endif %}
-          </div>
-        </div>
+      <div style="min-width:0">
+        <a href="{% url 'backoffice:branch_detail' b.id %}">
+          <b style="font-size:17px;font-weight:660;letter-spacing:-.02em;color:var(--txt)">{{ b.name }}</b></a>
+        <div style="font-size:12.5px;color:var(--mut);margin-top:2px">
+          {{ b.code|default:"—" }} · {{ b.open_time }}–{{ b.close_time }}</div>
+      </div>
+      <div class="spacer"></div>
+      {% if not b.active %}<span class="tag t-out">Closed</span>
+      {% elif b.shift %}<span class="tag t-low">Shift open</span>
+      {% else %}<span class="tag t-ok">Open</span>{% endif %}
+    </div>
 
-        <div class="d-flex justify-content-end gap-2 mt-3">
-          <a class="btn btn-outline-primary btn-sm"
-             href="{% url 'backoffice:branch_detail' branch_id=b.id %}">
-            <i class="bi bi-pencil"></i> Edit
-          </a>
-        </div>
+    <div style="margin-top:18px;display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+      <span class="lbl">Net sales</span>
+      <b class="money" style="font-size:26px;font-weight:690;letter-spacing:-.03em">฿{{ b.sales|floatformat:0|intcomma }}</b>
+    </div>
+    <div class="track" style="margin-top:12px"><i style="width:{{ b.share|floatformat:0 }}%;background:{{ b|branch_color }}"></i></div>
+
+    <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12.5px;color:var(--mut)">
+      <div><b class="money" style="display:block;color:var(--txt);font-size:15px;font-weight:660">{{ b.bills|intcomma }}</b>bills</div>
+      <div><b class="money" style="display:block;color:var(--txt);font-size:15px;font-weight:660">฿{{ b.avg_bill|floatformat:0|intcomma }}</b>avg</div>
+      <div>
+        {% if b.delta is None %}
+          <b class="money" style="display:block;color:var(--mut2);font-size:15px;font-weight:660">—</b>no prior
+        {% else %}
+          <b class="money" style="display:block;color:{% if b.delta >= 0 %}var(--green){% else %}var(--red-d){% endif %};font-size:15px;font-weight:660">{% if b.delta >= 0 %}+{% endif %}{{ b.delta|floatformat:0 }}%</b>vs prev.
+        {% endif %}
       </div>
     </div>
   </div>
-</div>
-{% empty %}
-<div class="card">
-  <div class="card-body text-center py-5">
-    <i class="bi bi-shop text-muted" style="font-size: 3rem;"></i>
-    <div class="text-muted mt-3">No branches yet.</div>
-    <a class="btn btn-success mt-3" href="{% url 'backoffice:branch_new' %}">
-      <i class="bi bi-plus-lg"></i> Create your first branch
-    </a>
+  {% empty %}
+  <div class="panel" style="grid-column:1/-1">
+    <div class="empty">
+      <svg><use href="#i-store"/></svg>
+      No branches yet. A branch is what a till signs in to — add one before setting up staff.
+      <div style="margin-top:16px"><a class="btn btn-blue" href="{% url 'backoffice:branch_new' %}">
+        <svg><use href="#i-plus"/></svg> Add the first branch</a></div>
+    </div>
   </div>
+  {% endfor %}
 </div>
-{% endfor %}
+
+{% if branches_all %}
+<div class="panel">
+  <div class="panel-h">Branch detail <span class="sm">{{ span_days }} day{{ span_days|pluralize }}</span></div>
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Branch</th><th>Address</th><th class="r">Staff</th><th class="r">Bills</th>
+        <th class="r">Net sales</th><th class="r">Cash variance</th>
+        <th>Payment lane</th><th class="r" style="width:110px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in branches_all %}
+      <tr>
+        <td>
+          <span class="branchdot" style="background:{{ b|branch_color }}"></span>
+          <b style="font-weight:620">{{ b.name }}</b>
+          <div class="sub" style="margin-left:18px">{{ b.open_time }} – {{ b.close_time }}</div>
+        </td>
+        <td style="color:var(--mut)">{{ b.address_line_1|default:b.address|default:"—"|truncatechars:40 }}</td>
+        <td class="r money">{{ b.staff_count }}</td>
+        <td class="r money">{{ b.bills|intcomma }}</td>
+        <td class="r money" style="font-weight:650">฿{{ b.sales|floatformat:0|intcomma }}</td>
+        <td class="r money" style="color:{% if b.variance < 0 %}var(--red-d){% elif b.variance > 0 %}var(--green){% else %}var(--mut){% endif %}">
+          {% if b.variance > 0 %}+{% endif %}฿{{ b.variance|floatformat:0|intcomma }}</td>
+        <td>
+          {% if b.beam_sandbox %}<span class="tag t-out">Test</span>
+          {% else %}<span class="tag t-info">Live</span>{% endif %}
+          <span class="money" style="font-size:11.5px;color:var(--mut2);margin-left:6px">{{ b.beam_key_mask|default:"no key" }}</span>
+        </td>
+        <td class="r">
+          <a class="btn btn-sm" href="{% url 'backoffice:branch_detail' b.id %}">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4">{{ branches_all|length }} branch{{ branches_all|length|pluralize:"es" }}</td>
+        <td class="r money" style="color:var(--blue)">฿{{ total_sales|floatformat:0|intcomma }}</td>
+        <td colspan="3"></td>
+      </tr>
+    </tfoot>
+  </table>
+  {% if short_branches %}
+  <div style="padding:16px 20px;border-top:1px solid var(--line2);display:flex;align-items:center;gap:11px;font-size:13px;color:var(--amber-d);background:var(--amber-soft)">
+    <svg style="width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9;flex:none"><use href="#i-alert"/></svg>
+    {% for b in short_branches %}{{ b.name }} is ฿{{ b.variance|floatformat:0|cut:"-"|intcomma }} short{% if not forloop.last %}, {% endif %}{% endfor %}
+    over this window. Worth reviewing the shift closes.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

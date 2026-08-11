@@ -1,61 +1,60 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  One day's bills, drilled into from the Sales table. Same column order as
+  that page — subtotal, discount, tax, total — so the eye doesn't have to
+  re-learn the row on the way down.
+{% endcomment %}
 
-{% block title %}Sales by Date — {{ day|date:"d M Y" }}{% endblock %}
+{% block title %}{{ day|date:"j M Y" }}{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}{{ day|date:"l j F Y" }}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ rows|length }} bill{{ rows|length|pluralize }}{% if branch %} at {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:report_daily' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to Sales</a>
+  <a class="btn" href="{% url 'backoffice:report_daily_detail_export' date_str=day|date:'Y-m-d' %}{% if qs %}?{{ qs }}{% endif %}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">Sales report by Date</h4>
-        <div class="text-muted small">Date {{ day|date:"d F Y" }}</div>
-      </div>
-      <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:report_daily' %}?{{ qs }}">
-          <i class="bi bi-arrow-left"></i> Back
-        </a>
-        <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_daily_detail_export' date_str=day|date:'Y-m-d' %}{% if qs %}?{{ qs }}{% endif %}">
-          <i class="bi bi-file-earmark-spreadsheet"></i> Export
-        </a>
-      </div>
-    </div>
-
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>Created at</th>
-            <th>Pay at</th>
-            <th>Receipt No.</th>
-            <th class="text-end">Sub Total</th>
-            <th class="text-end">Discount</th>
-            <th class="text-end">Tax Amount</th>
-            <th class="text-end">Service Charge</th>
-            <th class="text-end">Rounding Adj.</th>
-            <th class="text-end">Grand Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in rows %}{% with o=row.order %}
-          <tr>
-            <td>{{ o.created_at|date:"d/m/Y" }}</td>
-            <td>{{ o.created_at|date:"d/m/Y H:i:s" }}</td>
-            <td>{{ o.order_number }}</td>
-            <td class="text-end currency">{{ o.subtotal|floatformat:2|intcomma }}</td>
-            <td class="text-end currency {% if o.discount_amount %}text-danger{% endif %}">{{ o.discount_amount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.tax_amount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.service_charge|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.rounding_adj|floatformat:2|intcomma }}</td>
-            <td class="text-end currency fw-semibold">{{ o.total|floatformat:2|intcomma }}</td>
-          </tr>
-          {% endwith %}{% empty %}
-          <tr><td colspan="9" class="text-center text-muted py-4">No bills on this day.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <div class="text-muted small mt-2">Showing 1 to {{ rows|length }} of {{ rows|length }} entries</div>
+<div class="panel panel-grow">
+  <div class="panel-h">Bills on {{ day|date:"j M Y" }}</div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:110px">Receipt</th><th style="width:90px">Time</th><th>Payment</th>
+          <th class="r">Subtotal</th><th class="r">Discount</th><th class="r">VAT</th>
+          <th class="r">Service</th><th class="r">Rounding</th><th class="r">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}{% with o=row.order %}
+        <tr>
+          <td class="money" style="font-weight:620">
+            <a href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;o={{ o.id }}">#{{ o.order_number }}</a></td>
+          <td class="money">{{ o.created_at|date:"H:i" }}</td>
+          <td>{% include "backoffice/_payment_tag.html" with method=o.payment_method %}</td>
+          <td class="r money">฿{{ o.subtotal|floatformat:2|intcomma }}</td>
+          <td class="r money" style="{% if o.discount_amount %}color:var(--green){% else %}color:var(--mut){% endif %}">
+            {% if o.discount_amount %}−฿{{ o.discount_amount|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+          <td class="r money">฿{{ row.tax_amount|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ row.service_charge|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ row.rounding_adj|floatformat:2|intcomma }}</td>
+          <td class="r money" style="font-weight:660">฿{{ o.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% endwith %}{% empty %}
+        <tr><td colspan="9" class="empty">
+          <svg><use href="#i-inbox"/></svg>
+          No bills on this day.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}

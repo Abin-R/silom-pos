@@ -1,60 +1,67 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Bill detail — one row per line item, across every bill in the window.
 
-{% block title %}Sales by Bill Detail — Brave POS{% endblock %}
+  Product performance answers "what sells"; this answers "what was on that
+  bill" without opening bills one at a time. It stays a flat, exportable list
+  on purpose: it is the sheet an accountant reconciles against.
+{% endcomment %}
+
+{% block title %}Bill detail{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Bill detail{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Every line item · {{ date_from }} → {{ date_to }}{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:report_sell_export' %}{% if qs %}?{{ qs }}{% endif %}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">Sales report by Bill Detail</h4>
-        <div class="text-muted small">
-          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
-        </div>
-      </div>
-      <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_sell_export' %}{% if qs %}?{{ qs }}{% endif %}">
-        <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </a>
-    </div>
-
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>Date</th>
-            <th>Receipt No.</th>
-            <th>Barcode</th>
-            <th>Product Name</th>
-            <th class="text-end">Quantity</th>
-            <th class="text-end">Price / Unit</th>
-            <th class="text-end">Add-on Total</th>
-            <th class="text-end">Sub Total</th>
-            <th class="text-end">Discount</th>
-            <th class="text-end">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in rows %}{% with it=row.item %}
-          <tr>
-            <td>{{ it.order.created_at|date:"d/m/Y H:i:s" }}</td>
-            <td>{{ it.order.order_number }}</td>
-            <td>{{ row.barcode|default:"-" }}</td>
-            <td>{{ it.name }}</td>
-            <td class="text-end">{{ it.qty }}</td>
-            <td class="text-end currency">{{ it.price|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.add_on_total|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.sub_total|floatformat:2|intcomma }}</td>
-            <td class="text-end currency {% if row.discount %}text-danger{% endif %}">{{ row.discount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency fw-semibold">{{ row.total|floatformat:2|intcomma }}</td>
-          </tr>
-          {% endwith %}{% empty %}
-          <tr><td colspan="10" class="text-center text-muted py-4">No line items in range.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% include "backoffice/_pagination.html" %}
+<div class="panel panel-grow">
+  <div class="panel-h">
+    Line items
+    <div class="spacer"></div>
+    <span class="tag t-info">{{ paginator.count|intcomma }} line{{ paginator.count|pluralize }}</span>
   </div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:150px">When</th><th style="width:110px">Receipt</th>
+          <th>Product</th><th>Barcode</th>
+          <th class="r">Qty</th><th class="r">Unit price</th>
+          <th class="r">Subtotal</th><th class="r">Discount</th><th class="r">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}{% with it=row.item %}
+        <tr>
+          <td class="money">{{ it.order.created_at|date:"j M H:i" }}</td>
+          <td class="money" style="font-weight:620">
+            <a href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;o={{ it.order.id }}">#{{ it.order.order_number }}</a></td>
+          <td><b style="font-weight:600">{{ it.name }}</b>
+            {% if it.category_name %}<div class="sub">{{ it.category_name }}</div>{% endif %}</td>
+          <td class="money" style="color:var(--mut)">{{ row.barcode|default:"—" }}</td>
+          <td class="r money">{{ it.qty }}</td>
+          <td class="r money">฿{{ it.price|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ row.sub_total|floatformat:2|intcomma }}</td>
+          <td class="r money" style="{% if row.discount %}color:var(--green){% else %}color:var(--mut){% endif %}">
+            {% if row.discount %}−฿{{ row.discount|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+          <td class="r money" style="font-weight:660">฿{{ row.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% endwith %}{% empty %}
+        <tr><td colspan="9" class="empty">
+          <svg><use href="#i-recv"/></svg>
+          No line items between {{ date_from }} and {{ date_to }}.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "backoffice/_pagination.html" %}
 </div>
 {% endblock %}

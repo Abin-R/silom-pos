@@ -29,6 +29,43 @@ function routeOf(path: string): string {
     .replace(/\/\d+/g, "/:id");
 }
 
+/**
+ * Was this fetch rejection the tablet losing its connection, rather than
+ * anything wrong with our code?  Matches the platform-specific wordings we
+ * actually see in Sentry (Android throws `UnknownHostException`, iOS and the
+ * web build say "Network request failed").
+ */
+function isOffline(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e ?? "");
+  return (
+    msg.includes("Network request failed") ||
+    msg.includes("UnknownHostException") ||
+    msg.includes("Unable to resolve host") ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("Connection reset") ||
+    msg.includes("timed out")
+  );
+}
+
+/**
+ * `res.json()` when the response might not be JSON.
+ *
+ * A Django 500 (or an nginx 502, or a captive-portal splash page) is HTML, and
+ * `res.json()` on it throws `SyntaxError: JSON Parse error: Unexpected
+ * character: <` — which reports as a frontend bug and buries the actual
+ * backend fault that caused it.  Prefer this wherever the caller can cope with
+ * a missing body; it returns `fallback` instead of throwing.
+ */
+export async function safeJson<T>(res: Response, fallback: T): Promise<T> {
+  try {
+    const text = await res.text();
+    if (!text) return fallback;
+    return JSON.parse(text) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 let cachedToken: string | null | undefined = undefined;
 
 async function getToken(): Promise<string | null> {
@@ -71,8 +108,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     // fetch() only rejects on a network-level failure — wifi dropped, DNS
     // dead, server unreachable.  An HTTP 500 resolves normally and is handled
     // below.  This branch is the only signal that a tablet went offline.
+    //
+    // A shop tablet leaving wifi range is normal operations, not a defect, so
+    // it reports at `warning` — enough to spot a site that is permanently
+    // unreachable, without an offline till outranking real bugs in triage.
     Sentry.captureException(e, {
-      level: "error",
+      level: isOffline(e) ? "warning" : "error",
       tags: { api_route: route, api_method: method, api_status: "network" },
     });
     throw e;

@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import qrcode from "qrcode-generator";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -41,7 +41,7 @@ import {
   saveLocalPrinterConfig,
 } from "../lib/localPrinterConfig";
 import * as printerQueue from "../lib/printerQueue";
-import { apiFetch, clearAuthToken } from "../lib/api";
+import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert } from "../lib/dialog";
@@ -50,6 +50,7 @@ import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
 } from "../lib/ui";
+import { t as tr, useT, LANGUAGES } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
@@ -96,7 +97,7 @@ type StockDocItem = {
 type StockDoc = {
   id: string; type: "in" | "out" | "adjust" | "check"; document_no: string;
   document_name: string; adjust_type: string; ref_no: string;
-  vendor: string; receiver: string; note: string;
+  vendor: string; receiver: string; note: string; reason: string;
   subtotal: number; discount: number; tax: number; total: number;
   created_by: string; created_at: string; items: StockDocItem[];
 };
@@ -330,7 +331,7 @@ export default function Admin() {
           subtitle and actions through `sectionHeader`, so the bar reads the
           same on all six rather than each page inventing its own. */}
       <TopBar
-        title={current?.label}
+        title={current ? tr(current.labelKey) : undefined}
         subtitle={activeBranchName || undefined}
         onMenu={() => (isWide ? toggleRail() : setSidebarOpen(true))}
         menuOpen={isWide ? !railCollapsed : sidebarOpen}
@@ -361,6 +362,7 @@ export default function Admin() {
 
 // =================== REPORTS / DASHBOARD ===================
 function Reports({ isWide }: { isWide: boolean }) {
+  useT(); // re-render this screen when the language changes
   // A 731px-tall tablet can't show four full stat cards *and* a 210px chart.
   // Scrolling past them is what made this page look empty, so it densifies
   // rather than overflowing.
@@ -439,7 +441,7 @@ function Reports({ isWide }: { isWide: boolean }) {
         {PERIODS.map((p) => (
           <Pill
             key={p.k}
-            label={p.k === "custom" && period === "custom" && range.start ? rangeLabel(range) : p.l}
+            label={p.k === "custom" && period === "custom" && range.start ? rangeLabel(range) : tr(p.l)}
             active={period === p.k}
             onPress={() => (p.k === "custom" ? setShowRange(true) : setPeriod(p.k))}
             testID={`period-${p.k}`}
@@ -447,14 +449,14 @@ function Reports({ isWide }: { isWide: boolean }) {
         ))}
         <View style={{ width: 6 }} />
         <Btn
-          label="Channels"
+          label={tr("admin.channels")}
           icon="pie-chart-outline"
           height={40}
           onPress={() => setShowChannels(true)}
           testID="open-channel-report"
         />
         <Btn
-          label="Back office"
+          label={tr("admin.back_office")}
           icon="desktop-outline"
           height={40}
           onPress={() => Linking.openURL(BACKOFFICE_URL)}
@@ -477,7 +479,7 @@ function Reports({ isWide }: { isWide: boolean }) {
               icon="bar-chart-outline"
               tint={C.brandTintSoft}
               tintFg={C.brand}
-              label="Net sales"
+              label={tr("admin.net_sales")}
               value={THB(data.total_sales)}
               delta={`GP ${(data.gp_percent ?? 0).toFixed(1)}%`}
               deltaDir={(data.gp_percent ?? 0) >= 60 ? "up" : "down"}
@@ -490,7 +492,7 @@ function Reports({ isWide }: { isWide: boolean }) {
               icon="receipt-outline"
               tint={C.okTint}
               tintFg={C.ok}
-              label="Orders"
+              label={tr("common.orders")}
               dense={dense}
               value={String(data.tx_count ?? 0)}
               delta={`${THB(data.avg_bill)} average bill`}
@@ -500,7 +502,7 @@ function Reports({ isWide }: { isWide: boolean }) {
               icon="trending-up-outline"
               tint={C.accentTint}
               tintFg={C.accentDark}
-              label="Profit"
+              label={tr("admin.profit")}
               dense={dense}
               value={THB(data.profit)}
               delta={`after ${THB(data.cost)} cost`}
@@ -510,10 +512,10 @@ function Reports({ isWide }: { isWide: boolean }) {
               icon="shield-checkmark-outline"
               tint={C.warnTint}
               tintFg={C.warn}
-              label="VAT collected"
+              label={tr("admin.vat_collected")}
               dense={dense}
               value={THB((data.total_sales * 7) / 107)}
-              delta="7% included in prices"
+              delta={tr("admin.vat_included_in_prices")}
               style={!isWide ? { minWidth: "46%" } : undefined}
             />
           </View>
@@ -521,7 +523,7 @@ function Reports({ isWide }: { isWide: boolean }) {
           <View style={[styles.reportCols, !isWide && { flexDirection: "column" }]}>
             <Panel style={{ flex: isWide ? 1.55 : undefined }}>
               <PanelHead
-                title="Sales trend"
+                title={tr("admin.sales_trend")}
                 right={peak ? <Tag tone="info">{`Peak ${peak.label}`}</Tag> : undefined}
               />
               <View
@@ -529,7 +531,7 @@ function Reports({ isWide }: { isWide: boolean }) {
                 testID="sales-chart"
               >
                 {timeline.length === 0 ? (
-                  <Empty icon="bar-chart-outline" title="No data for this period" />
+                  <Empty icon="bar-chart-outline" title={tr("admin.no_data_for_this_period")} />
                 ) : (
                   timeline.map((t, i) => (
                     <View key={i} style={{ flex: 1, justifyContent: "flex-end" }}>
@@ -565,10 +567,10 @@ function Reports({ isWide }: { isWide: boolean }) {
 
             <View style={{ flex: 1, gap: 16, minWidth: 0 }}>
               <Panel testID="top-categories">
-                <PanelHead title="Top categories" />
+                <PanelHead title={tr("admin.top_categories")} />
                 <View style={{ padding: 20 }}>
                   {(data.top_categories ?? []).length === 0 ? (
-                    <Empty icon="pie-chart-outline" title="No sales yet" />
+                    <Empty icon="pie-chart-outline" title={tr("admin.no_sales_yet")} />
                   ) : (
                     (data.top_categories ?? []).map((c, i) => (
                       <MixRow
@@ -584,9 +586,9 @@ function Reports({ isWide }: { isWide: boolean }) {
               </Panel>
 
               <Panel testID="top-products">
-                <PanelHead title="Top products" />
+                <PanelHead title={tr("admin.top_products")} />
                 {(data.top_products ?? []).length === 0 ? (
-                  <Empty icon="cube-outline" title="No sales yet" />
+                  <Empty icon="cube-outline" title={tr("admin.no_sales_yet")} />
                 ) : (
                   <>
                     <THead cols={TOP_PROD_COLS} />
@@ -618,23 +620,23 @@ function Reports({ isWide }: { isWide: boolean }) {
 }
 
 const TOP_PROD_COLS: Col[] = [
-  { key: "name", title: "Product", flex: 2 },
-  { key: "qty", title: "Sold", flex: 1, right: true },
-  { key: "total", title: "Revenue", flex: 1.2, right: true },
+  { key: "name", title: "admin.product_2", flex: 2 },
+  { key: "qty", title: "admin.sold", flex: 1, right: true },
+  { key: "total", title: "admin.revenue", flex: 1.2, right: true },
 ];
 
 
 // ── Shared period filter helpers (dashboard + channel report) ──
 type DateRange = { start: string; end: string };
 const PERIODS = [
-  { k: "today", l: "Today" },
-  { k: "week", l: "This week" },
-  { k: "month", l: "This month" },
-  { k: "year", l: "This Year" },
-  { k: "custom", l: "Custom" },
+  { k: "today", l: "admin.today" },
+  { k: "week", l: "admin.this_week" },
+  { k: "month", l: "admin.this_month" },
+  { k: "year", l: "admin.this_year" },
+  { k: "custom", l: "admin.custom" },
 ] as const;
 const PERIOD_LABELS: Record<string, string> = {
-  today: "Today", week: "This week", month: "This month", year: "This Year", custom: "Custom",
+  today: "admin.today", week: "admin.this_week", month: "admin.this_month", year: "admin.this_year", custom: "admin.custom",
 };
 
 function periodQuery(period: string, range: DateRange): string {
@@ -714,6 +716,7 @@ function Calendar({ start, end, onPick }: { start: string; end: string; onPick: 
 function DateRangeModal({
   visible, initial, onClose, onApply,
 }: { visible: boolean; initial: DateRange; onClose: () => void; onApply: (r: DateRange) => void }) {
+  useT(); // re-render this screen when the language changes
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
   useEffect(() => { if (visible) { setStart(initial.start); setEnd(initial.end); } }, [visible, initial]);
@@ -730,19 +733,19 @@ function DateRangeModal({
         <View style={styles.rangeCard} testID="date-range-modal">
           <View style={styles.modalHead}>
             <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={C.ink2} /></TouchableOpacity>
-            <Text style={styles.modalTitle}>Custom range</Text>
+            <Text style={styles.modalTitle}>{tr("admin.custom_range")}</Text>
             <View style={{ width: 22 }} />
           </View>
           <View style={{ padding: 16, gap: 12 }}>
             <View style={styles.rangeSummary}>
               <View style={styles.rangeSummaryCol}>
-                <Text style={styles.docFieldLabel}>Start</Text>
+                <Text style={styles.docFieldLabel}>{tr("admin.start")}</Text>
                 <Text style={styles.rangeSummaryVal}>{start || "—"}</Text>
               </View>
               <Ionicons name="arrow-forward" size={16} color={C.ink3} />
               <View style={styles.rangeSummaryCol}>
-                <Text style={styles.docFieldLabel}>End</Text>
-                <Text style={styles.rangeSummaryVal}>{end || (start ? "Same day" : "—")}</Text>
+                <Text style={styles.docFieldLabel}>{tr("admin.end")}</Text>
+                <Text style={styles.rangeSummaryVal}>{end || (start ? tr("admin.same_day") : "—")}</Text>
               </View>
             </View>
             <Calendar start={start} end={end} onPick={pick} />
@@ -752,7 +755,7 @@ function DateRangeModal({
               onPress={() => onApply({ start, end })}
               testID="range-apply"
             >
-              <Text style={styles.primaryBtnText}>Apply</Text>
+              <Text style={styles.primaryBtnText}>{tr("admin.apply")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -765,6 +768,7 @@ function DateRangeModal({
 function ChannelReportModal({
   visible, period, range, onClose,
 }: { visible: boolean; period: string; range: DateRange; onClose: () => void }) {
+  useT(); // re-render this screen when the language changes
   const [rows, setRows] = useState<ChannelRow[] | null>(null);
   const [totals, setTotals] = useState({ before: 0, gp: 0, after: 0, count: 0 });
   const [curPeriod, setCurPeriod] = useState(period);
@@ -796,9 +800,9 @@ function ChannelReportModal({
         <View style={styles.docTopBar}>
           <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
             <Ionicons name="chevron-back" size={22} color={C.ink} />
-            <Text style={styles.docBackText}>Back</Text>
+            <Text style={styles.docBackText}>{tr("common.back")}</Text>
           </TouchableOpacity>
-          <Text style={styles.docTopTitle}>Sales channel report</Text>
+          <Text style={styles.docTopTitle}>{tr("admin.sales_channel_report")}</Text>
           <View style={{ width: 70 }} />
         </View>
 
@@ -812,7 +816,7 @@ function ChannelReportModal({
               testID={`ch-period-${p.k}`}
             >
               <Text style={[styles.periodText, curPeriod === p.k && styles.periodTextActive]}>
-                {p.k === "custom" && curPeriod === "custom" && curRange.start ? rangeLabel(curRange) : p.l}
+                {p.k === "custom" && curPeriod === "custom" && curRange.start ? rangeLabel(curRange) : tr(p.l)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -827,17 +831,17 @@ function ChannelReportModal({
 
         <View style={styles.chTableHead}>
           <Text style={[styles.chHeadCell, { width: 30 }]}>#</Text>
-          <Text style={[styles.chHeadCell, { flex: 1, textAlign: "left" }]}>Channel name</Text>
-          <Text style={[styles.chHeadCell, { width: 70 }]}>Count</Text>
-          <Text style={[styles.chHeadCell, { width: 110 }]}>Before GP</Text>
-          <Text style={[styles.chHeadCell, { width: 90 }]}>GP</Text>
-          <Text style={[styles.chHeadCell, { width: 110 }]}>After GP</Text>
+          <Text style={[styles.chHeadCell, { flex: 1, textAlign: "left" }]}>{tr("admin.channel_name")}</Text>
+          <Text style={[styles.chHeadCell, { width: 70 }]}>{tr("admin.count")}</Text>
+          <Text style={[styles.chHeadCell, { width: 110 }]}>{tr("admin.before_gp")}</Text>
+          <Text style={[styles.chHeadCell, { width: 90 }]}>{tr("admin.gp")}</Text>
+          <Text style={[styles.chHeadCell, { width: 110 }]}>{tr("admin.after_gp")}</Text>
         </View>
 
         {rows === null ? (
           <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
         ) : rows.length === 0 ? (
-          <View style={styles.emptyBox}><Text style={styles.emptyText}>No sales</Text></View>
+          <View style={styles.emptyBox}><Text style={styles.emptyText}>{tr("admin.no_sales")}</Text></View>
         ) : (
           <ScrollView>
             {rows.map((r, i) => (
@@ -849,7 +853,7 @@ function ChannelReportModal({
                   </View>
                   <Text style={styles.chName} numberOfLines={1}>{r.channel}</Text>
                   {!r.has_gp && (
-                    <View style={styles.noGpBadge}><Text style={styles.noGpText}>No GP</Text></View>
+                    <View style={styles.noGpBadge}><Text style={styles.noGpText}>{tr("admin.no_gp")}</Text></View>
                   )}
                 </View>
                 <Text style={[styles.chCell, { width: 70 }]}>{r.count}</Text>
@@ -860,7 +864,7 @@ function ChannelReportModal({
             ))}
             <View style={[styles.chRow, { backgroundColor: C.bgSoft }]}>
               <Text style={[styles.chCell, { width: 30 }]} />
-              <Text style={[styles.chCell, { flex: 1, textAlign: "left", fontWeight: "700" }]}>Total</Text>
+              <Text style={[styles.chCell, { flex: 1, textAlign: "left", fontWeight: "700" }]}>{tr("common.total")}</Text>
               <Text style={[styles.chCell, { width: 70, fontWeight: "700" }]}>{totals.count}</Text>
               <Text style={[styles.chCell, { width: 110, fontWeight: "700" }]}>{totals.before.toFixed(2)}</Text>
               <Text style={[styles.chCell, { width: 90, fontWeight: "700" }]}>{totals.gp.toFixed(2)}</Text>
@@ -906,6 +910,7 @@ function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
 const PAGE_SIZE = 50;
 
 function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: ReprintFn; staff: string }) {
+  useT(); // re-render this screen when the language changes
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1059,7 +1064,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
         rows.push({
           kind: "day",
           key: `day-${k}`,
-          label: k === today ? "Today" : k === yesterday ? "Yesterday"
+          label: k === today ? tr("admin.today") : k === yesterday ? tr("admin.yesterday")
             : new Date(o.created_at).toLocaleDateString("en-GB", {
                 weekday: "short", day: "2-digit", month: "short",
               }),
@@ -1088,7 +1093,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       <View style={{ flex: 1 }}>
         <TouchableOpacity style={styles.backRow} onPress={() => setShowDetail(false)}>
           <Ionicons name="chevron-back" size={22} color={C.brand} />
-          <Text style={styles.backText}>Back to orders</Text>
+          <Text style={styles.backText}>{tr("admin.back_to_orders")}</Text>
         </TouchableOpacity>
         <TransactionDetail
           order={selected}
@@ -1116,10 +1121,10 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           contentContainerStyle={{ gap: 10 }}
         >
           {([
-            { key: "today", label: "Today" },
-            { key: "yesterday", label: "Yesterday" },
-            { key: "week", label: "Last 7 days" },
-            { key: "all", label: "All" },
+            { key: "today", label: tr("admin.today") },
+            { key: "yesterday", label: tr("admin.yesterday") },
+            { key: "week", label: tr("admin.last_7_days") },
+            { key: "all", label: tr("admin.all") },
           ] as { key: DateFilter; label: string }[]).map((opt) => (
             <Pill
               key={opt.key}
@@ -1134,7 +1139,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
         <SearchField
           value={query}
           onChangeText={setQuery}
-          placeholder="Order no."
+          placeholder={tr("admin.order_no")}
           height={40}
           style={{ width: isWide ? 230 : "100%" }}
           testID="tx-search"
@@ -1149,7 +1154,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
             title={
               total > filteredOrders.length
                 ? `${page * PAGE_SIZE + 1}\u2013${page * PAGE_SIZE + filteredOrders.length} of ${total}`
-                : `${filteredOrders.length} ${filteredOrders.length === 1 ? "order" : "orders"}`
+                : `${filteredOrders.length} ${filteredOrders.length === 1 ? tr("admin.order") : tr("admin.orders")}`
             }
             right={
               // Only this page's rows are in hand, so don't let the figure
@@ -1157,7 +1162,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
               <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
                 <Money style={styles.takings}>{THB(takings)}</Money>
                 {total > filteredOrders.length && (
-                  <Text style={styles.takingsNote}>this page</Text>
+                  <Text style={styles.takingsNote}>{tr("admin.this_page")}</Text>
                 )}
               </View>
             }
@@ -1167,8 +1172,8 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           ) : filteredOrders.length === 0 ? (
             <Empty
               icon="receipt-outline"
-              title="No matching orders"
-              note="Try a wider date range, or clear the search."
+              title={tr("admin.no_matching_orders")}
+              note={tr("admin.try_a_wider_date_range_or")}
             />
           ) : (
             <>
@@ -1210,7 +1215,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                             {o.order_number}
                           </Money>
                           <Text style={styles.billMeta} numberOfLines={1}>
-                            {`${o.created_time} · ${voided ? "Voided" : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
+                            {`${o.created_time} · ${voided ? tr("admin.voided") : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
                           </Text>
                         </View>
                         <Money style={[styles.billAmount, voided && styles.txVoided]}>
@@ -1243,7 +1248,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                         <>
                           <TCell col={ocol("customer")}>
                             <TText muted={!o.customer_name || voided}>
-                              {o.customer_name || "Walk-in"}
+                              {o.customer_name || tr("admin.walk_in")}
                             </TText>
                           </TCell>
                           <TCell col={ocol("staff")}>
@@ -1266,11 +1271,11 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                       </TCell>
                       <TCell col={ocol("status")}>
                         {voided ? (
-                          <Tag tone="red">Voided</Tag>
+                          <Tag tone="red">{tr("admin.voided")}</Tag>
                         ) : o.pos_tax_invoice ? (
-                          <Tag tone="purple">Tax inv.</Tag>
+                          <Tag tone="purple">{tr("admin.tax_inv")}</Tag>
                         ) : (
-                          <Tag tone="ok">Paid</Tag>
+                          <Tag tone="ok">{tr("admin.paid")}</Tag>
                         )}
                       </TCell>
                     </TRow>
@@ -1280,7 +1285,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
               {pageCount > 1 && (
                 <View style={styles.pager}>
                   <Btn
-                    label="Previous"
+                    label={tr("admin.previous")}
                     icon="chevron-back"
                     height={40}
                     disabled={page === 0 || loading}
@@ -1293,7 +1298,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                   </Money>
                   <Spacer />
                   <Btn
-                    label="Next"
+                    label={tr("admin.next")}
                     iconRight="chevron-forward"
                     height={40}
                     disabled={page >= pageCount - 1 || loading}
@@ -1312,8 +1317,8 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
               <Panel style={{ flex: 1 }}>
                 <Empty
                   icon="document-text-outline"
-                  title="Select an order"
-                  note="Its lines, totals and reprint options open here."
+                  title={tr("admin.select_an_order")}
+                  note={tr("admin.its_lines_totals_and_reprint_options")}
                 />
               </Panel>
             ) : (
@@ -1334,14 +1339,14 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
 }
 
 const ORDER_COLS_FULL: Col[] = [
-  { key: "num", title: "Order", flex: 1.5 },
-  { key: "time", title: "Time", flex: 0.9 },
-  { key: "customer", title: "Customer", flex: 1.6 },
-  { key: "staff", title: "Cashier", flex: 1.1 },
-  { key: "pay", title: "Payment", flex: 1.2 },
-  { key: "items", title: "Items", flex: 0.7, right: true },
-  { key: "total", title: "Total", flex: 1.3, right: true },
-  { key: "status", title: "Status", flex: 1.1, right: true },
+  { key: "num", title: "admin.order_2", flex: 1.5 },
+  { key: "time", title: "admin.time", flex: 0.9 },
+  { key: "customer", title: "common.customer", flex: 1.6 },
+  { key: "staff", title: "common.cashier", flex: 1.1 },
+  { key: "pay", title: "common.payment", flex: 1.2 },
+  { key: "items", title: "admin.items", flex: 0.7, right: true },
+  { key: "total", title: "common.total", flex: 1.3, right: true },
+  { key: "status", title: "admin.status", flex: 1.1, right: true },
 ];
 // Customer and cashier are the first to go — the order number, total and
 // status are what the row is actually scanned for.
@@ -1382,6 +1387,7 @@ function TransactionDetail({
   productMap: Record<string, ProductRef>;
   taxPercent: number;
 }) {
+  useT(); // re-render this screen when the language changes
   const [reprintBusy, setReprintBusy] = useState(false);
   const [voidBusy, setVoidBusy] = useState(false);
   // Reprint is a menu of documents (abbreviated slip, full tax invoice, …),
@@ -1444,7 +1450,7 @@ function TransactionDetail({
     const r = await reprint(receipt, shop);
     if (!r.ok) {
       showAlert(
-        "Print failed",
+        tr("admin.print_failed"),
         `${r.error}\n\nCheck the printer under Settings → Local Printer (it must be enabled and connected on this device).`,
       );
     }
@@ -1456,7 +1462,7 @@ function TransactionDetail({
     try {
       await sendPrint(toReceiptOrder(isVoided));
     } catch (e: any) {
-      showAlert("Print failed", e?.message || String(e));
+      showAlert(tr("admin.print_failed"), e?.message || String(e));
     } finally {
       setReprintBusy(false);
     }
@@ -1472,7 +1478,7 @@ function TransactionDetail({
     try {
       await sendPrint(toReceiptOrder(isVoided, undefined, data));
     } catch (e: any) {
-      showAlert("Print failed", e?.message || String(e));
+      showAlert(tr("admin.print_failed"), e?.message || String(e));
     } finally {
       setReprintBusy(false);
     }
@@ -1498,7 +1504,7 @@ function TransactionDetail({
       // Auto-print the void receipt (fires the "Printing…" overlay).
       await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
-      showAlert("Void failed", e?.message || String(e));
+      showAlert(tr("admin.void_failed"), e?.message || String(e));
     } finally {
       setVoidBusy(false);
     }
@@ -1506,8 +1512,8 @@ function TransactionDetail({
 
   const onVoid = () => {
     showAlert(
-      "Void bill",
-      "Are you sure you want to void this bill? Can't undo this action.",
+      tr("admin.void_bill"),
+      tr("admin.are_you_sure_you_want_to_2"),
       [
         { text: "Close", style: "cancel" },
         { text: "Confirm", style: "destructive", onPress: doVoid },
@@ -1525,7 +1531,7 @@ function TransactionDetail({
               <Text style={styles.tdOrderNo}>{order.order_number}</Text>
               <View style={[styles.tdStatus, isVoided && styles.tdStatusVoid]}>
                 <Text style={[styles.tdStatusText, isVoided && styles.tdStatusTextVoid]}>
-                  {isVoided ? "Voided" : "Paid"}
+                  {isVoided ? tr("admin.voided") : tr("admin.paid")}
                 </Text>
               </View>
             </View>
@@ -1542,7 +1548,7 @@ function TransactionDetail({
               testID={`reprint-${order.order_number}`}
             >
               <Ionicons name="print-outline" size={15} color={C.surface} />
-              <Text style={styles.tdReprintText}>{reprintBusy ? "Printing…" : "Re-print"}</Text>
+              <Text style={styles.tdReprintText}>{reprintBusy ? tr("admin.printing") : tr("admin.re_print")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.tdCancelBtn, (isVoided || voidBusy) && styles.tdCancelBtnDisabled]}
@@ -1550,26 +1556,26 @@ function TransactionDetail({
               disabled={isVoided || voidBusy}
               testID={`void-${order.order_number}`}
             >
-              <Text style={styles.tdCancelText}>{voidBusy ? "Voiding…" : "Cancel bill"}</Text>
+              <Text style={styles.tdCancelText}>{voidBusy ? tr("admin.voiding") : tr("admin.cancel_bill")}</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Meta reads as labelled facts, not a stack of grey sentences. */}
         <View style={styles.tdMetaGrid}>
-          <TdFact label="When" value={formatThaiDateTime(order.created_at)} />
-          <TdFact label="Cashier" value={order.staff || "—"} />
-          <TdFact label="Channel" value={channelLabel(order.source)} />
-          {isVoided && <TdFact label="Voided by" value={order.voided_by || "—"} danger />}
+          <TdFact label={tr("admin.when")} value={formatThaiDateTime(order.created_at)} />
+          <TdFact label={tr("common.cashier")} value={order.staff || "—"} />
+          <TdFact label={tr("admin.channel")} value={channelLabel(order.source)} />
+          {isVoided && <TdFact label={tr("admin.voided_by")} value={order.voided_by || "—"} danger />}
         </View>
         {!!order.pos_tax_invoice && (
           <Text style={styles.tdTaxIssued}>
-            Tax invoice issued to {order.pos_tax_invoice.name}
+            {tr("admin.tax_invoice_issued_to")} {order.pos_tax_invoice.name}
             {order.pos_tax_invoice.issued_by ? ` by ${order.pos_tax_invoice.issued_by}` : ""}
           </Text>
         )}
 
-        <Text style={styles.tdHeading}>{order.items.length} {order.items.length === 1 ? "item" : "items"}</Text>
+        <Text style={styles.tdHeading}>{order.items.length} {order.items.length === 1 ? tr("common.item") : tr("common.items")}</Text>
         {order.items.map((it: any, i: number) => {
           const ref = it.product_id ? productMap[it.product_id] : undefined;
           const img = ref?.image;
@@ -1596,14 +1602,14 @@ function TransactionDetail({
 
         {/* ── Totals ── */}
         <View style={styles.tdTotalsBlock}>
-          <TdLine label="Subtotal" value={THB(subtotal)} />
-          <TdLine label="Subtotal (ex-Tax)" value={THB(exTax)} />
+          <TdLine label={tr("common.subtotal")} value={THB(subtotal)} />
+          <TdLine label={tr("admin.subtotal_ex_tax")} value={THB(exTax)} />
           <TdLine label={`Tax ${taxPercent} %`} value={THB(tax)} />
         </View>
 
-        <Text style={styles.tdHeading}>Payment</Text>
-        <TdLine label={order.payment_method || "Cash"} value={THB(paid)} />
-        <TdLine label="Change" value={THB(change)} bold />
+        <Text style={styles.tdHeading}>{tr("common.payment")}</Text>
+        <TdLine label={order.payment_method || tr("common.cash")} value={THB(paid)} />
+        <TdLine label={tr("common.change")} value={THB(change)} bold />
       </ScrollView>
 
       <ReprintMenu
@@ -1630,9 +1636,9 @@ function TransactionDetail({
 // the menu matches what cashiers are trained on, but only the two thermal
 // documents are wired up; the rest say so rather than failing silently.
 const REPRINT_UNBUILT = [
-  { key: "a4", label: "Receipt / Tax Invoice (A4)" },
-  { key: "image", label: "Save as Image" },
-  { key: "email", label: "Email" },
+  { key: "a4", labelKey: "admin.receipt_tax_invoice_a4" },
+  { key: "image", labelKey: "admin.save_as_image" },
+  { key: "email", labelKey: "admin.email" },
 ];
 
 function ReprintMenu({
@@ -1646,29 +1652,30 @@ function ReprintMenu({
   onAbbreviated: () => void;
   onFullTaxInvoice: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.tiBackdrop} activeOpacity={1} onPress={onClose}>
         <TouchableOpacity style={styles.rpMenu} activeOpacity={1} testID="reprint-menu">
-          <Text style={styles.rpTitle}>Reprint</Text>
+          <Text style={styles.rpTitle}>{tr("admin.reprint")}</Text>
           <TouchableOpacity
             style={styles.rpItem}
             onPress={onAbbreviated}
             testID="reprint-abbreviated"
           >
-            <Text style={styles.rpItemText}>Abbreviated Tax Invoice</Text>
+            <Text style={styles.rpItemText}>{tr("admin.abbreviated_tax_invoice")}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.rpItem}
             onPress={onFullTaxInvoice}
             testID="reprint-full-tax-invoice"
           >
-            <Text style={styles.rpItemText}>Receipt / Tax Invoice</Text>
+            <Text style={styles.rpItemText}>{tr("admin.receipt_tax_invoice")}</Text>
           </TouchableOpacity>
           {REPRINT_UNBUILT.map((opt) => (
             <View key={opt.key} style={[styles.rpItem, styles.rpItemDisabled]}>
-              <Text style={[styles.rpItemText, styles.rpItemTextDisabled]}>{opt.label}</Text>
-              <Text style={styles.rpSoon}>Not available yet</Text>
+              <Text style={[styles.rpItemText, styles.rpItemTextDisabled]}>{tr(opt.labelKey)}</Text>
+              <Text style={styles.rpSoon}>{tr("admin.not_available_yet")}</Text>
             </View>
           ))}
         </TouchableOpacity>
@@ -1685,10 +1692,10 @@ function ReprintMenu({
 // record that a reprint can replay.
 type TaxStep = "search" | "add" | "form";
 
-const GENDERS: { key: NonNullable<Customer["gender"]>; label: string }[] = [
-  { key: "male", label: "Male" },
-  { key: "female", label: "Female" },
-  { key: "unspecified", label: "Unspecified" },
+const GENDERS: { key: NonNullable<Customer["gender"]>; labelKey: string }[] = [
+  { key: "male", labelKey: "admin.male" },
+  { key: "female", labelKey: "admin.female" },
+  { key: "unspecified", labelKey: "admin.unspecified" },
 ];
 
 // Display name for a picker row: companies use `name` alone, people have both.
@@ -1707,6 +1714,7 @@ function TaxInvoiceFlow({
   onOrderUpdated: (updated: Order) => void;
   onPrint: (data: TaxInvoiceData) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const existing = order.pos_tax_invoice;
 
   // Re-issuing an invoice that already names a buyer opens straight on the
@@ -1719,7 +1727,7 @@ function TaxInvoiceFlow({
   const [selected, setSelected] = useState<Customer | null>(null);
   // Non-null while a request is in flight; the string is the overlay caption.
   const [busy, setBusy] = useState<string | null>(null);
-  // Set once Print has been tapped, so "Required" messages appear on the fields
+  // Set once Print has been tapped, so tr("admin.required") messages appear on the fields
   // the cashier skipped instead of greeting them on a blank form.
   const [attempted, setAttempted] = useState(false);
 
@@ -1785,10 +1793,10 @@ function TaxInvoiceFlow({
 
   const createCustomer = async () => {
     if (!add.name.trim() || !add.last_name.trim()) {
-      showAlert("Missing details", "First name and last name are required.");
+      showAlert(tr("admin.missing_details"), tr("admin.first_name_and_last_name_are"));
       return;
     }
-    setBusy("Saving customer…");
+    setBusy(tr("admin.saving_customer"));
     try {
       const res = await apiFetch(`${API}/customers`, {
         method: "POST",
@@ -1812,7 +1820,7 @@ function TaxInvoiceFlow({
       setCustomers((list) => [created, ...list]);
       pick(created);
     } catch (e: any) {
-      showAlert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert(tr("common.couldnt_save_customer"), e?.message || "Please try again.");
     } finally {
       setBusy(null);
     }
@@ -1824,37 +1832,37 @@ function TaxInvoiceFlow({
   // only greying the button out: a disabled button with no explanation is
   // indistinguishable from a broken one, and a 12-digit tax ID looks complete
   // at a glance.  The tax-ID count shows as soon as there is something to
-  // count; the bare "Required" messages wait until Print is tapped so a
+  // count; the bare tr("admin.required") messages wait until Print is tapped so a
   // freshly-opened form isn't shouting at the cashier.
   const errors = {
-    name: !form.name.trim() && attempted ? "Required" : "",
+    name: !form.name.trim() && attempted ? tr("admin.required") : "",
     tax_id: !form.tax_id.trim()
-      ? (attempted ? "Required" : "")
+      ? (attempted ? tr("admin.required") : "")
       : taxDigits.length !== 13
         ? `A Thai tax ID is 13 digits — this has ${taxDigits.length}`
         : "",
-    address: !form.address.trim() && attempted ? "Required" : "",
+    address: !form.address.trim() && attempted ? tr("admin.required") : "",
   };
 
   const saveAndPrint = async () => {
     setAttempted(true);
     if (!form.name.trim()) {
-      showAlert("Missing details", "Taxpayer or company name is required.");
+      showAlert(tr("admin.missing_details"), tr("admin.taxpayer_or_company_name_is_required"));
       return;
     }
     if (taxDigits.length !== 13) {
       showAlert(
-        "Invalid tax ID",
+        tr("admin.invalid_tax_id"),
         `A Thai tax ID is 13 digits — this has ${taxDigits.length}. Check it against the buyer's paperwork.`,
       );
       return;
     }
     if (!form.address.trim()) {
-      showAlert("Missing details", "Address is required.");
+      showAlert(tr("admin.missing_details"), tr("admin.address_is_required"));
       return;
     }
 
-    setBusy("Updating…");
+    setBusy(tr("admin.updating"));
     const payload = {
       name: form.name.trim(),
       tax_id: taxDigits,
@@ -1899,16 +1907,16 @@ function TaxInvoiceFlow({
       // never disagree with the buyer of record.
       onPrint(updated.pos_tax_invoice ?? payload);
     } catch (e: any) {
-      showAlert("Couldn't save tax invoice", e?.message || "Please try again.");
+      showAlert(tr("admin.couldnt_save_tax_invoice"), e?.message || "Please try again.");
     } finally {
       setBusy(null);
     }
   };
 
   const title =
-    step === "search" ? "Search Customer"
-      : step === "add" ? "Add Customer"
-        : "Full Tax Invoice";
+    step === "search" ? tr("admin.search_customer")
+      : step === "add" ? tr("admin.add_customer_2")
+        : tr("admin.full_tax_invoice");
 
   // The picker is the first screen of a fresh issue, so its left action closes
   // the whole flow.  A re-issue opens on the form with no picker behind it, so
@@ -1925,12 +1933,12 @@ function TaxInvoiceFlow({
               <TouchableOpacity onPress={() => setStep("search")} testID="tax-invoice-back">
                 <View style={styles.tiBackRow}>
                   <Ionicons name="chevron-back" size={20} color={C.brand} />
-                  <Text style={styles.tiHeaderAction}>Back</Text>
+                  <Text style={styles.tiHeaderAction}>{tr("common.back")}</Text>
                 </View>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity onPress={onClose} testID="tax-invoice-close">
-                <Text style={styles.tiHeaderAction}>Close</Text>
+                <Text style={styles.tiHeaderAction}>{tr("admin.close")}</Text>
               </TouchableOpacity>
             )}
             <Text style={styles.tiTitle}>{title}</Text>
@@ -1949,7 +1957,7 @@ function TaxInvoiceFlow({
               <View style={styles.tiSearchBox}>
                 <Ionicons name="search" size={16} color={C.ink3} />
                 <TextInput
-                  placeholder="Search by name or phone"
+                  placeholder={tr("admin.search_by_name_or_phone")}
                   placeholderTextColor={C.ink3}
                   style={styles.tiSearchInput}
                   value={query}
@@ -1963,8 +1971,8 @@ function TaxInvoiceFlow({
                 <View style={styles.tiEmpty}>
                   <Text style={styles.emptyText}>
                     {customers.length === 0
-                      ? "No customers yet — tap the pencil to add one"
-                      : "No matching customers"}
+                      ? tr("admin.no_customers_yet_tap_the_pencil")
+                      : tr("admin.no_matching_customers")}
                   </Text>
                 </View>
               ) : (
@@ -1987,12 +1995,12 @@ function TaxInvoiceFlow({
                       <View style={{ flex: 1 }}>
                         <Text style={styles.tiCustName}>{customerFullName(item) || "—"}</Text>
                         <Text style={styles.tiCustSub}>
-                          {item.phone || "No phone"}
+                          {item.phone || tr("admin.no_phone")}
                           {item.tax_id ? `   Tax ID ${item.tax_id}` : ""}
                         </Text>
                       </View>
                       {!!item.last_visit && (
-                        <Text style={styles.tiCustVisit}>Last purchase {item.last_visit}</Text>
+                        <Text style={styles.tiCustVisit}>{tr("admin.last_purchase")} {item.last_visit}</Text>
                       )}
                     </TouchableOpacity>
                   )}
@@ -2004,9 +2012,9 @@ function TaxInvoiceFlow({
           {/* ── Step 2: add a buyer ── */}
           {step === "add" && (
             <ScrollView contentContainerStyle={styles.tiForm} keyboardShouldPersistTaps="handled">
-              <TiField label="First name" required value={add.name} onChange={setAddField("name")} testID="ti-add-first" />
-              <TiField label="Last name" required value={add.last_name} onChange={setAddField("last_name")} testID="ti-add-last" />
-              <Text style={styles.tiLabel}>Gender</Text>
+              <TiField label={tr("admin.first_name")} required value={add.name} onChange={setAddField("name")} testID="ti-add-first" />
+              <TiField label={tr("admin.last_name")} required value={add.last_name} onChange={setAddField("last_name")} testID="ti-add-last" />
+              <Text style={styles.tiLabel}>{tr("admin.gender")}</Text>
               <View style={styles.tiRadioRow}>
                 {GENDERS.map((g) => {
                   const on = add.gender === g.key;
@@ -2022,28 +2030,28 @@ function TaxInvoiceFlow({
                         size={20}
                         color={on ? C.brand : C.lineStrong}
                       />
-                      <Text style={styles.tiRadioText}>{g.label}</Text>
+                      <Text style={styles.tiRadioText}>{tr(g.labelKey)}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-              <Text style={styles.tiLabel}>Phone (optional)</Text>
+              <Text style={styles.tiLabel}>{tr("common.phone_optional")}</Text>
               <PhoneInput
                 value={add.phone}
                 onChange={(e164) => setAddField("phone")(e164)}
-                placeholder="Phone (optional)"
+                placeholder={tr("common.phone_optional")}
                 defaultCountryCode="TH"
                 testID="ti-add-phone"
               />
               <TiField
-                label="Date of birth (optional)"
+                label={tr("admin.date_of_birth_optional")}
                 value={add.birth_date}
                 onChange={setAddField("birth_date")}
-                placeholder="YYYY-MM-DD"
+                placeholder={tr("admin.yyyy_mm_dd")}
                 testID="ti-add-dob"
               />
               <TiField
-                label="Customer group (optional)"
+                label={tr("admin.customer_group_optional")}
                 value={add.group}
                 onChange={setAddField("group")}
                 testID="ti-add-group"
@@ -2054,7 +2062,7 @@ function TaxInvoiceFlow({
                 disabled={!add.name.trim() || !add.last_name.trim()}
                 testID="ti-add-next"
               >
-                <Text style={styles.tiPrimaryText}>Next</Text>
+                <Text style={styles.tiPrimaryText}>{tr("admin.next")}</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
@@ -2063,7 +2071,7 @@ function TaxInvoiceFlow({
           {step === "form" && (
             <ScrollView contentContainerStyle={styles.tiForm} keyboardShouldPersistTaps="handled">
               <TiField
-                label="Taxpayer name or company name"
+                label={tr("admin.taxpayer_name_or_company_name")}
                 required
                 value={form.name}
                 onChange={setField("name")}
@@ -2071,25 +2079,25 @@ function TaxInvoiceFlow({
                 testID="ti-name"
               />
               <TiField
-                label="Tax ID / juristic person no."
+                label={tr("admin.tax_id_juristic_person_no")}
                 required
                 value={form.tax_id}
                 onChange={setField("tax_id")}
-                placeholder="i.e. 1234567890121"
+                placeholder={tr("admin.i_e_1234567890121")}
                 keyboardType="number-pad"
                 maxLength={20}
                 error={errors.tax_id}
                 testID="ti-tax-id"
               />
               <TiField
-                label="Branch name (optional)"
+                label={tr("admin.branch_name_optional")}
                 value={form.tax_branch}
                 onChange={setField("tax_branch")}
-                placeholder="Head Office"
+                placeholder={tr("admin.head_office")}
                 testID="ti-branch"
               />
               <TiField
-                label="Address"
+                label={tr("admin.address")}
                 required
                 value={form.address}
                 onChange={setField("address")}
@@ -2098,17 +2106,17 @@ function TaxInvoiceFlow({
                 testID="ti-address"
               />
               <TiField
-                label="Phone (optional)"
+                label={tr("common.phone_optional")}
                 value={form.phone}
                 onChange={setField("phone")}
                 keyboardType="phone-pad"
                 testID="ti-phone"
               />
               <TiField
-                label="Email (optional)"
+                label={tr("admin.email_optional")}
                 value={form.email}
                 onChange={setField("email")}
-                placeholder="abc@mail.com"
+                placeholder={tr("admin.abc_mail_com")}
                 keyboardType="email-address"
                 testID="ti-email"
               />
@@ -2120,7 +2128,7 @@ function TaxInvoiceFlow({
                 onPress={saveAndPrint}
                 testID="ti-print"
               >
-                <Text style={styles.tiPrimaryText}>Print</Text>
+                <Text style={styles.tiPrimaryText}>{tr("admin.print")}</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
@@ -2230,25 +2238,26 @@ function TdLine({ label, value, bold }: { label: string; value: string; bold?: b
 // Order.source → customer-facing sales-channel label.
 function channelLabel(source: string): string {
   switch (source) {
-    case "delivery": return "Delivery";
-    case "kiosk": return "Kiosk";
+    case "delivery": return tr("admin.channel_delivery");
+    case "kiosk": return tr("admin.channel_kiosk");
     case "table":
     case "other":
-    default: return "Store";
+    default: return tr("admin.channel_store");
   }
 }
 
 // =================== INVENTORY ===================
 const INV_TABS = [
-  { k: "movement", l: "Stock Movement" },
-  { k: "in", l: "Stock-In" },
-  { k: "out", l: "Stock-Out" },
-  { k: "adjust", l: "Adjust Stock" },
-  { k: "check", l: "Check Stock" },
+  { k: "movement", l: "admin.stock_movement" },
+  { k: "in", l: "admin.stock_in" },
+  { k: "out", l: "admin.stock_out" },
+  { k: "adjust", l: "admin.adjust_stock" },
+  { k: "check", l: "admin.check_stock" },
 ] as const;
 type InvTab = (typeof INV_TABS)[number]["k"];
 
 function Inventory({ isWide }: { isWide: boolean }) {
+  useT(); // re-render this screen when the language changes
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
@@ -2260,8 +2269,8 @@ function Inventory({ isWide }: { isWide: boolean }) {
 
   const load = async () => {
     const [c, p] = await Promise.all([
-      apiFetch(`${API}/categories`).then((r) => r.json()),
-      apiFetch(`${API}/products`).then((r) => r.json()),
+      apiFetch(`${API}/categories`).then((r) => safeJson<Category[]>(r, [])),
+      apiFetch(`${API}/products`).then((r) => safeJson<Product[]>(r, [])),
     ]);
     setCategories(c);
     setProducts(p);
@@ -2314,7 +2323,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
               testID={`inv-tab-${t.k}`}
             >
               <Text style={[styles.invTopTabText, tab === t.k && styles.invTopTabTextActive]}>
-                {t.l}
+                {tr(t.l)}
               </Text>
             </TouchableOpacity>
           ))}
@@ -2332,7 +2341,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
                 <Ionicons name="search" size={16} color={C.ink3} />
                 <TextInput
                   style={styles.invSearchInput}
-                  placeholder="Search"
+                  placeholder={tr("common.search")}
                   placeholderTextColor={C.ink3}
                   value={search}
                   onChangeText={setSearch}
@@ -2380,7 +2389,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
               {curCat?.name} ({filtered.length})
             </Text>
             <View style={styles.sortRow}>
-              <Text style={styles.sortLabel}>Sort</Text>
+              <Text style={styles.sortLabel}>{tr("admin.sort")}</Text>
               {(["custom", "name", "inventory"] as const).map((s) => (
                 <TouchableOpacity
                   key={s}
@@ -2389,7 +2398,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
                   testID={`inv-sort-${s}`}
                 >
                   <Text style={[styles.sortTabText, sortBy === s && styles.sortTabTextActive]}>
-                    {s === "custom" ? "Custom" : s === "name" ? "Name" : "Inventory"}
+                    {s === "custom" ? tr("admin.custom") : s === "name" ? tr("common.name") : tr("admin.inventory")}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -2414,14 +2423,14 @@ function Inventory({ isWide }: { isWide: boolean }) {
                   </View>
                   <View style={styles.stockBox}>
                     {item.product_type === "BOM" ? (
-                      <Text style={styles.nonStockText}>Non-stock product</Text>
+                      <Text style={styles.nonStockText}>{tr("admin.non_stock_product")}</Text>
                     ) : (
                       <>
                         <Text style={[styles.stockNum, item.stock <= 0 && { color: C.danger }]}>
                           {item.stock}
                         </Text>
                         <Text style={[styles.stockStatus, item.stock <= 0 && { color: C.danger }]}>
-                          {item.stock <= 0 ? "Out of stock" : "In stock"}
+                          {item.stock <= 0 ? tr("admin.out_of_stock") : tr("admin.in_stock")}
                         </Text>
                       </>
                     )}
@@ -2431,7 +2440,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
               )}
               ListEmptyComponent={
                 <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>No products</Text>
+                  <Text style={styles.emptyText}>{tr("admin.no_products")}</Text>
                 </View>
               }
             />
@@ -2470,38 +2479,38 @@ const DOC_CONFIG: Record<DocType, {
 }> = {
   in: {
     mode: "purchase",
-    title: "Create Stock-In Document", partyLabel: "Vendor",
-    refLabel: "Purchasing Document Ref.", refCol: "Purchasing Document Ref.",
+    title: "admin.create_stock_in_document", partyLabel: "admin.vendor",
+    refLabel: "admin.purchasing_document_ref", refCol: "admin.purchasing_document_ref",
     hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: true,
-    addBarLabel: "Items",
+    addBarLabel: "admin.items",
   },
   out: {
     mode: "purchase",
-    title: "Create Stock-Out Document", partyLabel: "Receiver",
-    refLabel: "Ref Doc No.", refCol: "Ref Doc No.",
+    title: "admin.create_stock_out_document", partyLabel: "admin.receiver",
+    refLabel: "admin.ref_doc_no", refCol: "admin.ref_doc_no",
     hasParty: true, hasPrice: true, hasName: false, hasAdjustType: false, hasAvgCost: false,
-    addBarLabel: "Items",
+    addBarLabel: "admin.items",
   },
   adjust: {
     mode: "reconcile",
-    title: "Create adjust stock document", refCol: "Document Name",
+    title: "admin.create_adjust_stock_document", refCol: "admin.document_name",
     hasParty: false, hasPrice: false, hasName: true, hasAdjustType: true, hasAvgCost: false,
-    addBarLabel: "Search Products", reasonLabel: "Reason", mutates: true,
-    reconcileCols: { before: "Before Adjust", input: "Qty Reconcile", result: "Update" },
+    addBarLabel: "admin.search_products", reasonLabel: "admin.reason", mutates: true,
+    reconcileCols: { before: "admin.before_adjust", input: "admin.qty_reconcile", result: "admin.update" },
   },
   check: {
     mode: "reconcile",
-    title: "Create check stock document", refCol: "Document Name",
+    title: "admin.create_check_stock_document", refCol: "admin.document_name",
     hasParty: false, hasPrice: false, hasName: true, hasAdjustType: false, hasAvgCost: false,
-    addBarLabel: "Search Products", reasonLabel: "Note", mutates: false,
-    reconcileCols: { before: "Before Count", input: "Counted Qty", result: "Difference" },
+    addBarLabel: "admin.search_products", reasonLabel: "admin.note", mutates: false,
+    reconcileCols: { before: "admin.before_count", input: "admin.counted_qty", result: "admin.difference" },
   },
 };
 
+// Document dates: month name in the UI language, Buddhist year, matching the
+// stock paperwork staff file these against.
 function thaiDate(d: Date): string {
-  const months = ["January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"];
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`;
+  return `${d.getDate()} ${tr(`date.months.${d.getMonth()}`)} ${d.getFullYear() + BE_OFFSET}`;
 }
 
 // Document list for a given type (images 4 / adjust / check).
@@ -2510,6 +2519,7 @@ function StockDocuments({
 }: {
   type: DocType; products: Product[]; categories: Category[]; onChanged: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
   const [docs, setDocs] = useState<StockDoc[] | null>(null);
   const [creating, setCreating] = useState(false);
@@ -2538,28 +2548,29 @@ function StockDocuments({
           <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
         </View>
         {cfg.hasPrice && (
-          <Text style={styles.docListTotal}>Total <Text style={{ fontWeight: "700", color: C.ink }}>{total.toFixed(2)}</Text></Text>
+          <Text style={styles.docListTotal}>{tr("common.total")} <Text style={{ fontWeight: "700", color: C.ink }}>{total.toFixed(2)}</Text></Text>
         )}
         <TouchableOpacity style={styles.createDocBtn} onPress={() => setCreating(true)} testID="create-document">
           <Ionicons name="add" size={16} color={C.brand} />
-          <Text style={styles.createDocBtnText}>Create Document</Text>
+          <Text style={styles.createDocBtnText}>{tr("admin.create_document")}</Text>
         </TouchableOpacity>
       </View>
 
       {/* column headers */}
       <View style={styles.docColHead}>
-        <Text style={[styles.docColCell, { width: 150 }]}>Date</Text>
-        <Text style={[styles.docColCell, { width: 150 }]}>Document No.</Text>
-        <Text style={[styles.docColCell, { flex: 1 }]}>{cfg.refCol}</Text>
-        {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>Total</Text>}
-        {cfg.hasAdjustType && <Text style={[styles.docColCell, { width: 110 }]}>Document Type</Text>}
-        <Text style={[styles.docColCell, { width: 100, textAlign: "right" }]}>Created by</Text>
+        <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.date")}</Text>
+        <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.document_no")}</Text>
+        <Text style={[styles.docColCell, { flex: 1 }]}>{cfg.refCol ? tr(cfg.refCol) : null}</Text>
+        {type === "out" && <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.reason")}</Text>}
+        {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>{tr("common.total")}</Text>}
+        {cfg.hasAdjustType && <Text style={[styles.docColCell, { width: 110 }]}>{tr("admin.document_type")}</Text>}
+        <Text style={[styles.docColCell, { width: 100, textAlign: "right" }]}>{tr("admin.created_by")}</Text>
       </View>
 
       {docs === null ? (
         <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
       ) : docs.length === 0 ? (
-        <View style={styles.emptyBox}><Text style={styles.emptyText}>No document</Text></View>
+        <View style={styles.emptyBox}><Text style={styles.emptyText}>{tr("admin.no_document")}</Text></View>
       ) : (
         <FlatList
           data={docs}
@@ -2574,6 +2585,13 @@ function StockDocuments({
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
                 <Text style={[styles.docCell, { width: 150, color: C.ink }]}>{item.document_no}</Text>
                 <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
+                {type === "out" && (
+                  // Blank for anything saved before reasons existed — those
+                  // documents legitimately have none, so don't invent one.
+                  <Text style={[styles.docCell, { width: 150 }]} numberOfLines={1}>
+                    {item.reason || item.note || ""}
+                  </Text>
+                )}
                 {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(item.total || 0).toFixed(2)}</Text>}
                 {cfg.hasAdjustType && <Text style={[styles.docCell, { width: 110 }]}>{item.adjust_type || ""}</Text>}
                 <Text style={[styles.docCell, { width: 100, textAlign: "right" }]}>{item.created_by || ""}</Text>
@@ -2595,6 +2613,14 @@ function StockDocuments({
   );
 }
 
+// Predefined stock-out reason, managed per branch in Settings → Stock-out
+// reasons.  Replaces the free-text remark staff used to type, which arrived
+// spelled a different way every time and could not be grouped or counted.
+type StockOutReason = {
+  id: string; name: string; name_th?: string;
+  sort_order?: number; active?: boolean;
+};
+
 type DraftField = "qty" | "price" | "discount" | "reconcile";
 type DraftLine = {
   product_id: string; barcode: string; product_name: string;
@@ -2611,6 +2637,7 @@ function CreateStockDocModal({
   visible: boolean; type: DocType; products: Product[]; categories: Category[];
   onClose: () => void; onSaved: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
   const reconcile = cfg.mode === "reconcile";
   const [lines, setLines] = useState<DraftLine[]>([]);
@@ -2625,13 +2652,36 @@ function CreateStockDocModal({
   const [importOpen, setImportOpen] = useState(false);
   const [keypad, setKeypad] = useState<{ idx: number; field: DraftField } | null>(null);
   const [saving, setSaving] = useState(false);
+  // Stock-out reason.  Kept separate from `reason` above, which belongs to the
+  // reconcile flow — the two never coexist, but sharing one slot invites a
+  // stray value from whichever form was opened last.
+  const [outReason, setOutReason] = useState("");
+  const [outReasons, setOutReasons] = useState<StockOutReason[]>([]);
+  const [reasonPicker, setReasonPicker] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
-      setTaxIncluded(false); setAvgCost(false);
+      setTaxIncluded(false); setAvgCost(false); setOutReason("");
     }
   }, [visible]);
+
+  // Only the active list: a reason an admin deactivated should disappear from
+  // the picker without disturbing the documents that already recorded it.
+  useEffect(() => {
+    if (!visible || type !== "out") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/stock-out-reasons?active=true`);
+        const data = await r.json();
+        if (!cancelled) setOutReasons(Array.isArray(data) ? data : []);
+      } catch {
+        if (!cancelled) setOutReasons([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [visible, type]);
 
   const lineTotal = (l: DraftLine) =>
     Math.max(0, (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) - (parseFloat(l.discount) || 0));
@@ -2693,7 +2743,7 @@ function CreateStockDocModal({
         discount: parseFloat(l.discount) || 0, total: lineTotal(l),
       }));
       if (type === "in") body.vendor = party;
-      if (type === "out") body.receiver = party;
+      if (type === "out") { body.receiver = party; body.reason = outReason; }
     }
     try {
       await apiFetch(`${API}/stock-documents`, { method: "POST", body: JSON.stringify(body) });
@@ -2702,10 +2752,15 @@ function CreateStockDocModal({
     setSaving(false);
   };
 
+  // A stock-out with no reason is the thing this feature exists to stop, so
+  // Save stays disabled until one is picked rather than silently saving blank.
+  const missingReason = type === "out" && !outReason;
+  const canSave = lines.length > 0 && !missingReason;
+
   const confirmSave = () => {
-    if (!lines.length) return;
+    if (!canSave) return;
     if (Platform.OS === "web") { save(); return; }
-    showAlert("Confirm Save Document", "Are you sure you want to save document.", [
+    showAlert(tr("admin.confirm_save_document"), tr("admin.are_you_sure_you_want_to"), [
       { text: "Cancel", style: "cancel" },
       { text: "Save", style: "destructive", onPress: save },
     ]);
@@ -2719,11 +2774,11 @@ function CreateStockDocModal({
         <View style={styles.docTopBar}>
           <TouchableOpacity style={styles.docBackBtn} onPress={onClose}>
             <Ionicons name="chevron-back" size={22} color={C.ink} />
-            <Text style={styles.docBackText}>Back</Text>
+            <Text style={styles.docBackText}>{tr("common.back")}</Text>
           </TouchableOpacity>
-          <Text style={styles.docTopTitle}>{cfg.title}</Text>
-          <TouchableOpacity onPress={confirmSave} disabled={!lines.length}>
-            <Text style={[styles.docSaveText, !lines.length && { color: C.lineStrong }]}>Save</Text>
+          <Text style={styles.docTopTitle}>{tr(cfg.title)}</Text>
+          <TouchableOpacity onPress={confirmSave} disabled={!canSave} testID="doc-save">
+            <Text style={[styles.docSaveText, !canSave && { color: C.lineStrong }]}>{tr("common.save")}</Text>
           </TouchableOpacity>
         </View>
 
@@ -2733,7 +2788,7 @@ function CreateStockDocModal({
             <View style={styles.docForm}>
               <View style={styles.docFormRow}>
                 <TouchableOpacity style={[styles.docField, styles.importBtn]} onPress={() => setImportOpen(true)} testID="import-documents">
-                  <Text style={styles.importBtnText}>Import Documents</Text>
+                  <Text style={styles.importBtnText}>{tr("admin.import_documents")}</Text>
                   <Ionicons name="chevron-forward" size={16} color={C.ink3} />
                 </TouchableOpacity>
                 <View style={[styles.docField, { flex: 2 }]}>
@@ -2741,7 +2796,7 @@ function CreateStockDocModal({
                     style={styles.docInput}
                     value={reason}
                     onChangeText={setReason}
-                    placeholder={cfg.reasonLabel}
+                    placeholder={cfg.reasonLabel ? tr(cfg.reasonLabel) : undefined}
                     placeholderTextColor={C.ink3}
                     testID="reconcile-reason"
                   />
@@ -2752,23 +2807,45 @@ function CreateStockDocModal({
             <View style={styles.docForm}>
               <View style={styles.docFormRow}>
                 <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>{type === "in" ? "Bill Date Ref." : "Date Ref."}</Text>
+                  <Text style={styles.docFieldLabel}>{type === "in" ? tr("admin.bill_date_ref") : tr("admin.date_ref")}</Text>
                   <Text style={styles.docFieldDate}>{thaiDate(new Date())}</Text>
                 </View>
                 <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>{cfg.refLabel}</Text>
+                  <Text style={styles.docFieldLabel}>{cfg.refLabel ? tr(cfg.refLabel) : null}</Text>
                   <TextInput style={styles.docInput} value={ref} onChangeText={setRef} placeholder="" />
                 </View>
               </View>
               <View style={styles.docFormRow}>
                 <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>{cfg.partyLabel}</Text>
+                  <Text style={styles.docFieldLabel}>{cfg.partyLabel ? tr(cfg.partyLabel) : null}</Text>
                   <TextInput style={styles.docInput} value={party} onChangeText={setParty} placeholder="" />
                 </View>
-                <View style={styles.docField}>
-                  <Text style={styles.docFieldLabel}>Note</Text>
-                  <TextInput style={styles.docInput} value={note} onChangeText={setNote} placeholder="" />
-                </View>
+                {type === "out" ? (
+                  // Reason replaces the free-text note on a stock-out: the
+                  // whole point is that the answer is one of a known set, so
+                  // the export can group by it.
+                  <View style={styles.docField}>
+                    <Text style={styles.docFieldLabel}>{tr("admin.reason")}</Text>
+                    <TouchableOpacity
+                      style={[styles.docInput, styles.docSelect]}
+                      onPress={() => setReasonPicker(true)}
+                      testID="stock-out-reason"
+                    >
+                      <Text
+                        style={[styles.docSelectText, !outReason && { color: C.ink3 }]}
+                        numberOfLines={1}
+                      >
+                        {outReason || tr("admin.choose_a_reason")}
+                      </Text>
+                      <Ionicons name="chevron-down" size={16} color={C.ink3} />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={styles.docField}>
+                    <Text style={styles.docFieldLabel}>{tr("admin.note")}</Text>
+                    <TextInput style={styles.docInput} value={note} onChangeText={setNote} placeholder="" />
+                  </View>
+                )}
               </View>
             </View>
           )}
@@ -2776,20 +2853,20 @@ function CreateStockDocModal({
           {/* ── items table header ── */}
           <View style={styles.itemsHead}>
             <Text style={[styles.itemsHeadCell, { width: 30 }]}>#</Text>
-            <Text style={[styles.itemsHeadCell, { width: 130 }]}>Barcode</Text>
-            <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>Product Name</Text>
+            <Text style={[styles.itemsHeadCell, { width: 130 }]}>{tr("admin.barcode")}</Text>
+            <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>{tr("admin.product_name_2")}</Text>
             {reconcile ? (
               <>
-                <Text style={[styles.itemsHeadCell, { width: 90, textAlign: "right" }]}>{rc?.before}</Text>
-                <Text style={[styles.itemsHeadCell, { width: 90 }]}>{rc?.input}</Text>
-                <Text style={[styles.itemsHeadCell, { width: 80, textAlign: "right" }]}>{rc?.result}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 90, textAlign: "right" }]}>{rc ? tr(rc.before) : null}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 90 }]}>{rc ? tr(rc.input) : null}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80, textAlign: "right" }]}>{rc ? tr(rc.result) : null}</Text>
               </>
             ) : (
               <>
-                <Text style={[styles.itemsHeadCell, { width: 70 }]}>Quantity</Text>
-                <Text style={[styles.itemsHeadCell, { width: 80 }]}>Price/Unit</Text>
-                <Text style={[styles.itemsHeadCell, { width: 70 }]}>Discount</Text>
-                <Text style={[styles.itemsHeadCell, { width: 80 }]}>Total</Text>
+                <Text style={[styles.itemsHeadCell, { width: 70 }]}>{tr("common.quantity")}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80 }]}>{tr("admin.price_unit")}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 70 }]}>{tr("common.discount")}</Text>
+                <Text style={[styles.itemsHeadCell, { width: 80 }]}>{tr("common.total")}</Text>
               </>
             )}
             <View style={{ width: 28 }} />
@@ -2834,7 +2911,7 @@ function CreateStockDocModal({
           })}
 
           <TouchableOpacity style={styles.itemsAddBar} onPress={() => setPicker(true)} testID="add-items">
-            <Text style={styles.itemsAddBarText}>{cfg.addBarLabel}</Text>
+            <Text style={styles.itemsAddBarText}>{tr(cfg.addBarLabel)}</Text>
           </TouchableOpacity>
         </ScrollView>
 
@@ -2843,17 +2920,17 @@ function CreateStockDocModal({
           <View style={styles.docFooter}>
             {cfg.hasAvgCost && (
               <View style={styles.footToggle}>
-                <Text style={styles.footToggleLabel}>AVG Cost Calculate</Text>
+                <Text style={styles.footToggleLabel}>{tr("admin.avg_cost_calculate")}</Text>
                 <Switch value={avgCost} onValueChange={setAvgCost} trackColor={{ true: C.brand }} />
               </View>
             )}
             <View style={styles.footToggle}>
-              <Text style={styles.footToggleLabel}>Tax Included</Text>
+              <Text style={styles.footToggleLabel}>{tr("admin.tax_included")}</Text>
               <Switch value={taxIncluded} onValueChange={setTaxIncluded} trackColor={{ true: C.brand }} />
             </View>
-            <View style={styles.footStat}><Text style={styles.footStatLabel}>Total</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
-            <View style={styles.footStat}><Text style={styles.footStatLabel}>Discount</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
-            <View style={styles.footStat}><Text style={styles.footStatLabel}>Tax 7%</Text><Text style={styles.footStatVal}>{tax.toFixed(2)}</Text></View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>{tr("common.total")}</Text><Text style={styles.footStatVal}>{subtotal.toFixed(2)}</Text></View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>{tr("common.discount")}</Text><Text style={styles.footStatVal}>{discountSum.toFixed(2)}</Text></View>
+            <View style={styles.footStat}><Text style={styles.footStatLabel}>{tr("admin.tax_7_pct")}</Text><Text style={styles.footStatVal}>{tax.toFixed(2)}</Text></View>
           </View>
         )}
 
@@ -2877,6 +2954,45 @@ function CreateStockDocModal({
           onCancel={() => setKeypad(null)}
           onDone={(v) => { if (keypad) setField(keypad.idx, keypad.field, v); setKeypad(null); }}
         />
+
+        {/* Stock-out reason picker */}
+        <Modal
+          visible={reasonPicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setReasonPicker(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setReasonPicker(false)}
+          >
+            <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
+              <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{tr("admin.reason")}</Text>
+              <ScrollView style={{ maxHeight: 360 }}>
+                {outReasons.length === 0 ? (
+                  <Text style={[styles.emptyText, { padding: 24 }]}>
+                    {tr("admin.no_reasons_yet_add_them_in")}
+                  </Text>
+                ) : (
+                  outReasons.map((r) => (
+                    <TouchableOpacity
+                      key={r.id}
+                      style={styles.catRow}
+                      onPress={() => { setOutReason(r.name); setReasonPicker(false); }}
+                      testID={`stock-out-reason-${r.id}`}
+                    >
+                      <Text style={styles.catRowText}>{r.name}</Text>
+                      {!!r.name_th && r.name_th !== r.name && (
+                        <Text style={styles.catRowSub}>{r.name_th}</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))
+                )}
+              </ScrollView>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
       </SafeAreaView>
     </Modal>
   );
@@ -2889,6 +3005,7 @@ function ProductPickerModal({
   visible: boolean; products: Product[]; categories: Category[];
   existing: string[]; onClose: () => void; onDone: (picked: Product[]) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [search, setSearch] = useState("");
   const [catId, setCatId] = useState<string>("");
   const [sort, setSort] = useState<"custom" | "name">("custom");
@@ -2913,7 +3030,7 @@ function ProductPickerModal({
       return n;
     });
 
-  const curCatName = catId ? (categories.find((c) => c.id === catId)?.name || "All Categories") : "All Categories";
+  const curCatName = catId ? (categories.find((c) => c.id === catId)?.name || tr("admin.all_categories_2")) : tr("admin.all_categories_2");
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -2921,9 +3038,9 @@ function ProductPickerModal({
         <View style={styles.pickerCard} testID="product-picker">
           <View style={styles.pickerHead}>
             <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
-            <Text style={styles.pickerTitle}>Select Products</Text>
+            <Text style={styles.pickerTitle}>{tr("admin.select_products")}</Text>
             <TouchableOpacity onPress={() => onDone(products.filter((p) => selected.has(p.id)))}>
-              <Text style={styles.pickerDone}>Done</Text>
+              <Text style={styles.pickerDone}>{tr("admin.done")}</Text>
             </TouchableOpacity>
           </View>
 
@@ -2935,7 +3052,7 @@ function ProductPickerModal({
             <View style={styles.pickerCatList}>
               <ScrollView style={{ maxHeight: 160 }}>
                 <TouchableOpacity style={styles.pickerCatItem} onPress={() => { setCatId(""); setCatOpen(false); }}>
-                  <Text style={styles.pickerCatItemText}>All Categories</Text>
+                  <Text style={styles.pickerCatItemText}>{tr("admin.all_categories")}</Text>
                 </TouchableOpacity>
                 {categories.map((c) => (
                   <TouchableOpacity key={c.id} style={styles.pickerCatItem} onPress={() => { setCatId(c.id); setCatOpen(false); }}>
@@ -2948,15 +3065,15 @@ function ProductPickerModal({
 
           <View style={styles.pickerSearchRow}>
             <Ionicons name="search" size={16} color={C.ink3} />
-            <TextInput style={styles.pickerSearchInput} placeholder="Search" placeholderTextColor={C.ink3} value={search} onChangeText={setSearch} />
+            <TextInput style={styles.pickerSearchInput} placeholder={tr("common.search")} placeholderTextColor={C.ink3} value={search} onChangeText={setSearch} />
             <Ionicons name="barcode-outline" size={20} color={C.brand} />
           </View>
 
           <View style={styles.pickerSortRow}>
-            <Text style={styles.sortLabel}>Sort</Text>
+            <Text style={styles.sortLabel}>{tr("admin.sort")}</Text>
             {(["custom", "name"] as const).map((s) => (
               <TouchableOpacity key={s} style={[styles.sortTab, sort === s && styles.sortTabActive]} onPress={() => setSort(s)}>
-                <Text style={[styles.sortTabText, sort === s && styles.sortTabTextActive]}>{s === "custom" ? "Custom" : "Name"}</Text>
+                <Text style={[styles.sortTabText, sort === s && styles.sortTabTextActive]}>{s === "custom" ? tr("admin.custom") : tr("common.name")}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -2988,7 +3105,7 @@ function ProductPickerModal({
                 </TouchableOpacity>
               );
             }}
-            ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>No products</Text></View>}
+            ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>{tr("admin.no_products")}</Text></View>}
           />
         </View>
       </View>
@@ -3000,6 +3117,7 @@ function ProductPickerModal({
 function AmountKeypad({
   visible, initial, onCancel, onDone,
 }: { visible: boolean; initial: string; onCancel: () => void; onDone: (v: string) => void }) {
+  useT(); // re-render this screen when the language changes
   const [val, setVal] = useState(initial);
   useEffect(() => { if (visible) setVal(initial === "0" ? "" : initial); }, [visible, initial]);
 
@@ -3014,7 +3132,7 @@ function AmountKeypad({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <TouchableOpacity style={styles.keypadOverlay} activeOpacity={1} onPress={onCancel}>
         <TouchableOpacity activeOpacity={1} style={styles.keypadCard}>
-          <Text style={styles.keypadTitle}>Amount</Text>
+          <Text style={styles.keypadTitle}>{tr("common.amount")}</Text>
           <Text style={styles.keypadValue}>{val || "0"}</Text>
           <View style={styles.keypadGrid}>
             {keys.map((k) => (
@@ -3026,7 +3144,7 @@ function AmountKeypad({
             ))}
           </View>
           <TouchableOpacity style={styles.keypadDone} onPress={() => onDone(val || "0")}>
-            <Text style={styles.keypadDoneText}>Done</Text>
+            <Text style={styles.keypadDoneText}>{tr("admin.done")}</Text>
           </TouchableOpacity>
         </TouchableOpacity>
       </TouchableOpacity>
@@ -3039,6 +3157,7 @@ function AmountKeypad({
 function SelectDocumentsModal({
   visible, type, onClose, onLoad,
 }: { visible: boolean; type: DocType; onClose: () => void; onLoad: (docs: StockDoc[]) => void }) {
+  useT(); // re-render this screen when the language changes
   const [docs, setDocs] = useState<StockDoc[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [from, setFrom] = useState("");
@@ -3072,23 +3191,23 @@ function SelectDocumentsModal({
         <View style={styles.pickerCard} testID="select-documents">
           <View style={styles.pickerHead}>
             <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
-            <Text style={styles.pickerTitle}>Select Documents</Text>
+            <Text style={styles.pickerTitle}>{tr("admin.select_documents")}</Text>
             <TouchableOpacity
               style={styles.loadDocsBtn}
               onPress={() => onLoad((docs || []).filter((d) => selected.has(d.id)))}
             >
-              <Text style={styles.loadDocsText}>Load Documents</Text>
+              <Text style={styles.loadDocsText}>{tr("admin.load_documents")}</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.selDateRow}>
             <TouchableOpacity style={styles.selDateField} onPress={() => setCal("from")}>
-              <Text style={styles.docFieldLabel}>From Date</Text>
-              <Text style={styles.selDateVal}>{from || "Select date"}</Text>
+              <Text style={styles.docFieldLabel}>{tr("admin.from_date")}</Text>
+              <Text style={styles.selDateVal}>{from || tr("admin.select_date")}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.selDateField} onPress={() => setCal("to")}>
-              <Text style={styles.docFieldLabel}>To Date</Text>
-              <Text style={styles.selDateVal}>{to || "Select date"}</Text>
+              <Text style={styles.docFieldLabel}>{tr("admin.to_date")}</Text>
+              <Text style={styles.selDateVal}>{to || tr("admin.select_date")}</Text>
             </TouchableOpacity>
           </View>
 
@@ -3103,15 +3222,15 @@ function SelectDocumentsModal({
           )}
 
           <View style={styles.docColHead}>
-            <Text style={[styles.docColCell, { width: 150 }]}>Date</Text>
-            <Text style={[styles.docColCell, { flex: 1 }]}>Document Name</Text>
+            <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.date")}</Text>
+            <Text style={[styles.docColCell, { flex: 1 }]}>{tr("admin.document_name")}</Text>
             <View style={{ width: 28 }} />
           </View>
 
           {docs === null ? (
             <ActivityIndicator color={C.brand} style={{ marginTop: 30 }} />
           ) : filtered.length === 0 ? (
-            <View style={styles.emptyBox}><Text style={styles.emptyText}>No items</Text></View>
+            <View style={styles.emptyBox}><Text style={styles.emptyText}>{tr("admin.no_items")}</Text></View>
           ) : (
             <FlatList
               data={filtered}
@@ -3151,6 +3270,7 @@ function StockMovementModal({
   onClose: () => void;
   onSave: (t: "in" | "out" | "adjust", qty: number) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [type, setType] = useState(defaultType);
   const [qty, setQty] = useState("");
   useEffect(() => {
@@ -3164,7 +3284,7 @@ function StockMovementModal({
           <View style={styles.smallModal} testID="stock-modal">
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>Stock · {product.name.slice(0, 24)}</Text>
+              <Text style={styles.modalTitle}>{tr("admin.stock")} {product.name.slice(0, 24)}</Text>
               <View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
@@ -3177,14 +3297,14 @@ function StockMovementModal({
                     testID={`stock-type-${t}`}
                   >
                     <Text style={[styles.typeBtnText, type === t && { color: C.surface }]}>
-                      {t === "in" ? "Stock-In" : t === "out" ? "Stock-Out" : "Adjust"}
+                      {t === "in" ? tr("admin.stock_in") : t === "out" ? tr("admin.stock_out") : tr("admin.adjust")}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              <Text style={styles.formLabel}>Current stock: {product.stock}</Text>
+              <Text style={styles.formLabel}>{tr("admin.current_stock")} {product.stock}</Text>
               <TextInput
-                placeholder={type === "adjust" ? "New stock value" : "Quantity"}
+                placeholder={type === "adjust" ? tr("admin.new_stock_value") : tr("common.quantity")}
                 keyboardType="number-pad"
                 style={styles.formInput}
                 value={qty}
@@ -3197,7 +3317,7 @@ function StockMovementModal({
                 onPress={() => onSave(type, parseInt(qty || "0"))}
                 testID="stock-save"
               >
-                <Text style={styles.primaryBtnText}>Save Movement</Text>
+                <Text style={styles.primaryBtnText}>{tr("admin.save_movement")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3209,6 +3329,7 @@ function StockMovementModal({
 
 // =================== CUSTOMERS ===================
 function Customers({ isWide }: { isWide: boolean }) {
+  useT(); // re-render this screen when the language changes
   const [list, setList] = useState<Customer[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
   const [stats, setStats] = useState<CustomerStats | null>(null);
@@ -3266,11 +3387,11 @@ function Customers({ isWide }: { isWide: boolean }) {
       }
       c = await r.json();
     } catch (e: any) {
-      showAlert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert(tr("common.couldnt_save_customer"), e?.message || "Please try again.");
       return;
     }
     if (!c || !c.name) {
-      showAlert("Couldn't save customer", "Unexpected response from server.");
+      showAlert(tr("common.couldnt_save_customer"), tr("common.unexpected_response_from_server"));
       return;
     }
     setList((l) => [c, ...l]);
@@ -3286,14 +3407,14 @@ function Customers({ isWide }: { isWide: boolean }) {
         <SearchField
           value={q}
           onChangeText={setQ}
-          placeholder="Phone number or name"
+          placeholder={tr("admin.phone_number_or_name")}
           height={40}
           style={{ flex: 1, maxWidth: isWide ? 340 : undefined, minWidth: 200 }}
           testID="cust-admin-search"
         />
         <Spacer />
         <Btn
-          label="Add customer"
+          label={tr("admin.add_customer")}
           icon="add"
           variant="blue"
           height={40}
@@ -3308,8 +3429,8 @@ function Customers({ isWide }: { isWide: boolean }) {
           {filtered.length === 0 ? (
             <Empty
               icon="people-outline"
-              title="No customers"
-              note={q ? "Nothing matches that search." : "Add a customer to start tracking their usual."}
+              title={tr("common.no_customers")}
+              note={q ? tr("admin.nothing_matches_that_search") : tr("admin.add_a_customer_to_start_tracking")}
             />
           ) : (
             <FlatList
@@ -3367,7 +3488,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                           ? new Date(item.last_visit).toLocaleDateString("en-GB", {
                               day: "2-digit", month: "short",
                             })
-                          : "Never"}
+                          : tr("admin.never")}
                       </TText>
                     </TCell>
                   </TRow>
@@ -3383,8 +3504,8 @@ function Customers({ isWide }: { isWide: boolean }) {
               {!sel ? (
                 <Empty
                   icon="person-outline"
-                  title="Select a customer"
-                  note="Their spend, usual order and recent bills open here."
+                  title={tr("admin.select_a_customer")}
+                  note={tr("admin.their_spend_usual_order_and_recent")}
                 />
               ) : (
                 <ScrollView showsVerticalScrollIndicator={false}>
@@ -3408,7 +3529,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                       ) : (
                         <Money style={styles.kpiVal}>{String(stats?.bill_count ?? 0)}</Money>
                       )}
-                      <Text style={styles.kpiLbl}>Bills</Text>
+                      <Text style={styles.kpiLbl}>{tr("admin.bills_2")}</Text>
                     </View>
                     <View style={styles.kpi}>
                       {statsLoading ? (
@@ -3416,7 +3537,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                       ) : (
                         <Money style={styles.kpiVal}>{THB(stats?.avg_bill ?? 0)}</Money>
                       )}
-                      <Text style={styles.kpiLbl}>Avg bill</Text>
+                      <Text style={styles.kpiLbl}>{tr("admin.avg_bill")}</Text>
                     </View>
                     <View style={[styles.kpi, { borderRightWidth: 0 }]}>
                       {statsLoading ? (
@@ -3424,7 +3545,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                       ) : (
                         <Money style={styles.kpiVal}>{THB(stats?.success_total ?? 0)}</Money>
                       )}
-                      <Text style={styles.kpiLbl}>Lifetime</Text>
+                      <Text style={styles.kpiLbl}>{tr("admin.lifetime")}</Text>
                     </View>
                   </View>
 
@@ -3433,7 +3554,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                   {!statsLoading && (stats?.outstanding_total ?? 0) > 0 && (
                     <View style={{ padding: 18 }}>
                       <Notice tone="danger">
-                        {`${THB(stats!.outstanding_total)} outstanding across ${stats!.outstanding_count} ${stats!.outstanding_count === 1 ? "bill" : "bills"}.`}
+                        {tr("admin.outstanding_across", { amount: THB(stats!.outstanding_total), count: stats!.outstanding_count })}
                       </Notice>
                     </View>
                   )}
@@ -3441,7 +3562,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                   {/* "The usual" is the feature — real loyalty at a shop this
                       size is a cashier who remembers. */}
                   <View style={styles.dsec}>
-                    <Lbl style={{ marginBottom: 12 }}>Usual order</Lbl>
+                    <Lbl style={{ marginBottom: 12 }}>{tr("admin.usual_order")}</Lbl>
                     {statsLoading ? (
                       <ActivityIndicator size="small" color={C.ink3} />
                     ) : stats?.top_products?.length ? (
@@ -3451,12 +3572,12 @@ function Customers({ isWide }: { isWide: boolean }) {
                         ))}
                       </View>
                     ) : (
-                      <Text style={styles.dsecEmpty}>Nothing bought yet.</Text>
+                      <Text style={styles.dsecEmpty}>{tr("admin.nothing_bought_yet")}</Text>
                     )}
                   </View>
 
                   <View style={styles.dsec}>
-                    <Lbl style={{ marginBottom: 12 }}>Top categories</Lbl>
+                    <Lbl style={{ marginBottom: 12 }}>{tr("admin.top_categories")}</Lbl>
                     {statsLoading ? (
                       <ActivityIndicator size="small" color={C.ink3} />
                     ) : stats?.top_categories?.length ? (
@@ -3469,7 +3590,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                         />
                       ))
                     ) : (
-                      <Text style={styles.dsecEmpty}>No sales yet.</Text>
+                      <Text style={styles.dsecEmpty}>{tr("admin.no_sales_yet_2")}</Text>
                     )}
                   </View>
                 </ScrollView>
@@ -3486,20 +3607,20 @@ function Customers({ isWide }: { isWide: boolean }) {
               <TouchableOpacity onPress={() => setAddOpen(false)}>
                 <Ionicons name="close" size={24} color={C.ink2} />
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>New customer</Text>
+              <Text style={styles.modalTitle}>{tr("admin.new_customer")}</Text>
               <View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
-              <TextInput placeholder="Name" style={styles.formInput} value={name} onChangeText={setName} testID="admin-cust-name" />
+              <TextInput placeholder={tr("common.name")} style={styles.formInput} value={name} onChangeText={setName} testID="admin-cust-name" />
               <PhoneInput
                 value={phone}
                 onChange={(e164, valid) => { setPhone(e164); setPhoneValid(valid); }}
-                placeholder="Phone (optional)"
+                placeholder={tr("common.phone_optional")}
                 defaultCountryCode="TH"
                 testID="admin-cust-phone"
               />
               <Btn
-                label="Save"
+                label={tr("common.save")}
                 variant="blue"
                 height={52}
                 onPress={save}
@@ -3515,15 +3636,16 @@ function Customers({ isWide }: { isWide: boolean }) {
 }
 
 const CUST_COLS: Col[] = [
-  { key: "name", title: "Customer", flex: 2 },
-  { key: "phone", title: "Phone", flex: 1.3 },
-  { key: "group", title: "Group", flex: 1 },
-  { key: "seen", title: "Last seen", width: 96, right: true },
+  { key: "name", title: "common.customer", flex: 2 },
+  { key: "phone", title: "admin.phone", flex: 1.3 },
+  { key: "group", title: "admin.group", flex: 1 },
+  { key: "seen", title: "admin.last_seen", width: 96, right: true },
 ];
 
 
 // =================== PRODUCTS ===================
 function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
+  useT(); // re-render this screen when the language changes
   const [cats, setCats] = useState<Category[]>([]);
   const [prods, setProds] = useState<Product[]>([]);
   const [activeCat, setActiveCat] = useState<string>("");
@@ -3534,8 +3656,8 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
 
   const load = async () => {
     const [c, p] = await Promise.all([
-      apiFetch(`${API}/categories`).then((r) => r.json()),
-      apiFetch(`${API}/products`).then((r) => r.json()),
+      apiFetch(`${API}/categories`).then((r) => safeJson<Category[]>(r, [])),
+      apiFetch(`${API}/products`).then((r) => safeJson<Product[]>(r, [])),
     ]);
     setCats(c); setProds(p);
     if (!activeCat && c.length) setActiveCat(c[0].id);
@@ -3593,7 +3715,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
         <SearchField
           value={q}
           onChangeText={setQ}
-          placeholder="Name or Thai name"
+          placeholder={tr("admin.name_or_thai_name")}
           height={40}
           style={{ flex: 1, maxWidth: isWide ? 320 : undefined, minWidth: 200 }}
           testID="admin-prod-search"
@@ -3602,14 +3724,14 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
         {/* One toggle, not two mutually exclusive pills — "custom order" is
             just the catalogue's own order, which is the default. */}
         <Pill
-          label="Sort A–Z"
+          label={tr("admin.sort_a_z")}
           active={sort === "name"}
           onPress={() => setSort(sort === "name" ? "custom" : "name")}
           testID="sort-name"
         />
         {isAdmin && (
           <Btn
-            label="Add product"
+            label={tr("admin.add_product")}
             icon="add"
             variant="blue"
             height={40}
@@ -3624,8 +3746,8 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
       {(unpriced > 0 || uncosted > 0) && (
         <Notice tone="warn">
           {[
-            unpriced > 0 && `${unpriced} ${unpriced === 1 ? "product has" : "products have"} no price and would ring up as free.`,
-            uncosted > 0 && `${uncosted} ${uncosted === 1 ? "has" : "have"} no cost, so their margin can't be calculated.`,
+            unpriced > 0 && tr("admin.products_no_price", { count: unpriced }),
+            uncosted > 0 && tr("admin.products_no_cost", { count: uncosted }),
           ].filter(Boolean).join(" ")}
         </Notice>
       )}
@@ -3638,7 +3760,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             showsVerticalScrollIndicator={false}
           >
             <Lbl style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 }}>
-              Categories
+              {tr("admin.categories")}
             </Lbl>
             {cats.map((c) => {
               const active = activeCat === c.id && !q;
@@ -3688,10 +3810,10 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
 
         <Panel style={{ flex: 1, minWidth: 0 }}>
           <PanelHead
-            title={q ? `Results for “${q}”` : curCat?.name || "Products"}
+            title={q ? `Results for “${q}”` : curCat?.name || tr("common.products")}
             right={
               <Text style={styles.prodCount}>
-                {filtered.length} {filtered.length === 1 ? "product" : "products"}
+                {filtered.length} {filtered.length === 1 ? tr("admin.product") : tr("admin.products")}
               </Text>
             }
           />
@@ -3706,8 +3828,8 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             ListEmptyComponent={
               <Empty
                 icon="cube-outline"
-                title="No products here"
-                note={q ? "Nothing matches that search." : "This category is empty."}
+                title={tr("common.no_products_here")}
+                note={q ? tr("admin.nothing_matches_that_search") : tr("admin.this_category_is_empty")}
               />
             }
             renderItem={({ item }) => {
@@ -3736,7 +3858,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                       </Money>
                     </View>
                     {item.price === 0 ? (
-                      <Tag tone="low">No price</Tag>
+                      <Tag tone="low">{tr("admin.no_price")}</Tag>
                     ) : m !== null ? (
                       <Tag tone={m >= 60 ? "ok" : "low"} mono>{`${m.toFixed(0)}%`}</Tag>
                     ) : null}
@@ -3791,7 +3913,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                     {/* Out-of-stock products still show, greyed in place,
                         rather than disappearing into an archive tab. */}
                     {item.stock <= 0 ? (
-                      <Tag tone="out">Sold out</Tag>
+                      <Tag tone="out">{tr("admin.sold_out")}</Tag>
                     ) : item.stock <= 5 ? (
                       <Tag tone="low" mono>{`${item.stock} left`}</Tag>
                     ) : (
@@ -3819,7 +3941,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             <View style={styles.prodFootNote}>
               <Ionicons name="shield-outline" size={16} color={C.ink2Soft} />
               <Text style={styles.prodFootText}>
-                Price and menu changes are admin-only.
+                {tr("admin.price_and_menu_changes_are_admin")}
               </Text>
             </View>
           )}
@@ -3841,12 +3963,12 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
 // they add up to more than the row has and the name column collapses to a
 // single letter. Flex lets every column shrink together instead.
 const PROD_COLS_FULL: Col[] = [
-  { key: "name", title: "Product", flex: 3 },
-  { key: "price", title: "Price", flex: 1.1, right: true },
-  { key: "cost", title: "Cost", flex: 1, right: true },
-  { key: "margin", title: "Margin", flex: 0.9, right: true },
-  { key: "stock", title: "Stock", flex: 1.1, right: true },
-  { key: "fav", title: "Favourite", flex: 1, right: true },
+  { key: "name", title: "admin.product_2", flex: 3 },
+  { key: "price", title: "admin.price", flex: 1.1, right: true },
+  { key: "cost", title: "admin.cost", flex: 1, right: true },
+  { key: "margin", title: "admin.margin", flex: 0.9, right: true },
+  { key: "stock", title: "common.stock", flex: 1.1, right: true },
+  { key: "fav", title: "admin.favourite", flex: 1, right: true },
 ];
 // Cost is the first thing to go: margin already carries it, and the name is
 // what makes a row identifiable at all.
@@ -3862,6 +3984,7 @@ function ProductEditModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [cost, setCost] = useState("");
@@ -3922,7 +4045,7 @@ function ProductEditModal({
         setImg(""); // clear the URL field so the new image wins
       }
     } catch (e) {
-      console.warn("Image pick failed", e);
+      console.warn(tr("admin.image_pick_failed"), e);
     } finally {
       setPickingImage(false);
     }
@@ -3972,25 +4095,25 @@ function ProductEditModal({
           <View style={styles.editModal} testID="product-edit-modal">
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>{isNew ? "Add Product" : "Edit Product"}</Text>
+              <Text style={styles.modalTitle}>{isNew ? tr("admin.add_product_2") : tr("admin.edit_product")}</Text>
               <View style={{ width: 24 }} />
             </View>
             <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-              <Text style={styles.formLabel}>Name</Text>
-              <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder="Product name" testID="prod-name" />
+              <Text style={styles.formLabel}>{tr("common.name")}</Text>
+              <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={tr("admin.product_name")} testID="prod-name" />
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <View style={{ flex: 1, gap: 6 }}>
-                  <Text style={styles.formLabel}>Price (THB)</Text>
+                  <Text style={styles.formLabel}>{tr("admin.price_thb")}</Text>
                   <TextInput style={styles.formInput} value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="0.00" testID="prod-price" />
                 </View>
                 <View style={{ flex: 1, gap: 6 }}>
-                  <Text style={styles.formLabel}>Cost (THB)</Text>
+                  <Text style={styles.formLabel}>{tr("admin.cost_thb")}</Text>
                   <TextInput style={styles.formInput} value={cost} onChangeText={setCost} keyboardType="decimal-pad" placeholder="0.00" testID="prod-cost" />
                 </View>
               </View>
-              <Text style={styles.formLabel}>Stock</Text>
+              <Text style={styles.formLabel}>{tr("common.stock")}</Text>
               <TextInput style={styles.formInput} value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" testID="prod-stock" />
-              <Text style={styles.formLabel}>Image</Text>
+              <Text style={styles.formLabel}>{tr("admin.image")}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                 <View style={styles.imgThumb}>
                   {imgBase64 || img ? (
@@ -4008,17 +4131,17 @@ function ProductEditModal({
                   >
                     <Ionicons name="camera-outline" size={18} color={C.ink} />
                     <Text style={styles.imgPickBtnText}>
-                      {pickingImage ? "Loading…" : (imgBase64 || img ? "Change Image" : "Choose Image")}
+                      {pickingImage ? tr("admin.loading") : (imgBase64 || img ? tr("admin.change_image") : tr("admin.choose_image"))}
                     </Text>
                   </TouchableOpacity>
                   {(imgBase64 || img) && (
                     <TouchableOpacity onPress={clearImage} testID="prod-img-clear">
-                      <Text style={styles.imgClearText}>Remove image</Text>
+                      <Text style={styles.imgClearText}>{tr("admin.remove_image")}</Text>
                     </TouchableOpacity>
                   )}
                 </View>
               </View>
-              <Text style={styles.formLabel}>Category</Text>
+              <Text style={styles.formLabel}>{tr("admin.category")}</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                 {categories.map((c) => (
                   <TouchableOpacity
@@ -4043,16 +4166,16 @@ function ProductEditModal({
                   color={fav ? C.brand : C.ink3}
                 />
                 <Text style={{ color: fav ? C.brand : C.ink2, fontWeight: "600" }}>
-                  {fav ? "Favorite" : "Mark as favorite"}
+                  {fav ? tr("common.favorite") : tr("admin.mark_as_favorite")}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.primaryBtn} onPress={save} testID="prod-save">
-                <Text style={styles.primaryBtnText}>{isNew ? "Create" : "Save Changes"}</Text>
+                <Text style={styles.primaryBtnText}>{isNew ? tr("admin.create") : tr("admin.save_changes")}</Text>
               </TouchableOpacity>
               {!isNew && (
                 <TouchableOpacity style={styles.dangerBtn} onPress={del} testID="prod-delete">
                   <Ionicons name="trash-outline" size={16} color={C.danger} />
-                  <Text style={{ color: C.danger, fontWeight: "600" }}>Delete product</Text>
+                  <Text style={{ color: C.danger, fontWeight: "600" }}>{tr("admin.delete_product")}</Text>
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -4090,6 +4213,7 @@ type DrawerCat = {
 };
 
 function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
+  useT(); // re-render this screen when the language changes
   const [current, setCurrent] = useState<ShiftType | null>(null);
   const [history, setHistory] = useState<ShiftType[]>([]);
   const [tab, setTab] = useState<"shift" | "history">("shift");
@@ -4117,15 +4241,18 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
     }
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [cur, hist] = await Promise.all([
-      apiFetch(`${API}/shifts/current`).then((r) => r.json()),
-      apiFetch(`${API}/shifts`).then((r) => r.json()),
+      apiFetch(`${API}/shifts/current`).then((r) => safeJson<any>(r, null)),
+      apiFetch(`${API}/shifts`).then((r) => safeJson<any[]>(r, [])),
     ]);
     setCurrent(cur && cur.id ? cur : null);
     setHistory(hist || []);
-  };
-  useEffect(() => { load(); }, []);
+  }, []);
+  // Re-read on focus, not just on mount.  The router keeps this screen alive
+  // behind the POS, so a cashier who rings up a sale and comes straight back
+  // would otherwise be looking at the drawer as it stood before the sale.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Pull the reason-code list for whichever side (Cash In / Cash Out) is open.
   useEffect(() => {
@@ -4146,7 +4273,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
   const closeShift = async () => {
     const counted = parseFloat(actualCash);
     if (actualCash.trim() === "" || isNaN(counted) || counted < 0) {
-      showAlert("Counted cash required", "Enter the actual amount counted in the drawer before closing.");
+      showAlert(tr("admin.counted_cash_required"), tr("admin.enter_the_actual_amount_counted_in"));
       return;
     }
     const res = await apiFetch(`${API}/shifts/close`, {
@@ -4165,7 +4292,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         await printShiftSummary(body.summary, shop);
       }
     } catch (e) {
-      console.error("shift summary print failed", e);
+      console.error(tr("admin.shift_summary_print_failed"), e);
     } finally {
       setPrinting(false);
       load();
@@ -4177,12 +4304,20 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
     setPrinting(true);
     try {
       const [summary, shop] = await Promise.all([
-        apiFetch(`${API}/shifts/${shiftId}/summary`).then((r) => r.json()),
+        // Unlike the read-only loads above this must NOT fall back to empty —
+        // printing a blank drawer summary is worse than not printing.  Fail on
+        // a bad response, but with a message that names the real fault instead
+        // of the "Unexpected character: <" you get from parsing an error page.
+        apiFetch(`${API}/shifts/${shiftId}/summary`).then(async (r) => {
+          if (!r.ok) throw new Error(`Shift summary fetch failed (HTTP ${r.status})`);
+          return safeJson<any>(r, null);
+        }),
         fetchShop(),
       ]);
+      if (!summary) throw new Error("Shift summary response was not valid JSON");
       await printShiftSummary(summary, shop);
     } catch (e) {
-      console.error("reprint summary failed", e);
+      console.error(tr("admin.reprint_summary_failed"), e);
     } finally {
       setPrinting(false);
     }
@@ -4197,16 +4332,17 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
   };
   const closeMoveDlg = () => { setMoveDlg(null); setMoveAmt(""); setMoveNote(""); setMoveCat(""); };
 
-  const expected = current
-    ? current.start_cash + current.total_paid_in - current.total_paid_out
-    : 0;
+  // Take the server's figure rather than recomputing. The local formula left
+  // cash sales out entirely, so the screen and the close-shift slip disagreed
+  // by exactly the round's cash takings.
+  const expected = current ? current.expected_in_drawer || 0 : 0;
 
   const fmtDT = (iso?: string) =>
     iso ? new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(",", "") : "-";
 
   return (
     <View style={{ flex: 1 }} testID="drawer-section">
-      <Text style={styles.shiftHeader}>Shift</Text>
+      <Text style={styles.shiftHeader}>{tr("admin.shift")}</Text>
 
       {tab === "shift" ? (
         <ScrollView contentContainerStyle={{ padding: 16 }}>
@@ -4214,36 +4350,36 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
             <View style={styles.shiftCard}>
               <View style={styles.emptyBox}>
                 <Ionicons name="file-tray-outline" size={40} color={C.lineStrong} />
-                <Text style={styles.emptyText}>No open shift</Text>
+                <Text style={styles.emptyText}>{tr("admin.no_open_shift")}</Text>
                 <TouchableOpacity style={[styles.primaryBtn, { marginTop: 14 }]} onPress={() => setOpenDlg(true)} testID="open-shift">
-                  <Text style={styles.primaryBtnText}>Open Shift</Text>
+                  <Text style={styles.primaryBtnText}>{tr("common.open_shift")}</Text>
                 </TouchableOpacity>
               </View>
             </View>
           ) : (
             <>
               <View style={styles.shiftCard}>
-                <ShiftRow label="Round" value={String(current.round_number)} strong />
-                <ShiftRow label="Start Cash in Drawer" value={current.start_cash.toFixed(2)} />
-                <ShiftRow label="Shift opened" value={fmtDT(current.opened_at)} />
-                <ShiftRow label="Shift opened by" value={current.opened_by} />
+                <ShiftRow label={tr("admin.round")} value={String(current.round_number)} strong />
+                <ShiftRow label={tr("admin.start_cash_in_drawer")} value={current.start_cash.toFixed(2)} />
+                <ShiftRow label={tr("admin.shift_opened")} value={fmtDT(current.opened_at)} />
+                <ShiftRow label={tr("admin.shift_opened_by")} value={current.opened_by} />
               </View>
               <View style={styles.shiftCard}>
-                <ShiftRow label="Total Sales (cash)" value={current.total_sales_cash.toFixed(2)} />
-                <ShiftRow label="Total Cash In" value={current.total_paid_in.toFixed(2)} />
-                <ShiftRow label="Total Cash Out" value={current.total_paid_out.toFixed(2)} />
-                <ShiftRow label="Expected in Drawer" value={expected.toFixed(2)} />
+                <ShiftRow label={tr("admin.total_sales_cash")} value={current.total_sales_cash.toFixed(2)} />
+                <ShiftRow label={tr("admin.total_cash_in")} value={current.total_paid_in.toFixed(2)} />
+                <ShiftRow label={tr("admin.total_cash_out")} value={current.total_paid_out.toFixed(2)} />
+                <ShiftRow label={tr("admin.expected_in_drawer")} value={expected.toFixed(2)} />
               </View>
               <View style={styles.inOutRow}>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_in")} testID="paid-in">
-                  <Text style={[styles.inOutText, { color: C.ok }]}>Cash In</Text>
+                  <Text style={[styles.inOutText, { color: C.ok }]}>{tr("admin.cash_in")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.inOutBtn} onPress={() => setMoveDlg("paid_out")} testID="paid-out">
-                  <Text style={[styles.inOutText, { color: C.danger }]}>Cash Out</Text>
+                  <Text style={[styles.inOutText, { color: C.danger }]}>{tr("admin.cash_out")}</Text>
                 </TouchableOpacity>
               </View>
               <TouchableOpacity style={styles.closeShiftBtn} onPress={() => setCloseDlg(true)} testID="close-shift">
-                <Text style={styles.closeShiftText}>CLOSE SHIFT</Text>
+                <Text style={styles.closeShiftText}>{tr("admin.close_shift")}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -4260,11 +4396,11 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
       <View style={styles.invTabs}>
         <TouchableOpacity style={[styles.invTab, tab === "shift" && styles.invTabActive]} onPress={() => setTab("shift")} testID="shift-tab">
           <Ionicons name="file-tray-outline" size={16} color={tab === "shift" ? C.brand : C.ink2} />
-          <Text style={[styles.invTabText, tab === "shift" && { color: C.brand }]}>Shift</Text>
+          <Text style={[styles.invTabText, tab === "shift" && { color: C.brand }]}>{tr("admin.shift")}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.invTab, tab === "history" && styles.invTabActive]} onPress={() => setTab("history")} testID="history-tab">
           <Ionicons name="time-outline" size={16} color={tab === "history" ? C.brand : C.ink2} />
-          <Text style={[styles.invTabText, tab === "history" && { color: C.brand }]}>History</Text>
+          <Text style={[styles.invTabText, tab === "history" && { color: C.brand }]}>{tr("admin.history")}</Text>
         </TouchableOpacity>
       </View>
 
@@ -4274,13 +4410,13 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setOpenDlg(false)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>Open Shift</Text><View style={{ width: 24 }} />
+              <Text style={styles.modalTitle}>{tr("common.open_shift")}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
-              <Text style={styles.formLabel}>Start Cash in Drawer (THB)</Text>
+              <Text style={styles.formLabel}>{tr("common.start_cash_in_drawer_thb")}</Text>
               <TextInput style={styles.formInput} value={startCash} onChangeText={setStartCash} keyboardType="decimal-pad" testID="start-cash" />
               <TouchableOpacity style={styles.primaryBtn} onPress={openShift} testID="confirm-open-shift">
-                <Text style={styles.primaryBtnText}>Open Shift</Text>
+                <Text style={styles.primaryBtnText}>{tr("common.open_shift")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -4293,7 +4429,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setCloseDlg(false)}><Ionicons name="close" size={24} color={C.danger} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>Actual in Drawer</Text><View style={{ width: 24 }} />
+              <Text style={styles.modalTitle}>{tr("admin.actual_in_drawer")}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
               <TextInput
@@ -4307,7 +4443,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
               />
               <TouchableOpacity style={styles.closeShiftBtn} onPress={closeShift} testID="confirm-close-shift">
                 <Ionicons name="save-outline" size={18} color={C.surface} style={{ marginRight: 6 }} />
-                <Text style={styles.closeShiftText}>CLOSE SHIFT</Text>
+                <Text style={styles.closeShiftText}>{tr("admin.close_shift")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -4320,11 +4456,11 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={closeMoveDlg}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? "Cash In" : "Cash Out"}</Text><View style={{ width: 24 }} />
+              <Text style={styles.modalTitle}>{moveDlg === "paid_in" ? tr("admin.cash_in") : tr("admin.cash_out")}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
               <View style={styles.moveRow}>
-                <Text style={styles.moveRowLabel}>Amount</Text>
+                <Text style={styles.moveRowLabel}>{tr("common.amount")}</Text>
                 <TextInput
                   style={styles.moveRowInput}
                   value={moveAmt}
@@ -4336,15 +4472,15 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
                 />
               </View>
               <TouchableOpacity style={styles.moveRow} onPress={() => setShowCatPicker(true)} testID="move-cat">
-                <Text style={styles.moveRowLabel}>Category</Text>
+                <Text style={styles.moveRowLabel}>{tr("admin.category")}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                   <Text style={[styles.moveRowValue, !moveCat && { color: C.ink3 }]}>
-                    {moveCat || "Choose category"}
+                    {moveCat || tr("admin.choose_category")}
                   </Text>
                   <Ionicons name="chevron-forward" size={16} color={C.ink3} />
                 </View>
               </TouchableOpacity>
-              <Text style={styles.formLabel}>Description</Text>
+              <Text style={styles.formLabel}>{tr("admin.description")}</Text>
               <TextInput
                 style={[styles.formInput, { height: 96, textAlignVertical: "top" }]}
                 value={moveNote}
@@ -4358,7 +4494,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
                 onPress={addMovement}
                 testID="confirm-movement"
               >
-                <Text style={styles.primaryBtnText}>{moveDlg === "paid_in" ? "Cash In" : "Cash Out"}</Text>
+                <Text style={styles.primaryBtnText}>{moveDlg === "paid_in" ? tr("admin.cash_in") : tr("admin.cash_out")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -4369,10 +4505,10 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
       <Modal visible={showCatPicker} transparent animationType="fade" onRequestClose={() => setShowCatPicker(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCatPicker(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
-            <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>Category</Text>
+            <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{tr("admin.category")}</Text>
             <ScrollView style={{ maxHeight: 360 }}>
               {cats.length === 0 ? (
-                <Text style={[styles.emptyText, { padding: 24 }]}>No categories yet</Text>
+                <Text style={[styles.emptyText, { padding: 24 }]}>{tr("admin.no_categories_yet")}</Text>
               ) : (
                 cats.map((c) => (
                   <TouchableOpacity
@@ -4395,7 +4531,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         <View style={styles.modalOverlay}>
           <View style={styles.printingBox}>
             <ActivityIndicator color={C.brand} size="large" />
-            <Text style={styles.printingText}>Printing…</Text>
+            <Text style={styles.printingText}>{tr("admin.printing")}</Text>
           </View>
         </View>
       </Modal>
@@ -4423,10 +4559,9 @@ function ShiftRow({ label, value, strong }: { label: string; value: string; stro
 // the range header (year + 543) to match the reference UI; the in-modal
 // Calendar reuses the existing Gregorian picker.
 const BE_OFFSET = 543;
-const MONTHS_SHORT_HIST = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+// Month names follow the UI language; the +543 Buddhist year is applied
+// alongside them (see BE_OFFSET below).
+const monthShort = (i: number) => tr(`date.monthsShort.${i}`);
 
 const isoToDate = (iso: string) => new Date(iso + "T00:00:00");
 const shiftIsoDays = (iso: string, delta: number) => {
@@ -4435,11 +4570,11 @@ const shiftIsoDays = (iso: string, delta: number) => {
   return fmtISO(d);
 };
 const fmtRangeLabel = (r: DateRange) => {
-  if (!r.start) return "Select date";
+  if (!r.start) return tr("admin.select_date");
   const s = isoToDate(r.start);
   const e = isoToDate(r.end || r.start);
-  return `${s.getDate()} ${MONTHS_SHORT_HIST[s.getMonth()]} ${s.getFullYear() + BE_OFFSET} - ` +
-    `${e.getDate()} ${MONTHS_SHORT_HIST[e.getMonth()]} ${e.getFullYear() + BE_OFFSET}`;
+  return `${s.getDate()} ${monthShort(s.getMonth())} ${s.getFullYear() + BE_OFFSET} - ` +
+    `${e.getDate()} ${monthShort(e.getMonth())} ${e.getFullYear() + BE_OFFSET}`;
 };
 const fmtTimeOfDay = (iso?: string) => {
   if (!iso) return "-";
@@ -4458,6 +4593,7 @@ function ShiftHistory({
   onReprint: (id: string) => void;
   fmtDT: (iso?: string) => string;
 }) {
+  useT(); // re-render this screen when the language changes
   const initialRange = useMemo<DateRange>(() => {
     const today = new Date();
     const start = new Date(today);
@@ -4510,33 +4646,33 @@ function ShiftHistory({
   const detailCard = selected ? (
     <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
       <View style={styles.histCard}>
-        <ShiftRow label="Round" value={String(selected.round_number)} strong />
-        <ShiftRow label="Shift opened" value={fmtDT(selected.opened_at)} />
-        <ShiftRow label="Shift opened by" value={selected.opened_by || "-"} />
-        <ShiftRow label="Shift closed" value={fmtDT(selected.closed_at)} />
-        <ShiftRow label="Shift closed by" value={selected.closed_by || "-"} />
+        <ShiftRow label={tr("admin.round")} value={String(selected.round_number)} strong />
+        <ShiftRow label={tr("admin.shift_opened")} value={fmtDT(selected.opened_at)} />
+        <ShiftRow label={tr("admin.shift_opened_by")} value={selected.opened_by || "-"} />
+        <ShiftRow label={tr("admin.shift_closed")} value={fmtDT(selected.closed_at)} />
+        <ShiftRow label={tr("admin.shift_closed_by")} value={selected.closed_by || "-"} />
       </View>
       <View style={styles.histCard}>
-        <ShiftRow label="Total Sales (cash)" value={(selected.total_sales_cash || 0).toFixed(2)} />
-        <ShiftRow label="Start Drawer" value={(selected.start_cash || 0).toFixed(2)} />
+        <ShiftRow label={tr("admin.total_sales_cash")} value={(selected.total_sales_cash || 0).toFixed(2)} />
+        <ShiftRow label={tr("admin.start_drawer")} value={(selected.start_cash || 0).toFixed(2)} />
         <View style={styles.shiftRow}>
-          <Text style={styles.shiftLabel}>Cash In</Text>
+          <Text style={styles.shiftLabel}>{tr("admin.cash_in")}</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Text style={styles.shiftVal}>{(selected.total_paid_in || 0).toFixed(2)}</Text>
             <Ionicons name="chevron-forward" size={14} color={C.ink3} />
           </View>
         </View>
         <View style={styles.shiftRow}>
-          <Text style={styles.shiftLabel}>Cash Out</Text>
+          <Text style={styles.shiftLabel}>{tr("admin.cash_out")}</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Text style={[styles.shiftVal, { color: C.danger }]}>{(selected.total_paid_out || 0).toFixed(2)}</Text>
             <Ionicons name="chevron-forward" size={14} color={C.ink3} />
           </View>
         </View>
-        <ShiftRow label="Actual in Drawer" value={(selected.actual_in_drawer ?? 0).toFixed(2)} />
-        <ShiftRow label="Expected in Drawer" value={(selected.expected_in_drawer || 0).toFixed(2)} />
+        <ShiftRow label={tr("admin.actual_in_drawer")} value={(selected.actual_in_drawer ?? 0).toFixed(2)} />
+        <ShiftRow label={tr("admin.expected_in_drawer")} value={(selected.expected_in_drawer || 0).toFixed(2)} />
         <ShiftRow
-          label="Difference"
+          label={tr("admin.difference")}
           value={((selected.actual_in_drawer ?? 0) - (selected.expected_in_drawer || 0)).toFixed(2)}
         />
       </View>
@@ -4547,14 +4683,14 @@ function ShiftHistory({
           testID={`shift-reprint-${selected.id}`}
         >
           <Ionicons name="print-outline" size={18} color={C.brand} />
-          <Text style={styles.histReprintText}>Reprint summary</Text>
+          <Text style={styles.histReprintText}>{tr("admin.reprint_summary")}</Text>
         </TouchableOpacity>
       )}
     </ScrollView>
   ) : (
     <View style={styles.emptyBox}>
       <Ionicons name="time-outline" size={40} color={C.lineStrong} />
-      <Text style={styles.emptyText}>Pick a shift to see details</Text>
+      <Text style={styles.emptyText}>{tr("admin.pick_a_shift_to_see_details")}</Text>
     </View>
   );
 
@@ -4578,7 +4714,7 @@ function ShiftHistory({
       <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
         {grouped.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Text style={styles.emptyText}>No shifts in this range</Text>
+            <Text style={styles.emptyText}>{tr("admin.no_shifts_in_this_range")}</Text>
           </View>
         ) : (
           grouped.map((g) => (
@@ -4594,9 +4730,9 @@ function ShiftHistory({
                     testID={`shift-hist-${row.id}`}
                   >
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.histListRound}>Round {row.round_number}</Text>
+                      <Text style={styles.histListRound}>{tr("admin.round")} {row.round_number}</Text>
                       <Text style={styles.histListSub}>
-                        End Drawer: {fmtTimeOfDay(row.closed_at || row.opened_at)}
+                        {tr("admin.end_drawer")} {fmtTimeOfDay(row.closed_at || row.opened_at)}
                       </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color={C.ink3} />
@@ -4639,6 +4775,7 @@ function ShiftHistory({
 // for customers to scan.  The URL is derived from the backend host + the active
 // branch id, so each branch/tablet shows its own — no configuration needed.
 function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchName: string }) {
+  useT(); // re-render this screen when the language changes
   const url = branchId ? `${SELF_ORDER_BASE}/${branchId}/` : "";
   const qr = useMemo(() => (url ? makeQrDataUrl(url) : null), [url]);
 
@@ -4654,9 +4791,9 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
   if (!branchId) {
     return (
       <ScrollView contentContainerStyle={{ padding: 20 }}>
-        <Text style={styles.h2}>Self-Order QR</Text>
+        <Text style={styles.h2}>{tr("admin.self_order_qr")}</Text>
         <Text style={{ color: C.ink2Soft, marginTop: 8 }}>
-          No active branch on this device. Log in to a branch to see its QR.
+          {tr("admin.no_active_branch_on_this_device")}
         </Text>
       </ScrollView>
     );
@@ -4664,10 +4801,10 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
 
   return (
     <ScrollView contentContainerStyle={{ padding: 20, gap: 16, alignItems: "center" }}>
-      <Text style={[styles.h2, { alignSelf: "flex-start" }]}>Self-Order QR</Text>
+      <Text style={[styles.h2, { alignSelf: "flex-start" }]}>{tr("admin.self_order_qr")}</Text>
       <Text style={{ color: C.ink2, alignSelf: "flex-start", marginTop: -6 }}>
-        Customers scan this to order &amp; pay from their phone for{" "}
-        <Text style={{ fontWeight: "700" }}>{branchName || "this branch"}</Text>.
+        {tr("admin.customers_scan_this_to_order_and")}{" "}
+        <Text style={{ fontWeight: "700" }}>{branchName || tr("admin.this_branch")}</Text>.
       </Text>
 
       <View
@@ -4690,11 +4827,11 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           <Image source={{ uri: qr }} style={{ width: 240, height: 240 }} resizeMode="contain" />
         ) : (
           <View style={{ width: 240, height: 240, alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ color: C.ink3 }}>Couldn’t render QR</Text>
+            <Text style={{ color: C.ink3 }}>{tr("admin.couldnt_render_qr")}</Text>
           </View>
         )}
         <Text style={{ fontWeight: "800", fontSize: 16, marginTop: 12, color: C.ink }}>
-          {branchName || "Self Order"}
+          {branchName || tr("admin.self_order")}
         </Text>
       </View>
 
@@ -4709,7 +4846,7 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           borderColor: C.line,
         }}
       >
-        <Text style={{ color: C.ink2Soft, fontSize: 12, marginBottom: 4 }}>Link</Text>
+        <Text style={{ color: C.ink2Soft, fontSize: 12, marginBottom: 4 }}>{tr("admin.link")}</Text>
         <Text selectable style={{ color: C.ink, fontSize: 13 }}>{url}</Text>
       </View>
 
@@ -4723,7 +4860,7 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           }}
         >
           <Ionicons name="share-outline" size={18} color={C.surface} />
-          <Text style={{ color: C.surface, fontWeight: "700" }}>Share link</Text>
+          <Text style={{ color: C.surface, fontWeight: "700" }}>{tr("admin.share_link")}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => Linking.openURL(url)}
@@ -4734,40 +4871,49 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           }}
         >
           <Ionicons name="open-outline" size={18} color={C.brand} />
-          <Text style={{ color: C.brand, fontWeight: "700" }}>Open</Text>
+          <Text style={{ color: C.brand, fontWeight: "700" }}>{tr("admin.open")}</Text>
         </TouchableOpacity>
       </View>
 
       <Text style={{ color: C.ink3, fontSize: 12, textAlign: "center", maxWidth: 340, marginTop: 4 }}>
-        Print this and place it on the table or counter. Each branch shows its own link automatically.
+        {tr("admin.print_this_and_place_it_on")}
       </Text>
     </ScrollView>
   );
 }
 
 function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branchId: string; branchName: string }) {
-  const sections: { name: string; icon: any; color: string }[] = [
-    { name: "Store profile", icon: "home", color: C.danger },
-    { name: "Tables & zones", icon: "grid", color: "#3B82F6" },
-    { name: "Language", icon: "language", color: "#8B5CF6" },
-    { name: "Receipt", icon: "receipt", color: C.danger },
+  useT(); // re-render this screen when the language changes
+  // `key` is the contract, `labelKey` the presentation. The detail pane below
+  // dispatches on `key`, so it must stay a stable English identifier — putting
+  // translated text here would break every section the moment the language
+  // changed, since `active === "Printers"` would never match "เครื่องพิมพ์".
+  const sections: { key: string; labelKey: string; icon: any; color: string }[] = [
+    { key: "Store profile", labelKey: "admin.store_profile", icon: "home", color: C.danger },
+    { key: "Tables & zones", labelKey: "admin.tables_and_zones", icon: "grid", color: "#3B82F6" },
+    { key: "Language", labelKey: "admin.language", icon: "language", color: "#8B5CF6" },
+    { key: "Receipt", labelKey: "admin.receipt_2", icon: "receipt", color: C.danger },
     // No Payment section: gateway credentials and the test/live lane are
     // backoffice-only. A tablet on a shop counter has no business learning the
     // merchant account or changing where money lands. /api/settings strips the
     // payment fields in both directions, so there is nothing here to edit.
-    { name: "Self-Order QR", icon: "qr-code", color: C.brand },
-    { name: "Cash drawer", icon: "calculator", color: "#06B6D4" },
-    { name: "Delivery partners", icon: "link", color: "#EC4899" },
-    { name: "Printers", icon: "print", color: C.ok },
-    { name: "Second screen", icon: "tv", color: "#3B82F6" },
-    { name: "Users", icon: "person", color: "#F97316" },
-    { name: "Advanced", icon: "settings", color: C.ink2Soft },
-    { name: "Backup & Restore", icon: "cloud-upload", color: "#A855F7" },
-    { name: "Sync", icon: "sync", color: "#06B6D4" },
-    { name: "Loyalty", icon: "star", color: "#EAB308" },
-    { name: "Add-ons", icon: "extension-puzzle", color: "#14B8A6" },
+    { key: "Self-Order QR", labelKey: "admin.self_order_qr", icon: "qr-code", color: C.brand },
+    { key: "Cash drawer", labelKey: "admin.cash_drawer", icon: "calculator", color: "#06B6D4" },
+    { key: "Stock-out reasons", labelKey: "admin.stock_out_reasons", icon: "arrow-undo", color: "#F59E0B" },
+    { key: "Delivery partners", labelKey: "admin.delivery_partners", icon: "link", color: "#EC4899" },
+    { key: "Printers", labelKey: "admin.printers", icon: "print", color: C.ok },
+    { key: "Second screen", labelKey: "admin.second_screen", icon: "tv", color: "#3B82F6" },
+    { key: "Users", labelKey: "admin.users", icon: "person", color: "#F97316" },
+    { key: "Advanced", labelKey: "admin.advanced", icon: "settings", color: C.ink2Soft },
+    { key: "Backup & Restore", labelKey: "admin.backup_and_restore", icon: "cloud-upload", color: "#A855F7" },
+    { key: "Sync", labelKey: "admin.sync", icon: "sync", color: "#06B6D4" },
+    { key: "Loyalty", labelKey: "admin.loyalty", icon: "star", color: "#EAB308" },
+    { key: "Add-ons", labelKey: "admin.add_ons", icon: "extension-puzzle", color: "#14B8A6" },
   ];
-  const [active, setActive] = useState("Shop");
+  // Must match a `sections` entry exactly — the panel below dispatches on this
+  // string, so a name that isn't in the list renders the "not built yet"
+  // placeholder instead of the section.
+  const [active, setActive] = useState("Store profile");
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -4791,7 +4937,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
     return () => { cancelled = true; };
   }, [branchId]);
   const visibleSections = sections.filter(
-    (sec) => sec.name !== "Self-Order QR" || selfOrderOn,
+    (sec) => sec.key !== "Self-Order QR" || selfOrderOn,
   );
   // Narrow phones can't show the list + the detail side by side (leftNav is
   // 280px wide, leaving ~95px for the detail pane).  Use a master-detail
@@ -4801,7 +4947,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
   const showList = isWide || !drilled;
 
   useEffect(() => {
-    apiFetch(`${API}/settings`).then((r) => r.json()).then(setS);
+    apiFetch(`${API}/settings`).then((r) => safeJson<Settings | null>(r, null)).then(setS);
   }, []);
 
   const update = (patch: Partial<Settings>) => setS((c) => (c ? { ...c, ...patch } : c));
@@ -4815,7 +4961,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        showAlert("Save failed", `Settings did not save (HTTP ${res.status}). ${detail.slice(0, 200)}`);
+        showAlert(tr("admin.save_failed"), `Settings did not save (HTTP ${res.status}). ${detail.slice(0, 200)}`);
         return;
       }
       // Refresh from the server response so saved (and masked) values are
@@ -4823,7 +4969,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
       const saved = await res.json().catch(() => null);
       if (saved) setS(saved);
     } catch (e: any) {
-      showAlert("Save failed", e?.message || "Could not reach the server.");
+      showAlert(tr("admin.save_failed"), e?.message || tr("admin.could_not_reach_the_server"));
     } finally {
       setSaving(false);
     }
@@ -4839,18 +4985,18 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
         <Panel style={[styles.setNav, !isWide && { width: "100%", flex: 1 }]}>
           <ScrollView showsVerticalScrollIndicator={false}>
             {visibleSections.map((sec, i) => {
-              const on = isWide && active === sec.name;
+              const on = isWide && active === sec.key;
               return (
                 <TouchableOpacity
-                  key={sec.name}
+                  key={sec.key}
                   style={[
                     styles.setRow,
                     on && { backgroundColor: C.brandTintSoft },
                     i === visibleSections.length - 1 && { borderBottomWidth: 0 },
                   ]}
-                  onPress={() => { setActive(sec.name); setDrilled(true); }}
+                  onPress={() => { setActive(sec.key); setDrilled(true); }}
                   activeOpacity={0.8}
-                  testID={`settings-${sec.name}`}
+                  testID={`settings-${sec.key}`}
                 >
                   {/* Icon tile rather than a bare glyph — at a glance the tint
                       says which part of the shop a setting belongs to. */}
@@ -4865,7 +5011,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                     style={[styles.setLabel, on && { color: C.brand, fontWeight: "700" }]}
                     numberOfLines={1}
                   >
-                    {sec.name}
+                    {tr(sec.labelKey)}
                   </Text>
                   <Ionicons
                     name="chevron-forward"
@@ -4887,18 +5033,18 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
             testID="settings-back"
           >
             <Ionicons name="chevron-back" size={18} color={C.brand} />
-            <Text style={styles.backText}>Settings</Text>
+            <Text style={styles.backText}>{tr("common.settings")}</Text>
           </TouchableOpacity>
         )}
         {active === "Self-Order QR" ? (
           <SelfOrderQrView branchId={branchId} branchName={branchName} />
-        ) : active === "Shop" && s ? (
+        ) : active === "Store profile" && s ? (
           <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-            <Text style={styles.h2}>Shop</Text>
-            <Field label="Shop Name">
+            <Text style={styles.h2}>{tr("common.shop")}</Text>
+            <Field label={tr("admin.shop_name")}>
               <TextInput style={styles.formInput} value={s.shop_name} onChangeText={(v) => update({ shop_name: v })} testID="set-shop-name" />
             </Field>
-            <Field label="Business Type">
+            <Field label={tr("admin.business_type")}>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {["General", "Restaurant", "Hostel"].map((bt) => (
                   <TouchableOpacity
@@ -4913,24 +5059,24 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
               </View>
             </Field>
             <View style={{ flexDirection: "row", gap: 12 }}>
-              <Field label="Tax ID" flex>
+              <Field label={tr("admin.tax_id")} flex>
                 <TextInput style={styles.formInput} value={s.tax_id || ""} onChangeText={(v) => update({ tax_id: v })} placeholder="—" />
               </Field>
-              <Field label="POS ID" flex>
+              <Field label={tr("admin.pos_id")} flex>
                 <TextInput style={styles.formInput} value={s.pos_id} onChangeText={(v) => update({ pos_id: v })} />
               </Field>
-              <Field label="Branch" flex>
+              <Field label={tr("admin.branch")} flex>
                 <TextInput style={styles.formInput} value={s.branch} onChangeText={(v) => update({ branch: v })} />
               </Field>
-              <Field label="POS #" flex>
+              <Field label={tr("admin.pos")} flex>
                 <TextInput style={styles.formInput} value={s.pos_number} onChangeText={(v) => update({ pos_number: v })} />
               </Field>
             </View>
             <View style={{ flexDirection: "row", gap: 12 }}>
-              <Field label="Open time" flex>
+              <Field label={tr("admin.open_time")} flex>
                 <TextInput style={styles.formInput} value={s.open_time} onChangeText={(v) => update({ open_time: v })} />
               </Field>
-              <Field label="Close time" flex>
+              <Field label={tr("admin.close_time")} flex>
                 <TextInput style={styles.formInput} value={s.close_time} onChangeText={(v) => update({ close_time: v })} />
               </Field>
             </View>
@@ -4954,7 +5100,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                 />
               </View>
             </Field>
-            <Field label="Service charge">
+            <Field label={tr("admin.service_charge")}>
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
                 <TouchableOpacity
                   style={[styles.toggleBox, s.service_charge_enabled && styles.toggleBoxOn]}
@@ -4965,7 +5111,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
                     style={[styles.toggleKnob, s.service_charge_enabled && styles.toggleKnobOn]}
                   />
                 </TouchableOpacity>
-                <Text>{s.service_charge_enabled ? "Enabled" : "Disabled"}</Text>
+                <Text>{s.service_charge_enabled ? tr("admin.enabled") : tr("admin.disabled")}</Text>
                 {s.service_charge_enabled && (
                   <TextInput
                     style={[styles.formInput, { width: 80 }]}
@@ -4982,18 +5128,24 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
               disabled={saving}
               testID="settings-save"
             >
-              <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Settings"}</Text>
+              <Text style={styles.primaryBtnText}>{saving ? tr("admin.saving") : tr("admin.save_settings")}</Text>
             </TouchableOpacity>
           </ScrollView>
         ) : active === "Printers" && s ? (
           <PrintersSection s={s} update={update} save={save} saving={saving} />
-        ) : active === "Drawer" ? (
+        ) : active === "Cash drawer" ? (
           <DrawerCategoriesSection />
+        ) : active === "Stock-out reasons" ? (
+          <StockOutReasonsSection />
+        ) : active === "Language" ? (
+          <LanguageSection />
         ) : (
           <Empty
             icon="construct-outline"
-            title={active}
-            note="Not built yet — this section is a placeholder."
+            // `active` is the English dispatch key; show the section's own
+            // translated label so the placeholder reads in the UI language.
+            title={tr(sections.find((sec) => sec.key === active)?.labelKey ?? active)}
+            note={tr("admin.not_built_yet_this_section_is")}
           />
         )}
       </Panel>
@@ -5012,8 +5164,54 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
   );
 }
 
+// ── Settings → Language: pick the UI language for this tablet ──
+//
+// Device-scoped, not per-staff: a counter tablet is shared, and re-reading the
+// preference on every PIN login would flip the language under whoever is
+// mid-sale. Whoever sets it here sets it for the till.
+//
+// Receipts and the shift-close slip deliberately ignore this — they are Thai
+// statutory documents (ใบกำกับภาษีอย่างย่อ) whose bilingual layout is fixed by
+// what the Revenue Department requires, not by who is logged in.
+function LanguageSection() {
+  const { lang, setLang } = useT();
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+      <Text style={styles.h2}>{tr("language.title")}</Text>
+      <View style={{ gap: 10 }}>
+        {LANGUAGES.map((l) => {
+          const on = lang === l.code;
+          return (
+            <TouchableOpacity
+              key={l.code}
+              style={[styles.langRow, on && styles.langRowOn]}
+              onPress={() => setLang(l.code)}
+              testID={`lang-${l.code}`}
+            >
+              <Ionicons
+                name={on ? "checkmark-circle" : "ellipse-outline"}
+                size={22}
+                color={on ? C.brand : C.lineStrong}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.langNative}>{l.native}</Text>
+                <Text style={styles.langSub}>
+                  {tr(l.code === "th" ? "language.thai" : "language.english")}
+                </Text>
+              </View>
+              {on && <Tag tone="info">{tr("language.current")}</Tag>}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.langNote}>{tr("language.note")}</Text>
+    </ScrollView>
+  );
+}
+
 // ── Settings → Drawer: manage Cash In / Cash Out reason codes ──
 function DrawerCategoriesSection() {
+  useT(); // re-render this screen when the language changes
   const [type, setType] = useState<"paid_in" | "paid_out">("paid_in");
   const [rows, setRows] = useState<DrawerCat[]>([]);
   const [loading, setLoading] = useState(true);
@@ -5060,7 +5258,7 @@ function DrawerCategoriesSection() {
   return (
     <View style={{ flex: 1 }} testID="drawer-settings">
       <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-        <Text style={styles.h2}>Drawer Categories</Text>
+        <Text style={styles.h2}>{tr("admin.drawer_categories")}</Text>
         <View style={{ flexDirection: "row", gap: 8 }}>
           {([["paid_in", "Cash In"], ["paid_out", "Cash Out"]] as const).map(([k, label]) => (
             <TouchableOpacity
@@ -5094,7 +5292,7 @@ function DrawerCategoriesSection() {
 
         <TouchableOpacity style={[styles.primaryBtn, { marginTop: 6 }]} onPress={openNew} testID="drawer-cat-add">
           <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
-          <Text style={styles.primaryBtnText}>Add Category</Text>
+          <Text style={styles.primaryBtnText}>{tr("admin.add_category")}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -5103,13 +5301,157 @@ function DrawerCategoriesSection() {
           <View style={styles.smallModal}>
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setEditing(null)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>{editing?.id ? "Edit Category" : "New Category"}</Text><View style={{ width: 24 }} />
+              <Text style={styles.modalTitle}>{editing?.id ? tr("admin.edit_category") : tr("admin.new_category")}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 14 }}>
-              <Text style={styles.formLabel}>Category name</Text>
+              <Text style={styles.formLabel}>{tr("admin.category_name")}</Text>
               <TextInput style={styles.formInput} value={name} onChangeText={setName} autoFocus testID="drawer-cat-name" />
               <TouchableOpacity style={styles.primaryBtn} onPress={submit} testID="drawer-cat-save">
-                <Text style={styles.primaryBtnText}>Save</Text>
+                <Text style={styles.primaryBtnText}>{tr("common.save")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+// ── Settings → Stock-out reasons: manage the reason codes staff pick from ──
+// Same shape as DrawerCategoriesSection: the two solve the same problem (a
+// free-text box producing six spellings of one reason) and should not drift
+// into two different interaction models.
+function StockOutReasonsSection() {
+  useT(); // re-render this screen when the language changes
+  const [rows, setRows] = useState<StockOutReason[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<StockOutReason | null>(null);
+  const [name, setName] = useState("");
+  const [nameTh, setNameTh] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await apiFetch(`${API}/stock-out-reasons`);
+      const data = await r.json();
+      setRows(Array.isArray(data) ? data : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); }, []);
+
+  const openNew = () => { setEditing({ id: "", name: "" }); setName(""); setNameTh(""); };
+  const openEdit = (r: StockOutReason) => {
+    setEditing(r); setName(r.name); setNameTh(r.name_th || "");
+  };
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!editing || !trimmed) return;
+    const payload = { name: trimmed, name_th: nameTh.trim() || trimmed };
+    if (editing.id) {
+      await apiFetch(`${API}/stock-out-reasons/${editing.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await apiFetch(`${API}/stock-out-reasons`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, sort_order: rows.length }),
+      });
+    }
+    setEditing(null); setName(""); setNameTh(""); load();
+  };
+
+  // Deactivate rather than delete is the safer default, but keep delete for a
+  // reason added by mistake.  Either way the documents that already recorded
+  // it keep their text — the document stores the name, not a foreign key.
+  const toggleActive = async (r: StockOutReason) => {
+    await apiFetch(`${API}/stock-out-reasons/${r.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: !(r.active ?? true) }),
+    });
+    load();
+  };
+
+  const remove = async (r: StockOutReason) => {
+    await apiFetch(`${API}/stock-out-reasons/${r.id}`, { method: "DELETE" });
+    load();
+  };
+
+  return (
+    <View style={{ flex: 1 }} testID="stock-out-reason-settings">
+      <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+        <Text style={styles.h2}>{tr("admin.stock_out_reasons")}</Text>
+        <Text style={{ color: C.ink3, fontSize: 13 }}>
+          {tr("admin.staff_pick_one_of_these_when")}
+        </Text>
+
+        {loading ? (
+          <ActivityIndicator color={C.brand} style={{ marginTop: 20 }} />
+        ) : (
+          rows.map((r) => {
+            const on = r.active ?? true;
+            return (
+              <View key={r.id} style={styles.moveRow} testID={`stock-reason-row-${r.id}`}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.moveRowValue, !on && { color: C.ink3 }]}>
+                    {r.name}{on ? "" : tr("admin.hidden")}
+                  </Text>
+                  {!!r.name_th && r.name_th !== r.name && (
+                    <Text style={styles.catRowSub}>{r.name_th}</Text>
+                  )}
+                </View>
+                <View style={{ flexDirection: "row", gap: 16 }}>
+                  <TouchableOpacity onPress={() => toggleActive(r)} testID={`stock-reason-toggle-${r.id}`}>
+                    <Ionicons
+                      name={on ? "eye-outline" : "eye-off-outline"}
+                      size={20}
+                      color={on ? C.ok : C.ink3}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => openEdit(r)} testID={`stock-reason-edit-${r.id}`}>
+                    <Ionicons name="create-outline" size={20} color="#3B82F6" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => remove(r)} testID={`stock-reason-del-${r.id}`}>
+                    <Ionicons name="trash-outline" size={20} color={C.danger} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })
+        )}
+
+        <TouchableOpacity style={[styles.primaryBtn, { marginTop: 6 }]} onPress={openNew} testID="stock-reason-add">
+          <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
+          <Text style={styles.primaryBtnText}>{tr("admin.add_reason")}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+
+      <Modal visible={!!editing} transparent animationType="fade" onRequestClose={() => setEditing(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setEditing(null)}>
+                <Ionicons name="close" size={24} color={C.ink2} />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>{editing?.id ? tr("admin.edit_reason") : tr("admin.new_reason")}</Text>
+              <View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 14 }}>
+              <Text style={styles.formLabel}>{tr("admin.reason_english")}</Text>
+              <TextInput
+                style={styles.formInput} value={name} onChangeText={setName}
+                autoFocus testID="stock-reason-name"
+              />
+              <Text style={styles.formLabel}>{tr("admin.thai_name_optional")}</Text>
+              <TextInput
+                style={styles.formInput} value={nameTh} onChangeText={setNameTh}
+                testID="stock-reason-name-th"
+              />
+              <TouchableOpacity style={styles.primaryBtn} onPress={submit} testID="stock-reason-save">
+                <Text style={styles.primaryBtnText}>{tr("common.save")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -5130,6 +5472,7 @@ function PrintersSection({
   save: () => Promise<void>;
   saving: boolean;
 }) {
+  useT(); // re-render this screen when the language changes
   const [status, setStatus] = useState<PrinterStatus | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string>("");
@@ -5187,7 +5530,7 @@ function PrintersSection({
       setLocalFound(found);
       if (found.length === 0) {
         setLocalResult(
-          "No printers found. Make sure the Epson TM-T82X is powered on and either connected to the same Wi-Fi/router as this tablet, or plugged in via USB-C.",
+          tr("admin.no_printers_found_hint"),
         );
       }
     } catch (e: any) {
@@ -5219,7 +5562,7 @@ function PrintersSection({
     const ip = manualIp.trim();
     const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
     if (!ipv4.test(ip)) {
-      setLocalResult("Please enter a valid IPv4 address like 192.168.1.100");
+      setLocalResult(tr("admin.invalid_ipv4"));
       return;
     }
     const identifier = `TCP:${ip}`;
@@ -5262,7 +5605,7 @@ function PrintersSection({
       const shopRes = await apiFetch(`${API}/settings`);
       const shop = shopRes.ok ? await shopRes.json() : {};
       const r = await starTestPrint(localCfg, shop);
-      setLocalResult(r.ok ? "Sent. Check the printer." : `Test failed: ${(r as any).error}`);
+      setLocalResult(r.ok ? tr("admin.sent_check_the_printer") : `Test failed: ${(r as any).error}`);
     } catch (e: any) {
       setLocalResult(`Test failed: ${e?.message || e}`);
     } finally {
@@ -5328,7 +5671,7 @@ function PrintersSection({
     try {
       const r = await apiFetch(`${API}/print-test`, { method: "POST" });
       const body = await r.json().catch(() => ({}));
-      if (r.ok) setTestResult("Sent. Check the printer.");
+      if (r.ok) setTestResult(tr("admin.sent_check_the_printer"));
       else setTestResult(body?.detail || `Failed (HTTP ${r.status})`);
     } catch (e: any) {
       setTestResult(`Network error: ${e?.message || e}`);
@@ -5345,12 +5688,12 @@ function PrintersSection({
       ? C.ok
       : C.danger;
   const statusLabel = !status
-    ? "Checking…"
+    ? tr("admin.checking")
     : status.status === "disabled"
     ? "Disabled"
     : status.connected
-    ? "Connected"
-    : "Offline";
+    ? tr("admin.connected")
+    : tr("admin.offline");
 
   // ── List view (default) ──
   // The legacy "Printers / Receipt Printer (FILE · —) / Edit Printer"
@@ -5362,10 +5705,9 @@ function PrintersSection({
     return (
       <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
         {/* ─── LOCAL TABLET PRINTER (Epson ePOS SDK) ─────────────────────────── */}
-        <Text style={styles.h2}>Local Printer (this tablet)</Text>
+        <Text style={styles.h2}>{tr("admin.local_printer_this_tablet")}</Text>
         <Text style={styles.printerListMeta}>
-          Connect an Epson TM-T82X to the same Wi-Fi/router as this tablet, then tap
-          Scan. (USB-C is also supported if the printer is plugged in directly.)
+          {tr("admin.connect_an_epson_tm_t82x_to")}
         </Text>
 
         <View style={styles.printerCard}>
@@ -5375,19 +5717,19 @@ function PrintersSection({
               <Text style={styles.printerName}>
                 {localCfg?.identifier
                   ? (localCfg.model || "Epson TM-T82X")
-                  : "Not configured"}
+                  : tr("admin.not_configured")}
               </Text>
               <Text style={styles.printerSub} numberOfLines={1}>
-                {localCfg?.identifier ? localCfg.identifier : "Tap Scan to find printer"}
+                {localCfg?.identifier ? localCfg.identifier : tr("admin.tap_scan_to_find_printer")}
               </Text>
             </View>
             {/* Status pill reflects three things in order of priority:
                 1. No config       → grey "Off"
                 2. Config disabled → grey "Disabled"
                 3. Live ping (online/offline checked every 30s):
-                     online      → green "Online"
-                     offline     → red   "Offline"
-                     unknown yet → amber "Checking…" */}
+                     online      → green tr("admin.online")
+                     offline     → red   tr("admin.offline")
+                     unknown yet → amber tr("admin.checking") */}
             {(() => {
               const noConfig = !localCfg?.identifier;
               const disabled = !!localCfg && !localCfg.enabled;
@@ -5398,11 +5740,11 @@ function PrintersSection({
               } else if (disabled) {
                 dotColor = C.ink3; label = "Disabled";
               } else if (livePrinter.online === true) {
-                dotColor = C.ok; label = "Online";
+                dotColor = C.ok; label = tr("admin.online");
               } else if (livePrinter.online === false) {
-                dotColor = C.danger; label = "Offline";
+                dotColor = C.danger; label = tr("admin.offline");
               } else {
-                dotColor = C.warn; label = "Checking…";
+                dotColor = C.warn; label = tr("admin.checking");
               }
               return (
                 <View style={styles.printerStatusPill}>
@@ -5423,7 +5765,7 @@ function PrintersSection({
           >
             <Ionicons name="search" size={16} color={C.ink} />
             <Text style={styles.secondaryBtnText}>
-              {localScanning ? "Scanning…" : "Scan"}
+              {localScanning ? tr("admin.scanning") : tr("admin.scan")}
             </Text>
           </TouchableOpacity>
           {localCfg?.identifier && (
@@ -5436,7 +5778,7 @@ function PrintersSection({
               >
                 <Ionicons name="document-text-outline" size={16} color={C.ink} />
                 <Text style={styles.secondaryBtnText}>
-                  {localTesting ? "Sending…" : "Test Print"}
+                  {localTesting ? tr("admin.sending") : tr("admin.test_print")}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -5445,7 +5787,7 @@ function PrintersSection({
                 testID="local-printer-toggle"
               >
                 <Text style={styles.secondaryBtnText}>
-                  {localCfg.enabled ? "Disable" : "Enable"}
+                  {localCfg.enabled ? tr("admin.disable") : tr("admin.enable")}
                 </Text>
               </TouchableOpacity>
             </>
@@ -5458,7 +5800,7 @@ function PrintersSection({
         <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginTop: 10 }}>
           <TextInput
             style={[styles.input, { flex: 1 }]}
-            placeholder="Or enter IP, e.g. 192.168.1.100"
+            placeholder={tr("admin.or_enter_ip_e_g_192")}
             value={manualIp}
             onChangeText={setManualIp}
             keyboardType="numeric"
@@ -5473,7 +5815,7 @@ function PrintersSection({
             testID="local-printer-add-by-ip"
           >
             <Ionicons name="add" size={16} color={C.ink} />
-            <Text style={styles.secondaryBtnText}>Add by IP</Text>
+            <Text style={styles.secondaryBtnText}>{tr("admin.add_by_ip")}</Text>
           </TouchableOpacity>
         </View>
 
@@ -5483,13 +5825,13 @@ function PrintersSection({
             change (reprint any bill from Transactions). */}
         {localCfg?.identifier && (
           <View style={{ marginTop: 14 }}>
-            <Text style={styles.formLabel}>Receipt right margin</Text>
+            <Text style={styles.formLabel}>{tr("admin.receipt_right_margin")}</Text>
             <Text style={{ color: C.ink2Soft, fontSize: 12, marginBottom: 8 }}>
-              If the right side of the receipt is cut off, pick a bigger margin, then reprint a bill. Keep increasing until the amounts fit.
+              {tr("admin.if_the_right_side_of_the")}
             </Text>
             <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
               {[
-                { label: "Default", v: undefined as number | undefined },
+                { label: tr("admin.default"), v: undefined as number | undefined },
                 { label: "210", v: 210 },
                 { label: "250", v: 250 },
                 { label: "290", v: 290 },
@@ -5516,7 +5858,7 @@ function PrintersSection({
 
         {localFound.length > 0 && (
           <View style={{ gap: 6, marginTop: 8 }}>
-            <Text style={styles.formLabel}>Found {localFound.length} printer(s):</Text>
+            <Text style={styles.formLabel}>{tr("admin.found")} {localFound.length} {tr("admin.printer_s")}</Text>
             {localFound.map((d) => (
               <TouchableOpacity
                 key={d.identifier}
@@ -5554,15 +5896,15 @@ function PrintersSection({
             block shows the cashier exactly what's pending so they know
             nothing has been lost — and lets them drop a job if they
             already handed the customer a manual reprint. */}
-        <Text style={[styles.h2, { marginTop: 8 }]}>Queued receipts</Text>
+        <Text style={[styles.h2, { marginTop: 8 }]}>{tr("admin.queued_receipts")}</Text>
         {queuedJobs.length === 0 ? (
           <Text style={styles.printerListMeta}>
-            No receipts waiting to print. New orders print immediately when the printer is online.
+            {tr("admin.no_receipts_waiting_to_print_new")}
           </Text>
         ) : (
           <View style={{ gap: 8 }}>
             <Text style={styles.printerListMeta}>
-              {queuedJobs.length} receipt{queuedJobs.length === 1 ? "" : "s"} waiting — will print automatically when the printer is back online.
+              {tr("admin.receipts_waiting", { count: queuedJobs.length, tail: tr("admin.waiting_will_print_automatically_when_the") })}
             </Text>
             {queuedJobs.map((j) => {
               const ageMin = Math.max(0, Math.round((Date.now() - j.createdAt) / 60000));
@@ -5571,7 +5913,7 @@ function PrintersSection({
                   <View style={{ flex: 1 }}>
                     <Text style={styles.queuedOrder}>{j.order.order_number}</Text>
                     <Text style={styles.queuedMeta}>
-                      {THB(j.order.total)} · {ageMin < 1 ? "just now" : `${ageMin} min ago`} · {j.attempts} attempt{j.attempts === 1 ? "" : "s"}
+                      {THB(j.order.total)} · {ageMin < 1 ? tr("admin.just_now") : tr("admin.min_ago", { count: ageMin })} · {tr("admin.attempts", { count: j.attempts })}
                     </Text>
                     {j.lastError ? (
                       <Text style={styles.queuedError} numberOfLines={1}>{j.lastError}</Text>
@@ -5583,7 +5925,7 @@ function PrintersSection({
                     testID={`queued-remove-${j.order.order_number}`}
                   >
                     <Ionicons name="close" size={16} color={C.danger} />
-                    <Text style={styles.queuedRemoveText}>Remove</Text>
+                    <Text style={styles.queuedRemoveText}>{tr("admin.remove")}</Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -5601,11 +5943,11 @@ function PrintersSection({
         <TouchableOpacity onPress={() => setEditing(false)} testID="printer-back">
           <Ionicons name="chevron-back" size={22} color={C.ink} />
         </TouchableOpacity>
-        <Text style={styles.h2}>Receipt Printer</Text>
+        <Text style={styles.h2}>{tr("admin.receipt_printer")}</Text>
       </View>
 
       {/* ── Enable toggle ── */}
-      <Field label="Auto-print receipt on every order">
+      <Field label={tr("admin.auto_print_receipt_on_every_order")}>
         <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
           <TouchableOpacity
             style={[styles.toggleBox, enabled && styles.toggleBoxOn]}
@@ -5614,16 +5956,16 @@ function PrintersSection({
           >
             <View style={[styles.toggleKnob, enabled && styles.toggleKnobOn]} />
           </TouchableOpacity>
-          <Text>{enabled ? "Enabled" : "Disabled"}</Text>
+          <Text>{enabled ? tr("admin.enabled") : tr("admin.disabled")}</Text>
         </View>
       </Field>
 
       {/* ── Transport ── */}
-      <Field label="Connection type">
+      <Field label={tr("admin.connection_type")}>
         <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
           {[
             { k: "file", label: "USB" },
-            { k: "network", label: "Network (TCP)" },
+            { k: "network", label: tr("admin.network_tcp") },
           ].map((t) => (
             <TouchableOpacity
               key={t.k}
@@ -5641,11 +5983,11 @@ function PrintersSection({
 
       {/* ── USB: detected devices only (no manual path input) ── */}
       {transport === "file" && (
-        <Field label="Detected printers">
+        <Field label={tr("admin.detected_printers")}>
           <View style={{ flexDirection: "row", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {detected.length === 0 ? (
               <Text style={styles.printerListMeta}>
-                {detecting ? "Scanning…" : "No USB printers detected — plug one in"}
+                {detecting ? tr("admin.scanning") : tr("admin.no_usb_printers_detected_plug_one")}
               </Text>
             ) : (
               detected.map((d) => (
@@ -5676,7 +6018,7 @@ function PrintersSection({
               testID="detect-refresh"
             >
               <Ionicons name="refresh" size={14} color={C.ink2} />
-              <Text style={styles.printerListMeta}>{detecting ? "…" : "Rescan"}</Text>
+              <Text style={styles.printerListMeta}>{detecting ? "…" : tr("admin.rescan")}</Text>
             </TouchableOpacity>
           </View>
         </Field>
@@ -5684,7 +6026,7 @@ function PrintersSection({
 
       {/* ── Network: address still needed (can't auto-detect) ── */}
       {transport === "network" && (
-        <Field label="Host:port (e.g. 192.168.1.50:9100)">
+        <Field label={tr("admin.host_port_e_g_192_168")}>
           <TextInput
             style={styles.formInput}
             value={address}
@@ -5708,7 +6050,7 @@ function PrintersSection({
           disabled={saving}
           testID="printer-save"
         >
-          <Text style={styles.primaryBtnText}>{saving ? "Saving…" : "Save Printer Settings"}</Text>
+          <Text style={styles.primaryBtnText}>{saving ? tr("admin.saving") : tr("admin.save_printer_settings")}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.secondaryBtn, (testing || transport === "disabled") && { opacity: 0.5 }]}
@@ -5717,7 +6059,7 @@ function PrintersSection({
           testID="printer-test"
         >
           <Ionicons name="document-text-outline" size={16} color={C.ink} />
-          <Text style={styles.secondaryBtnText}>{testing ? "Sending…" : "Test Print"}</Text>
+          <Text style={styles.secondaryBtnText}>{testing ? tr("admin.sending") : tr("admin.test_print")}</Text>
         </TouchableOpacity>
       </View>
       {testResult ? <Text style={styles.printerError}>{testResult}</Text> : null}
@@ -6157,6 +6499,17 @@ const styles = StyleSheet.create({
   tiRadioRow: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginBottom: 2 },
   tiRadio: { flexDirection: "row", alignItems: "center", gap: 6 },
   tiRadioText: { fontSize: 14, color: C.ink },
+  langRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingVertical: 14, paddingHorizontal: 16,
+    borderWidth: 1.5, borderColor: C.line, borderRadius: R.card,
+    backgroundColor: C.surface,
+  },
+  langRowOn: { borderColor: C.brand, backgroundColor: C.brandTintSoft },
+  // The endonym leads — someone looking for Thai scans for "ไทย", not "Thai".
+  langNative: { fontSize: 16, fontWeight: "700", color: C.ink },
+  langSub: { fontSize: 12, color: C.ink3, marginTop: 2 },
+  langNote: { fontSize: 12, color: C.ink3, lineHeight: 18 },
   tiPrimaryBtn: {
     height: 48, borderRadius: 10, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center", marginTop: 8,
@@ -6394,6 +6747,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   catRowText: { fontSize: 15, color: C.ink },
+  catRowSub: { fontSize: 13, color: C.ink3, marginTop: 2 },
   printingBox: {
     backgroundColor: C.surface, borderRadius: 16,
     paddingVertical: 28, paddingHorizontal: 40,
@@ -6744,6 +7098,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.line, borderRadius: 8,
     paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: C.ink,
   },
+  // A picker dressed as docInput so the Reason field lines up with the text
+  // inputs beside it; the chevron is what marks it as a choice, not typing.
+  docSelect: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    gap: 8, minHeight: 36,
+  },
+  docSelectText: { flex: 1, fontSize: 14, color: C.ink },
   adjTypeBtn: {
     paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8,
     borderWidth: 1, borderColor: C.line,

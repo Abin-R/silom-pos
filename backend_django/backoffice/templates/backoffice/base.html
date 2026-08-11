@@ -1,317 +1,219 @@
 {% load humanize %}<!DOCTYPE html>
+{% comment %}
+  The owner's side of the same system.
+
+  Chrome shared by every backoffice page: the navy rail (grouped, with live
+  counts), and a single header row carrying the page title, what the page is
+  scoped to, and the branch + date range every report reads from `request.GET`.
+
+  The old layout had a second filter bar under the header with its own Submit
+  button. Branch and dates are the two things you change on nearly every page,
+  so they moved up into the header and now apply on change — one row of chrome
+  instead of two, and no button to forget to press.
+
+  Blocks a page can fill:
+    title          <title> text
+    page_title     the big heading (defaults to `title`)
+    page_sub       the grey line under it — say what the numbers cover
+    topbar         extra header controls (segmented views, search, actions)
+    content        the page itself
+  A page sets `hide_dates` in its context when a date range means nothing to
+  it, and `hide_branch` when it is genuinely organisation-wide.
+{% endcomment %}
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Backoffice — Brave POS{% endblock %}</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-  <style>
-    body { background: #f5f7fa; font-size: 0.92rem; }
-
-    /* Sidebar (collapsible) */
-    .layout { display: flex; min-height: 100vh; }
-    .sidebar {
-      background: linear-gradient(180deg, #2c3e50 0%, #1f2d3d 100%);
-      color: #ecf0f1;
-      width: 240px;
-      flex: 0 0 240px;
-      transition: margin-left 0.25s ease, flex-basis 0.25s ease;
-      padding: 0;
-      position: sticky;
-      top: 0;
-      align-self: flex-start;
-      height: 100vh;
-      overflow-y: auto;
-    }
-    .sidebar.collapsed { margin-left: -240px; }
-    .sidebar .brand {
-      font-weight: 700; font-size: 1.5rem; padding: 1.1rem 1.25rem;
-      letter-spacing: -0.02em;
-    }
-    .sidebar .brand .dot { color: #00B14F; }
-    .sidebar .nav-link {
-      color: #bdc3c7; padding: 0.5rem 1.25rem;
-      border-left: 3px solid transparent;
-    }
-    .sidebar .nav-link i { width: 1.25rem; margin-right: 0.4rem; }
-    .sidebar .nav-link:hover { background: rgba(255,255,255,0.04); color: #fff; }
-    .sidebar .nav-link.active {
-      background: rgba(0,177,79,0.12); color: #fff; border-left-color: #00B14F;
-    }
-    .sidebar .group-label {
-      color: #7f8c8d; font-size: 0.7rem; padding: 1rem 1.25rem 0.25rem;
-      text-transform: uppercase; letter-spacing: 0.08em;
-    }
-    /* Collapsible submenu (e.g. Product Management → Products / Categories / Units) */
-    .sidebar .nav-link .caret { margin-left: auto; transition: transform 0.2s ease; }
-    .sidebar .nav-link[aria-expanded="true"] .caret { transform: rotate(180deg); }
-    .sidebar .nav-link.has-sub { display: flex; align-items: center; }
-    .sidebar .submenu { list-style: none; padding: 0; margin: 0; }
-    .sidebar .submenu .nav-link {
-      padding-left: 2.85rem; font-size: 0.88rem;
-    }
-
-    .content-area { flex: 1; min-width: 0; }
-
-    /* Top navbar — hamburger + brand spacer + language + profile only. */
-    .topbar {
-      background: #fff; border-bottom: 1px solid #e9ecef;
-      padding: 0.5rem 1rem;
-      display: flex; align-items: center; gap: 0.75rem;
-      flex-wrap: nowrap; min-height: 56px;
-    }
-    .topbar .hamburger {
-      background: transparent; border: 0; color: #34495e; font-size: 1.5rem;
-      padding: 0 0.4rem; line-height: 1; flex-shrink: 0;
-    }
-    .topbar .hamburger:hover { color: #00B14F; }
-    .topbar .spacer { flex: 1; }
-    .topbar-actions {
-      display: flex; align-items: center; gap: 0.6rem;
-      flex-shrink: 0;
-    }
-    .lang-flag { width: 26px; height: 18px; border-radius: 3px; object-fit: cover; }
-    .topbar-actions .btn-link {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 32px; height: 32px; border-radius: 50%;
-    }
-    .topbar-actions .btn-link:hover { background: #f1f3f5; }
-    /* Date range picker now lives in the navbar (SilomPOS-style). */
-    .topbar-dates { width: auto; }
-    .topbar-dates .form-control-sm { min-width: 8.5rem; }
-
-    /* Filter bar — second row below the navbar, holds branch + submit. */
-    .filterbar {
-      background: #fff; border-bottom: 1px solid #e9ecef;
-      padding: 0.6rem 1rem;
-    }
-    .filterbar form {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;
-    }
-    .filterbar .branch-group { flex: 1 1 auto; min-width: 0; }
-    .filterbar .branch-group .form-select-sm { min-width: 0; }
-
-    main.content { padding: 1.25rem; }
-    .card { border: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border-radius: 8px; }
-    .stat-card { border-left: 4px solid #00B14F; }
-    .stat-card.profit { border-left-color: #3498db; }
-    .stat-card.discount { border-left-color: #e74c3c; }
-    .stat-card .label { color: #7f8c8d; font-size: 0.85rem; }
-    .stat-card .value { font-size: 1.4rem; font-weight: 700; color: #2c3e50; }
-    .stat-card .icon { font-size: 2.2rem; color: #ecf0f1; }
-    .breakdown-row { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.92rem; }
-    .breakdown-row.muted { color: #95a5a6; }
-    .breakdown-row.negative { color: #e74c3c; }
-    .breakdown-row.total { font-weight: 700; font-size: 1.05rem; border-top: 1px solid #ecf0f1; padding-top: 0.6rem; margin-top: 0.4rem; }
-    .section-title { font-size: 1.05rem; font-weight: 600; color: #34495e; margin-bottom: 0.75rem; }
-    /* Keep donut charts compact (SilomPOS-sized) instead of filling the card. */
-    .chart-box { position: relative; height: 240px; }
-    .table-sm > :not(caption) > * > * { padding: 0.4rem 0.5rem; }
-    .currency { font-variant-numeric: tabular-nums; }
-  </style>
+  <title>{% block title %}Backoffice{% endblock %} — {{ shop_name|default:"Brave POS" }}</title>
+  <link href="{% url 'backoffice:app_css' %}?v={{ css_version }}" rel="stylesheet">
   {% block extra_head %}{% endblock %}
 </head>
-<body>
-  <div class="layout">
-    <nav id="sidebar" class="sidebar">
-      <div class="brand">Bravepos<span class="dot">.</span></div>
-      <ul class="nav flex-column">
-        <li class="nav-item">
-          <a class="nav-link {% if active == 'dashboard' %}active{% endif %}"
-             href="{% url 'backoffice:dashboard' %}">
-            <i class="bi bi-grid-1x2-fill"></i> Dashboard
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link {% if active == 'transactions' %}active{% endif %}"
-             href="{% url 'backoffice:transactions' %}">
-            <i class="bi bi-receipt"></i> Transactions
-          </a>
-        </li>
-        <div class="group-label">Reports</div>
-        <li><a class="nav-link {% if active == 'report_daily' %}active{% endif %}"
-               href="{% url 'backoffice:report_daily' %}"><i class="bi bi-calendar3"></i> Sales by Date</a></li>
-        <li><a class="nav-link {% if active == 'report_sell' %}active{% endif %}"
-               href="{% url 'backoffice:report_sell' %}"><i class="bi bi-list-ul"></i> Sales by Bill Detail</a></li>
-        <li><a class="nav-link {% if active == 'report_sku' %}active{% endif %}"
-               href="{% url 'backoffice:report_sku' %}"><i class="bi bi-tag-fill"></i> Sales by Product</a></li>
-        <li><a class="nav-link {% if active == 'report_tax' %}active{% endif %}"
-               href="{% url 'backoffice:report_tax' %}"><i class="bi bi-journal-text"></i> Tax Report (ภาษีขาย)</a></li>
-        <li><a class="nav-link {% if active == 'inventory' %}active{% endif %}"
-               href="{% url 'backoffice:inventory' %}"><i class="bi bi-box-seam"></i> Inventory Summary</a></li>
-        <li><a class="nav-link {% if active == 'staff' %}active{% endif %}"
-               href="{% url 'backoffice:staff_list' %}"><i class="bi bi-people"></i> Staff</a></li>
+<body class="{% block body_class %}{% endblock %}">
+{% include "backoffice/_icons.html" %}
 
-        <div class="group-label">Management</div>
-        <li>
-          <a class="nav-link has-sub {% if active == 'products' or active == 'categories' or active == 'units' %}active{% endif %}"
-             data-bs-toggle="collapse" href="#productMgmt" role="button"
-             aria-expanded="{% if active == 'products' or active == 'categories' or active == 'units' %}true{% else %}false{% endif %}"
-             aria-controls="productMgmt">
-            <i class="bi bi-box-seam"></i> Product Management
-            <i class="bi bi-chevron-down caret"></i>
-          </a>
-          <ul class="submenu collapse {% if active == 'products' or active == 'categories' or active == 'units' %}show{% endif %}"
-              id="productMgmt">
-            <li><a class="nav-link {% if active == 'products' %}active{% endif %}"
-                   href="{% url 'backoffice:product_list' %}"><i class="bi bi-tags"></i> Products</a></li>
-            <li><a class="nav-link {% if active == 'categories' %}active{% endif %}"
-                   href="{% url 'backoffice:category_list' %}"><i class="bi bi-folder"></i> Categories</a></li>
-            <li><a class="nav-link {% if active == 'units' %}active{% endif %}"
-                   href="{% url 'backoffice:unit_list' %}"><i class="bi bi-rulers"></i> Units</a></li>
-          </ul>
-        </li>
-        <li><a class="nav-link {% if active == 'branches' %}active{% endif %}"
-               href="{% url 'backoffice:branch_list' %}"><i class="bi bi-shop"></i> Shops &amp; Branches</a></li>
-
-        {% comment %}
-          Admin-only. The views enforce this too — hiding the links is just so
-          a cashier isn't offered a door that won't open.
-        {% endcomment %}
-        {% if user.role == 'admin' %}
-        <div class="group-label">Administration</div>
-        <li><a class="nav-link {% if active == 'users' %}active{% endif %}"
-               href="{% url 'backoffice:user_list' %}"><i class="bi bi-person-badge"></i> Users</a></li>
-        <li><a class="nav-link {% if active == 'audit' %}active{% endif %}"
-               href="{% url 'backoffice:audit_log' %}"><i class="bi bi-clipboard-check"></i> Audit Log</a></li>
-        {% endif %}
-      </ul>
-    </nav>
-
-    <div class="content-area">
-      <div class="topbar">
-        {# ─── Hamburger (toggles sidebar) ─── #}
-        <button type="button" id="sidebarToggle" class="hamburger" title="Toggle menu">
-          <i class="bi bi-list"></i>
-        </button>
-
-        {# ─── Date range picker (submits with the filterbar form) ─── #}
-        {% if not hide_dates %}
-        <div class="topbar-dates input-group input-group-sm">
-          <span class="input-group-text"><i class="bi bi-calendar3"></i></span>
-          <input type="date" name="from" value="{{ date_from }}" form="filterForm"
-                 class="form-control form-control-sm">
-          <span class="input-group-text">→</span>
-          <input type="date" name="to" value="{{ date_to }}" form="filterForm"
-                 class="form-control form-control-sm">
-        </div>
-        {% endif %}
-
-        <div class="spacer"></div>
-
-        {# ─── Right-side: language + profile ─── #}
-        <div class="topbar-actions">
-          {# Language switcher (UI only for now — wires up later). #}
-          <div class="dropdown">
-            <button class="btn btn-link p-0 border-0" type="button"
-                    data-bs-toggle="dropdown" aria-expanded="false" title="Language">
-              <img id="langFlag" class="lang-flag"
-                   src="https://flagcdn.com/us.svg" alt="EN">
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end">
-              <li>
-                <button type="button" class="dropdown-item d-flex align-items-center gap-2"
-                        data-lang="en" data-flag="https://flagcdn.com/us.svg">
-                  <img class="lang-flag" src="https://flagcdn.com/us.svg" alt="EN">
-                  English
-                </button>
-              </li>
-              <li>
-                <button type="button" class="dropdown-item d-flex align-items-center gap-2"
-                        data-lang="th" data-flag="https://flagcdn.com/th.svg">
-                  <img class="lang-flag" src="https://flagcdn.com/th.svg" alt="TH">
-                  ไทย
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          {# Profile dropdown — Shop + Sign Out. #}
-          <div class="dropdown">
-            <button class="btn btn-link p-0 border-0 text-secondary" type="button"
-                    data-bs-toggle="dropdown" aria-expanded="false" title="Profile">
-              <i class="bi bi-person-circle" style="font-size: 1.6rem;"></i>
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end">
-              <li class="px-3 py-2 small text-muted">
-                {{ user.get_username|default:"Guest" }}
-              </li>
-              <li><hr class="dropdown-divider"></li>
-              <li>
-                <a class="dropdown-item" href="{% url 'backoffice:shop_settings' %}">
-                  <i class="bi bi-shop me-2"></i> Shop
-                </a>
-              </li>
-              <li>
-                <form method="post" action="{% url 'backoffice:logout' %}" class="m-0">
-                  {% csrf_token %}
-                  <button type="submit" class="dropdown-item text-danger">
-                    <i class="bi bi-box-arrow-right me-2"></i> Sign Out
-                  </button>
-                </form>
-              </li>
-            </ul>
-          </div>
-        </div>
+<div class="shell">
+  {# ══ RAIL ══════════════════════════════════════════════════════════════ #}
+  <nav id="sidebar" class="side">
+    <a class="side-logo" href="{% url 'backoffice:dashboard' %}">
+      <i><svg><use href="#i-bag"/></svg></i>
+      <div>
+        <b>{{ shop_name|default:"Brave POS" }}</b>
+        <u>Backoffice</u>
       </div>
+    </a>
 
-      {# Filterbar: branch selector + submit; date pickers post via the same form. #}
-      <div class="filterbar">
-        <form method="get" id="filterForm">
-          <div class="input-group input-group-sm branch-group">
-            <span class="input-group-text"><i class="bi bi-shop"></i></span>
-            <select name="branch" class="form-select form-select-sm">
-              {% for b in branches %}
-                <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
-              {% empty %}
-                <option value="">No branches available</option>
-              {% endfor %}
-            </select>
-          </div>
-          <button class="btn btn-success btn-sm px-4">Submit</button>
-        </form>
-      </div>
+    <div class="side-nav">
+      <div class="grp">Overview</div>
+      <a class="nv {% if active == 'dashboard' %}on{% endif %}" href="{% url 'backoffice:dashboard' %}">
+        <svg><use href="#i-home"/></svg>Dashboard</a>
 
-      <main class="content">
-        {% block content %}{% endblock %}
-      </main>
+      <div class="grp">Reports</div>
+      <a class="nv {% if active == 'report_daily' %}on{% endif %}" href="{% url 'backoffice:report_daily' %}">
+        <svg><use href="#i-bars"/></svg>Sales</a>
+      <a class="nv {% if active == 'transactions' %}on{% endif %}" href="{% url 'backoffice:transactions' %}">
+        <svg><use href="#i-orders"/></svg>Transactions</a>
+      <a class="nv {% if active == 'report_sku' %}on{% endif %}" href="{% url 'backoffice:report_sku' %}">
+        <svg><use href="#i-tag"/></svg>Product performance</a>
+      <a class="nv {% if active == 'report_sell' %}on{% endif %}" href="{% url 'backoffice:report_sell' %}">
+        <svg><use href="#i-recv"/></svg>Bill detail</a>
+      <a class="nv {% if active == 'inventory' %}on{% endif %}" href="{% url 'backoffice:inventory' %}">
+        <svg><use href="#i-stack"/></svg>Inventory</a>
+      <a class="nv {% if active == 'report_tax' %}on{% endif %}" href="{% url 'backoffice:report_tax' %}">
+        <svg><use href="#i-shield"/></svg>Tax &amp; VAT</a>
+
+      <div class="grp">Manage</div>
+      <a class="nv {% if active == 'products' or active == 'categories' or active == 'units' %}on{% endif %}"
+         href="{% url 'backoffice:product_list' %}">
+        <svg><use href="#i-box"/></svg>Catalogue{% if nav_products %}<u>{{ nav_products }}</u>{% endif %}</a>
+      <a class="nv {% if active == 'branches' %}on{% endif %}" href="{% url 'backoffice:branch_list' %}">
+        <svg><use href="#i-store"/></svg>Branches{% if nav_branches %}<u>{{ nav_branches }}</u>{% endif %}</a>
+      <a class="nv {% if active == 'staff' %}on{% endif %}" href="{% url 'backoffice:staff_list' %}">
+        <svg><use href="#i-users"/></svg>Staff &amp; shifts</a>
+      <a class="nv {% if active == 'customers' %}on{% endif %}" href="{% url 'backoffice:customer_list' %}">
+        <svg><use href="#i-heart"/></svg>Customers</a>
+
+      {% comment %}
+        Admin-only. The views enforce this too — hiding the links is just so
+        a cashier isn't offered a door that won't open.
+      {% endcomment %}
+      {% if user.role == 'admin' %}
+      <div class="grp">Administration</div>
+      <a class="nv {% if active == 'users' %}on{% endif %}" href="{% url 'backoffice:user_list' %}">
+        <svg><use href="#i-userlock"/></svg>Users{% if nav_users %}<u>{{ nav_users }}</u>{% endif %}</a>
+      <a class="nv {% if active == 'audit' %}on{% endif %}" href="{% url 'backoffice:audit_log' %}">
+        <svg><use href="#i-log"/></svg>Audit log</a>
+      {% endif %}
     </div>
+
+    <div class="side-foot">
+      <div class="side-sep"></div>
+      <a class="nv {% if active == 'shop_settings' %}on{% endif %}" href="{% url 'backoffice:shop_settings' %}">
+        <svg><use href="#i-cog"/></svg>Settings</a>
+      <div class="menu" id="userMenu">
+        <button class="side-card" type="button" aria-expanded="false" aria-haspopup="true">
+          <span class="av">{{ user.name|slice:":1"|default:"?" }}</span>
+          <span class="nm">
+            <b>{{ user.name|default:user.get_username|default:"Guest" }}</b>
+            <u>{% if user.role == 'admin' %}Admin{% else %}{{ user.role|title|default:"Signed in" }}{% endif %}</u>
+          </span>
+          <svg><use href="#i-chev"/></svg>
+        </button>
+        <div class="menu-list">
+          <div class="menu-head">{{ user.email|default:user.get_username }}</div>
+          <a href="{% url 'backoffice:shop_settings' %}">Shop settings</a>
+          <form method="post" action="{% url 'backoffice:logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="danger">Sign out</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  {# ══ MAIN ══════════════════════════════════════════════════════════════ #}
+  <div class="main">
+    <header class="topbar">
+      <button type="button" id="sidebarToggle" class="hamburger" title="Toggle menu">
+        <svg><use href="#i-menu"/></svg>
+      </button>
+
+      <div>
+        <div class="tb-title">{% block page_title %}{{ page_title }}{% endblock %}</div>
+        {% block page_sub %}{% endblock %}
+      </div>
+
+      <div class="spacer"></div>
+
+      {% block topbar %}{% endblock %}
+
+      {% comment %}
+        Branch and date range. A GET form so the filters live in the URL and a
+        report stays shareable and bookmarkable; every control submits on
+        change, so there is nothing to press.
+      {% endcomment %}
+      {% if not hide_branch %}
+      <div class="ctl" title="Branch">
+        <svg><use href="#i-store"/></svg>
+        <select name="branch" form="filterForm" onchange="this.form.submit()">
+          {% for b in branches %}
+            <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
+          {% empty %}
+            <option value="">No branches</option>
+          {% endfor %}
+        </select>
+        <svg class="cv"><use href="#i-chev"/></svg>
+      </div>
+      {% endif %}
+
+      {% if not hide_dates %}
+      <div class="ctl" title="Date range">
+        <svg><use href="#i-cal"/></svg>
+        <input type="date" name="from" value="{{ date_from }}" form="filterForm" onchange="this.form.submit()">
+        <span class="arrow">→</span>
+        <input type="date" name="to" value="{{ date_to }}" form="filterForm" onchange="this.form.submit()">
+      </div>
+      {% endif %}
+
+      {% block topbar_end %}{% endblock %}
+
+      {% comment %}
+        The form itself carries no visible controls — the header inputs post
+        into it by `form=` so they can sit anywhere in the layout.
+      {% endcomment %}
+      <form method="get" id="filterForm" hidden>{% block filter_extra %}{% endblock %}</form>
+    </header>
+
+    {% if messages %}
+    <div style="padding:16px 24px 0" class="msg">
+      {% for m in messages %}
+        <div class="banner {% if m.tags == 'error' %}b-red{% elif m.tags == 'warning' %}b-amber{% elif m.tags == 'success' %}b-green{% else %}b-blue{% endif %}">
+          <svg><use href="#i-alert"/></svg><span>{{ m }}</span>
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% block body %}
+    <main class="body">
+      {% block content %}{% endblock %}
+    </main>
+    {% endblock %}
   </div>
+</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
-  <script>
-    // Sidebar collapse — remembers state in localStorage so it survives
-    // page navigation (every backoffice page extends this template).
-    (function () {
-      const sidebar = document.getElementById('sidebar');
-      const toggle = document.getElementById('sidebarToggle');
-      const STORAGE_KEY = 'bravepos.sidebar.collapsed';
-      if (localStorage.getItem(STORAGE_KEY) === '1') sidebar.classList.add('collapsed');
-      toggle.addEventListener('click', () => {
-        sidebar.classList.toggle('collapsed');
-        localStorage.setItem(STORAGE_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
-      });
-    })();
+<script>
+  // Rail collapse. Remembered in localStorage so it survives navigation —
+  // every backoffice page is a full page load.
+  (function () {
+    var rail = document.getElementById('sidebar');
+    var toggle = document.getElementById('sidebarToggle');
+    var KEY = 'bravepos.sidebar.collapsed';
+    if (localStorage.getItem(KEY) === '1') rail.classList.add('collapsed');
+    toggle.addEventListener('click', function () {
+      rail.classList.toggle('collapsed');
+      localStorage.setItem(KEY, rail.classList.contains('collapsed') ? '1' : '0');
+    });
+  })();
 
-    // Language switcher — UI only for now. Persists the chosen flag so the
-    // selection is sticky; actual string translation gets wired later.
-    (function () {
-      const flag = document.getElementById('langFlag');
-      const STORAGE_KEY = 'bravepos.lang.flag';
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) flag.src = saved;
-      document.querySelectorAll('[data-lang]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const src = btn.getAttribute('data-flag');
-          flag.src = src;
-          localStorage.setItem(STORAGE_KEY, src);
-          localStorage.setItem('bravepos.lang', btn.getAttribute('data-lang'));
-        });
-      });
-    })();
-  </script>
-  {% block extra_scripts %}{% endblock %}
+  // The user menu. Fifteen lines instead of a 250 KB CSS+JS framework that
+  // this page had stopped using for anything else.
+  (function () {
+    var menu = document.getElementById('userMenu');
+    if (!menu) return;
+    var button = menu.querySelector('.side-card');
+    function close() {
+      menu.classList.remove('open');
+      button.setAttribute('aria-expanded', 'false');
+    }
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      var open = menu.classList.toggle('open');
+      button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+  })();
+</script>
+{% block extra_scripts %}{% endblock %}
 </body>
 </html>

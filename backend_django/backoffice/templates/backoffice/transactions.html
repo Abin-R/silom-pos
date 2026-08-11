@@ -1,187 +1,197 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 03 — Transactions.
 
-{% block title %}Transactions — Brave POS{% endblock %}
+  Discount and VAT get their own columns, not just the detail panel. Scanning
+  for the day a discount ran away is a column-sort, not a fourteen-click
+  investigation. The footer totals whatever is currently filtered, and so does
+  the export — both read the same queryset.
 
-{% block extra_head %}
-<style>
-  .trx-row { cursor: pointer; }
-  .trx-row:hover { background: #f8f9fa; }
-  .trx-row .chev { transition: transform 0.2s; display: inline-block; }
-  .trx-row[aria-expanded="true"] .chev { transform: rotate(90deg); }
-  .trx-detail > td { padding: 0 !important; }
-  .trx-detail .panel { background: #fafbfc; padding: 1rem; }
-  table.trx-list th { font-size: 0.75rem; text-transform: uppercase; color: #6c757d; letter-spacing: 0.02em; white-space: nowrap; }
-  table.trx-list td { font-size: 0.85rem; white-space: nowrap; }
-  .badge-normal { background: #ecf0f1; color: #34495e; }
-</style>
+  Branch identity is a colour chip carried consistently across every screen,
+  so a mixed list stays readable without reading the words.
+{% endcomment %}
+
+{% block title %}Transactions{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Transactions{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">
+    {{ window_bills|intcomma }} bill{{ window_bills|pluralize }} · ฿{{ window_total|floatformat:0|intcomma }} · {{ date_from }} → {{ date_to }}
+  </div>
+{% endblock %}
+
+{% block topbar %}
+  <div class="ctl" style="width:250px">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" name="q" value="{{ query }}" form="filterForm"
+           placeholder="Bill no., name, phone or amount">
+  </div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
+
+{% block filter_extra %}
+  <input type="hidden" name="status" value="{{ status }}">
+  <input type="hidden" name="payment" value="{{ payment }}">
 {% endblock %}
 
 {% block content %}
 
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">Transactions</h4>
-        <div class="text-muted small">
-          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
-        </div>
-      </div>
-      <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:transactions_export' %}{% if qs %}?{{ qs }}{% endif %}">
-        <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </a>
-    </div>
+<div class="row tight">
+  <div class="seg">
+    {% for key, label in statuses %}
+      <a class="{% if status == key %}on{% endif %}"
+         href="?{% qs_replace request status=key page=None %}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  <div class="seg">
+    <a class="{% if not payment %}on{% endif %}" href="?{% qs_replace request payment=None page=None %}">Any payment</a>
+    {% for p in payments %}
+      <a class="{% if payment == p %}on{% endif %}" href="?{% qs_replace request payment=p page=None %}">{{ p }}</a>
+    {% endfor %}
+  </div>
+  <div class="spacer"></div>
+  <span style="font-size:13px;color:var(--mut)">
+    Showing {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ paginator.count|intcomma }}
+  </span>
+</div>
 
-    <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 trx-list">
+<div class="row" style="flex:1">
+  <div class="panel panel-grow" style="flex:1;min-width:0">
+    <div class="panel-scroll">
+      <table class="tbl">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Receipt No.</th>
-            <th class="text-end">Sub Total</th>
-            <th class="text-end">Discount</th>
-            <th class="text-end">Promotion Discount</th>
-            <th class="text-end">Grand Total</th>
-            <th class="text-end">Total (incl-Tax)</th>
-            <th class="text-end">Total (non-Tax)</th>
-            <th class="text-end">Sub-total (ex-Tax)</th>
-            <th class="text-end">Tax Amount</th>
-            <th class="text-end">Add-on Total</th>
-            <th class="text-end">Service Charge</th>
-            <th class="text-end">Rounding Adj.</th>
-            <th class="text-end">Shipping Fee</th>
-            <th>Status</th>
+            <th style="width:96px">Bill</th><th style="width:110px">Date</th><th style="width:64px">Time</th>
+            <th>Branch</th><th>Cashier</th><th>Customer</th><th>Payment</th>
+            <th class="r">Items</th><th class="r">Discount</th><th class="r">VAT</th>
+            <th class="r">Total</th><th class="r" style="width:92px">Status</th>
           </tr>
         </thead>
         <tbody>
-          {% for row in rows %}{% with o=row.order %}
-          <tr class="trx-row" data-bs-toggle="collapse" data-bs-target="#trx-{{ o.id }}"
-              role="button" aria-expanded="false">
-            <td><span class="chev">›</span> {{ o.created_at|date:"d/m/Y H:i:s" }}</td>
-            <td>{{ o.order_number }}</td>
-            <td class="text-end currency">{{ o.subtotal|floatformat:2|intcomma }}</td>
-            <td class="text-end currency {% if o.discount_amount %}text-danger{% endif %}">{{ o.discount_amount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.promotion_discount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency fw-semibold">{{ o.total|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.total_incl_tax|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.total_non_tax|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.sub_ex_tax|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.tax_amount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.add_on_total|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.service_charge|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.rounding_adj|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.shipping_fee|floatformat:2|intcomma }}</td>
-            <td>
-              {% if o.status == 'cancel' %}
-                <span class="badge bg-danger">Cancel</span>
-              {% else %}
-                <span class="badge badge-normal">Normal</span>
-              {% endif %}
+          {% for row in rows %}
+          {% with o=row.order %}
+          <tr class="click {% if selected and o.id == selected.order.id %}sel{% endif %}"
+              onclick="location.href='?{% qs_replace request o=o.id %}'">
+            <td class="money" style="font-weight:650;{% if o.status == 'cancel' %}color:var(--mut){% elif selected and o.id == selected.order.id %}color:var(--blue){% endif %}">#{{ o.order_number }}</td>
+            <td class="money" {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>{{ o.created_at|date:"d M Y" }}</td>
+            <td class="money" {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>{{ o.created_at|date:"H:i" }}</td>
+            <td {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>
+              <span class="branchdot" style="background:{% if o.status == 'cancel' %}#C9D2E0{% else %}{{ o.branch|branch_color }}{% endif %}"></span>{{ o.branch.name|default:"—" }}</td>
+            <td {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>{{ o.staff|default:"—" }}</td>
+            <td {% if o.customer_name or o.customer %}style="font-weight:550"{% else %}style="color:var(--mut)"{% endif %}>
+              {{ o.customer.name|default:o.customer_name|default:"Walk-in" }}</td>
+            <td {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>{{ o.payment_method|payment_label }}</td>
+            <td class="r money" {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>{{ o.items.count }}</td>
+            <td class="r money" style="{% if o.discount_amount %}color:var(--green){% else %}color:var(--mut){% endif %}">
+              {% if o.discount_amount %}−฿{{ o.discount_amount|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+            <td class="r money" {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>฿{{ row.tax_amount|floatformat:2|intcomma }}</td>
+            <td class="r money" style="font-weight:660;{% if o.status == 'cancel' %}color:var(--mut);text-decoration:line-through{% endif %}">฿{{ o.total|floatformat:2|intcomma }}</td>
+            <td class="r">
+              {% if o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+              {% else %}<span class="tag t-ok">Paid</span>{% endif %}
             </td>
           </tr>
-          <tr class="trx-detail collapse" id="trx-{{ o.id }}">
-            <td colspan="15">
-              <div class="panel">
-                <div class="row g-3">
-                  <div class="col-lg-8">
-                    <h6 class="mb-2">Items</h6>
-                    <table class="table table-sm bg-white mb-3" style="font-size: 0.85rem;">
-                      <thead class="table-light">
-                        <tr>
-                          <th>Receipt No.</th>
-                          <th>Barcode</th>
-                          <th>Product Name</th>
-                          <th class="text-end">Quantity</th>
-                          <th class="text-end">Price / Unit</th>
-                          <th class="text-end">Item discount</th>
-                          <th class="text-end">Sub Total</th>
-                          <th class="text-end">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {% for entry in row.items %}
-                        <tr>
-                          <td>{{ o.order_number }}</td>
-                          <td>{{ entry.barcode|default:"-" }}</td>
-                          <td>{{ entry.item.name }}</td>
-                          <td class="text-end">{{ entry.item.qty }}</td>
-                          <td class="text-end currency">{{ entry.item.price|floatformat:2|intcomma }}</td>
-                          <td class="text-end currency">0.00</td>
-                          <td class="text-end currency">{{ entry.line_total|floatformat:2|intcomma }}</td>
-                          <td class="text-end currency">{{ entry.line_total|floatformat:2|intcomma }}</td>
-                        </tr>
-                        {% empty %}
-                        <tr><td colspan="8" class="text-center text-muted">No items recorded.</td></tr>
-                        {% endfor %}
-                      </tbody>
-                    </table>
-                    <div class="bg-white rounded p-3">
-                      <div class="d-flex justify-content-between"><span class="text-muted">Discount</span><span class="currency">{{ o.discount_amount|floatformat:2|intcomma }}</span></div>
-                      <div class="d-flex justify-content-between"><span class="text-muted">Promotion Discount</span><span class="currency">{{ row.promotion_discount|floatformat:2 }}</span></div>
-                      <div class="d-flex justify-content-between"><span class="text-muted">Service Charge</span><span class="currency">{{ row.service_charge|floatformat:2|intcomma }}</span></div>
-                    </div>
-                  </div>
-                  <div class="col-lg-4">
-                    <h6 class="mb-2">Payment</h6>
-                    <div class="bg-white rounded p-3 mb-3">
-                      <div class="d-flex justify-content-between">
-                        <span class="text-muted">{{ o.payment_method|default:"Custom Pay"|title }}</span>
-                        <span class="currency fw-semibold">{{ o.paid_amount|floatformat:2|intcomma }}</span>
-                      </div>
-                      <div class="d-flex justify-content-between">
-                        <span class="text-muted">Change</span>
-                        <span class="currency">{{ o.change|floatformat:2|intcomma }}</span>
-                      </div>
-                    </div>
-                    <a class="btn btn-outline-info btn-sm w-100" target="_blank" rel="noopener"
-                       href="{% url 'backoffice:receipt_print' order_number=o.order_number %}">
-                      <i class="bi bi-printer"></i> Print Simplified Tax Invoice
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </td>
-          </tr>
-          {% endwith %}{% empty %}
-          <tr><td colspan="15" class="text-center text-muted py-4">No transactions in range.</td></tr>
+          {% endwith %}
+          {% empty %}
+          <tr><td colspan="12" class="empty">
+            <svg><use href="#i-inbox"/></svg>
+            No bills match these filters.
+          </td></tr>
           {% endfor %}
         </tbody>
+        {% if rows %}
+        <tfoot>
+          <tr>
+            <td colspan="8">Everything filtered · {{ window_bills|intcomma }} paid bill{{ window_bills|pluralize }}</td>
+            <td class="r money">−฿{{ window_discount|floatformat:2|intcomma }}</td>
+            <td class="r money">฿{{ window_vat|floatformat:2|intcomma }}</td>
+            <td class="r money" style="color:var(--blue)">฿{{ window_total|floatformat:2|intcomma }}</td>
+            <td></td>
+          </tr>
+        </tfoot>
+        {% endif %}
       </table>
     </div>
+    {% include "backoffice/_pagination.html" %}
+  </div>
 
-    {# ─── Pagination + counter ─────────────────────────────────────── #}
-    <div class="d-flex justify-content-between align-items-center mt-3">
-      <nav>
-        <ul class="pagination pagination-sm mb-0">
-          {% if page_obj.has_previous %}
-            <li class="page-item">
-              <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ page_obj.previous_page_number }}">«</a>
-            </li>
-          {% else %}
-            <li class="page-item disabled"><span class="page-link">«</span></li>
-          {% endif %}
-          {% for i in paginator.page_range %}
-            {% if i == page_obj.number or i == 1 or i == paginator.num_pages or i|add:-3 < page_obj.number and i|add:3 > page_obj.number %}
-            <li class="page-item {% if i == page_obj.number %}active{% endif %}">
-              <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ i }}">{{ i }}</a>
-            </li>
-            {% endif %}
-          {% endfor %}
-          {% if page_obj.has_next %}
-            <li class="page-item">
-              <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ page_obj.next_page_number }}">»</a>
-            </li>
-          {% else %}
-            <li class="page-item disabled"><span class="page-link">»</span></li>
-          {% endif %}
-        </ul>
-      </nav>
-      <div class="text-muted small">
-        Showing {{ page_obj.start_index }} to {{ page_obj.end_index }} of {{ paginator.count }} entries
+  {# ── The selected bill ──────────────────────────────────────────────── #}
+  {% if selected %}
+  {% with o=selected.order %}
+  <div class="detail">
+    <div class="panel panel-grow">
+      <div class="panel-h">
+        Bill #{{ o.order_number }}
+        <div class="spacer"></div>
+        {% if o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+        {% else %}<span class="tag t-ok">Paid</span>{% endif %}
+      </div>
+
+      <div class="dsec">
+        <div class="dkv"><span>Date &amp; time</span><b class="money">{{ o.created_at|date:"d M Y, H:i" }}</b></div>
+        <div class="dkv"><span>Branch</span><b>{{ o.branch.name|default:"—" }}</b></div>
+        <div class="dkv"><span>Cashier</span><b>{{ o.staff|default:"—" }}</b></div>
+        <div class="dkv"><span>Customer</span><b>{{ o.customer.name|default:o.customer_name|default:"Walk-in" }}</b></div>
+        <div class="dkv"><span>Payment</span>
+          <b class="money">{{ o.payment_method|payment_label }}{% if o.paid_amount %} ฿{{ o.paid_amount|floatformat:2 }} → ฿{{ o.change|floatformat:2 }}{% endif %}</b></div>
+        {% if o.queue_number %}<div class="dkv"><span>Queue</span><b class="money">{{ o.queue_number }}</b></div>{% endif %}
+      </div>
+
+      <div style="flex:1;min-height:0;overflow:auto;padding:8px 20px">
+        <table class="tbl" style="font-size:13px">
+          <tbody>
+            {% for line in selected.items %}
+            <tr>
+              <td style="padding-left:0">
+                <div style="display:flex;align-items:center;gap:11px">
+                  <span class="thumb sm">{{ line.item.name|initial }}</span>
+                  <div>
+                    <b style="font-weight:600">{{ line.item.name }}</b>
+                    {% if line.item.discount %}<div class="sub">less ฿{{ line.item.discount|floatformat:2 }}</div>{% endif %}
+                  </div>
+                </div>
+              </td>
+              <td class="r money">×{{ line.item.qty }}</td>
+              <td class="r money" style="font-weight:640;padding-right:0">฿{{ line.line_total|floatformat:2|intcomma }}</td>
+            </tr>
+            {% empty %}
+            <tr><td class="empty" style="padding:24px 0">No line items recorded.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div style="padding:14px 20px;border-top:1px solid var(--line2)">
+        <div class="dkv"><span>Subtotal</span><b class="money">฿{{ o.subtotal|floatformat:2|intcomma }}</b></div>
+        {% if o.discount_amount %}
+        <div class="dkv"><span>Discount</span><b class="money" style="color:var(--green)">−฿{{ o.discount_amount|floatformat:2|intcomma }}</b></div>
+        {% endif %}
+        <div class="dkv"><span>Goods</span><b class="money">฿{{ selected.total_non_tax|floatformat:2|intcomma }}</b></div>
+        <div class="dkv"><span>VAT {{ tax_percent|floatformat:"-2" }}% (included)</span><b class="money">฿{{ selected.tax_amount|floatformat:2|intcomma }}</b></div>
+        {% if selected.processing_fee %}
+        <div class="dkv"><span>Card fee incl. VAT</span><b class="money">฿{{ selected.processing_fee|floatformat:2|intcomma }}</b></div>
+        {% endif %}
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:12px;margin-top:8px;border-top:1px solid var(--line2)">
+          <b style="font-size:16px;font-weight:670">Total</b>
+          <b class="money" style="font-size:24px;font-weight:700;color:var(--blue);letter-spacing:-.03em">฿{{ o.total|floatformat:2|intcomma }}</b>
+        </div>
+      </div>
+
+      <div style="padding:14px 20px;display:flex;gap:9px;border-top:1px solid var(--line2)">
+        <a class="btn" style="flex:1" target="_blank"
+           href="{% url 'backoffice:receipt_print' o.order_number %}">
+          <svg><use href="#i-print"/></svg> Receipt</a>
+        <a class="btn" style="flex:1"
+           href="{% url 'create_tax_invoice' o.order_number %}">Tax invoice</a>
       </div>
     </div>
   </div>
+  {% endwith %}
+  {% endif %}
 </div>
-
 {% endblock %}

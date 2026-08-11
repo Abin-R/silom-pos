@@ -58,6 +58,36 @@ patch goes missing, update the regexes in [plugins/withBravePosPrinter.js](plugi
 The on-device printer can only be validated with a real build — run `eas build -p android
 --profile preview` yourself (not auto-triggered) and test printing.
 
+## Things that bit us on the 56 → 57 jump (watch for analogues)
+
+- **`expo install --fix` downgrades Sentry.** Expo's `bundledNativeModules.json` pins
+  `@sentry/react-native` to `~7.11.0` (the version current when SDK 57 shipped), so `--fix`
+  happily rolls back the major we're on. Sentry ships on its own train, independent of Expo
+  SDKs. We keep `^8.x` and hold `--fix` off it with `expo.install.exclude` in
+  [package.json](package.json). Re-check this each SDK bump: if Expo's pin ever catches up
+  past ours, drop the exclude.
+- **`--fix` also appends a duplicate Sentry config plugin** — a bare `"@sentry/react-native"`
+  next to our configured `["@sentry/react-native/expo", {...}]` in [app.json](app.json). They
+  are the *same* plugin (`app.plugin.js` is just `module.exports = require('./expo')`), so the
+  bare entry re-runs it with no `url`/`project`/`organization`. Delete the added line after
+  every `--fix`.
+- **A stale eslint cache from the previous SDK segfaults `yarn lint`** (exit 139, "Segmentation
+  fault (core dumped)" — not a real crash, and not a code problem). Clear it after any SDK bump:
+  `rm -rf .expo/cache/eslint`.
+- **Sentry 8 moved to `sentry.gradle.kts`.** `expo prebuild` now emits an `apply from:` pointing
+  at `sentry.gradle.kts` instead of `sentry.gradle`. Fine on 8.22 (both files ship), but if a
+  future Sentry drops one, the Android build breaks at configure time.
+- **`expo prebuild` clears native directories by default now**, so the `--clean` flag above is
+  redundant (harmless — keep it for older CLIs).
+- **Known upstream issue, not yet acted on**: importing `react-native-reanimated` under Hermes V1
+  raises memory use 25–30%. Workaround is worklets *bundle mode* (a `bundleMode` option on the
+  worklets babel plugin, which needs a `babel.config.js` — this project currently has none). It
+  changes how worklets are bundled, so it needs a real on-device soak test before adopting. If
+  the POS tablets start showing memory pressure, start here.
+- **Node floor moved to `^20.19.4 || ^22.13.0 || ^24.3.0 || >=25`** (RN 0.86). `.nvmrc` already
+  pins 22, so no change was needed — but the `Array.prototype.toReversed` polyfill at the top of
+  [metro.config.js](metro.config.js) exists only to support Node 18 and is now dead code.
+
 ## Things that bit us on the 54 → 56 jump (watch for analogues)
 
 - **Config schema drops**: `newArchEnabled` and `android.edgeToEdgeEnabled` were removed (both are

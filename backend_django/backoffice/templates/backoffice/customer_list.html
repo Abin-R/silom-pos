@@ -1,0 +1,182 @@
+{% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 09 — Customers.
+
+  The rhythm bars are the profile. Lifetime spend tells you who mattered;
+  twelve weeks of visit frequency tells you whether they still do. Recent
+  weeks are blue so a fading regular reads as a fade, not a number.
+
+  Home branch is tracked per customer because a Thonglor regular appearing at
+  Silom is a different fact from a new customer, and only the backoffice can
+  see across all three.
+{% endcomment %}
+
+{% block title %}Customers{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Customers{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ total_customers|intcomma }} registered · {{ matched_share }}% of bills in the last 30 days are matched to a customer</div>
+{% endblock %}
+
+{% block topbar %}
+  <div class="ctl" style="width:230px">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" name="q" value="{{ query }}" form="filterForm"
+           placeholder="Phone number or name">
+  </div>
+{% endblock %}
+
+{% block filter_extra %}
+  <input type="hidden" name="tier" value="{{ tier }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="stats s4">
+  <div class="stat">
+    <span class="k">Registered customers</span>
+    <span class="v money">{{ total_customers|intcomma }}</span>
+    <span class="d {% if new_this_month %}up{% endif %}">
+      {% if new_this_month %}<svg><use href="#i-up"/></svg>{% endif %}
+      {{ new_this_month }} new this month</span>
+  </div>
+  <div class="stat">
+    <span class="k">Repeat rate</span>
+    <span class="v money">{{ repeat_rate }}%</span>
+    <span class="d">came back at least once</span>
+  </div>
+  <div class="stat">
+    <span class="k">Average bill, matched</span>
+    <span class="v money">฿{{ member_avg|floatformat:0|intcomma }}</span>
+    <span class="d">across every bill with a name on it</span>
+  </div>
+  <div class="stat">
+    <span class="k">Lapsed {{ lapsed_days }}+ days</span>
+    <span class="v money" style="color:var(--amber)">{{ lapsed_count|intcomma }}</span>
+    <span class="d amber">฿{{ lapsed_spend|floatformat:0|intcomma }} of past spend</span>
+  </div>
+</div>
+
+<div class="row" style="flex:1">
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:12px">
+    <div class="row tight">
+      <div class="seg">
+        {% for key, label in tiers %}
+          <a class="{% if tier == key %}on{% endif %}"
+             href="?{% qs_replace request tier=key page=None %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+      <div class="spacer"></div>
+      <span style="font-size:13px;color:var(--mut)">
+        {{ customers|length }} shown{% if customers|length == 400 %} · first 400{% endif %}
+      </span>
+    </div>
+
+    <div class="panel panel-grow">
+      <div class="panel-scroll">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th style="width:24%">Customer</th><th>Phone</th><th>Home branch</th>
+              <th class="r">Visits</th><th class="r">Total spend</th><th class="r">Avg bill</th>
+              <th class="r">First seen</th><th class="r">Last seen</th>
+              <th class="r" style="width:96px">Tier</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in customers %}
+            <tr class="click {% if selected and c.id == selected.id %}sel{% endif %}"
+                onclick="location.href='?{% qs_replace request c=c.id %}'">
+              <td>
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span class="thumb" style="background:{{ c.branch|branch_color }};color:#fff;font-size:15px;font-weight:650">{{ c.name|initial }}</span>
+                  <b style="font-weight:620">{{ c.name }} {{ c.last_name }}</b>
+                </div>
+              </td>
+              <td class="money">{{ c.phone|default:"—" }}</td>
+              <td>
+                {% if c.branch %}
+                  <span class="branchdot" style="background:{{ c.branch|branch_color }}"></span>{{ c.branch.name }}
+                {% else %}<span style="color:var(--mut2)">Any</span>{% endif %}
+              </td>
+              <td class="r money">{{ c.visits }}</td>
+              <td class="r money" style="font-weight:660">฿{{ c.spend|floatformat:0|intcomma }}</td>
+              <td class="r money">฿{{ c.avg_bill|floatformat:0|intcomma }}</td>
+              <td class="r money" style="color:var(--mut)">{{ c.first_seen|date:"j M y"|default:"—" }}</td>
+              <td class="r money" {% if c.tier_label == 'Lapsed' %}style="color:var(--amber)"{% endif %}>
+                {{ c.last_seen|date:"j M y"|default:"—" }}</td>
+              <td class="r"><span class="tag {{ c.tier_class }}">{{ c.tier_label }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="9" class="empty">
+              <svg><use href="#i-heart"/></svg>
+              {% if query %}Nobody matches “{{ query }}”.{% else %}No customers registered yet. The till adds them when a cashier attaches a phone number to a bill.{% endif %}
+            </td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ── The selected customer ──────────────────────────────────────────── #}
+  {% if selected %}
+  <div class="detail" style="width:352px">
+    <div class="panel panel-grow">
+      <div style="padding:22px 20px;text-align:center;border-bottom:1px solid var(--line2)">
+        <div style="width:64px;height:64px;border-radius:50%;margin:0 auto 12px;background:{{ selected.branch|branch_color }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:670">{{ selected.name|initial }}</div>
+        <div style="font-size:19px;font-weight:670;letter-spacing:-.022em">{{ selected.name }} {{ selected.last_name }}</div>
+        <div class="money" style="font-size:13px;color:var(--mut);margin-top:5px">
+          {{ selected.phone|default:"no phone" }}{% if selected.first_seen %} · first bill {{ selected.first_seen|date:"j M Y" }}{% endif %}
+        </div>
+        <span class="tag {{ selected.tier_class }}" style="margin-top:11px">{{ selected.tier_label }}</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line2)">
+        <div style="padding:15px 6px;text-align:center;border-right:1px solid var(--line2)">
+          <b class="money" style="display:block;font-size:20px;font-weight:690;letter-spacing:-.03em">{{ selected.visits }}</b>
+          <span style="font-size:11.5px;color:var(--mut)">Visits</span></div>
+        <div style="padding:15px 6px;text-align:center;border-right:1px solid var(--line2)">
+          <b class="money" style="display:block;font-size:20px;font-weight:690;letter-spacing:-.03em">฿{{ selected.avg_bill|floatformat:0|intcomma }}</b>
+          <span style="font-size:11.5px;color:var(--mut)">Avg bill</span></div>
+        <div style="padding:15px 6px;text-align:center">
+          <b class="money" style="display:block;font-size:20px;font-weight:690;letter-spacing:-.03em">฿{{ selected.spend|floatformat:0|intcomma }}</b>
+          <span style="font-size:11.5px;color:var(--mut)">Lifetime</span></div>
+      </div>
+
+      <div class="dsec">
+        <div class="lbl" style="margin-bottom:10px">Visit rhythm · last 12 weeks</div>
+        <div style="display:flex;align-items:flex-end;gap:5px;height:52px">
+          {% for bar in selected.week_bars %}
+            <div style="flex:1;height:{{ bar.height }}%;min-height:2px;border-radius:3px 3px 0 0;background:{% if bar.recent %}var(--blue){% else %}#DDE4EE{% endif %}"></div>
+          {% endfor %}
+        </div>
+        <div style="font-size:12.5px;color:var(--mut);margin-top:10px;line-height:1.5">
+          The last four weeks are blue. A regular going quiet shows up here before it shows up in the total.
+        </div>
+      </div>
+
+      <div style="padding:16px 20px;flex:1;min-height:0;overflow:auto">
+        <div class="lbl" style="margin-bottom:10px">Recent bills</div>
+        <div style="font-size:13px;line-height:2.2;color:var(--mut)">
+          {% for o in selected.recent_orders %}
+          <div style="display:flex;justify-content:space-between;gap:10px">
+            <span>#{{ o.order_number }} · {{ o.created_at|date:"j M H:i" }}</span>
+            <b class="money" style="color:var(--txt)">฿{{ o.total|floatformat:2|intcomma }}</b>
+          </div>
+          {% empty %}
+          <div style="color:var(--mut2)">No bills recorded against this customer.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div style="padding:14px 20px;display:flex;gap:9px;border-top:1px solid var(--line2)">
+        <a class="btn" style="flex:1" href="{% url 'backoffice:customer_detail' selected.id %}?{{ qs }}">Edit</a>
+        <a class="btn" style="flex:1" href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;q={{ selected.phone|urlencode }}">All bills</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

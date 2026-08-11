@@ -1,71 +1,144 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 02 — Sales.
 
-{% block title %}Sales by Date — Brave POS{% endblock %}
+  Gross, discount, refunds, net — in that order, on every row. Net alone
+  hides why a day was soft. The fourth stat card is filled blue because net
+  is the figure that goes in the books; the three before it are the
+  arithmetic that produced it.
+
+  Weekends are coloured purple in both the chart and the day labels. For a
+  bakery that's the whole shape of the week, and it should never take
+  arithmetic to spot.
+{% endcomment %}
+
+{% block title %}Sales{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Sales{% endblock %}
+{% block page_sub %}<div class="tb-sub">Daily breakdown · {{ date_from }} → {{ date_to }}{% if branch %} · {{ branch.name }}{% endif %}</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:report_daily_export' %}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Export CSV</a>
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">Sales report by Date</h4>
-        <div class="text-muted small">
-          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
-        </div>
-      </div>
-      <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_daily_export' %}{% if qs %}?{{ qs }}{% endif %}">
-        <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </a>
-    </div>
 
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>Date</th>
-            <th class="text-end">Sub Total</th>
-            <th class="text-end">Discount</th>
-            <th class="text-end">Tax Amount</th>
-            <th class="text-end">Service Charge</th>
-            <th class="text-end">Profit</th>
-            <th class="text-end">Grand Total</th>
-            <th>Payment Type</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in rows %}
-          <tr>
-            <td>{{ row.date|date:"d/m/Y" }}</td>
-            <td class="text-end currency">{{ row.subtotal|floatformat:2|intcomma }}</td>
-            <td class="text-end currency {% if row.discount %}text-danger{% endif %}">{{ row.discount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.tax_amount|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.service_charge|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.profit|floatformat:2|intcomma }}</td>
-            <td class="text-end currency fw-semibold">{{ row.grand_total|floatformat:2|intcomma }}</td>
-            <td>
-              {% for p in row.payments %}
-                <span class="badge bg-light text-dark border me-1 mb-1" style="font-weight:500;">
-                  {{ p.method }} <span class="text-success ms-1">฿{{ p.amount|floatformat:2|intcomma }}</span>
-                </span>
-              {% empty %}
-                <span class="text-muted small">—</span>
-              {% endfor %}
-            </td>
-            <td class="text-end">
-              <a class="btn btn-sm btn-outline-success"
-                 href="{% url 'backoffice:report_daily_detail' date_str=row.date|date:'Y-m-d' %}?{{ qs }}">
-                <i class="bi bi-chevron-right"></i> View bills
-              </a>
-            </td>
-          </tr>
-          {% empty %}
-          <tr><td colspan="9" class="text-center text-muted py-4">No sales in range.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+<div class="stats s4">
+  <div class="stat">
+    <span class="k">Gross sales</span>
+    <span class="v money">฿{{ gross|floatformat:0|intcomma }}</span>
+    {% include "backoffice/_delta.html" with value=gross_delta suffix=compare_label %}
+  </div>
+  <div class="stat">
+    <span class="k">Discounts given</span>
+    <span class="v money">−฿{{ discount|floatformat:0|intcomma }}</span>
+    <span class="d">{{ discount_share|floatformat:1 }}% of gross</span>
+  </div>
+  <div class="stat">
+    <span class="k">Voids &amp; refunds</span>
+    <span class="v money">−฿{{ refunds|floatformat:0|intcomma }}</span>
+    <span class="d">{{ refund_bills }} day{{ refund_bills|pluralize }} affected</span>
+  </div>
+  <div class="stat headline">
+    <span class="k">Net sales</span>
+    <span class="v money">฿{{ net|floatformat:0|intcomma }}</span>
+    {% include "backoffice/_delta.html" with value=net_delta suffix=compare_label %}
+  </div>
+</div>
+
+<div class="panel" style="flex:none;height:250px;display:flex;flex-direction:column">
+  <div class="panel-h">
+    Daily net sales <span class="sm">one bar per day</span>
+    <div class="spacer"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:#2563EB"></span> Weekday</span>
+      <span><span class="dot" style="background:#7C3AED"></span> Weekend</span>
     </div>
-    <div class="text-muted small mt-2">{{ rows|length }} day{{ rows|length|pluralize }}.</div>
+  </div>
+  <div class="bars" style="padding-bottom:0">
+    {% for d in chart_rows %}
+      <div class="{% if d.weekend %}we{% else %}hi{% endif %}"
+           style="height:{{ d.height|floatformat:0 }}%"
+           title="{{ d.date|date:'D j M' }} — ฿{{ d.total|floatformat:0|intcomma }}"></div>
+    {% empty %}
+      <div style="flex:1;align-self:center;text-align:center;color:var(--mut);font-size:13.5px;background:none">
+        No sales in this window.</div>
+    {% endfor %}
+  </div>
+  <div class="xaxis" style="padding-top:10px">
+    {% for d in chart_rows %}{% if forloop.counter0|divisibleby:4 %}<span>{{ d.date|date:"j M" }}</span>{% endif %}{% endfor %}
+  </div>
+</div>
+
+<div class="panel panel-grow">
+  <div class="panel-h">
+    Day by day
+    <div class="spacer"></div>
+    <span class="tag t-info">{{ rows|length }} day{{ rows|length|pluralize }}</span>
+  </div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:150px">Date</th><th class="r">Bills</th><th class="r">Gross</th>
+          <th class="r">Discount</th><th class="r">Refunds</th><th class="r">Net</th>
+          <th class="r">VAT</th><th class="r">Profit</th><th class="r">Avg bill</th>
+          <th class="r" style="width:120px">vs prev. week</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            <a href="{% url 'backoffice:report_daily_detail' r.date|date:'Y-m-d' %}?{{ qs }}">
+              <b style="font-weight:620">{{ r.date|date:"D j M" }}</b></a>
+            <div class="sub {% if r.weekend %}purple{% endif %}">
+              {{ r.date|date:"Y" }}{% if r.weekend %} · weekend{% endif %}</div>
+          </td>
+          <td class="r money">{{ r.bill_count|intcomma }}</td>
+          <td class="r money">฿{{ r.subtotal|floatformat:0|intcomma }}</td>
+          <td class="r money" style="color:var(--mut)">{% if r.discount %}−฿{{ r.discount|floatformat:0|intcomma }}{% else %}—{% endif %}</td>
+          <td class="r money" style="color:var(--mut)">{% if r.refunds %}−฿{{ r.refunds|floatformat:0|intcomma }}{% else %}—{% endif %}</td>
+          <td class="r money" style="font-weight:660">฿{{ r.grand_total|floatformat:0|intcomma }}</td>
+          <td class="r money">฿{{ r.tax_amount|floatformat:0|intcomma }}</td>
+          <td class="r money">฿{{ r.profit|floatformat:0|intcomma }}</td>
+          <td class="r money">฿{{ r.avg_bill|floatformat:2|intcomma }}</td>
+          <td class="r">
+            {% if r.vs_prev_week is None %}
+              <span style="color:var(--mut2)">—</span>
+            {% elif r.vs_prev_week >= 0 %}
+              <span class="tag t-ok">+{{ r.vs_prev_week|floatformat:1 }}%</span>
+            {% else %}
+              <span class="tag t-out">{{ r.vs_prev_week|floatformat:1 }}%</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" class="empty">
+          <svg><use href="#i-bars"/></svg>
+          No sales between {{ date_from }} and {{ date_to }}.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot>
+        <tr>
+          <td>{{ span_days }}-day total</td>
+          <td class="r money">{{ bills|intcomma }}</td>
+          <td class="r money">฿{{ gross|floatformat:0|intcomma }}</td>
+          <td class="r money">−฿{{ discount|floatformat:0|intcomma }}</td>
+          <td class="r money">−฿{{ refunds|floatformat:0|intcomma }}</td>
+          <td class="r money" style="color:var(--blue)">฿{{ net|floatformat:0|intcomma }}</td>
+          <td class="r money">฿{{ vat|floatformat:0|intcomma }}</td>
+          <td class="r"></td>
+          <td class="r money">฿{{ avg_bill|floatformat:2|intcomma }}</td>
+          <td class="r"></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
   </div>
 </div>
 {% endblock %}

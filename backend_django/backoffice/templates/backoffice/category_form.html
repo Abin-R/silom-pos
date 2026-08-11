@@ -1,67 +1,60 @@
 {% extends "backoffice/base.html" %}
+{% comment %}
+  Add / edit a category. The colour is not decoration — it is the tile colour
+  a cashier reaches for on the till, so it sits next to the name rather than
+  in an "appearance" section somewhere below.
+{% endcomment %}
 
-{% block title %}
-  {% if mode == 'new' %}Add Category{% else %}Edit {{ category.name }}{% endif %} — Bravepos
+{% block title %}{% if mode == 'new' %}Add category{% else %}{{ category.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add category{% else %}{{ category.name }}{% endif %}{% endblock %}
+{% block page_sub %}<div class="tb-sub">Categories group the Sale screen into tabs</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:category_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to categories</a>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">
-    {% if mode == 'new' %}Add Category{% else %}Edit category — {{ category.name }}{% endif %}
-  </h4>
-  <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:category_list' %}?{{ qs }}">
-    <i class="bi bi-arrow-left"></i> Back to list
-  </a>
-</div>
-
-<form method="post">
+<form method="post" style="max-width:720px">
   {% csrf_token %}
-  <div class="card">
-    <div class="card-body">
-      <div class="row g-3">
-
-        <div class="col-md-8">
-          <label class="form-label"><span class="text-danger">*</span> Category Name</label>
-          <input type="text" name="name" required class="form-control"
-                 value="{{ category.name }}" placeholder="e.g. Large Cookies">
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Order</label>
-          <input type="number" name="order" class="form-control"
-                 value="{{ category.order }}">
-          <div class="form-text">Lower numbers show first.</div>
-        </div>
-
-        <div class="col-md-8">
-          <label class="form-label">Name (Thai)</label>
-          <input type="text" name="name_th" class="form-control"
-                 value="{{ category.name_th }}" placeholder="ชื่อหมวดหมู่ (optional)">
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Background color</label>
-          <input type="color" name="color" class="form-control form-control-color"
-                 value="{{ category.color|default:'#00B14F' }}" style="width:100%;">
-        </div>
-
-        <div class="col-12">
-          <label class="form-label">Status</label>
-          <div class="form-check form-switch ps-5">
-            <input type="checkbox" name="active" id="cat-active"
-                   class="form-check-input"
-                   {% if category.active %}checked{% endif %}>
-            <label class="form-check-label" for="cat-active">Active</label>
-          </div>
-          <div class="form-text">Inactive categories stay in the system but
-            don't show in the POS menu.</div>
-        </div>
+  <div class="panel">
+    <div class="panel-h">Category</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" name="name" required value="{{ category.name }}"
+               placeholder="e.g. Large Cookies">
       </div>
-
-      <div class="d-flex justify-content-end gap-2 mt-4">
-        <a class="btn btn-outline-secondary" href="{% url 'backoffice:category_list' %}?{{ qs }}">Cancel</a>
-        <button type="submit" class="btn btn-success">
-          <i class="bi bi-check2"></i> {% if mode == 'new' %}Create category{% else %}Save changes{% endif %}
-        </button>
+      <div class="field">
+        <label for="f-order">Order</label>
+        <input id="f-order" type="number" name="order" value="{{ category.order }}">
+        <span class="hint">Lower numbers show first on the till.</span>
       </div>
+      <div class="field">
+        <label for="f-nameth">Name in Thai</label>
+        <input id="f-nameth" type="text" name="name_th" value="{{ category.name_th }}"
+               placeholder="ชื่อหมวดหมู่">
+      </div>
+      <div class="field">
+        <label for="f-color">Tile colour</label>
+        <input id="f-color" type="color" name="color"
+               value="{{ category.color|default:'#2563EB' }}"
+               style="height:40px;padding:4px;cursor:pointer">
+      </div>
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="active" {% if category.active %}checked{% endif %}>
+          Show this category on the till
+        </label>
+        <span class="hint">Turning it off keeps the category and its products in the system;
+          they just stop appearing on the Sale screen.</span>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue">
+        <svg><use href="#i-check"/></svg>
+        {% if mode == 'new' %}Create category{% else %}Save changes{% endif %}</button>
+      <a class="btn" href="{% url 'backoffice:category_list' %}?{{ qs }}">Cancel</a>
     </div>
   </div>
 </form>

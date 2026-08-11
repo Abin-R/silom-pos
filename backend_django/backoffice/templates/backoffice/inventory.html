@@ -1,105 +1,164 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 05 — Inventory.
 
-{% block title %}Inventory Summary — Brave POS{% endblock %}
+  Days cover is the column that decides anything. "4 on hand" is meaningless
+  without the sell-through rate beside it; 0.1 days cover against 268 sold
+  this week is an order that should have gone yesterday.
+
+  A product with no par level says "untracked" rather than being flagged
+  against an invented threshold — how much stock is enough depends on lead
+  time and shelf life, which only the shop knows.
+{% endcomment %}
+
+{% block title %}Inventory{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Inventory{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ branch.name|default:"All products" }} · {{ sku_count }} SKU{{ sku_count|pluralize }} tracked</div>
+{% endblock %}
+
+{% block topbar %}
+  <div class="ctl" style="width:210px">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" name="q" value="{{ q }}" form="filterForm" placeholder="Name, SKU or barcode">
+  </div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:inventory_export' %}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+
+  {% comment %}
+    Stock-movement export carries its OWN date range rather than borrowing the
+    header's: this page hides the header dates (the on-hand table is a snapshot,
+    not a window), so a shared control would filter nothing on screen while
+    silently changing the file. Its own form keeps that honest.
+  {% endcomment %}
+  <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="ctl" style="gap:6px">
+    {% if branch %}<input type="hidden" name="branch" value="{{ branch.id }}">{% endif %}
+    <select name="type" title="Movement direction">
+      <option value="out">Stock out</option>
+      <option value="in">Stock in</option>
+      <option value="all">In &amp; out</option>
+    </select>
+    <input type="date" name="from" value="{{ today|date:'Y-m-d' }}" title="Movement from">
+    <span class="arrow">→</span>
+    <input type="date" name="to" value="{{ today|date:'Y-m-d' }}" title="Movement to">
+    <button class="btn" type="submit"><svg><use href="#i-dl"/></svg> Movement</button>
+  </form>
+{% endblock %}
+
+{% block filter_extra %}
+  <input type="hidden" name="level" value="{{ level }}">
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">Inventory Report</h4>
-        <div class="text-muted small">Date {{ today|date:"d F Y" }}</div>
-      </div>
-      <a class="btn btn-info text-white btn-sm"
-         href="{% url 'backoffice:inventory_export' %}?{{ qs }}">
-        <i class="bi bi-file-earmark-spreadsheet"></i> Export
-      </a>
-    </div>
 
-    {# Search row — field selector + free-text query, matches SilomPOS #}
-    <form method="get" class="row g-2 align-items-center mb-3">
-      <input type="hidden" name="branch" value="{{ branch.id }}">
-      <input type="hidden" name="from" value="{{ date_from }}">
-      <input type="hidden" name="to" value="{{ date_to }}">
-      <input type="hidden" name="sort" value="{{ sort }}">
-      <div class="col-md-3">
-        <select name="field" class="form-select form-select-sm">
-          <option value="all" {% if field == 'all' %}selected{% endif %}>All Product</option>
-          <option value="name" {% if field == 'name' %}selected{% endif %}>Product Name</option>
-          <option value="barcode" {% if field == 'barcode' %}selected{% endif %}>Barcode</option>
-          <option value="category" {% if field == 'category' %}selected{% endif %}>Category</option>
-        </select>
-      </div>
-      <div class="col-md-7">
-        <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
-               placeholder="Search products…">
-      </div>
-      <div class="col-md-2 d-grid">
-        <button type="submit" class="btn btn-success btn-sm">
-          <i class="bi bi-search"></i> Search
-        </button>
-      </div>
-    </form>
-
-    <div class="mb-2"><strong>{{ paginator.count }} Items</strong></div>
-
-    {# Sort tabs — matches SilomPOS layout #}
-    <div class="d-flex gap-2 mb-3 flex-wrap">
-      <span class="text-muted small align-self-center me-2">Sort By</span>
-      <a class="btn btn-sm {% if sort == 'name' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-         href="?{{ qs }}{% if qs %}&{% endif %}sort=name">Name</a>
-      <a class="btn btn-sm {% if sort == 'barcode' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-         href="?{{ qs }}{% if qs %}&{% endif %}sort=barcode">Barcode</a>
-      <a class="btn btn-sm {% if sort == 'category' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-         href="?{{ qs }}{% if qs %}&{% endif %}sort=category">Category</a>
-      <div class="dropdown">
-        <button class="btn btn-sm dropdown-toggle {% if sort == 'stock_min' or sort == 'stock_max' %}btn-success{% else %}btn-outline-secondary{% endif %}"
-                data-bs-toggle="dropdown" type="button">OnhandQty</button>
-        <ul class="dropdown-menu">
-          <li><a class="dropdown-item {% if sort == 'stock_min' %}active{% endif %}"
-                 href="?{{ qs }}{% if qs %}&{% endif %}sort=stock_min">Onhand Min</a></li>
-          <li><a class="dropdown-item {% if sort == 'stock_max' %}active{% endif %}"
-                 href="?{{ qs }}{% if qs %}&{% endif %}sort=stock_max">Onhand Max</a></li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>Barcode</th>
-            <th>Product Name</th>
-            <th>Unit</th>
-            <th>Category</th>
-            <th class="text-end">Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for p in products %}
-          <tr>
-            <td>{{ page_obj.start_index|add:forloop.counter0 }}</td>
-            <td>{{ p.barcode|default:"-" }}</td>
-            <td>{{ p.name }}</td>
-            <td class="text-muted">ชิ้น</td>
-            <td class="text-muted">{{ p.category.name|default:"-" }}</td>
-            <td class="text-end">
-              {% if p.product_type == 'S' %}
-                <span class="text-muted">non-stock</span>
-              {% else %}
-                {{ p.stock|intcomma }}
-              {% endif %}
-            </td>
-          </tr>
-          {% empty %}
-          <tr><td colspan="6" class="text-center text-muted py-4">No products.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% include "backoffice/_pagination.html" %}
+<div class="stats s4">
+  <div class="stat">
+    <span class="k">Stock value at cost</span>
+    <span class="v money">฿{{ stock_value|floatformat:0|intcomma }}</span>
+    <span class="d">across {{ sku_count }} SKU{{ sku_count|pluralize }}</span>
   </div>
+  <div class="stat">
+    <span class="k">Out of stock</span>
+    <span class="v money" {% if out_of_stock %}style="color:var(--red-d)"{% endif %}>{{ out_of_stock }}</span>
+    <span class="d {% if out_of_stock %}down{% endif %}">hidden from every till until received</span>
+  </div>
+  <div class="stat">
+    <span class="k">Below par level</span>
+    <span class="v money" {% if below_par %}style="color:var(--amber)"{% endif %}>{{ below_par }}</span>
+    <span class="d {% if below_par %}amber{% endif %}">reorder before tomorrow</span>
+  </div>
+  <div class="stat">
+    <span class="k">No par level set</span>
+    <span class="v money">{{ untracked }}</span>
+    <span class="d">these can never raise an alert</span>
+  </div>
+</div>
+
+{% if out_of_stock %}
+<div class="banner b-amber">
+  <svg><use href="#i-alert"/></svg>
+  <span><b>{{ out_of_stock }} SKU{{ out_of_stock|pluralize }} out of stock.</b>
+    They reappear on the Sale screen automatically once stock is received against them.</span>
+  <div class="spacer"></div>
+  <a class="btn btn-sm btn-amber" href="?{% qs_replace request level='out' page=None %}">Show them</a>
+</div>
+{% endif %}
+
+<div class="panel panel-grow">
+  <div class="panel-h">
+    Stock on hand
+    <div class="spacer"></div>
+    <div class="seg sm">
+      {% for key, label in levels %}
+        <a class="{% if level == key %}on{% endif %}"
+           href="?{% qs_replace request level=key page=None %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:24%">Product</th><th style="width:90px">SKU</th>
+          <th style="width:150px">Level</th>
+          <th class="r">On hand</th><th class="r">Par</th><th class="r">Sold 7d</th>
+          <th class="r">Days cover</th><th class="r">Unit cost</th><th class="r">Value</th>
+          <th class="r">Last received</th><th class="r" style="width:104px">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr {% if p.stock <= 0 %}class="bad-row"{% elif p.level_label == 'Low' %}class="warn-row"{% endif %}>
+          <td>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="thumb">{{ p.name|initial }}</span>
+              <div>
+                <a href="{% url 'backoffice:product_detail' p.id %}?{{ qs }}"><b style="font-weight:620">{{ p.name }}</b></a>
+                <div class="sub">{{ p.name_th|default:p.category.name|default:"" }}</div>
+              </div>
+            </div>
+          </td>
+          <td class="money" style="color:var(--mut)">{{ p.sku|default:p.barcode|default:"—" }}</td>
+          <td>
+            <div class="track"><i style="width:{{ p.fill }}%;background:{{ p.level_colour }}"></i></div>
+            <div class="money" style="font-size:11px;color:var(--mut2);margin-top:5px">
+              {% if p.par_level %}{{ p.stock }} of {{ p.par_level }}{% else %}{{ p.stock }} on hand{% endif %}
+            </div>
+          </td>
+          <td class="r money" style="font-weight:650;color:{{ p.level_colour }}">{{ p.stock }}</td>
+          <td class="r money">{% if p.par_level %}{{ p.par_level }}{% else %}<span style="color:var(--mut2)">—</span>{% endif %}</td>
+          <td class="r money">{{ p.sold_7d }}</td>
+          <td class="r money" {% if p.days_cover != None and p.days_cover < 1 %}style="color:var(--red-d)"{% elif p.days_cover != None and p.days_cover < 3 %}style="color:var(--amber)"{% endif %}>
+            {% if p.days_cover == None %}<span style="color:var(--mut2)">—</span>{% else %}{{ p.days_cover|floatformat:1 }}{% endif %}</td>
+          <td class="r money">฿{{ p.cost|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ p.value|floatformat:0|intcomma }}</td>
+          <td class="r money" style="color:var(--mut)">{{ p.last_received|date:"j M"|default:"—" }}</td>
+          <td class="r"><span class="tag {{ p.level_class }}">{{ p.level_label }}</span></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="11" class="empty">
+          <svg><use href="#i-stack"/></svg>
+          {% if level == 'attention' %}Nothing needs attention — every tracked product is above its par level.
+          {% else %}No products match this filter.{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+      {% if products %}
+      <tfoot>
+        <tr>
+          <td colspan="8">{{ sku_count }} tracked SKU{{ sku_count|pluralize }}{% if branch %} · {{ branch.name }}{% endif %}</td>
+          <td class="r money" style="color:var(--blue)">฿{{ stock_value|floatformat:0|intcomma }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+  {% include "backoffice/_pagination.html" %}
 </div>
 {% endblock %}

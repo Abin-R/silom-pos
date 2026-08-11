@@ -276,6 +276,12 @@ class Product(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     stock = models.IntegerField(default=0)
+    # Reorder point: the on-hand level below which the backoffice flags this
+    # product as needing a delivery. 0 means "not tracked" — the default, so
+    # every existing product stays silent until someone sets a level for it.
+    # Cannot be derived from sales history: how much stock is "enough"
+    # depends on lead time and shelf life, which only the shop knows.
+    par_level = models.IntegerField(default=0)
     sku = models.CharField(max_length=64, blank=True, default="")
     barcode = models.CharField(max_length=64, blank=True, default="")
     image_url = models.TextField(blank=True, default="")
@@ -556,6 +562,8 @@ class Order(models.Model):
             models.Index(fields=["source"]),
             models.Index(fields=["status"]),
             models.Index(fields=["branch"]),
+            # Transactions pages by branch + date bucket, newest first.
+            models.Index(fields=["branch", "-created_at"]),
         ]
 
 
@@ -769,6 +777,53 @@ class DrawerCategory(models.Model):
         return f"{self.type}:{self.name}"
 
 
+# Default stock-out reason codes (Thai + English), seeded per branch.  Named
+# here rather than inside the migration that first writes them so the
+# new-branch signal and the migration can't drift apart — a branch created
+# today must offer the same list as one created before the feature existed.
+DEFAULT_STOCK_OUT_REASONS = [
+    ("Waste / Expired", "ของเสีย / หมดอายุ"),
+    ("Damaged", "สินค้าชำรุด"),
+    ("Staff consumption", "พนักงานบริโภค"),
+    ("Tasting / Sample", "ชิม / ตัวอย่าง"),
+    ("Transfer to branch", "โอนไปสาขาอื่น"),
+    ("Return to vendor", "คืนผู้ขาย"),
+    ("Complimentary", "ของแถม / โปรโมชั่น"),
+    ("Other", "อื่นๆ"),
+]
+
+
+class StockOutReason(models.Model):
+    """Reason codes for stock-out documents — why stock left the branch.
+
+    Same shape and lifecycle as :class:`DrawerCategory` (branch-scoped,
+    renameable, reorderable, deactivatable), because it solves the same
+    problem: staff were typing free-text remarks, so the same reason arrived
+    spelled six different ways and nothing could be grouped or counted.
+
+    Unlike DrawerCategory these are also seeded for branches created *after*
+    the migration ran — see ``signals.seed_new_branch_stock_out_reasons``.
+    Without that a new branch opens with an empty dropdown and the cashier
+    has no way to record a stock-out at all.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="stock_out_reasons",
+        null=True, blank=True,
+    )
+    name = models.CharField(max_length=120)
+    name_th = models.CharField(max_length=120, blank=True, default="")
+    sort_order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        indexes = [models.Index(fields=["branch"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 # ─── Peak (full tax-invoice) integration ────────────────────────────────────
 # The customer-receipt landing page lets shoppers request a "full tax
 # invoice" — the form data goes to Peak's API and produces a downloadable
@@ -808,6 +863,58 @@ class PeakRequest(models.Model):
         indexes = [models.Index(fields=["-created_at"])]
 
 
+class ConsolidatedReceipt(models.Model):
+    """The one Peak receipt that bills a whole branch-day.
+
+    This row is what makes ``consolidate_daily --issue`` safe to re-run: it is
+    the only record of whether a branch-day has already been billed. Without
+    it a second run enqueues a second receipt for the same sales and nothing
+    detects the double-count — Peak accepts both, and the first document's
+    code is nowhere to void from.
+
+    ``unique_together`` on (branch, date) is the hard guarantee; the queue id
+    and response are the soft state of one issuance attempt:
+
+    * ``peak_queue_id`` set, ``response`` null — enqueued, not yet confirmed.
+      A re-run polls this queue id instead of enqueuing again.
+    * ``response`` set — Peak materialised the document; its ``code`` is what
+      a later reissue must void first.
+    * ``needs_reissue`` — a late or voided bill landed in a day already
+      billed, so the figures are stale. SilomPOS calls this
+      ``is_reconsolidate``.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="consolidated_receipts",
+    )
+    date = models.DateField(db_index=True)
+    peak_queue_id = models.CharField(max_length=128, blank=True, default="")
+    response = models.JSONField(null=True, blank=True)
+    needs_reissue = models.BooleanField(default=False)
+    # Exactly the bills this receipt covers. Set (not added to) on every
+    # issuance so a reissued receipt never keeps links to bills the live
+    # document doesn't count.
+    orders = models.ManyToManyField(
+        Order, related_name="consolidated_receipts", blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date"]
+        unique_together = [("branch", "date")]
+
+    def __str__(self):
+        return f"{self.date} {self.branch_id} ({self.peak_code or 'pending'})"
+
+    @property
+    def peak_code(self) -> str:
+        """The live Peak document code, once the queue has materialised it.
+        Empty while the receipt is still queued."""
+        receipts = (self.response or {}).get("PeakReceipts", {}).get("receipts") or []
+        return receipts[0].get("code") or "" if receipts else ""
+
+
 class PeakClientToken(models.Model):
     """Singleton-ish row holding Peak's rotating client token.  On a
     fresh install seed it from the env var PEAK_CLIENT_TOKEN.  The token
@@ -844,6 +951,10 @@ class StockDocument(models.Model):
     ref_no = models.CharField(max_length=120, blank=True, default="")  # purchasing / ref doc no.
     vendor = models.CharField(max_length=200, blank=True, default="")    # stock-in
     receiver = models.CharField(max_length=200, blank=True, default="")  # stock-out
+    # Snapshot of the chosen StockOutReason name at the time of the document,
+    # so renaming or deleting a reason later never rewrites history — the same
+    # reasoning as ShiftMovement.category.  Stock-out only; blank elsewhere.
+    reason = models.CharField(max_length=120, blank=True, default="")
     note = models.TextField(blank=True, default="")
     tax_included = models.BooleanField(default=False)
     avg_cost = models.BooleanField(default=False)  # "AVG Cost Calculate" toggle (stock-in)

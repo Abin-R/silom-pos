@@ -1,56 +1,47 @@
 {% extends "backoffice/base.html" %}
+{% comment %}
+  Add / edit a unit of measure — what a product is counted in when it is not
+  simply counted in pieces.
+{% endcomment %}
 
-{% block title %}
-  {% if mode == 'new' %}Add Unit{% else %}Edit {{ unit.name }}{% endif %} — Bravepos
+{% block title %}{% if mode == 'new' %}Add unit{% else %}{{ unit.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add unit{% else %}{{ unit.name }}{% endif %}{% endblock %}
+{% block page_sub %}<div class="tb-sub">Units appear in the product form's unit selector</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:unit_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to units</a>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">
-    {% if mode == 'new' %}Add Unit{% else %}Edit unit — {{ unit.name }}{% endif %}
-  </h4>
-  <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:unit_list' %}?{{ qs }}">
-    <i class="bi bi-arrow-left"></i> Back to list
-  </a>
-</div>
-
-<form method="post">
+<form method="post" style="max-width:720px">
   {% csrf_token %}
-  <div class="card">
-    <div class="card-body">
-      <div class="row g-3">
-
-        <div class="col-md-8">
-          <label class="form-label"><span class="text-danger">*</span> Unit</label>
-          <input type="text" name="name" required class="form-control"
-                 value="{{ unit.name }}" placeholder="e.g. BOX, Piece, KG, ชิ้น">
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Order</label>
-          <input type="number" name="order" class="form-control"
-                 value="{{ unit.order }}">
-          <div class="form-text">Lower numbers show first.</div>
-        </div>
-
-        <div class="col-12">
-          <label class="form-label">Status</label>
-          <div class="form-check form-switch ps-5">
-            <input type="checkbox" name="active" id="unit-active"
-                   class="form-check-input"
-                   {% if unit.active %}checked{% endif %}>
-            <label class="form-check-label" for="unit-active">Active</label>
-          </div>
-          <div class="form-text">Inactive units stay in the system but
-            don't show in product unit selectors.</div>
-        </div>
+  <div class="panel">
+    <div class="panel-h">Unit</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" name="name" required value="{{ unit.name }}"
+               placeholder="e.g. Box, Piece, kg, ชิ้น">
       </div>
-
-      <div class="d-flex justify-content-end gap-2 mt-4">
-        <a class="btn btn-outline-secondary" href="{% url 'backoffice:unit_list' %}?{{ qs }}">Cancel</a>
-        <button type="submit" class="btn btn-success">
-          <i class="bi bi-check2"></i> {% if mode == 'new' %}Create unit{% else %}Save changes{% endif %}
-        </button>
+      <div class="field">
+        <label for="f-order">Order</label>
+        <input id="f-order" type="number" name="order" value="{{ unit.order }}">
+        <span class="hint">Lower numbers show first in the selector.</span>
       </div>
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="active" {% if unit.active %}checked{% endif %}>
+          Offer this unit when editing a product
+        </label>
+        <span class="hint">Products already using it keep it either way.</span>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue">
+        <svg><use href="#i-check"/></svg>
+        {% if mode == 'new' %}Create unit{% else %}Save changes{% endif %}</button>
+      <a class="btn" href="{% url 'backoffice:unit_list' %}?{{ qs }}">Cancel</a>
     </div>
   </div>
 </form>

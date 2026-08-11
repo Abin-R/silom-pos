@@ -1,76 +1,76 @@
 {% extends "backoffice/base.html" %}
+{% load backoffice_ui %}
+{% comment %}
+  Categories. Reached from the Catalogue's left column, which is where they
+  are usually picked; this page is for reordering, recolouring and deleting —
+  the operations that need a table rather than a filter list.
+{% endcomment %}
 
-{% block title %}Category — Bravepos{% endblock %}
+{% block title %}Categories{% endblock %}
+{% block page_title %}Categories{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ categories|length }} categor{{ categories|length|pluralize:"y,ies" }}{% if branch %} at {{ branch.name }}{% endif %} · the colour is what a cashier sees on the till</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Catalogue</a>
+  <a class="btn btn-blue" href="{% url 'backoffice:category_new' %}?{{ qs }}">
+    <svg><use href="#i-plus"/></svg> Add category</a>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <div>
-    <h4 class="mb-1">Category</h4>
-    <div class="text-muted small">{{ categories|length }} categor{{ categories|length|pluralize:"y,ies" }}</div>
-  </div>
-  <a class="btn btn-success" href="{% url 'backoffice:category_new' %}?{{ qs }}">
-    <i class="bi bi-plus-lg"></i> Add Category
-  </a>
-</div>
-
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0">
-      <thead class="table-light">
-        <tr>
-          <th style="width:4rem;">#</th>
-          <th>Category</th>
-          <th style="width:9rem;">Background color</th>
-          <th style="width:7rem;" class="text-center">Active</th>
-          <th style="width:9rem;" class="text-end">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in categories %}
-        <tr>
-          <td class="text-muted">{{ c.order }}</td>
-          <td>
-            <a class="text-decoration-none fw-semibold"
-               href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}">{{ c.name }}</a>
-            {% if c.name_th %}<span class="text-muted ms-1">({{ c.name_th }})</span>{% endif %}
-          </td>
-          <td>
-            <span style="display:inline-block; width:28px; height:28px; border-radius:6px;
-                         border:1px solid #dee2e6; background:{{ c.color }};"></span>
-          </td>
-          <td class="text-center">
-            {% if c.active %}
-              <span class="badge bg-success-subtle text-success"><i class="bi bi-check-lg"></i> Active</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary">Inactive</span>
-            {% endif %}
-          </td>
-          <td class="text-end">
-            <a class="btn btn-outline-primary btn-sm"
-               href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}"
-               title="Edit"><i class="bi bi-pencil"></i></a>
+<div class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:70px">Order</th><th>Category</th>
+        <th style="width:150px">Colour on the till</th>
+        <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in categories %}
+      <tr>
+        <td class="money" style="color:var(--mut)">{{ c.order }}</td>
+        <td>
+          <a href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}">
+            <b style="font-weight:620;color:var(--txt)">{{ c.name }}</b></a>
+          {% if c.name_th %}<span style="color:var(--mut2);margin-left:6px">{{ c.name_th }}</span>{% endif %}
+        </td>
+        <td>
+          <span style="display:inline-flex;align-items:center;gap:9px">
+            <span style="width:26px;height:26px;border-radius:7px;border:1px solid var(--line);background:{{ c.color }}"></span>
+            <span class="money" style="font-size:12px;color:var(--mut2)">{{ c.color }}</span>
+          </span>
+        </td>
+        <td>
+          {% if c.active %}<span class="tag t-ok">Active</span>
+          {% else %}<span class="tag t-out">Hidden</span>{% endif %}
+        </td>
+        <td class="r">
+          <span style="display:inline-flex;gap:6px">
+            <a class="ico-btn" title="Edit" href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}">
+              <svg><use href="#i-pencil"/></svg></a>
             <form method="post" action="{% url 'backoffice:category_delete' category_id=c.id %}?{{ qs }}"
-                  class="d-inline" onsubmit="return confirm('Delete category “{{ c.name|escapejs }}”? Products in it become uncategorised.');">
+                  style="display:inline"
+                  onsubmit="return confirm('Delete category “{{ c.name|escapejs }}”? Products in it become uncategorised.');">
               {% csrf_token %}
-              <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete">
-                <i class="bi bi-trash"></i>
-              </button>
+              <button type="submit" class="ico-btn danger" title="Delete"><svg><use href="#i-trash"/></svg></button>
             </form>
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="5" class="text-center text-muted py-5">
-            <i class="bi bi-folder text-muted" style="font-size:2.5rem;"></i>
-            <div class="mt-2">No categories yet.</div>
-            <a class="btn btn-success btn-sm mt-3" href="{% url 'backoffice:category_new' %}?{{ qs }}">
-              <i class="bi bi-plus-lg"></i> Create your first category
-            </a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+          </span>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="empty">
+        <svg><use href="#i-folder"/></svg>
+        No categories yet. Products without one still sell — they just land in a single ungrouped tab on the till.
+        <div style="margin-top:16px">
+          <a class="btn btn-blue" href="{% url 'backoffice:category_new' %}?{{ qs }}">
+            <svg><use href="#i-plus"/></svg> Create the first category</a></div>
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}

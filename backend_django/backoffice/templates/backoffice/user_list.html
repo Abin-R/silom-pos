@@ -1,171 +1,188 @@
 {% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 12 — Users.
 
-{% block title %}Users — Bravepos{% endblock %}
+  The banner is the most important thing on the page. Two login systems on
+  one product is the confusion that generates support calls, so the
+  distinction — password here, PIN on the till, neither works on the other —
+  is stated before the table, not buried in help.
+
+  The role matrix fills the space three rows would otherwise leave empty, so
+  "what does a cashier account actually get?" is answered where you assign it
+  rather than guessed at.
+{% endcomment %}
+
+{% block title %}Users{% endblock %}
+{% block page_title %}Users{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Backoffice web logins · {{ users|length }} account{{ users|length|pluralize }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn btn-blue" href="{% url 'backoffice:user_new' %}">
+    <svg><use href="#i-plus"/></svg> Add user</a>
+{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <div>
-    <h4 class="mb-1">Users</h4>
-    <div class="text-muted small">
-      Backoffice web logins · {{ users|length }} account{{ users|length|pluralize }}
-    </div>
-  </div>
-  <a class="btn btn-success" href="{% url 'backoffice:user_new' %}">
-    <i class="bi bi-person-plus"></i> Add User
-  </a>
-</div>
 
 {% if issued %}
 {% comment %}
   Shown exactly once, straight after create/reset. Refreshing loses it —
   that's deliberate: nothing stores the plaintext password anywhere.
 {% endcomment %}
-<div class="card border-success mb-3">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start">
-      <h6 class="text-success mb-3">
-        <i class="bi bi-key-fill"></i>
-        Credentials for {{ issued.name }} ({{ issued.reason }})
-      </h6>
-      <span class="badge bg-warning-subtle text-warning">Shown once</span>
-    </div>
-    <div class="row g-3">
-      {% if issued.username %}
-      <div class="col-sm-4">
-        <div class="text-muted small">Username</div>
-        <code class="fs-6" id="credUsername">{{ issued.username }}</code>
-      </div>
-      {% endif %}
-      <div class="col-sm-4">
-        <div class="text-muted small">Email</div>
-        <code class="fs-6">{{ issued.email }}</code>
-      </div>
-      <div class="col-sm-4">
-        <div class="text-muted small">Password</div>
-        <code class="fs-6" id="credPassword">{{ issued.password }}</code>
-      </div>
-    </div>
-    <button type="button" class="btn btn-outline-success btn-sm mt-3" id="copyCreds">
-      <i class="bi bi-clipboard"></i> Copy
-    </button>
-    <div class="form-text mt-2">
-      Send these over a private channel and have the user change the password
-      after their first sign-in. Reload this page and the password is gone for good.
-    </div>
+<div class="panel" style="border-color:var(--green);border-width:1px">
+  <div class="panel-h">
+    <svg style="width:18px;height:18px;stroke:var(--green);fill:none;stroke-width:1.8"><use href="#i-key"/></svg>
+    Credentials for {{ issued.name }}
+    <span class="sm">{{ issued.reason }}</span>
+    <div class="spacer"></div>
+    <span class="tag t-low">Shown once</span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:18px 20px">
+    {% if issued.username %}
+    <div><div class="lbl" style="margin-bottom:6px">Username</div>
+      <b class="money" style="font-size:15px" id="credUsername">{{ issued.username }}</b></div>
+    {% endif %}
+    <div><div class="lbl" style="margin-bottom:6px">Email</div>
+      <b class="money" style="font-size:15px">{{ issued.email }}</b></div>
+    <div><div class="lbl" style="margin-bottom:6px">Password</div>
+      <b class="money" style="font-size:15px" id="credPassword">{{ issued.password }}</b></div>
+  </div>
+  <div class="form-actions">
+    <button type="button" class="btn" id="copyCreds"><svg><use href="#i-recv"/></svg> Copy</button>
+    <span style="font-size:12.5px;color:var(--mut);line-height:1.5">
+      Send these over a private channel. Reload this page and the password is gone for good.</span>
   </div>
 </div>
 {% endif %}
 
-<div class="alert alert-light border small text-muted">
-  <i class="bi bi-info-circle"></i>
-  These accounts sign in to <strong>this website</strong> with a username
-  <em>or</em> an email address, plus a password. The
-  <a href="{% url 'backoffice:staff_list' %}">Staff</a> page is separate — that
-  manages the 4-digit <strong>PIN logins on the POS app</strong>.
+<div class="banner b-blue">
+  <svg><use href="#i-userlock"/></svg>
+  <span>These accounts sign in to <b>this website</b> with a username or email plus a password.
+    Till access is separate — the <a href="{% url 'backoffice:staff_list' %}"><b>Staff</b></a> page
+    manages the 4-digit PINs cashiers use on the POS app. A PIN never opens the backoffice,
+    and a backoffice password never opens a till.</span>
 </div>
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0">
-      <thead class="table-light">
-        <tr>
-          <th>Name</th>
-          <th>Username</th>
-          <th>Email</th>
-          <th style="width:8rem;">Role</th>
-          <th style="width:12rem;">Branches</th>
-          <th style="width:11rem;">Last sign-in</th>
-          <th style="width:7rem;" class="text-center">Status</th>
-          <th style="width:11rem;" class="text-end">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for u in users %}
-        <tr>
-          <td>
-            <a class="text-decoration-none fw-semibold"
-               href="{% url 'backoffice:user_detail' staff_id=u.id %}">{{ u.name }}</a>
-          </td>
-          <td>
-            {% if u.username %}<code>{{ u.username }}</code>
-            {% else %}<span class="text-muted small">—</span>{% endif %}
-          </td>
-          <td class="small">{{ u.email }}</td>
-          <td>
-            {% if u.role == 'admin' %}
-              <span class="badge bg-primary-subtle text-primary">Admin</span>
-            {% else %}
-              <span class="badge bg-info-subtle text-info">Cashier</span>
-            {% endif %}
-          </td>
-          <td class="small text-muted">
-            {% if u.branches.all %}
-              {% for b in u.branches.all %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
-            {% else %}
-              All branches
-            {% endif %}
-          </td>
-          <td class="small text-muted">
-            {% if u.last_login_at %}{{ u.last_login_at|date:"d M Y H:i" }}
-            {% else %}<span class="text-muted">Never</span>{% endif %}
-          </td>
-          <td class="text-center">
-            {% if u.active %}
-              <span class="badge bg-success-subtle text-success">Active</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary">Inactive</span>
-            {% endif %}
-          </td>
-          <td class="text-end text-nowrap">
-            <a class="btn btn-outline-primary btn-sm"
-               href="{% url 'backoffice:user_detail' staff_id=u.id %}"
-               title="Edit"><i class="bi bi-pencil"></i></a>
+<div class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:22%">Name</th><th>Username</th><th>Email</th>
+        <th style="width:110px">Role</th><th style="width:170px">Branches</th>
+        <th style="width:150px">Last sign-in</th><th style="width:96px">Status</th>
+        <th class="r" style="width:130px">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="thumb" style="width:34px;height:34px;font-size:14px;font-weight:650;{% if u.role == 'admin' %}background:var(--blue);color:#fff{% else %}background:#E8EDF5;color:var(--txt2){% endif %}">{{ u.name|initials }}</span>
+            <div>
+              <a href="{% url 'backoffice:user_detail' staff_id=u.id %}">
+                <b style="font-weight:640;color:var(--txt)">{{ u.name }}</b></a>
+              <div class="sub">created {{ u.created_at|date:"j M Y" }}</div>
+            </div>
+          </div>
+        </td>
+        <td class="money" style="color:var(--amber)">{{ u.username|default:"—" }}</td>
+        <td class="money" style="color:var(--txt2);font-size:12.5px">{{ u.email }}</td>
+        <td>
+          {% if u.role == 'admin' %}<span class="tag t-info">Admin</span>
+          {% else %}<span class="tag t-out">Cashier</span>{% endif %}
+        </td>
+        <td style="color:var(--mut)">
+          {% for b in u.branches.all %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% empty %}All branches{% endfor %}
+        </td>
+        <td class="money" style="white-space:nowrap;{% if not u.last_login_at %}color:var(--mut2){% endif %}">
+          {{ u.last_login_at|date:"j M Y H:i"|default:"Never" }}</td>
+        <td>
+          {% if u.active %}<span class="tag t-ok">Active</span>
+          {% else %}<span class="tag t-out">Suspended</span>{% endif %}
+        </td>
+        <td class="r">
+          <span style="display:inline-flex;gap:6px">
+            <a class="ico-btn" title="Edit" href="{% url 'backoffice:user_detail' staff_id=u.id %}">
+              <svg><use href="#i-pencil"/></svg></a>
             <form method="post" action="{% url 'backoffice:user_reset_password' staff_id=u.id %}"
-                  class="d-inline"
+                  style="display:inline"
                   onsubmit="return confirm('Generate a new password for “{{ u.name|escapejs }}”? Their current one stops working immediately.');">
               {% csrf_token %}
-              <button type="submit" class="btn btn-outline-secondary btn-sm" title="Reset password">
-                <i class="bi bi-key"></i>
-              </button>
+              <button type="submit" class="ico-btn" title="Reset password"><svg><use href="#i-key"/></svg></button>
             </form>
             {% if u.id != user.id %}
             <form method="post" action="{% url 'backoffice:user_delete' staff_id=u.id %}"
-                  class="d-inline"
+                  style="display:inline"
                   onsubmit="return confirm('Revoke backoffice access for “{{ u.name|escapejs }}”? Their POS PIN login is unaffected.');">
               {% csrf_token %}
-              <button type="submit" class="btn btn-outline-danger btn-sm" title="Revoke access">
-                <i class="bi bi-person-slash"></i>
-              </button>
+              <button type="submit" class="ico-btn danger" title="Revoke access"><svg><use href="#i-slash"/></svg></button>
             </form>
+            {% else %}
+            <span class="ico-btn dis" title="You cannot revoke your own access"><svg><use href="#i-slash"/></svg></span>
             {% endif %}
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="8" class="text-center text-muted py-5">
-            <i class="bi bi-people text-muted" style="font-size:2.5rem;"></i>
-            <div class="mt-2">No backoffice users yet.</div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+          </span>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" class="empty">
+        <svg><use href="#i-userlock"/></svg>
+        No backoffice users yet.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="panel-f" style="display:flex;align-items:center;gap:10px">
+    <svg style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-slash"/></svg>
+    The account you are signed in as cannot be revoked, and the last remaining admin cannot be removed.
   </div>
 </div>
 
+<div class="panel">
+  <div class="panel-h">What each role can do</div>
+  <table class="tbl">
+    <thead><tr><th>Capability</th><th class="r" style="width:110px">Admin</th><th class="r" style="width:110px">Cashier</th></tr></thead>
+    <tbody>
+      <tr><td>Sell, refund and close a shift on the till</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td></tr>
+      <tr><td>View every report and export</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td></tr>
+      <tr><td>Add, edit or delete a product</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--mut2)">—</td></tr>
+      <tr><td>Add branches, staff and users</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--mut2)">—</td></tr>
+      <tr><td>Change payment and tax settings</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--mut2)">—</td></tr>
+      <tr><td>Read the audit log</td>
+        <td class="r" style="color:var(--green);font-weight:700">✓</td>
+        <td class="r" style="color:var(--mut2)">—</td></tr>
+    </tbody>
+  </table>
+  <div class="panel-f">
+    Every sign-in attempt, successful or not, is written to the
+    <a href="{% url 'backoffice:audit_log' %}">audit log</a> with its IP address.
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
 {% if issued %}
 <script>
   document.getElementById('copyCreds').addEventListener('click', function () {
-    const username = document.getElementById('credUsername');
-    const lines = [
-      username ? 'Username: ' + username.textContent : null,
-      'Email: {{ issued.email|escapejs }}',
-      'Password: ' + document.getElementById('credPassword').textContent,
-      'Sign in: ' + window.location.origin + '{% url "backoffice:login" %}',
+    var username = document.getElementById('credUsername');
+    var lines = [
+      username ? 'Username: ' + username.textContent.trim() : null,
+      'Password: ' + document.getElementById('credPassword').textContent.trim(),
     ].filter(Boolean);
-    navigator.clipboard.writeText(lines.join('\n')).then(() => {
-      this.innerHTML = '<i class="bi bi-check-lg"></i> Copied';
-    });
+    navigator.clipboard.writeText(lines.join('\n'));
+    this.textContent = 'Copied';
   });
 </script>
 {% endif %}

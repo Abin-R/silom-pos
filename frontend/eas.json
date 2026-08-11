@@ -9,13 +9,19 @@
       "android": {
         "buildType": "apk"
       },
-      "channel": "preview"
+      "channel": "preview",
+      "env": {
+        "EXPO_PUBLIC_SENTRY_ENV": "preview"
+      }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
       },
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_SENTRY_ENV": "production"
+      }
     }
   }
 }

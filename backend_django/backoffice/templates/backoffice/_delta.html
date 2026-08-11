@@ -1,0 +1,16 @@
+{% comment %}
+  The change line under a stat card.
+
+    {% include "backoffice/_delta.html" with value=sales_delta suffix="vs July" %}
+
+  `value` is a percentage or None. None means there was nothing to compare
+  against, which is rendered as such — a first month of trading must not read
+  as "flat", because an owner would act on that.
+{% endcomment %}
+{% if value is None %}
+  <span class="d">{{ suffix|default:"no prior period" }}</span>
+{% elif value >= 0 %}
+  <span class="d up"><svg><use href="#i-up"/></svg> {{ value|floatformat:1 }}% {{ suffix }}</span>
+{% else %}
+  <span class="d down"><svg><use href="#i-down"/></svg> {{ value|floatformat:1 }}% {{ suffix }}</span>
+{% endif %}

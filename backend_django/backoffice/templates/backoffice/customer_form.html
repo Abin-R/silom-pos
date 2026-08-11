@@ -1,0 +1,70 @@
+{% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Only the fields the till matches a customer on are editable. Visits, spend
+  and tier are derived from their orders — showing them as inputs would imply
+  they can be corrected here, and they can't.
+{% endcomment %}
+
+{% block title %}{{ customer.name }}{% endblock %}
+{% block page_title %}{{ customer.name }} {{ customer.last_name }}{% endblock %}
+{% block page_sub %}<div class="tb-sub">Customer · registered {{ customer.created_at|date:"j F Y"|default:"—" }}</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:customer_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to customers</a>
+{% endblock %}
+
+{% block content %}
+<form method="post" style="max-width:760px">
+  {% csrf_token %}
+  <div class="panel">
+    <div class="panel-h">Details</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" name="name" value="{{ customer.name }}" required>
+        <span class="hint">What the cashier sees when they attach this customer to a bill.</span>
+      </div>
+      <div class="field">
+        <label for="f-last">Last name</label>
+        <input id="f-last" type="text" name="last_name" value="{{ customer.last_name }}">
+      </div>
+      <div class="field">
+        <label for="f-phone">Phone</label>
+        <input id="f-phone" type="tel" name="phone" value="{{ customer.phone }}">
+        <span class="hint">The till looks a customer up by this number. Changing it breaks that lookup for anyone who knows the old one.</span>
+      </div>
+      <div class="field">
+        <label for="f-email">Email</label>
+        <input id="f-email" type="email" name="email" value="{{ customer.email }}">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save changes</button>
+      <a class="btn" href="{% url 'backoffice:customer_list' %}?{{ qs }}">Cancel</a>
+    </div>
+  </div>
+</form>
+
+{% if customer.tax_id %}
+<div class="panel" style="max-width:760px;margin-top:16px">
+  <div class="panel-h">Tax invoice identity <span class="sm">ใบกำกับภาษีเต็มรูป</span></div>
+  <div style="padding:4px 0">
+    <div class="srow">
+      <span class="si" style="background:var(--amber-soft);color:var(--amber)"><svg><use href="#i-shield"/></svg></span>
+      <span class="sm"><b>Tax ID</b><u class="money">{{ customer.tax_id }}{% if customer.tax_branch %} · {{ customer.tax_branch }}{% endif %}</u></span>
+    </div>
+    {% if customer.address %}
+    <div class="srow">
+      <span class="si" style="background:#F1F4F8;color:var(--mut)"><svg><use href="#i-pin"/></svg></span>
+      <span class="sm"><b>Registered address</b><u>{{ customer.address|linebreaksbr }}</u></span>
+    </div>
+    {% endif %}
+  </div>
+  <div class="panel-f">
+    Captured once from Transactions → Reprint and reused on every later invoice for this buyer. Edited there, not here.
+  </div>
+</div>
+{% endif %}
+{% endblock %}

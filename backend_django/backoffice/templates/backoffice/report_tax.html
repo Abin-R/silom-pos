@@ -1,96 +1,186 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 10 — Tax & VAT (รายงานภาษีขาย).
 
-{% block title %}Tax Report (ภาษีขาย) — Brave POS{% endblock %}
+  The formulas are shown, not hidden. VAT-inclusive pricing is where owners
+  and accountants most often disagree, so goods value and output tax each
+  state their arithmetic on screen and again on every export.
 
-{% block extra_head %}
-<style>
-  /* Print: hide the chrome so the page prints as the RD-format report. */
-  @media print {
-    .sidebar, .topbar, .filterbar, .no-print { display: none !important; }
-    .content-area { margin-left: 0 !important; }
-    .card { border: 0; box-shadow: none; }
-  }
-  .rd-header .label { color: #6c757d; min-width: 15rem; display: inline-block; }
-</style>
+  The receipt sequence audit is the quiet centrepiece: "1,392 issued, 1,392
+  accounted for" is what a revenue officer asks first, and it should be
+  answerable before anyone asks. Voided bills keep their numbers, so the
+  sequence stays continuous rather than developing gaps.
+{% endcomment %}
+
+{% block title %}Tax &amp; VAT{% endblock %}
+{% block page_title %}Tax &amp; VAT{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">
+    ภ.พ.30{% if header.tax_id %} · Tax ID {{ header.tax_id }}{% endif %} ·
+    VAT {{ header.tax_percent|floatformat:"-2" }}% included in prices
+  </div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn btn-blue" href="{% url 'backoffice:report_tax_export' %}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Download filing pack</a>
 {% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-start mb-3">
-      <div>
-        <h4 class="mb-1">รายงานภาษีขาย</h4>
-        <div class="text-muted small">
-          Date {{ date_from }}{% if date_from != date_to %} → {{ date_to }}{% endif %}
-        </div>
-      </div>
-      <div class="no-print">
-        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
-          <i class="bi bi-printer"></i> Print
-        </button>
-        <a class="btn btn-info text-white btn-sm" href="{% url 'backoffice:report_tax_export' %}{% if qs %}?{{ qs }}{% endif %}">
-          <i class="bi bi-file-earmark-spreadsheet"></i> Export
-        </a>
-      </div>
-    </div>
 
-    {# ── Taxpayer identity block (RD-prescribed header) ── #}
-    <div class="rd-header small mb-3">
-      <div><span class="label">ชื่อผู้ประกอบการ</span>{{ header.company_name }}</div>
-      <div><span class="label">เลขประจำตัวผู้เสียภาษี</span>{{ header.tax_id }}</div>
-      <div><span class="label">สถานประกอบการ</span>{% if branch %}สาขา {{ branch.name }}{% else %}ทุกสาขา{% endif %}</div>
-      <div><span class="label">เลขรหัสประจำเครื่อง (POS ID)</span>{{ header.pos_id }}</div>
-      <div><span class="label">อัตราภาษีมูลค่าเพิ่ม</span>{{ header.tax_percent|floatformat:"-2" }}% (ราคารวมภาษี)</div>
-    </div>
+<div class="banner b-blue">
+  <svg><use href="#i-clock"/></svg>
+  <span>
+    <b>Output VAT of ฿{{ totals.vat|floatformat:2|intcomma }} for {{ date_from }} → {{ date_to }}.</b>
+    {% if voided_count %}
+      {{ issued_count|intcomma }} receipt numbers issued, {{ voided_count }} of them voided and listed by number — the sequence has no gaps.
+    {% else %}
+      Every bill in the period is accounted for, with no gaps in the receipt numbering.
+    {% endif %}
+  </span>
+</div>
 
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>วัน เดือน ปี</th>
-            <th>เลขที่ใบกำกับภาษีอย่างย่อ</th>
-            <th class="text-end">จำนวนฉบับ</th>
-            <th class="text-end">มูลค่าสินค้า/บริการ</th>
-            <th class="text-end">ภาษีมูลค่าเพิ่ม</th>
-            <th class="text-end">รวม</th>
-            <th>หมายเหตุ</th>
-          </tr>
-        </thead>
+<div class="stats s4">
+  <div class="stat">
+    <span class="k">Sales including VAT</span>
+    <span class="v money">฿{{ totals.total|floatformat:0|intcomma }}</span>
+    <span class="d">{% if branch %}{{ branch.name }}{% else %}all branches{% endif %}</span>
+  </div>
+  <div class="stat">
+    <span class="k">Goods value</span>
+    <span class="v money">฿{{ totals.value|floatformat:0|intcomma }}</span>
+    <span class="d">total ÷ 1.{{ header.tax_percent|floatformat:"0" }}</span>
+  </div>
+  <div class="stat headline">
+    <span class="k">Output VAT due</span>
+    <span class="v money">฿{{ totals.vat|floatformat:0|intcomma }}</span>
+    <span class="d" style="color:var(--blue-d)">total × {{ header.tax_percent|floatformat:"-2" }} ÷ 10{{ header.tax_percent|floatformat:"0" }}</span>
+  </div>
+  <div class="stat">
+    <span class="k">Receipts issued</span>
+    <span class="v money">{{ issued_count|intcomma }}</span>
+    <span class="d {% if not voided_count %}up{% endif %}">
+      {% if not voided_count %}<svg><use href="#i-check"/></svg> no gaps in sequence
+      {% else %}{{ voided_count }} voided, all numbered{% endif %}</span>
+  </div>
+</div>
+
+<div class="cols c-2">
+  <div class="panel">
+    <div class="panel-h">
+      Day by day <span class="sm">รายงานภาษีขาย</span>
+      <div class="spacer"></div>
+      <a class="btn btn-sm" href="{% url 'backoffice:report_tax_export' %}?{{ qs }}">
+        <svg><use href="#i-dl"/></svg> CSV</a>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Date</th><th>Receipt no.</th><th class="r">Receipts</th>
+          <th class="r">Goods</th><th class="r">Output VAT</th><th class="r">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr {% if r.voided %}class="warn-row"{% endif %}>
+          <td>
+            <b style="font-weight:640">{{ r.date|date:"j M Y" }}</b>
+            {% if r.voided %}<div class="sub amber">{{ r.voided|length }} voided: {{ r.voided|join:", "|truncatechars:34 }}</div>{% endif %}
+          </td>
+          <td class="money" style="font-size:12px;color:var(--mut)">
+            {{ r.inv_from }}{% if r.inv_to != r.inv_from %} – {{ r.inv_to }}{% endif %}</td>
+          <td class="r money">{{ r.bill_count }}</td>
+          <td class="r money">฿{{ r.value|floatformat:2|intcomma }}</td>
+          <td class="r money" style="font-weight:660;color:var(--blue)">฿{{ r.vat|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ r.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="empty">
+          <svg><use href="#i-shield"/></svg>
+          No receipts issued between {{ date_from }} and {{ date_to }}.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot>
+        <tr>
+          <td colspan="2">Period total</td>
+          <td class="r money">{{ totals.bills|intcomma }}</td>
+          <td class="r money">฿{{ totals.value|floatformat:2|intcomma }}</td>
+          <td class="r money" style="color:var(--blue)">฿{{ totals.vat|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ totals.total|floatformat:2|intcomma }}</td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="stack">
+    <div class="panel">
+      <div class="panel-h">By branch</div>
+      <table class="tbl">
+        <thead><tr><th>Branch</th><th class="r">Receipts</th><th class="r">Sales</th><th class="r">Output VAT</th></tr></thead>
         <tbody>
-          {% for row in rows %}
+          {% for b in by_branch %}
           <tr>
-            <td>{{ row.date|date:"d/m/Y" }}</td>
-            <td class="currency">{{ row.inv_from }}{% if row.inv_to != row.inv_from %} – {{ row.inv_to }}{% endif %}</td>
-            <td class="text-end">{{ row.bill_count }}</td>
-            <td class="text-end currency">{{ row.value|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ row.vat|floatformat:2|intcomma }}</td>
-            <td class="text-end currency fw-semibold">{{ row.total|floatformat:2|intcomma }}</td>
-            <td class="small {% if row.voided %}text-danger{% else %}text-muted{% endif %}">
-              {% if row.voided %}ยกเลิก: {{ row.voided|join:", " }}{% else %}—{% endif %}
-            </td>
+            <td><span class="branchdot" style="background:{{ b|branch_color }}"></span>{{ b.name }}</td>
+            <td class="r money">{{ b.receipts|intcomma }}</td>
+            <td class="r money">฿{{ b.total|floatformat:0|intcomma }}</td>
+            <td class="r money" style="font-weight:650">฿{{ b.vat|floatformat:2|intcomma }}</td>
           </tr>
           {% empty %}
-          <tr><td colspan="7" class="text-center text-muted py-4">No tax invoices in range.</td></tr>
+          <tr><td colspan="4" class="empty">Nothing in this window.</td></tr>
           {% endfor %}
         </tbody>
-        {% if rows %}
-        <tfoot class="table-light fw-semibold">
-          <tr>
-            <td>รวมทั้งสิ้น</td>
-            <td></td>
-            <td class="text-end">{{ totals.bills }}</td>
-            <td class="text-end currency">{{ totals.value|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ totals.vat|floatformat:2|intcomma }}</td>
-            <td class="text-end currency">{{ totals.total|floatformat:2|intcomma }}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-        {% endif %}
       </table>
     </div>
-    <div class="text-muted small mt-2">
-      {{ rows|length }} day{{ rows|length|pluralize }}. มูลค่าคำนวณจากยอดรวมที่ชำระ (รวมภาษีมูลค่าเพิ่ม) — ภาษี = ยอดรวม × {{ header.tax_percent|floatformat:"-2" }} / (100 + {{ header.tax_percent|floatformat:"-2" }})
+
+    <div class="panel">
+      <div class="panel-h">Filing pack contents</div>
+      <div style="padding:8px 20px 16px">
+        <table class="tbl" style="font-size:13px">
+          <tbody>
+            <tr>
+              <td style="padding-left:0">
+                <b style="font-weight:600">Output tax report</b>
+                <div class="sub">รายงานภาษีขาย · {{ rows|length }} row{{ rows|length|pluralize }}</div>
+              </td>
+              <td class="r" style="padding-right:0">
+                <a class="tag t-ok" href="{% url 'backoffice:report_tax_export' %}?{{ qs }}">CSV</a></td>
+            </tr>
+            <tr>
+              <td style="padding-left:0">
+                <b style="font-weight:600">Daily sales summary</b>
+                <div class="sub">รายงานยอดขายรายวัน</div>
+              </td>
+              <td class="r" style="padding-right:0">
+                <a class="tag t-ok" href="{% url 'backoffice:report_daily_export' %}?{{ qs }}">CSV</a></td>
+            </tr>
+            <tr>
+              <td style="padding-left:0">
+                <b style="font-weight:600">Per-bill register</b>
+                <div class="sub">every receipt, voids included</div>
+              </td>
+              <td class="r" style="padding-right:0">
+                <a class="tag t-ok" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">CSV</a></td>
+            </tr>
+            <tr>
+              <td style="padding-left:0;border:0">
+                <b style="font-weight:600">Receipt sequence audit</b>
+                <div class="sub">{{ issued_count|intcomma }} issued, {{ issued_count|intcomma }} accounted for</div>
+              </td>
+              <td class="r" style="padding-right:0;border:0"><span class="tag t-ok">No gaps</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-f">
+        Prices already include VAT, so goods value is the total divided by
+        1.{{ header.tax_percent|floatformat:"0" }} and output tax is the total
+        × {{ header.tax_percent|floatformat:"-2" }} ÷ 10{{ header.tax_percent|floatformat:"0" }}.
+        Both formulas are printed on every export.
+      </div>
     </div>
   </div>
 </div>

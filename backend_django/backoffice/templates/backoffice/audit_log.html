@@ -1,174 +1,157 @@
 {% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 13 — Audit log.
 
-{% block title %}Audit Log — Bravepos{% endblock %}
+  The diff is the whole point, so it gets the widest column. `open → closed`
+  with the old value struck through in red and the new one in green reads
+  faster than any prose, and it is what makes the log usable rather than
+  merely complete.
 
-{% block extra_head %}
-<style>
-  .audit-changes { font-size: 0.75rem; line-height: 1.35; }
-  .audit-changes .field { color: #6c757d; }
-  .audit-changes .from { color: #b02a37; text-decoration: line-through; }
-  .audit-changes .to { color: #146c43; }
-  .audit-meta { font-size: 0.7rem; color: #9aa0a6; }
-  td.audit-target { max-width: 18rem; }
-  td.audit-diff { max-width: 30rem; }
-</style>
+  Rows that touch money or access are tinted — a voided bill amber, a failed
+  sign-in red — because a raw field diff cannot tell you which changes
+  mattered.
+{% endcomment %}
+
+{% block title %}Audit log{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Audit log{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ total|intcomma }} event{{ total|pluralize }} · who changed what, when, and from where</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:audit_log_export' %}?{{ audit_qs }}">
+    <svg><use href="#i-dl"/></svg> Export CSV</a>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <div>
-    <h4 class="mb-1">Audit Log</h4>
-    <div class="text-muted small">
-      {{ total }} recorded event{{ total|pluralize }} — who changed what, when, and from where
-    </div>
-  </div>
-  <a class="btn btn-outline-success" href="{% url 'backoffice:audit_log_export' %}?{{ audit_qs }}">
-    <i class="bi bi-download"></i> Export CSV
-  </a>
-</div>
 
-<div class="card mb-3">
-  <div class="card-body py-3">
-    <form method="get" class="row g-2 align-items-end">
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">From</label>
-        <input type="date" name="from" class="form-control form-control-sm" value="{{ selected.from }}">
-      </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">To</label>
-        <input type="date" name="to" class="form-control form-control-sm" value="{{ selected.to }}">
-      </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">Action</label>
-        <select name="action" class="form-select form-select-sm">
-          <option value="">All actions</option>
-          {% for value, label in action_choices %}
-            <option value="{{ value }}" {% if selected.action == value %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">Type</label>
-        <select name="model" class="form-select form-select-sm">
-          <option value="">All types</option>
-          {% for m in model_choices %}
-            <option value="{{ m }}" {% if selected.model == m %}selected{% endif %}>{{ m }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">User</label>
-        <select name="actor" class="form-select form-select-sm">
-          <option value="">Everyone</option>
-          {% for a in actors %}
-            <option value="{{ a.id }}" {% if selected.actor == a.id|stringformat:'s' %}selected{% endif %}>{{ a.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label small mb-1">Search</label>
-        <div class="input-group input-group-sm">
-          <input type="text" name="q" class="form-control form-control-sm"
-                 value="{{ selected.q }}" placeholder="name, note…">
-          <button class="btn btn-success btn-sm px-3" type="submit">
-            <i class="bi bi-search"></i>
-          </button>
-        </div>
-      </div>
-    </form>
+{% comment %}
+  The audit filters are their own form: they are not the branch/date pair the
+  rest of the backoffice shares, and mixing them into `filterForm` would mean
+  changing a branch silently dropped an action filter.
+{% endcomment %}
+<form method="get" class="filters">
+  <div class="ctl" title="From">
+    <svg><use href="#i-cal"/></svg>
+    <input type="date" name="from" value="{{ selected.from }}" onchange="this.form.submit()">
+    <span class="arrow">→</span>
+    <input type="date" name="to" value="{{ selected.to }}" onchange="this.form.submit()">
   </div>
-</div>
+  <div class="ctl">
+    <select name="action" onchange="this.form.submit()">
+      <option value="">All actions</option>
+      {% for value, label in action_choices %}
+        <option value="{{ value }}" {% if selected.action == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  <div class="ctl">
+    <select name="model" onchange="this.form.submit()">
+      <option value="">All record types</option>
+      {% for m in model_choices %}
+        <option value="{{ m }}" {% if selected.model == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  <div class="ctl">
+    <svg><use href="#i-store"/></svg>
+    <select name="branch" onchange="this.form.submit()">
+      <option value="">All branches</option>
+      {% for b in branches %}
+        <option value="{{ b.id }}" {% if selected.branch == b.id|stringformat:'s' %}selected{% endif %}>{{ b.name }}</option>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  <div class="ctl">
+    <select name="actor" onchange="this.form.submit()">
+      <option value="">Everyone</option>
+      {% for a in actors %}
+        <option value="{{ a.id }}" {% if selected.actor == a.id|stringformat:'s' %}selected{% endif %}>{{ a.name }}</option>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  <div class="ctl" style="width:220px">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" name="q" value="{{ selected.q }}" placeholder="Record id, name or note">
+  </div>
+  <button class="btn" type="submit">Apply</button>
+  {% if audit_qs %}<a class="btn" href="{% url 'backoffice:audit_log' %}">Clear</a>{% endif %}
+</form>
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0">
-      <thead class="table-light">
+<div class="panel panel-grow">
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
         <tr>
-          <th style="width:10rem;">When</th>
-          <th style="width:11rem;">Who</th>
-          <th style="width:7rem;">Action</th>
-          <th class="audit-target">What</th>
-          <th class="audit-diff">Changes</th>
-          <th style="width:9rem;">Where from</th>
+          <th style="width:120px">When</th><th style="width:150px">Who</th>
+          <th style="width:110px">Action</th><th style="width:22%">What</th>
+          <th>Changes</th><th class="r" style="width:170px">Where from</th>
         </tr>
       </thead>
       <tbody>
         {% for e in entries %}
-        <tr>
-          <td class="small text-nowrap">
-            {{ e.at|date:"d M Y" }}<br>
-            <span class="text-muted">{{ e.at|date:"H:i:s" }}</span>
-          </td>
-          <td class="small">
-            {% if e.actor_label %}
-              <span class="fw-semibold">{{ e.actor_label }}</span>
-              {% if e.actor_role %}<br><span class="audit-meta">{{ e.actor_role }}</span>{% endif %}
-            {% else %}
-              <span class="text-muted">system</span>
-            {% endif %}
+        <tr class="{% if e.action == 'login_failed' or e.action == 'delete' %}bad-row{% elif e.model == 'Order' or e.model == 'Staff' or e.model == 'Settings' %}warn-row{% endif %}">
+          <td class="money" style="white-space:nowrap">
+            {{ e.at|date:"j M Y" }}
+            <div style="color:var(--mut2)">{{ e.at|date:"H:i:s" }}</div>
           </td>
           <td>
-            {% if e.action == 'create' %}
-              <span class="badge bg-success-subtle text-success">Created</span>
-            {% elif e.action == 'update' %}
-              <span class="badge bg-primary-subtle text-primary">Updated</span>
-            {% elif e.action == 'delete' %}
-              <span class="badge bg-danger-subtle text-danger">Deleted</span>
-            {% elif e.action == 'login' %}
-              <span class="badge bg-info-subtle text-info">Signed in</span>
-            {% elif e.action == 'login_failed' %}
-              <span class="badge bg-warning-subtle text-warning">Failed</span>
-            {% elif e.action == 'logout' %}
-              <span class="badge bg-secondary-subtle text-secondary">Signed out</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary">{{ e.get_action_display }}</span>
+            <b style="font-weight:640{% if not e.actor_label %};color:var(--mut){% endif %}">{{ e.actor_label|default:"system" }}</b>
+            <div class="sub">{{ e.actor_role|default:"not signed in" }}{% if e.source %} · {{ e.source }}{% endif %}</div>
+          </td>
+          <td>
+            {% if e.action == 'create' %}<span class="tag t-ok">Created</span>
+            {% elif e.action == 'update' %}<span class="tag t-info">Updated</span>
+            {% elif e.action == 'delete' %}<span class="tag t-red">Deleted</span>
+            {% elif e.action == 'login' %}<span class="tag t-purple">Signed in</span>
+            {% elif e.action == 'login_failed' %}<span class="tag t-red">Failed</span>
+            {% elif e.action == 'logout' %}<span class="tag t-out">Signed out</span>
+            {% else %}<span class="tag t-out">{{ e.get_action_display }}</span>{% endif %}
+          </td>
+          <td>
+            {% if e.model %}<span class="lbl" style="display:block;margin-bottom:3px">{{ e.model }}</span>{% endif %}
+            <b class="money" style="font-size:12.5px;font-weight:600">{{ e.object_label|default:e.object_id|default:"—"|truncatechars:36 }}</b>
+            {% if e.branch %}
+            <div class="sub"><span class="branchdot" style="background:{{ e.branch|branch_color }}"></span>{{ e.branch.name }}</div>
             {% endif %}
           </td>
-          <td class="audit-target small">
-            {% if e.model %}<span class="audit-meta">{{ e.model }}</span><br>{% endif %}
-            <span class="text-truncate d-inline-block w-100">{{ e.object_label|default:"—" }}</span>
-            {% if e.branch %}<br><span class="audit-meta"><i class="bi bi-shop"></i> {{ e.branch.name }}</span>{% endif %}
-          </td>
-          <td class="audit-diff audit-changes">
-            {% for field, change in e.changes.items %}
-              {% if forloop.counter <= 6 %}
-                <div>
-                  <span class="field">{{ field }}</span>
-                  {% if change.to is not None or change.from is not None %}
-                    <span class="from">{{ change.from|default_if_none:"∅"|truncatechars:40 }}</span>
-                    <span class="text-muted">→</span>
-                    <span class="to">{{ change.to|default_if_none:"∅"|truncatechars:40 }}</span>
-                  {% else %}
-                    <span class="to">{{ change|truncatechars:40 }}</span>
-                  {% endif %}
-                </div>
-              {% elif forloop.counter == 7 %}
-                <div class="audit-meta">… +{{ e.change_count|add:"-6" }} more field{{ e.change_count|add:"-6"|pluralize }}</div>
-              {% endif %}
+          <td style="font-family:var(--mono);font-size:11.5px;line-height:1.7;color:var(--mut)">
+            {% for c in e.visible_changes %}
+              {{ c.field }}
+              {% if c.is_diff and c.old %}<s style="color:var(--red-d)">{{ c.old|stringformat:"s"|truncatechars:24 }}</s>{% endif %}
+              {% if c.is_diff %}<span style="color:var(--mut2)">→</span>{% endif %}
+              <b style="color:{% if c.is_diff %}var(--green-d){% else %}var(--txt2){% endif %}">{{ c.new|stringformat:"s"|truncatechars:26 }}</b>
+              <br>
             {% empty %}
-              <span class="text-muted small">{{ e.note|default:"—" }}</span>
+              {% if e.note %}{{ e.note }}{% else %}<span style="color:var(--mut2)">—</span>{% endif %}
             {% endfor %}
-            {% if e.note and e.changes %}<div class="audit-meta">{{ e.note }}</div>{% endif %}
+            {% if e.hidden_changes %}
+              <span style="color:var(--mut2)">+ {{ e.hidden_changes }} more field{{ e.hidden_changes|pluralize }}</span>
+            {% endif %}
+            {% if e.note and e.visible_changes %}
+              <div style="color:var(--amber-d);margin-top:3px">{{ e.note }}</div>
+            {% endif %}
           </td>
-          <td class="small">
-            <span class="audit-meta">
-              {{ e.source|default:"—" }}{% if e.method %} · {{ e.method }}{% endif %}<br>
-              {{ e.ip|default:"" }}
-            </span>
+          <td class="r money" style="font-size:11.5px;color:var(--mut)">
+            {{ e.source|default:"—" }}{% if e.method %} · {{ e.method }}{% endif %}
+            <div style="color:var(--mut2)">{{ e.ip|default:"" }}</div>
           </td>
         </tr>
         {% empty %}
-        <tr>
-          <td colspan="6" class="text-center text-muted py-5">
-            <i class="bi bi-clipboard-check text-muted" style="font-size:2.5rem;"></i>
-            <div class="mt-2">Nothing recorded for these filters yet.</div>
-          </td>
-        </tr>
+        <tr><td colspan="6" class="empty">
+          <svg><use href="#i-log"/></svg>
+          {% if audit_qs %}No events match these filters.{% else %}Nothing recorded yet.{% endif %}
+        </td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% include "backoffice/_pagination.html" with qs=audit_qs %}
 </div>
-
-{% include "backoffice/_pagination.html" with page_obj=page_obj paginator=paginator qs=audit_qs %}
 {% endblock %}

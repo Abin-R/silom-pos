@@ -24,7 +24,7 @@ import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
 import { AppShell, TopBar, WIDE, railWidth, useDense } from "../components/AppShell";
-import { apiFetch, clearAuthToken } from "../lib/api";
+import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
@@ -32,6 +32,7 @@ import { C, MONO, R } from "../lib/theme";
 import { showAlert } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
 import { methodLabel } from "../lib/payments";
+import { t as tr, useT } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -101,6 +102,7 @@ type ParkedOrder = {
 const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function POS() {
+  useT(); // re-render this screen when the language changes
   const router = useRouter();
   const insets = useSafeAreaInsets();
   // Receipt-printing hook.  printReceipt renders ReceiptImage to a PNG
@@ -274,7 +276,7 @@ export default function POS() {
 
   const loadShift = useCallback(async () => {
     try {
-      const cur = await apiFetch(`${API}/shifts/current`).then((r) => r.json());
+      const cur = await apiFetch(`${API}/shifts/current`).then((r) => safeJson<any>(r, null));
       setShiftOpen(!!(cur && cur.id));
     } catch {
       // Treat a failed lookup as "no shift" so the cashier is told to open one
@@ -338,8 +340,8 @@ export default function POS() {
   const refreshBadges = async () => {
     try {
       const [po, oh] = await Promise.all([
-        apiFetch(`${API}/parked-orders`).then((r) => r.json()),
-        apiFetch(`${API}/orders?source=delivery`).then((r) => r.json()),
+        apiFetch(`${API}/parked-orders`).then((r) => safeJson<any[]>(r, [])),
+        apiFetch(`${API}/orders?source=delivery`).then((r) => safeJson<Order[]>(r, [])),
       ]);
       setParkedCount(po.length);
       // count active (non-delivered) delivery orders
@@ -377,9 +379,9 @@ export default function POS() {
   // Name of the category currently on screen — the grid header states what
   // you are looking at, which matters once the strip became a column.
   const activeCatName = useMemo(() => {
-    if (search.trim()) return `Results for “${search.trim()}”`;
-    if (activeCat === "favorite") return "Favorites";
-    return categories.find((c) => c.id === activeCat)?.name || "Products";
+    if (search.trim()) return tr("pos.results_for", { q: search.trim() });
+    if (activeCat === "favorite") return tr("pos.favorites");
+    return categories.find((c) => c.id === activeCat)?.name || tr("common.products");
   }, [activeCat, categories, search]);
 
   // Subtotal is the gross line value; discounts are per-product only (no
@@ -551,9 +553,8 @@ export default function POS() {
       // Keep the cart intact: the cashier can retry the save once the network
       // is back, and clearing it would destroy the only record of the sale.
       showAlert(
-        "Order NOT saved",
-        "The payment went through but the order could not be saved to the server.\n\n" +
-          "Do NOT take payment again. Write this order down, then tell an admin.",
+        tr("pos.order_not_saved"),
+        tr("pos.order_not_saved_body") + "\n\n" + tr("pos.order_not_saved_action"),
       );
     }
   };
@@ -645,31 +646,31 @@ export default function POS() {
   const actions = [
     {
       icon: "person-outline",
-      label: "Customer",
-      short: "Customer",
+      label: tr("common.customer"),
+      short: tr("common.customer"),
       onPress: () => setShowCustomer(true),
       testId: "toolbar-customer",
     },
     {
       icon: "bookmark-outline",
-      label: "Hold Sale",
-      short: "Hold",
+      label: tr("pos.hold_sale"),
+      short: tr("pos.hold_sale"),
       badge: parkedCount,
       onPress: () => setShowParked(true),
       testId: "toolbar-parked",
     },
     {
       icon: "globe-outline",
-      label: "Online Orders",
-      short: "Orders",
+      label: tr("pos.online_orders"),
+      short: tr("common.orders"),
       badge: orderHubCount,
       onPress: () => setShowOrderHub(true),
       testId: "toolbar-order-hub",
     },
     {
       icon: "albums-outline",
-      label: "Cash Drawer",
-      short: "Cash",
+      label: tr("pos.cash_drawer"),
+      short: tr("common.cash"),
       onPress: () => navProps.onNavigate("drawer"),
       testId: "toolbar-drawer",
     },
@@ -696,11 +697,11 @@ export default function POS() {
       ListEmptyComponent={
         <Empty
           icon="search-outline"
-          title="No products here"
+          title={tr("common.no_products_here")}
           note={
             search.trim()
-              ? "Nothing matches that search. Check the spelling, or clear it to browse by category."
-              : "This category has no products yet."
+              ? tr("pos.nothing_matches_that_search_check_the")
+              : tr("pos.this_category_has_no_products_yet")
           }
         />
       }
@@ -736,7 +737,7 @@ export default function POS() {
             value={search}
             onChangeText={setSearch}
             placeholder={
-              isWide ? "Search products by name or Thai name…" : "Search products"
+              isWide ? tr("pos.search_products_by_name_or_thai") : tr("pos.search_products")
             }
             testID="product-search"
           />
@@ -752,8 +753,8 @@ export default function POS() {
                   style={styles.statusPill}
                   onPress={() =>
                     showAlert(
-                      `${queuedPrints} receipt${queuedPrints === 1 ? "" : "s"} waiting to print`,
-                      "The printer was unreachable, so these were queued and are retried automatically. Check the printer is on and connected.",
+                      tr("pos.receipts_waiting_to_print", { count: queuedPrints }),
+                      tr("pos.the_printer_was_unreachable_so_these"),
                     )
                   }
                   testID="status-print-queue"
@@ -773,14 +774,14 @@ export default function POS() {
                 >
                   <Ionicons name="lock-closed-outline" size={16} color={C.warnDark} />
                   <Text style={[styles.statusText, { color: C.warnDark }]}>
-                    No shift open
+                    {tr("pos.no_shift_open")}
                   </Text>
                 </TouchableOpacity>
               ) : shiftOpen === true ? (
                 <View style={[styles.statusPill, { backgroundColor: C.okTint }]}>
                   <View style={styles.statusDot} />
                   <Text style={[styles.statusText, { color: C.okDark }]}>
-                    Shift open
+                    {tr("pos.shift_open")}
                   </Text>
                 </View>
               ) : null}
@@ -822,7 +823,7 @@ export default function POS() {
                   testID="category-rail"
                 >
                   <CatRow
-                    label="Favorites"
+                    label={tr("pos.favorites")}
                     emoji="★"
                     count={catCounts.favorite}
                     active={activeCat === "favorite" && !search.trim()}
@@ -861,7 +862,7 @@ export default function POS() {
                     <View style={{ flex: 1 }} />
                     <Text style={styles.prodHeadCount}>
                       {filteredProducts.length}{" "}
-                      {filteredProducts.length === 1 ? "item" : "items"}
+                      {filteredProducts.length === 1 ? tr("common.item") : tr("common.items")}
                     </Text>
                   </View>
                 ) : (
@@ -877,7 +878,7 @@ export default function POS() {
                     testID="category-rail"
                   >
                     <CatChip
-                      label="Favorites"
+                      label={tr("pos.favorites")}
                       active={activeCat === "favorite"}
                       onPress={() => {
                         setActiveCat("favorite");
@@ -971,11 +972,11 @@ export default function POS() {
               </View>
             </View>
             <View style={styles.fabMid}>
-              <Text style={styles.fabTotalLabel}>Total</Text>
+              <Text style={styles.fabTotalLabel}>{tr("common.total")}</Text>
               <Text style={styles.fabTotal}>{THB(total)}</Text>
             </View>
             <View style={styles.fabRight}>
-              <Text style={styles.fabView}>Checkout</Text>
+              <Text style={styles.fabView}>{tr("pos.checkout")}</Text>
               <Ionicons name="chevron-up" size={18} color={C.surface} />
             </View>
           </TouchableOpacity>
@@ -989,13 +990,12 @@ export default function POS() {
               <View style={styles.shiftGateIcon}>
                 <Ionicons name="lock-closed-outline" size={32} color={C.brand} />
               </View>
-              <Text style={styles.shiftGateText}>Open shift to continue</Text>
+              <Text style={styles.shiftGateText}>{tr("pos.open_shift_to_continue")}</Text>
               <Text style={styles.shiftGateNote}>
-                Count the drawer first — the figure you enter is what the close
-                is measured against.
+                {tr("pos.count_the_drawer_first_the_figure")}
               </Text>
               <Btn
-                label="Open shift"
+                label={tr("pos.open_shift")}
                 variant="blue"
                 icon="play-outline"
                 height={56}
@@ -1014,10 +1014,10 @@ export default function POS() {
           <View style={styles.gateModal}>
             <View style={styles.gateModalHead}>
               <TouchableOpacity onPress={() => setShowOpenShift(false)}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.gateModalTitle}>Open Shift</Text><View style={{ width: 24 }} />
+              <Text style={styles.gateModalTitle}>{tr("common.open_shift")}</Text><View style={{ width: 24 }} />
             </View>
             <View style={{ padding: 20, gap: 12 }}>
-              <Text style={styles.gateModalLabel}>Start Cash in Drawer (THB)</Text>
+              <Text style={styles.gateModalLabel}>{tr("common.start_cash_in_drawer_thb")}</Text>
               <TextInput
                 style={styles.gateModalInput}
                 value={startCash}
@@ -1033,7 +1033,7 @@ export default function POS() {
                 disabled={openingShift}
                 testID="gate-confirm-open"
               >
-                <Text style={styles.shiftGateBtnText}>{openingShift ? "Opening…" : "OPEN SHIFT"}</Text>
+                <Text style={styles.shiftGateBtnText}>{openingShift ? tr("pos.opening") : tr("pos.open_shift_2")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1052,7 +1052,7 @@ export default function POS() {
           <View style={[styles.cartSheet, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
             <View style={styles.cartSheetHandle} />
             <View style={styles.cartSheetHeader}>
-              <Text style={styles.cartSheetTitle}>Current Order</Text>
+              <Text style={styles.cartSheetTitle}>{tr("pos.current_order")}</Text>
               <TouchableOpacity onPress={() => setShowCart(false)}>
                 <Ionicons name="close" size={24} color={C.ink2} />
               </TouchableOpacity>
@@ -1290,6 +1290,7 @@ function ProductCard({
   item: Product;
   onPress: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const img = item.image_base64 || item.image_url;
   return (
     <TouchableOpacity
@@ -1307,7 +1308,7 @@ function ProductCard({
       </View>
       {item.is_favorite && (
         <View style={styles.pbadge}>
-          <Tag tone="low" icon="star">Favorite</Tag>
+          <Tag tone="low" icon="star">{tr("common.favorite")}</Tag>
         </View>
       )}
       <Text style={styles.pname} numberOfLines={2}>
@@ -1363,6 +1364,7 @@ function CartSidebar({
   onEdit: (item: CartItem) => void;
   embedded?: boolean;
 }) {
+  useT(); // re-render this screen when the language changes
   // Prices already include VAT (see the shop's tax setup), so the tax line is
   // the portion carved out of the total, not something added on top of it.
   const vat = total > 0 ? (total * 7) / 107 : 0;
@@ -1379,7 +1381,7 @@ function CartSidebar({
       {!embedded && (
         <View style={styles.cartHead}>
           <Text style={styles.cartTitle}>
-            Cart <Text style={styles.cartCountText}>({cartCount})</Text>
+            {tr("pos.cart")} <Text style={styles.cartCountText}>({cartCount})</Text>
           </Text>
           <View style={{ flex: 1 }} />
           {cart.length > 0 && (
@@ -1389,7 +1391,7 @@ function CartSidebar({
               testID="clear-cart"
             >
               <Ionicons name="trash-outline" size={18} color={C.danger} />
-              <Text style={styles.clearText}>Clear</Text>
+              <Text style={styles.clearText}>{tr("pos.clear")}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -1420,8 +1422,8 @@ function CartSidebar({
         ListEmptyComponent={
           <Empty
             icon="cart-outline"
-            title="Cart is empty"
-            note="Tap a product to start the order."
+            title={tr("pos.cart_is_empty")}
+            note={tr("pos.tap_a_product_to_start_the")}
           />
         }
         renderItem={({ item }) => (
@@ -1478,24 +1480,24 @@ function CartSidebar({
 
       <View style={styles.totals}>
         <View style={styles.tr}>
-          <Text style={styles.trLabel}>Subtotal</Text>
+          <Text style={styles.trLabel}>{tr("common.subtotal")}</Text>
           <Money style={styles.trValue}>{THB(subtotal)}</Money>
         </View>
         {discountAmount > 0 && (
           <View style={styles.tr}>
-            <Text style={styles.trLabel}>Discount</Text>
+            <Text style={styles.trLabel}>{tr("common.discount")}</Text>
             <Money style={[styles.trValue, { color: C.ok }]}>
               {`−${THB(discountAmount)}`}
             </Money>
           </View>
         )}
         <View style={styles.tr}>
-          <Text style={styles.trLabel}>VAT 7% (included)</Text>
+          <Text style={styles.trLabel}>{tr("pos.vat_7_pct_included")}</Text>
           <Money style={styles.trValue}>{THB(vat)}</Money>
         </View>
         <View style={styles.dash} />
         <View style={styles.trBig}>
-          <Text style={styles.trBigLabel}>Total</Text>
+          <Text style={styles.trBigLabel}>{tr("common.total")}</Text>
           <Money style={styles.trBigValue} numberOfLines={1}>
             <Text testID="cart-total">{THB(total)}</Text>
           </Money>
@@ -1510,7 +1512,7 @@ function CartSidebar({
         testID="pay-btn"
       >
         <Ionicons name="lock-closed-outline" size={20} color={C.surface} />
-        <Text style={styles.checkoutText}>Checkout</Text>
+        <Text style={styles.checkoutText}>{tr("pos.checkout")}</Text>
         <View style={{ flex: 1 }} />
         <Money style={styles.checkoutAmt}>{THB(total)}</Money>
       </TouchableOpacity>
@@ -1558,6 +1560,7 @@ function PaymentModal({
     },
   ) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("Cash");
   // The keypad is opt-in. Quick-tender chips cover almost every cash sale, so
@@ -1708,7 +1711,7 @@ function PaymentModal({
       const data = await res.json();
       if (!res.ok) {
         setBeamStatus("failed");
-        setBeamError(data.detail || "Failed to create Beam charge");
+        setBeamError(data.detail || tr("pos.failed_to_create_beam_charge"));
         return;
       }
       setBeamChargeId(data.charge_id);
@@ -1716,7 +1719,7 @@ function PaymentModal({
       setBeamStatus(data.status === "SUCCEEDED" || data.status === "COMPLETED" ? "completed" : "pending");
     } catch {
       setBeamStatus("failed");
-      setBeamError("Cannot reach payment server");
+      setBeamError(tr("pos.cannot_reach_payment_server"));
     }
   };
 
@@ -1743,7 +1746,7 @@ function PaymentModal({
           onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
         } else if (data.status === "FAILED" || data.status === "EXPIRED") {
           setBeamStatus("failed");
-          setBeamError("Payment " + data.status.toLowerCase() + ". Please try again.");
+          setBeamError(tr("pos.payment_status_try_again", { status: data.status.toLowerCase() }));
           clearInterval(interval);
         }
       } catch { /* ignore transient errors */ }
@@ -1766,7 +1769,7 @@ function PaymentModal({
       const data = await res.json();
       if (!res.ok) {
         setOmiseStatus("failed");
-        setOmiseError(data.detail || "Failed to create payment link");
+        setOmiseError(data.detail || tr("pos.failed_to_create_payment_link"));
         return;
       }
       setOmiseLinkId(data.link_id);
@@ -1781,7 +1784,7 @@ function PaymentModal({
       setOmiseStatus("pending");
     } catch {
       setOmiseStatus("failed");
-      setOmiseError("Cannot reach payment server");
+      setOmiseError(tr("pos.cannot_reach_payment_server"));
     }
   };
 
@@ -1806,7 +1809,7 @@ function PaymentModal({
           });
         } else if (data.status === "failed") {
           setOmiseStatus("failed");
-          setOmiseError("Card payment failed. Please try again.");
+          setOmiseError(tr("pos.card_payment_failed_try_again"));
           clearInterval(interval);
         }
       } catch { /* ignore transient errors */ }
@@ -1829,7 +1832,7 @@ function PaymentModal({
       const data = await res.json();
       if (!res.ok) {
         setBeamCardStatus("failed");
-        setBeamCardError(data.detail || "Failed to create payment link");
+        setBeamCardError(data.detail || tr("pos.failed_to_create_payment_link"));
         return;
       }
       setBeamCardLinkId(data.link_id);
@@ -1844,7 +1847,7 @@ function PaymentModal({
       setBeamCardStatus("pending");
     } catch {
       setBeamCardStatus("failed");
-      setBeamCardError("Cannot reach payment server");
+      setBeamCardError(tr("pos.cannot_reach_payment_server"));
     }
   };
 
@@ -1868,7 +1871,7 @@ function PaymentModal({
           });
         } else if (data.status === "failed") {
           setBeamCardStatus("failed");
-          setBeamCardError("Card payment failed. Please try again.");
+          setBeamCardError(tr("pos.card_payment_failed_try_again"));
           clearInterval(interval);
         }
       } catch { /* ignore transient errors */ }
@@ -1876,7 +1879,7 @@ function PaymentModal({
     return () => clearInterval(interval);
   }, [beamCardStatus, beamCardLinkId]);
 
-  // Derived flags for the right-panel "Payment Confirm" button — extracted so
+  // Derived flags for the right-panel tr("pos.payment_confirm") button — extracted so
   // the JSX below stays readable.
   const isQrLikeMethod = method === PAYMENT_METHODS.QR_KBANK || method === PAYMENT_METHODS.PROMPTPAY || method === PAYMENT_METHODS.BEAM;
   const isCustomReady = method === PAYMENT_METHODS.CUSTOM && !!customPick;
@@ -1898,21 +1901,21 @@ function PaymentModal({
 
   const confirmLabel = (() => {
     if (method === PAYMENT_METHODS.BEAM) {
-      if (beamStatus === "loading") return "Generating…";
-      if (beamStatus === "pending") return "Waiting for scan…";
-      return "Generate QR";
+      if (beamStatus === "loading") return tr("pos.generating");
+      if (beamStatus === "pending") return tr("pos.waiting_for_scan");
+      return tr("pos.generate_qr");
     }
     if (method === PAYMENT_METHODS.CARD_LINK) {
-      if (omiseStatus === "loading") return "Generating…";
-      if (omiseStatus === "pending") return "Waiting for payment…";
-      return "Generate Card QR";
+      if (omiseStatus === "loading") return tr("pos.generating");
+      if (omiseStatus === "pending") return tr("pos.waiting_for_payment");
+      return tr("pos.generate_card_qr");
     }
     if (method === PAYMENT_METHODS.BEAM_CARD) {
-      if (beamCardStatus === "loading") return "Generating…";
-      if (beamCardStatus === "pending") return "Waiting for payment…";
-      return "Generate Card QR";
+      if (beamCardStatus === "loading") return tr("pos.generating");
+      if (beamCardStatus === "pending") return tr("pos.waiting_for_payment");
+      return tr("pos.generate_card_qr");
     }
-    return "Payment Confirm";
+    return tr("pos.payment_confirm");
   })();
 
   const handleConfirmPayment = () => {
@@ -1973,12 +1976,12 @@ function PaymentModal({
         >
           {/* ── Header ── */}
           <View style={[styles.payHead, dense && { height: 60 }]}>
-            <Text style={styles.payHeadTitle}>Checkout</Text>
+            <Text style={styles.payHeadTitle}>{tr("pos.checkout")}</Text>
             {!isNarrow && (
               // Tag defaults to flex-start so it never stretches in a column;
               // in this centred row it has to opt back in.
               <Tag tone="info" mono style={{ alignSelf: "center" }}>
-                {`${itemsCount} item${itemsCount !== 1 ? "s" : ""} · ${cartCount} pcs`}
+                {tr("pos.items_pcs", { count: itemsCount, pcs: cartCount })}
               </Tag>
             )}
             <View style={{ flex: 1 }} />
@@ -2033,8 +2036,7 @@ function PaymentModal({
               {!isNarrow && (
                 <View style={styles.payNote}>
                   <Text style={styles.payNoteText}>
-                    Splitting the bill? Take one method now and charge the
-                    remainder after.
+                    {tr("pos.splitting_the_bill_take_one_method")}
                   </Text>
                 </View>
               )}
@@ -2043,7 +2045,7 @@ function PaymentModal({
             {/* ── Detail column ── */}
             <View style={styles.payRight}>
               <View style={[styles.due, dense && { paddingTop: 14, paddingBottom: 12 }]}>
-                <Text style={styles.dueLabel}>AMOUNT DUE</Text>
+                <Text style={styles.dueLabel}>{tr("pos.amount_due")}</Text>
                 <Money style={[styles.dueVal, dense && { fontSize: 30 }]} numberOfLines={1}>
                   {THB(total)}
                 </Money>
@@ -2056,8 +2058,8 @@ function PaymentModal({
               >
             {method === PAYMENT_METHODS.EASY_PAY ? (
               <View style={styles.easyPayPane} testID="easypay-pane">
-                <Text style={styles.easyPayThai}>ชำระเงินครบวงจร</Text>
-                <Text style={styles.easyPayTitle}>Pay Easy</Text>
+                <Text style={styles.easyPayThai}>{tr("pos.payeasy_tagline")}</Text>
+                <Text style={styles.easyPayTitle}>{tr("pos.pay_easy")}</Text>
                 <View style={styles.easyPayBadges}>
                   {["รองรับบัตรเครดิต/เดบิต", "QR Payment ทุกธนาคาร", "e-Wallet ทุกค่าย"].map((b) => (
                     <View key={b} style={styles.easyPayBadge}><Text style={styles.easyPayBadgeText}>{b}</Text></View>
@@ -2078,7 +2080,7 @@ function PaymentModal({
                       { name: "True", color: C.danger },
                       { name: "Ali", color: "#1677FF" },
                       { name: "PP", color: "#00457C" },
-                      { name: "Shop", color: "#EE4D2D" },
+                      { name: tr("common.shop"), color: "#EE4D2D" },
                       { name: "KB", color: "#138F2D" },
                       { name: "SCB", color: "#4E2D80" },
                       { name: "Laz", color: "#0F146D" },
@@ -2090,34 +2092,34 @@ function PaymentModal({
                   </View>
                 </View>
                 <TouchableOpacity style={styles.easyPayRegister}>
-                  <Text style={styles.easyPayRegisterText}>สมัคร ใช้บริการ</Text>
+                  <Text style={styles.easyPayRegisterText}>{tr("pos.apply_for_service")}</Text>
                 </TouchableOpacity>
               </View>
             ) : method === PAYMENT_METHODS.PROMPTPAY ? (
               <View style={styles.promptPayPane} testID="promptpay-pane">
                 <View style={styles.thaiQrHeader}>
                   <Ionicons name="grid" size={28} color={C.surface} />
-                  <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
+                  <Text style={styles.thaiQrTitle}>{tr("pos.thai_qr")}{"\n"}{tr("pos.payment")}</Text>
                 </View>
                 <View style={styles.promptPayLogoBox}>
                   <View style={styles.promptPayLogoPill}>
-                    <Text style={styles.promptPayLogoText}>PromptPay</Text>
+                    <Text style={styles.promptPayLogoText}>{tr("pos.promptpay")}</Text>
                   </View>
                 </View>
-                <Text style={styles.promptPayInvalid}>Invalid PromptPay ID</Text>
+                <Text style={styles.promptPayInvalid}>{tr("pos.invalid_promptpay_id")}</Text>
                 <Text style={styles.promptPayHint}>
-                  Please enter Mobile No. / Citizen ID / Tax ID in Shop{"\n"}Setting -{">"} Payment
+                  {tr("pos.please_enter_mobile_no_citizen_id")}{"\n"}{tr("pos.setting")}{">"} {tr("common.payment")}
                 </Text>
                 <TouchableOpacity style={styles.printQrBtn}>
                   <Ionicons name="print-outline" size={16} color={C.ink2} />
-                  <Text style={styles.printQrText}>Print QR Code</Text>
+                  <Text style={styles.printQrText}>{tr("pos.print_qr_code")}</Text>
                 </TouchableOpacity>
               </View>
             ) : method === PAYMENT_METHODS.QR_KBANK ? (
               <View style={styles.qrKbankPane} testID="qrkbank-pane">
                 <View style={styles.thaiQrHeader}>
                   <Ionicons name="grid" size={28} color={C.surface} />
-                  <Text style={styles.thaiQrTitle}>THAI QR{"\n"}PAYMENT</Text>
+                  <Text style={styles.thaiQrTitle}>{tr("pos.thai_qr")}{"\n"}{tr("pos.payment")}</Text>
                 </View>
                 <View style={styles.kbankBrandRow}>
                   {[
@@ -2132,12 +2134,12 @@ function PaymentModal({
                   ))}
                 </View>
                 <Text style={styles.kbankSupportText}>
-                  Support payment type Thai QR (PromptPay), Credit Card
+                  {tr("pos.support_payment_type_thai_qr_promptpay")}
                 </Text>
                 <View style={styles.kbankByRow}>
-                  <Text style={styles.kbankByLabel}>By</Text>
+                  <Text style={styles.kbankByLabel}>{tr("pos.by")}</Text>
                   <View style={[styles.kbankLogoPill, { backgroundColor: "#138F2D" }]}>
-                    <Text style={styles.kbankLogoText}>KBank</Text>
+                    <Text style={styles.kbankLogoText}>{tr("pos.kbank")}</Text>
                   </View>
                 </View>
                 <View style={styles.kbankIllustration}>
@@ -2145,7 +2147,7 @@ function PaymentModal({
                   <Ionicons name="qr-code" size={32} color={C.ink} style={{ position: "absolute", bottom: 0, right: 0 }} />
                 </View>
                 <TouchableOpacity style={styles.kbankRegisterBtn}>
-                  <Text style={styles.kbankRegisterText}>Register</Text>
+                  <Text style={styles.kbankRegisterText}>{tr("pos.register")}</Text>
                 </TouchableOpacity>
               </View>
             ) : method === PAYMENT_METHODS.BEAM ? (
@@ -2156,22 +2158,22 @@ function PaymentModal({
                     <Ionicons name="scan-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>PromptPay QR</Text>
-                    <Text style={styles.beamSub}>Scan with any Thai banking app · via Beam</Text>
+                    <Text style={styles.beamTitle}>{tr("pos.promptpay_qr")}</Text>
+                    <Text style={styles.beamSub}>{tr("pos.scan_with_any_thai_banking_app")}</Text>
                   </View>
                 </View>
 
                 {beamStatus === "idle" && (
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
-                    <Text style={styles.beamIdleText}>{'Tap "Generate QR" to create a QR code'}</Text>
+                    <Text style={styles.beamIdleText}>{tr("pos.tap_generate_qr_hint")}</Text>
                   </View>
                 )}
 
                 {beamStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
                     <ActivityIndicator size="large" color={C.brand} />
-                    <Text style={styles.beamIdleText}>Generating QR code…</Text>
+                    <Text style={styles.beamIdleText}>{tr("pos.generating_qr_code")}</Text>
                   </View>
                 )}
 
@@ -2184,14 +2186,14 @@ function PaymentModal({
                     />
                     <View style={styles.beamWaiting}>
                       <ActivityIndicator size="small" color={C.brand} />
-                      <Text style={styles.beamWaitingText}>Waiting for customer to scan…</Text>
+                      <Text style={styles.beamWaitingText}>{tr("pos.waiting_for_customer_to_scan")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
                       onPress={resetBeam}
                       testID="beam-cancel"
                     >
-                      <Text style={styles.beamCancelText}>Cancel</Text>
+                      <Text style={styles.beamCancelText}>{tr("pos.cancel")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2199,12 +2201,12 @@ function PaymentModal({
                 {beamStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
-                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamError || "Payment failed"}</Text>
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamError || tr("pos.payment_failed")}</Text>
                     <TouchableOpacity
                       style={styles.beamRetryBtn}
                       onPress={resetBeam}
                     >
-                      <Text style={styles.beamRetryText}>Try Again</Text>
+                      <Text style={styles.beamRetryText}>{tr("pos.try_again")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2219,8 +2221,8 @@ function PaymentModal({
                     <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>Card · Omise</Text>
-                    <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
+                    <Text style={styles.beamTitle}>{tr("pos.card_omise")}</Text>
+                    <Text style={styles.beamSub}>{tr("pos.visa_mastercard_jcb_scan_to_pay")}</Text>
                   </View>
                 </View>
 
@@ -2228,7 +2230,7 @@ function PaymentModal({
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
                     <Text style={styles.beamIdleText}>
-                      {'Tap "Generate Card QR" — the customer scans it to pay by card'}
+                      {tr("pos.tap_generate_card_qr_hint")}
                     </Text>
                   </View>
                 )}
@@ -2236,7 +2238,7 @@ function PaymentModal({
                 {omiseStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
                     <ActivityIndicator size="large" color={C.brand} />
-                    <Text style={styles.beamIdleText}>Generating payment link…</Text>
+                    <Text style={styles.beamIdleText}>{tr("pos.generating_payment_link")}</Text>
                   </View>
                 )}
 
@@ -2249,14 +2251,14 @@ function PaymentModal({
                     />
                     <View style={styles.beamWaiting}>
                       <ActivityIndicator size="small" color={C.brand} />
-                      <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
+                      <Text style={styles.beamWaitingText}>{tr("pos.waiting_for_card_payment")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
                       onPress={resetOmise}
                       testID="cardlink-cancel"
                     >
-                      <Text style={styles.beamCancelText}>Cancel</Text>
+                      <Text style={styles.beamCancelText}>{tr("pos.cancel")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2264,9 +2266,9 @@ function PaymentModal({
                 {omiseStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
-                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{omiseError || "Payment failed"}</Text>
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{omiseError || tr("pos.payment_failed")}</Text>
                     <TouchableOpacity style={styles.beamRetryBtn} onPress={resetOmise}>
-                      <Text style={styles.beamRetryText}>Try Again</Text>
+                      <Text style={styles.beamRetryText}>{tr("pos.try_again")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2275,23 +2277,23 @@ function PaymentModal({
                 {omiseBreakdown && (
                   <View style={styles.feeBreakdown}>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabel}>Goods (VAT incl.)</Text>
+                      <Text style={styles.feeLabel}>{tr("pos.goods_vat_incl")}</Text>
                       <Text style={styles.feeVal}>{THB(omiseBreakdown.goods)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabelMuted}>VAT 7% (incl.)</Text>
+                      <Text style={styles.feeLabelMuted}>{tr("pos.vat_7_pct_incl")}</Text>
                       <Text style={styles.feeValMuted}>{THB(omiseBreakdown.vat)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabel}>Processing fee 3.65%</Text>
+                      <Text style={styles.feeLabel}>{tr("pos.processing_fee_3_65_pct")}</Text>
                       <Text style={styles.feeVal}>{THB(omiseBreakdown.fee)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabelMuted}>VAT 7% on fee</Text>
+                      <Text style={styles.feeLabelMuted}>{tr("pos.vat_7_pct_on_fee")}</Text>
                       <Text style={styles.feeValMuted}>{THB(omiseBreakdown.feeVat)}</Text>
                     </View>
                     <View style={[styles.feeRow, styles.feeRowTotal]}>
-                      <Text style={styles.feeTotalLabel}>Total charged</Text>
+                      <Text style={styles.feeTotalLabel}>{tr("pos.total_charged")}</Text>
                       <Text style={styles.feeTotalVal}>{THB(omiseBreakdown.total)}</Text>
                     </View>
                   </View>
@@ -2307,8 +2309,8 @@ function PaymentModal({
                     <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>Card · Beam</Text>
-                    <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
+                    <Text style={styles.beamTitle}>{tr("pos.card_beam")}</Text>
+                    <Text style={styles.beamSub}>{tr("pos.visa_mastercard_jcb_scan_to_pay")}</Text>
                   </View>
                 </View>
 
@@ -2316,7 +2318,7 @@ function PaymentModal({
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="qr-code-outline" size={72} color={C.lineStrong} />
                     <Text style={styles.beamIdleText}>
-                      {'Tap "Generate Card QR" — the customer scans it to pay by card'}
+                      {tr("pos.tap_generate_card_qr_hint")}
                     </Text>
                   </View>
                 )}
@@ -2324,7 +2326,7 @@ function PaymentModal({
                 {beamCardStatus === "loading" && (
                   <View style={styles.beamIdleBox}>
                     <ActivityIndicator size="large" color={C.brand} />
-                    <Text style={styles.beamIdleText}>Generating payment link…</Text>
+                    <Text style={styles.beamIdleText}>{tr("pos.generating_payment_link")}</Text>
                   </View>
                 )}
 
@@ -2337,14 +2339,14 @@ function PaymentModal({
                     />
                     <View style={styles.beamWaiting}>
                       <ActivityIndicator size="small" color={C.brand} />
-                      <Text style={styles.beamWaitingText}>Waiting for card payment…</Text>
+                      <Text style={styles.beamWaitingText}>{tr("pos.waiting_for_card_payment")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
                       onPress={resetBeamCard}
                       testID="beamcard-cancel"
                     >
-                      <Text style={styles.beamCancelText}>Cancel</Text>
+                      <Text style={styles.beamCancelText}>{tr("pos.cancel")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2352,9 +2354,9 @@ function PaymentModal({
                 {beamCardStatus === "failed" && (
                   <View style={styles.beamIdleBox}>
                     <Ionicons name="alert-circle-outline" size={48} color={C.danger} />
-                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamCardError || "Payment failed"}</Text>
+                    <Text style={[styles.beamIdleText, { color: C.danger }]}>{beamCardError || tr("pos.payment_failed")}</Text>
                     <TouchableOpacity style={styles.beamRetryBtn} onPress={resetBeamCard}>
-                      <Text style={styles.beamRetryText}>Try Again</Text>
+                      <Text style={styles.beamRetryText}>{tr("pos.try_again")}</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2363,23 +2365,23 @@ function PaymentModal({
                 {beamCardBreakdown && (
                   <View style={styles.feeBreakdown}>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabel}>Goods (VAT incl.)</Text>
+                      <Text style={styles.feeLabel}>{tr("pos.goods_vat_incl")}</Text>
                       <Text style={styles.feeVal}>{THB(beamCardBreakdown.goods)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabelMuted}>VAT 7% (incl.)</Text>
+                      <Text style={styles.feeLabelMuted}>{tr("pos.vat_7_pct_incl")}</Text>
                       <Text style={styles.feeValMuted}>{THB(beamCardBreakdown.vat)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabel}>Processing fee</Text>
+                      <Text style={styles.feeLabel}>{tr("pos.processing_fee")}</Text>
                       <Text style={styles.feeVal}>{THB(beamCardBreakdown.fee)}</Text>
                     </View>
                     <View style={styles.feeRow}>
-                      <Text style={styles.feeLabelMuted}>VAT 7% on fee</Text>
+                      <Text style={styles.feeLabelMuted}>{tr("pos.vat_7_pct_on_fee")}</Text>
                       <Text style={styles.feeValMuted}>{THB(beamCardBreakdown.feeVat)}</Text>
                     </View>
                     <View style={[styles.feeRow, styles.feeRowTotal]}>
-                      <Text style={styles.feeTotalLabel}>Total charged</Text>
+                      <Text style={styles.feeTotalLabel}>{tr("pos.total_charged")}</Text>
                       <Text style={styles.feeTotalVal}>{THB(beamCardBreakdown.total)}</Text>
                     </View>
                   </View>
@@ -2396,32 +2398,30 @@ function PaymentModal({
                   </View>
                   <View style={styles.edcArrowWrap}>
                     <View style={styles.edcArrowLine} />
-                    <Text style={styles.edcArrowLabel}>Send data</Text>
+                    <Text style={styles.edcArrowLabel}>{tr("pos.send_data")}</Text>
                   </View>
                   <Ionicons name="print" size={64} color={C.brand} />
                 </View>
                 <Text style={styles.edcTitle}>
-                  Connect Brave POS with Electronic Data Capture (EDC) payment terminal no need
-                  to manual input data, supporting both credit and debit cards (VISA, MasterCard,
-                  JCB, UnionPay)
+                  {tr("pos.connect_brave_pos_with_electronic_data")}
                 </Text>
                 <View style={styles.edcByRow}>
-                  <Text style={styles.edcBy}>โดย</Text>
+                  <Text style={styles.edcBy}>{tr("pos.by_provider")}</Text>
                   <View style={[styles.kbankLogoPill, { backgroundColor: "#138F2D" }]}>
-                    <Text style={styles.kbankLogoText}>KBank</Text>
+                    <Text style={styles.kbankLogoText}>{tr("pos.kbank")}</Text>
                   </View>
                 </View>
                 <Ionicons name="phone-portrait-outline" size={32} color={C.ink2} style={{ marginTop: 4 }} />
                 <TouchableOpacity style={styles.edcRegister} testID="edc-register">
-                  <Text style={styles.edcRegisterText}>สมัครใช้บริการ</Text>
+                  <Text style={styles.edcRegisterText}>{tr("pos.apply_for_service_alt")}</Text>
                 </TouchableOpacity>
               </View>
             ) : method === PAYMENT_METHODS.CUSTOM ? (
               <View style={styles.customPane} testID="custom-pane">
                 <View style={styles.customRefRow}>
-                  <Text style={styles.customRefLabel}>Order Ref.</Text>
+                  <Text style={styles.customRefLabel}>{tr("pos.order_ref")}</Text>
                   <TextInput
-                    placeholder="Optional"
+                    placeholder={tr("pos.optional")}
                     style={styles.customRefInput}
                     value={orderRef}
                     onChangeText={setOrderRef}
@@ -2430,7 +2430,7 @@ function PaymentModal({
                   />
                 </View>
                 <View style={styles.customAmountRow}>
-                  <Text style={styles.customAmountLabel}>Amount</Text>
+                  <Text style={styles.customAmountLabel}>{tr("common.amount")}</Text>
                   <Text style={styles.customAmountVal}>{THB(total)}</Text>
                 </View>
                 <View style={styles.customGrid}>
@@ -2453,11 +2453,11 @@ function PaymentModal({
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.creditPane} testID="credit-pane">
                 {/* TODO: consider using THB(total) here for consistency; currently "THB" is a separate label */}
                 <View style={styles.creditAmtRow}>
-                  <Text style={styles.creditAmtLabel}>THB</Text>
+                  <Text style={styles.creditAmtLabel}>{tr("pos.thb")}</Text>
                   <Text style={styles.creditAmtVal}>{total.toFixed(2)}</Text>
                 </View>
                 <TextInput
-                  placeholder="Card Number (Last 4 digits)"
+                  placeholder={tr("pos.card_number_last_4_digits")}
                   placeholderTextColor={C.ink3}
                   style={styles.creditInput}
                   value={cardLast4}
@@ -2466,7 +2466,7 @@ function PaymentModal({
                   keyboardType="number-pad"
                   testID="card-last4"
                 />
-                <Text style={styles.creditDivider}>เลือกประเภทบัตรเครดิต</Text>
+                <Text style={styles.creditDivider}>{tr("pos.choose_card_type")}</Text>
                 <View style={styles.creditGrid}>
                   {[
                     { k: "VISA", icon: "card" as const, color: "#1A1F71" },
@@ -2488,7 +2488,7 @@ function PaymentModal({
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text style={styles.creditDivider}>หรือ เลือกธนาคาร</Text>
+                <Text style={styles.creditDivider}>{tr("pos.or_choose_bank")}</Text>
                 <View style={styles.creditGrid}>
                   {[
                     { k: "WELFARE", th: "บัตรสวัสดิการแห่งรัฐ", color: "#3B82F6" },
@@ -2518,7 +2518,7 @@ function PaymentModal({
               </ScrollView>
             ) : (
               <View style={styles.cashPane} testID="cash-pane">
-                  <Text style={styles.paneLbl}>CASH RECEIVED</Text>
+                  <Text style={styles.paneLbl}>{tr("pos.cash_received")}</Text>
                   <View style={styles.quickGrid}>
                     {tenders.map((t) => {
                       const on = amount !== "" && parseFloat(amount) === t;
@@ -2564,7 +2564,7 @@ function PaymentModal({
                       <Text
                         style={[styles.qkText, showPad && styles.qkTextOn, { fontWeight: "600" }]}
                       >
-                        Other amount
+                        {tr("pos.other_amount")}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -2574,7 +2574,7 @@ function PaymentModal({
                   {showPad && (
                     <View style={styles.padWrap}>
                       <View style={styles.padDisplay}>
-                        <Text style={styles.padDisplayLbl}>THB</Text>
+                        <Text style={styles.padDisplayLbl}>{tr("pos.thb")}</Text>
                         <Money style={styles.padDisplayVal} testID="amount-display">
                           {amount || "0"}
                         </Money>
@@ -2606,7 +2606,7 @@ function PaymentModal({
                         onPress={() => onKey("clear")}
                         testID="pad-clear"
                       >
-                        <Text style={styles.padClearText}>Clear</Text>
+                        <Text style={styles.padClearText}>{tr("pos.clear")}</Text>
                       </TouchableOpacity>
                     </View>
                   )}
@@ -2622,17 +2622,17 @@ function PaymentModal({
                 <View style={styles.tenderPinned}>
                   <View style={[styles.tender, dense && { marginTop: 12, paddingVertical: 12, gap: 8 }]}>
                     <View style={styles.tenderRow}>
-                      <Text style={styles.tenderLbl}>Received</Text>
+                      <Text style={styles.tenderLbl}>{tr("pos.received")}</Text>
                       <Money style={styles.tenderVal}>
                         {amount ? THB(parseFloat(amount) || 0) : "—"}
                       </Money>
                     </View>
                     <View style={styles.tenderRow}>
-                      <Text style={styles.tenderLbl}>Bill total</Text>
+                      <Text style={styles.tenderLbl}>{tr("pos.bill_total")}</Text>
                       <Money style={styles.tenderValSoft}>{THB(total)}</Money>
                     </View>
                     <View style={[styles.tenderRow, styles.tenderChange]}>
-                      <Text style={styles.tenderChangeLbl}>Change to give</Text>
+                      <Text style={styles.tenderChangeLbl}>{tr("pos.change_to_give")}</Text>
                       <Money style={[styles.tenderChangeVal, dense && { fontSize: 26 }]} numberOfLines={1}>
                         {THB(change)}
                       </Money>
@@ -2644,7 +2644,7 @@ function PaymentModal({
               {/* ── Footer ── */}
               <View style={[styles.payFoot, dense && { padding: 14 }]}>
                 <Btn
-                  label="Back"
+                  label={tr("common.back")}
                   icon="arrow-back"
                   height={dense ? 52 : 60}
                   onPress={onClose}
@@ -2681,6 +2681,7 @@ function CartItemModal({
   onSave: (pid: string, qty: number, discount: number) => void;
   onRemove: (pid: string) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [qty, setQty] = useState(1);
   const [disc, setDisc] = useState("");
   const [discMode, setDiscMode] = useState<"thb" | "pct">("thb");
@@ -2720,7 +2721,7 @@ function CartItemModal({
           </View>
 
           <View style={styles.itemRow}>
-            <Text style={styles.itemRowLabel}>Quantity</Text>
+            <Text style={styles.itemRowLabel}>{tr("common.quantity")}</Text>
             <View style={styles.itemStepper}>
               <TouchableOpacity
                 style={styles.itemStepBtn}
@@ -2741,7 +2742,7 @@ function CartItemModal({
           </View>
 
           <View style={styles.itemRow}>
-            <Text style={styles.itemRowLabel}>Discount</Text>
+            <Text style={styles.itemRowLabel}>{tr("common.discount")}</Text>
             <View style={styles.itemDiscControls}>
               <View style={styles.discModeToggle}>
                 <TouchableOpacity
@@ -2788,7 +2789,7 @@ function CartItemModal({
           )}
 
           <View style={styles.itemTotalRow}>
-            <Text style={styles.itemRowLabel}>Line Total</Text>
+            <Text style={styles.itemRowLabel}>{tr("pos.line_total")}</Text>
             <Text style={styles.itemTotalVal}>{THB(lineTotal)}</Text>
           </View>
 
@@ -2797,7 +2798,7 @@ function CartItemModal({
             onPress={() => onSave(item.product_id, qty, discAmount)}
             testID="item-modal-save"
           >
-            <Text style={styles.doneBtnText}>Save</Text>
+            <Text style={styles.doneBtnText}>{tr("common.save")}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -2815,6 +2816,7 @@ function CustomerModal({
   onClose: () => void;
   onSelect: (c: Customer) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -2827,7 +2829,7 @@ function CustomerModal({
       setShowAdd(false);
       setQ("");
       apiFetch(`${API}/customers`)
-        .then((r) => r.json())
+        .then((r) => safeJson<Customer[]>(r, []))
         .then(setCustomers);
     }
   }, [visible]);
@@ -2858,13 +2860,13 @@ function CustomerModal({
       }
       c = await res.json();
     } catch (e: any) {
-      showAlert("Couldn't save customer", e?.message || "Please try again.");
+      showAlert(tr("common.couldnt_save_customer"), e?.message || tr("pos.please_try_again"));
       return;
     }
     // Guard against a success response missing the required field — never select
     // an object the cart can't render (it reads customer.name[0]).
     if (!c || !c.name) {
-      showAlert("Couldn't save customer", "Unexpected response from server.");
+      showAlert(tr("common.couldnt_save_customer"), tr("common.unexpected_response_from_server"));
       return;
     }
     setCustomers((list) => [c!, ...list]);
@@ -2880,10 +2882,10 @@ function CustomerModal({
         <View style={styles.customerModal} testID="customer-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose}>
-              <Text style={styles.cancelText}>Cancel</Text>
+              <Text style={styles.cancelText}>{tr("pos.cancel")}</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>
-              {showAdd ? "New Customer" : "Search Customer"}
+              {showAdd ? tr("pos.new_customer") : tr("pos.search_customer")}
             </Text>
             <TouchableOpacity onPress={() => setShowAdd((s) => !s)} testID="toggle-add-customer">
               <Ionicons
@@ -2897,7 +2899,7 @@ function CustomerModal({
           {showAdd ? (
             <View style={{ padding: 20, gap: 14 }}>
               <TextInput
-                placeholder="Name"
+                placeholder={tr("common.name")}
                 placeholderTextColor={C.ink3}
                 style={styles.textInput}
                 value={name}
@@ -2907,7 +2909,7 @@ function CustomerModal({
               <PhoneInput
                 value={phone}
                 onChange={(e164, valid) => { setPhone(e164); setPhoneValid(valid); }}
-                placeholder="Phone (optional)"
+                placeholder={tr("common.phone_optional")}
                 defaultCountryCode="TH"
                 testID="new-cust-phone"
               />
@@ -2917,7 +2919,7 @@ function CustomerModal({
                 disabled={!name.trim() || !phoneValid}
                 testID="save-customer"
               >
-                <Text style={styles.saveCustText}>Save & Select</Text>
+                <Text style={styles.saveCustText}>{tr("pos.save_and_select")}</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -2925,7 +2927,7 @@ function CustomerModal({
               <View style={styles.searchBox}>
                 <Ionicons name="search" size={18} color={C.ink3} />
                 <TextInput
-                  placeholder="Search"
+                  placeholder={tr("common.search")}
                   placeholderTextColor={C.ink3}
                   style={styles.searchInput2}
                   value={q}
@@ -2955,7 +2957,7 @@ function CustomerModal({
                       {item.phone && <Text style={styles.custRowPhone}>{item.phone}</Text>}
                       {item.last_visit && (
                         <Text style={styles.custRowLast}>
-                          Last visit {item.last_visit}
+                          {tr("pos.last_visit")} {item.last_visit}
                         </Text>
                       )}
                     </View>
@@ -2963,7 +2965,7 @@ function CustomerModal({
                 )}
                 ListEmptyComponent={
                   <View style={styles.empty}>
-                    <Text style={styles.emptyText}>No customers</Text>
+                    <Text style={styles.emptyText}>{tr("common.no_customers")}</Text>
                   </View>
                 }
               />
@@ -2977,6 +2979,7 @@ function CustomerModal({
 
 // ---------- Order Hub ----------
 function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  useT(); // re-render this screen when the language changes
   const [orders, setOrders] = useState<Order[]>([]);
   const [tab, setTab] = useState("all");
   const [deliveryOn, setDeliveryOn] = useState(true);
@@ -2997,10 +3000,10 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
             { backgroundColor: deliveryOn ? C.brand : C.lineStrong },
           ]}
         />
-        <Text style={styles.delText}>Delivery ON/OFF</Text>
+        <Text style={styles.delText}>{tr("pos.delivery_on_off")}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.delMenu}>
-        <Text style={styles.delMenuText}>Delivery Menu</Text>
+        <Text style={styles.delMenuText}>{tr("pos.delivery_menu")}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -3017,10 +3020,10 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
   }, [visible, tab]);
 
   const cols: { key: string; label: string; icon: any; color: string }[] = [
-    { key: "new", label: "New Order", icon: "list-outline", color: C.warn },
-    { key: "preparing", label: "Preparing", icon: "restaurant-outline", color: "#3B82F6" },
-    { key: "completed", label: "Completed", icon: "checkmark-circle-outline", color: C.ok },
-    { key: "cancel", label: "Cancel", icon: "close-circle-outline", color: C.danger },
+    { key: "new", label: tr("pos.new_order"), icon: "list-outline", color: C.warn },
+    { key: "preparing", label: tr("pos.preparing"), icon: "restaurant-outline", color: "#3B82F6" },
+    { key: "completed", label: tr("pos.completed"), icon: "checkmark-circle-outline", color: C.ok },
+    { key: "cancel", label: tr("pos.cancel"), icon: "close-circle-outline", color: C.danger },
   ];
 
   const grouped = (col: string) => orders.filter((o) => o.status === col);
@@ -3042,7 +3045,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
             <TouchableOpacity onPress={onClose} testID="close-orderhub">
               <Ionicons name="close" size={26} color={C.ink2} />
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>All Orders</Text>
+            <Text style={styles.modalTitle}>{tr("pos.all_orders")}</Text>
             {isNarrow ? <View style={{ width: 26 }} /> : deliveryCtrl}
           </View>
           {isNarrow && (
@@ -3068,7 +3071,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
 
           <View style={styles.hubSearch}>
             <Ionicons name="search" size={16} color={C.ink3} />
-            <Text style={styles.hubSearchText}>Search by order number</Text>
+            <Text style={styles.hubSearchText}>{tr("pos.search_by_order_number")}</Text>
           </View>
 
           <ScrollView
@@ -3201,6 +3204,7 @@ function ParkedOrdersModal({
   onPark: () => void;
   onRetrieve: (items: CartItem[]) => void;
 }) {
+  useT(); // re-render this screen when the language changes
   const [parked, setParked] = useState<ParkedOrder[]>([]);
 
   const load = async () => {
@@ -3224,14 +3228,14 @@ function ParkedOrdersModal({
             <TouchableOpacity onPress={onClose}>
               <Ionicons name="close" size={26} color={C.ink2} />
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Save & Retrieve</Text>
+            <Text style={styles.modalTitle}>{tr("pos.save_and_retrieve")}</Text>
             <View style={{ width: 26 }} />
           </View>
 
           {currentCart.length > 0 && (
             <TouchableOpacity style={styles.parkBtn} onPress={onPark} testID="park-current">
               <Ionicons name="bookmark" size={18} color={C.brand} />
-              <Text style={styles.parkBtnText}>Park current order ({currentCart.length} items)</Text>
+              <Text style={styles.parkBtnText}>{tr("pos.park_current_order")}{currentCart.length} {tr("pos.items")}</Text>
             </TouchableOpacity>
           )}
 
@@ -3242,7 +3246,7 @@ function ParkedOrdersModal({
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Ionicons name="bookmarks-outline" size={40} color={C.lineStrong} />
-                <Text style={styles.emptyText}>No parked orders</Text>
+                <Text style={styles.emptyText}>{tr("pos.no_parked_orders")}</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -3250,7 +3254,7 @@ function ParkedOrdersModal({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.parkLabel}>{item.label}</Text>
                   <Text style={styles.parkSub}>
-                    {item.items.length} item(s) · {THB(item.subtotal)}
+                    {item.items.length} {tr("pos.item_s")} {THB(item.subtotal)}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -3261,7 +3265,7 @@ function ParkedOrdersModal({
                   }}
                   testID={`retrieve-${item.id}`}
                 >
-                  <Text style={styles.retrieveBtnText}>Retrieve</Text>
+                  <Text style={styles.retrieveBtnText}>{tr("pos.retrieve")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => del(item.id)} testID={`park-del-${item.id}`}>
                   <Ionicons name="trash-outline" size={20} color={C.danger} />
@@ -3291,6 +3295,7 @@ function SuccessModal({
   printStatus: PrintStatus;
   onClose: () => void;
 }) {
+  useT(); // re-render this screen when the language changes
   // The cashier already knows it worked. What they need in that second is the
   // number to count back into a hand — so change is the headline, and the word
   // "successful" is demoted to the tick.
@@ -3306,14 +3311,14 @@ function SuccessModal({
             </View>
 
             <Text style={styles.successTitle}>
-              {hasChange ? `Give ${THB(data.change)} change` : "Paid in full"}
+              {hasChange ? `Give ${THB(data.change)} change` : tr("pos.paid_in_full")}
             </Text>
             <Text style={styles.successOrder}>
               {`${data.order_number} · ${methodLabel(data.method)}`}
             </Text>
 
             <View style={styles.successTotal}>
-              <Text style={styles.successTotalLbl}>BILL TOTAL</Text>
+              <Text style={styles.successTotalLbl}>{tr("pos.bill_total_2")}</Text>
               <Money style={styles.successTotalVal} numberOfLines={1}>
                 {THB(data.total)}
               </Money>
@@ -3322,18 +3327,18 @@ function SuccessModal({
             {/* Received/change stay available for the cashier who wants to
                 check the arithmetic, just not at headline size. */}
             <View style={styles.successRow}>
-              <Text style={styles.successLabel}>Received</Text>
+              <Text style={styles.successLabel}>{tr("pos.received")}</Text>
               <Money style={styles.successVal}>{THB(data.paid)}</Money>
             </View>
             <View style={styles.successRow}>
-              <Text style={styles.successLabel}>Change</Text>
+              <Text style={styles.successLabel}>{tr("common.change")}</Text>
               <Money style={styles.successVal}>{THB(data.change)}</Money>
             </View>
 
             <PrintStatusPill status={printStatus} />
 
             <Btn
-              label="New sale"
+              label={tr("pos.new_sale")}
               icon="add"
               variant="blue"
               height={64}
@@ -3350,13 +3355,14 @@ function SuccessModal({
 }
 
 function PrintStatusPill({ status }: { status: PrintStatus }) {
+  useT(); // re-render this screen when the language changes
   if (!status) return null;
 
   if (status.state === "printing") {
     return (
       <View style={[styles.printPill, styles.printPillNeutral]} testID="print-status-printing">
         <ActivityIndicator size="small" color={C.ink2} />
-        <Text style={styles.printPillText}>Printing receipt…</Text>
+        <Text style={styles.printPillText}>{tr("pos.printing_receipt")}</Text>
       </View>
     );
   }
@@ -3365,7 +3371,7 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
     return (
       <View style={[styles.printPill, styles.printPillOk]} testID="print-status-printed">
         <Ionicons name="checkmark-circle" size={16} color={C.ok} />
-        <Text style={[styles.printPillText, { color: C.okDark }]}>Receipt printed</Text>
+        <Text style={[styles.printPillText, { color: C.okDark }]}>{tr("pos.receipt_printed")}</Text>
       </View>
     );
   }
@@ -3377,9 +3383,9 @@ function PrintStatusPill({ status }: { status: PrintStatus }) {
       <Ionicons name="time-outline" size={16} color={C.warnDark} />
       <View style={{ flex: 1 }}>
         <Text style={[styles.printPillText, { color: C.warnDark, fontWeight: "700" }]}>
-          Printer offline — receipt queued
+          {tr("pos.printer_offline_receipt_queued")}
         </Text>
-        <Text style={styles.printPillSub}>Will print automatically when the printer is back online.</Text>
+        <Text style={styles.printPillSub}>{tr("pos.will_print_automatically_when_the_printer")}</Text>
       </View>
     </View>
   );

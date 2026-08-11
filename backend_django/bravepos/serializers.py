@@ -6,7 +6,7 @@ from . import images
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
-    DrawerCategory, StockDocument, StockDocumentItem,
+    DrawerCategory, StockDocument, StockDocumentItem, StockOutReason,
 )
 
 
@@ -194,6 +194,12 @@ class DrawerCategorySerializer(serializers.ModelSerializer):
         fields = ['id', 'type', 'name', 'name_th', 'sort_order', 'active']
 
 
+class StockOutReasonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockOutReason
+        fields = ['id', 'name', 'name_th', 'sort_order', 'active']
+
+
 class StockDocumentItemSerializer(serializers.ModelSerializer):
     product_id = serializers.UUIDField(required=False, allow_null=True)
 
@@ -214,7 +220,7 @@ class StockDocumentSerializer(serializers.ModelSerializer):
         model = StockDocument
         fields = [
             'id', 'type', 'document_no', 'document_name', 'adjust_type',
-            'ref_no', 'vendor', 'receiver',
+            'ref_no', 'vendor', 'receiver', 'reason',
             'note', 'tax_included', 'avg_cost',
             'subtotal', 'discount', 'tax', 'total',
             'created_by', 'created_at', 'items',

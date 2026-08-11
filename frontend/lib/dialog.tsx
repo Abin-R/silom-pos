@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from "react";
 import { Modal, StyleSheet, Text, View } from "react-native";
 import { C, R } from "./theme";
+import { t as tr } from "./i18n";
 import { Btn } from "./ui";
 
 export type DialogButton = {
@@ -42,7 +43,7 @@ export function showAlert(
   const d: Dialog = {
     title,
     message,
-    buttons: buttons && buttons.length ? buttons : [{ text: "OK" }],
+    buttons: buttons && buttons.length ? buttons : [{ text: tr("dialog.ok") }],
   };
   if (listener) listener(d);
   else pending = d;
@@ -52,14 +53,14 @@ export function showAlert(
 export function confirmDialog(
   title: string,
   message?: string,
-  confirmText = "Confirm",
+  confirmText?: string,
   destructive = true,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     showAlert(title, message, [
-      { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+      { text: tr("dialog.cancel"), style: "cancel", onPress: () => resolve(false) },
       {
-        text: confirmText,
+        text: confirmText ?? tr("dialog.confirm"),
         style: destructive ? "destructive" : "default",
         onPress: () => resolve(true),
       },

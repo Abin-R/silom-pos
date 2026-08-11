@@ -22,6 +22,11 @@ urlpatterns = [
         name="logout",
     ),
 
+    # The design system's stylesheet. Served by Django, not `staticfiles` —
+    # see `views.backoffice_css` for why. Unauthenticated so the login page
+    # can load it.
+    path("app.css", views.backoffice_css, name="app_css"),
+
     path("", views.dashboard, name="home"),
     path("dashboard", views.dashboard, name="dashboard"),
     path("transactions", views.transactions, name="transactions"),
@@ -44,6 +49,8 @@ urlpatterns = [
     # Inventory
     path("inventory", views.inventory_summary, name="inventory"),
     path("inventory/export", views.inventory_export, name="inventory_export"),
+    path("inventory/stock-movement-export", views.stock_movement_export,
+         name="stock_movement_export"),
 
     # Products
     path("products", views.product_list, name="product_list"),
@@ -77,6 +84,10 @@ urlpatterns = [
     path("users/<uuid:staff_id>", views.user_detail, name="user_detail"),
     path("users/<uuid:staff_id>/reset-password", views.user_reset_password, name="user_reset_password"),
     path("users/<uuid:staff_id>/revoke", views.user_delete, name="user_delete"),
+
+    # Customers
+    path("customers", views.customer_list, name="customer_list"),
+    path("customers/<uuid:customer_id>", views.customer_detail, name="customer_detail"),
 
     # Audit log
     path("audit", views.audit_log, name="audit_log"),

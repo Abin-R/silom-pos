@@ -1,75 +1,79 @@
 {% extends "backoffice/base.html" %}
+{% comment %}
+  Add / edit a till login. This is the PIN tier — branch-scoped, used on the
+  Sale screen. The backoffice account with a password is a separate record on
+  the Users page, and the note at the bottom says so where someone about to
+  hand out a PIN will read it.
+{% endcomment %}
 
-{% block title %}
-  {% if mode == 'new' %}Add Staff{% else %}Edit {{ member.name }}{% endif %} — Bravepos
+{% block title %}{% if mode == 'new' %}Add staff{% else %}{{ member.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add staff{% else %}{{ member.name }}{% endif %}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Till login{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:staff_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to staff</a>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">
-    {% if mode == 'new' %}Add Staff{% else %}Edit staff — {{ member.name }}{% endif %}
-  </h4>
-  <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:staff_list' %}?{{ qs }}">
-    <i class="bi bi-arrow-left"></i> Back to list
-  </a>
-</div>
-
-<form method="post">
+<form method="post" style="max-width:760px">
   {% csrf_token %}
-  <div class="card">
-    <div class="card-body">
-      <div class="row g-3">
-
-        <div class="col-md-8">
-          <label class="form-label"><span class="text-danger">*</span> Name</label>
-          <input type="text" name="name" required class="form-control"
-                 value="{{ member.name }}" placeholder="e.g. Admin, Cashier, or a person's name">
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Role</label>
-          <select name="role" class="form-select">
-            <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
-            <option value="cashier" {% if member.role == 'cashier' %}selected{% endif %}>Cashier</option>
-          </select>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">
-            {% if mode == 'new' %}PIN{% else %}Reset PIN{% endif %}
-          </label>
-          <input type="text" name="pin" class="form-control" inputmode="numeric"
-                 pattern="[0-9]*" maxlength="6" autocomplete="off"
-                 placeholder="{% if mode == 'new' %}Blank = default (1234 / 0000){% else %}Blank = keep current{% endif %}">
-          <div class="form-text">4–6 digit PIN used at the app login.</div>
-        </div>
-        <div class="col-md-8">
-          <label class="form-label">Status</label>
-          <div class="form-check form-switch ps-5">
-            <input type="checkbox" name="active" id="staff-active"
-                   class="form-check-input"
-                   {% if member.active %}checked{% endif %}>
-            <label class="form-check-label" for="staff-active">Active</label>
-          </div>
-          <div class="form-text">Inactive staff stay in the system but don't
-            appear on the branch's login picker.</div>
-        </div>
-
-        {% if mode == 'new' and branch %}
-        <div class="col-12">
-          <div class="text-muted small">
-            <i class="bi bi-shop"></i> This staff member will be assigned to
-            <strong>{{ branch.name }}</strong> (the branch selected above).
-          </div>
-        </div>
-        {% endif %}
+  <div class="panel">
+    <div class="panel-h">Staff member</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" name="name" required value="{{ member.name }}"
+               placeholder="The name shown on the login picker">
       </div>
-
-      <div class="d-flex justify-content-end gap-2 mt-4">
-        <a class="btn btn-outline-secondary" href="{% url 'backoffice:staff_list' %}?{{ qs }}">Cancel</a>
-        <button type="submit" class="btn btn-success">
-          <i class="bi bi-check2"></i> {% if mode == 'new' %}Create staff{% else %}Save changes{% endif %}
-        </button>
+      <div class="field">
+        <label for="f-role">Role</label>
+        <select id="f-role" name="role">
+          <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
+          <option value="cashier" {% if member.role == 'cashier' %}selected{% endif %}>Cashier</option>
+        </select>
+        <span class="hint">Cashiers sell and refund. Only admins can change products or prices.</span>
       </div>
+      <div class="field">
+        <label for="f-pin">{% if mode == 'new' %}PIN{% else %}Reset PIN{% endif %}</label>
+        <input id="f-pin" type="text" name="pin" inputmode="numeric" pattern="[0-9]*"
+               maxlength="6" autocomplete="off"
+               placeholder="{% if mode == 'new' %}Blank = default (1234 / 0000){% else %}Blank = keep current{% endif %}">
+        <span class="hint">4–6 digits, entered on the till's PIN pad.
+          {% if mode != 'new' %}Leaving this blank keeps the current PIN.{% endif %}</span>
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <label class="check" style="height:40px">
+          <input type="checkbox" name="active" {% if member.active %}checked{% endif %}>
+          Show on the branch's login picker
+        </label>
+        <span class="hint">Turning it off keeps the record and its history.</span>
+      </div>
+    </div>
+
+    {% if mode == 'new' and branch %}
+    <div class="srow" style="border-top:1px solid var(--line2)">
+      <span class="si" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-store"/></svg></span>
+      <span class="sm"><b>Assigned to {{ branch.name }}</b>
+        <u>The branch selected in the header. Switch it there before creating to assign elsewhere.</u></span>
+    </div>
+    {% endif %}
+
+    <div class="srow">
+      <span class="si" style="background:var(--amber-soft);color:var(--amber)"><svg><use href="#i-userlock"/></svg></span>
+      <span class="sm"><b>This PIN does not open the backoffice</b>
+        <u>Web sign-in is a separate account with a username and password.</u></span>
+      <a class="btn btn-sm" href="{% url 'backoffice:user_list' %}">Users</a>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue">
+        <svg><use href="#i-check"/></svg>
+        {% if mode == 'new' %}Create staff{% else %}Save changes{% endif %}</button>
+      <a class="btn" href="{% url 'backoffice:staff_list' %}?{{ qs }}">Cancel</a>
     </div>
   </div>
 </form>

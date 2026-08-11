@@ -34,6 +34,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { C, MONO, R } from "../lib/theme";
 import { Btn, Tag } from "../lib/ui";
+import { t as tr, useT, formatLongDate, formatClock } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const BRANCH_KEY = "bravepos:selected-branch:v1";
@@ -43,14 +44,6 @@ const PIN_LENGTH = 4;
 type Branch = { id: string; name: string; code?: string; active: boolean };
 type BranchUser = { id: string; name: string; role: "admin" | "cashier" };
 
-const THAI_MONTHS = [
-  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
-  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
-];
-const THAI_DAYS = [
-  "วันอาทิตย์", "วันจันทร์", "วันอังคาร", "วันพุธ",
-  "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์",
-];
 const EN_DAYS = [
   "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 ];
@@ -59,20 +52,12 @@ const EN_MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-function formatThaiDate(d: Date): string {
-  return `${THAI_DAYS[d.getDay()]}ที่ ${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
-}
-
-// Shown beneath the Thai date — the shop reads both, and a shift-opener
-// checking the till against a delivery note is usually reading English.
+// The long date follows the UI language (Thai adds the Buddhist year) — see
+// formatLongDate in lib/i18n. This English form stays for the second line: it
+// exists so a shift-opener can cross-check the till against a delivery note,
+// which is printed in English whatever the tablet is set to.
 function formatEnDate(d: Date): string {
   return `${EN_DAYS[d.getDay()]} ${d.getDate()} ${EN_MONTHS[d.getMonth()]}`;
-}
-
-function formatClock(d: Date): string {
-  const h = String(d.getHours()).padStart(2, "0");
-  const m = String(d.getMinutes()).padStart(2, "0");
-  return `${h}:${m}`;
 }
 
 function initial(name: string): string {
@@ -81,6 +66,8 @@ function initial(name: string): string {
 }
 
 export default function Login() {
+  // `lang` gates the English second line below; useT also re-renders on change.
+  const { lang } = useT();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
   const isWide = width >= 900;
@@ -183,7 +170,7 @@ export default function Login() {
         if (cancelled) return;
         if (!r.ok) {
           setUsers([]);
-          setError(body?.detail || "Couldn't load users for this branch.");
+          setError(body?.detail || tr("login.couldnt_load_users"));
           return;
         }
         setUsers(Array.isArray(body.users) ? body.users : []);
@@ -192,7 +179,7 @@ export default function Login() {
       } catch (e: any) {
         if (!cancelled) {
           setUsers([]);
-          setError(e?.message || "Network error.");
+          setError(e?.message || tr("login.network_error"));
         }
       } finally {
         if (!cancelled) setUsersLoading(false);
@@ -218,7 +205,7 @@ export default function Login() {
       });
       const body = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        setError(body?.detail || "Invalid PIN.");
+        setError(body?.detail || tr("login.invalid_pin"));
         setPin("");
         return;
       }
@@ -248,7 +235,7 @@ export default function Login() {
         },
       });
     } catch {
-      setError("Network error. Please retry.");
+      setError(tr("login.network_error_retry"));
       setPin("");
     } finally {
       setSubmitting(false);
@@ -259,7 +246,7 @@ export default function Login() {
     if (submitting) return;
     setShowStaffPicker(false);
     if (!selectedUser) {
-      setError("Please choose a user first.");
+      setError(tr("login.choose_user_first"));
       return;
     }
     setError("");
@@ -303,7 +290,7 @@ export default function Login() {
         <Ionicons name="location-outline" size={17} color={C.navMuted} />
         <Text style={s.branchChipText} numberOfLines={1}>
           {branch?.name
-            || (branchLoading ? "Loading branches…" : branchLoadError ? "Couldn't load branches" : "Select branch")}
+            || (branchLoading ? tr("login.loading_branches") : branchLoadError ? tr("login.couldnt_load_branches") : tr("login.select_branch"))}
         </Text>
         {branches.length > 1 && (
           <Ionicons name="chevron-down" size={15} color={C.navMuted} />
@@ -313,7 +300,7 @@ export default function Login() {
         <View style={{ marginTop: 10, gap: 8, alignItems: "flex-start" }}>
           <Text style={s.branchErr}>{branchLoadError}</Text>
           <Btn
-            label="Retry"
+            label={tr("login.retry")}
             height={38}
             onPress={loadBranches}
             style={{
@@ -331,6 +318,7 @@ export default function Login() {
   // A dropdown should open where it is, not throw a sheet over the middle of
   // the screen. The list drops directly under the control, anchored to it.
   const StaffSelect = () => {
+  useT(); // re-render this screen when the language changes
     const open = showStaffPicker;
     const disabled = usersLoading || users.length === 0;
     return (
@@ -354,7 +342,7 @@ export default function Login() {
                   {selectedUser.name}
                 </Text>
                 <Text style={s.selectRole} numberOfLines={1}>
-                  {selectedUser.role === "admin" ? "Admin" : "Cashier"}
+                  {selectedUser.role === "admin" ? tr("common.admin") : tr("common.cashier")}
                 </Text>
               </View>
             </>
@@ -366,10 +354,10 @@ export default function Login() {
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={s.selectPlaceholder}>
                   {usersLoading
-                    ? "Loading staff\u2026"
+                    ? tr("login.loading_staff")
                     : users.length === 0
-                      ? "No staff at this branch"
-                      : "Select your name"}
+                      ? tr("login.no_staff_at_this_branch")
+                      : tr("login.select_your_name")}
                 </Text>
                 {!disabled && (
                   <Text style={s.selectHint}>
@@ -423,7 +411,7 @@ export default function Login() {
                         {u.name}
                       </Text>
                       <Text style={s.sRole} numberOfLines={1}>
-                        {u.role === "admin" ? "Admin" : "Cashier"}
+                        {u.role === "admin" ? tr("common.admin") : tr("common.cashier")}
                       </Text>
                     </View>
                     {on && <Ionicons name="checkmark" size={19} color={C.brand} />}
@@ -462,7 +450,7 @@ export default function Login() {
         />
       ))}
       <Key
-        label="Switch staff"
+        label={tr("login.switch_staff")}
         secondary
         h={keyH}
         onPress={() => {
@@ -523,7 +511,7 @@ export default function Login() {
         onPress={() => setShowBranchPicker(false)}
       >
         <View style={s.modalSheet}>
-          <Text style={s.modalTitle}>Choose branch</Text>
+          <Text style={s.modalTitle}>{tr("login.choose_branch")}</Text>
           <FlatList
             data={branches}
             keyExtractor={(b) => b.id}
@@ -546,7 +534,7 @@ export default function Login() {
                   <Text style={[s.branchRowName, on && { color: C.brand }]}>
                     {item.name}
                   </Text>
-                  {on && <Tag tone="info">Current</Tag>}
+                  {on && <Tag tone="info">{tr("login.current")}</Tag>}
                 </TouchableOpacity>
               );
             }}
@@ -578,8 +566,8 @@ export default function Login() {
 
             <View>
               <Text style={s.clock}>{formatClock(now)}</Text>
-              <Text style={s.date}>{formatThaiDate(now)}</Text>
-              <Text style={s.dateEn}>{formatEnDate(now)}</Text>
+              <Text style={s.date}>{formatLongDate(now)}</Text>
+              {lang === "th" && <Text style={s.dateEn}>{formatEnDate(now)}</Text>}
             </View>
           </View>
 
@@ -592,12 +580,12 @@ export default function Login() {
               />
             )}
             <Text style={[s.h1, compact && { fontSize: 24 }]} numberOfLines={1}>
-              {selectedUser ? `Hi, ${selectedUser.name}` : "Who's on the till?"}
+              {selectedUser ? `Hi, ${selectedUser.name}` : tr("login.whos_on_the_till")}
             </Text>
             <Text style={s.h1sub}>
               {selectedUser
-                ? "รหัส 4 หลัก — enter your PIN to sign in"
-                : "รายชื่อพนักงาน — choose your name, then enter your PIN"}
+                ? tr("login.pin_hint")
+                : tr("login.staff_list_pin_hint")}
             </Text>
             <StaffSelect />
             <Dots />
@@ -628,7 +616,7 @@ export default function Login() {
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={s.brandSm} numberOfLines={1}>The Rolling Pinn</Text>
-            <Text style={s.dateSm} numberOfLines={1}>{formatThaiDate(now)}</Text>
+            <Text style={s.dateSm} numberOfLines={1}>{formatLongDate(now)}</Text>
           </View>
           <Text style={s.clockSm}>{formatClock(now)}</Text>
         </View>
@@ -647,8 +635,8 @@ export default function Login() {
       >
         {!selectedUser ? (
           <>
-            <Text style={s.h1}>Who&apos;s on the till?</Text>
-            <Text style={s.h1sub}>รายชื่อพนักงาน — choose your name</Text>
+            <Text style={s.h1}>{tr("login.whos_on_the_till")}</Text>
+            <Text style={s.h1sub}>{tr("login.staff_list_hint")}</Text>
             <StaffSelect />
           </>
         ) : (
@@ -663,10 +651,10 @@ export default function Login() {
               testID="pin-back"
             >
               <Ionicons name="chevron-back" size={18} color={C.ink2} />
-              <Text style={s.backText}>เปลี่ยนพนักงาน · Switch staff</Text>
+              <Text style={s.backText}>{tr("login.switch_staff_hint")}</Text>
             </TouchableOpacity>
             <Text style={s.h1}>{selectedUser.name}</Text>
-            <Text style={s.h1sub}>Enter your 4-digit PIN</Text>
+            <Text style={s.h1sub}>{tr("login.enter_your_4_digit_pin")}</Text>
             <Dots />
             <Status />
             <Pad />

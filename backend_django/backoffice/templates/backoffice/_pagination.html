@@ -1,31 +1,34 @@
-{# Shared pagination + entry counter. Pass `page_obj`, `paginator`, `qs`. #}
-<div class="d-flex justify-content-between align-items-center mt-3">
-  <nav>
-    <ul class="pagination pagination-sm mb-0">
-      {% if page_obj.has_previous %}
-        <li class="page-item">
-          <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ page_obj.previous_page_number }}">«</a>
-        </li>
-      {% else %}
-        <li class="page-item disabled"><span class="page-link">«</span></li>
+{% comment %}
+  Shared pager. Pass `page_obj`, `paginator`, `qs`.
+
+  Sits in the panel footer rather than floating below it, so a table that
+  scrolls inside its own panel keeps its controls attached to it. Renders
+  nothing at all for a single page — a lone disabled "1" is furniture.
+{% endcomment %}
+{% if paginator.num_pages > 1 %}
+<div class="panel-f" style="display:flex;align-items:center;gap:12px">
+  <div class="pager">
+    {% if page_obj.has_previous %}
+      <a href="?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page_obj.previous_page_number }}" title="Previous">‹</a>
+    {% else %}
+      <span class="dis">‹</span>
+    {% endif %}
+
+    {% for i in paginator.page_range %}
+      {% if i == page_obj.number %}
+        <span class="on">{{ i }}</span>
+      {% elif i == 1 or i == paginator.num_pages or i|add:-3 < page_obj.number and i|add:3 > page_obj.number %}
+        <a href="?{{ qs }}{% if qs %}&amp;{% endif %}page={{ i }}">{{ i }}</a>
       {% endif %}
-      {% for i in paginator.page_range %}
-        {% if i == page_obj.number or i == 1 or i == paginator.num_pages or i|add:-3 < page_obj.number and i|add:3 > page_obj.number %}
-          <li class="page-item {% if i == page_obj.number %}active{% endif %}">
-            <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ i }}">{{ i }}</a>
-          </li>
-        {% endif %}
-      {% endfor %}
-      {% if page_obj.has_next %}
-        <li class="page-item">
-          <a class="page-link" href="?{{ qs }}{% if qs %}&{% endif %}page={{ page_obj.next_page_number }}">»</a>
-        </li>
-      {% else %}
-        <li class="page-item disabled"><span class="page-link">»</span></li>
-      {% endif %}
-    </ul>
-  </nav>
-  <div class="text-muted small">
-    Showing {{ page_obj.start_index }} to {{ page_obj.end_index }} of {{ paginator.count }} entries
+    {% endfor %}
+
+    {% if page_obj.has_next %}
+      <a href="?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page_obj.next_page_number }}" title="Next">›</a>
+    {% else %}
+      <span class="dis">›</span>
+    {% endif %}
   </div>
+  <div class="spacer"></div>
+  <span>{{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ paginator.count }}</span>
 </div>
+{% endif %}

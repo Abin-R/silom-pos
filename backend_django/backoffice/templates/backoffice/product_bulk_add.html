@@ -1,95 +1,97 @@
 {% extends "backoffice/base.html" %}
 {% load humanize %}
+{% comment %}
+  Quick add — the fast path for typing in a delivery's worth of new products.
+  Only the fields needed to sell something are here; photos, cost and par
+  levels are filled in afterwards from each product's own page.
+{% endcomment %}
 
-{% block title %}Quick Add Multiple Products — Brave POS{% endblock %}
+{% block title %}Quick add products{% endblock %}
+{% block page_title %}Quick add products{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Up to ten at a time{% if branch %} · {{ branch.name }}{% endif %} · the rest of each product is filled in afterwards</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to catalogue</a>
+  <button type="submit" form="bulkAddForm" class="btn btn-blue">
+    <svg><use href="#i-check"/></svg> Save all</button>
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h4 class="mb-0">Quick Add Multiple Products</h4>
-      <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:product_list' %}?{{ qs }}">
-          <i class="bi bi-arrow-left"></i> Back
-        </a>
-        <button type="submit" form="bulkAddForm" class="btn btn-success">
-          <i class="bi bi-check2"></i> Save
-        </button>
-      </div>
-    </div>
-
-    <form method="get" class="row g-2 align-items-center mb-3">
+<div class="panel">
+  <div class="panel-h">
+    New products
+    <div class="spacer"></div>
+    <form method="get" style="display:flex;gap:8px;align-items:center;margin:0">
       <input type="hidden" name="branch" value="{{ branch.id }}">
-      <div class="col-md-3">
-        <label class="form-label text-muted small mb-1">Product quantity</label>
-        <input type="number" name="rows" value="{{ rows_count }}" min="1" max="10" class="form-control form-control-sm">
+      <div class="ctl" style="height:34px">
+        <input type="number" name="rows" value="{{ rows_count }}" min="1" max="10"
+               style="width:50px;text-align:right;font-family:var(--mono)">
+        <span style="font-size:12.5px;color:var(--mut);font-weight:500">rows</span>
       </div>
-      <div class="col-md-3 align-self-end">
-        <button class="btn btn-success btn-sm w-100"><i class="bi bi-plus-square"></i> Add items</button>
-      </div>
-      <div class="col-12">
-        <div class="text-warning small">** Can add product maximum 10 items</div>
-      </div>
-    </form>
-
-    <form method="post" id="bulkAddForm">
-      {% csrf_token %}
-      <input type="hidden" name="branch" value="{{ branch.id }}">
-      <div class="table-responsive">
-        <table class="table table-bordered align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>No.</th>
-              <th>Image</th>
-              <th>Barcode</th>
-              <th><span class="text-danger">*</span> Name</th>
-              <th>Product Description</th>
-              <th><span class="text-danger">*</span> Category</th>
-              <th><span class="text-danger">*</span> Unit</th>
-              <th class="text-end">Product price</th>
-              <th><span class="text-danger">*</span> Product Type</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for i in rows_range %}
-            <tr>
-              <td>{{ forloop.counter }}</td>
-              <td><div style="width:40px;height:40px;background:#e6f7ef;border-radius:4px;"></div></td>
-              <td><input type="text" name="barcode" class="form-control form-control-sm"></td>
-              <td><input type="text" name="name" class="form-control form-control-sm"></td>
-              <td><input type="text" name="description" class="form-control form-control-sm" placeholder="Please fill product detail"></td>
-              <td>
-                <select name="category" class="form-select form-select-sm">
-                  <option value="">Select option</option>
-                  {% for c in categories %}
-                    <option value="{{ c.id }}">{{ c.name }}</option>
-                  {% endfor %}
-                </select>
-              </td>
-              <td>
-                <select name="unit" class="form-select form-select-sm unit-select">
-                  <option value="">Unit</option>
-                  {% for u in units %}
-                    <option value="{{ u.id }}" {% if u.name == 'ชิ้น' %}selected{% endif %}>{{ u.name }}</option>
-                  {% endfor %}
-                  <option value="__new__">➕ Add new unit…</option>
-                </select>
-              </td>
-              <td><input type="number" step="0.01" name="price" value="0" class="form-control form-control-sm text-end"></td>
-              <td>
-                <select name="product_type" class="form-select form-select-sm">
-                  <option value="P">General Prod</option>
-                  <option value="S">Service</option>
-                  <option value="BOM">BOM</option>
-                </select>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+      <button class="btn btn-sm" type="submit">Set</button>
     </form>
   </div>
+
+  <form method="post" id="bulkAddForm">
+    {% csrf_token %}
+    <input type="hidden" name="branch" value="{{ branch.id }}">
+    <div style="overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:44px">#</th>
+            <th>Barcode</th><th>Name</th><th>Description</th>
+            <th>Category</th><th>Unit</th>
+            <th class="r">Price</th><th>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in rows_range %}
+          <tr>
+            <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
+            <td><input type="text" name="barcode" class="inp" style="height:34px"></td>
+            <td><input type="text" name="name" class="inp" style="height:34px" placeholder="Product name"></td>
+            <td><input type="text" name="description" class="inp" style="height:34px" placeholder="Thai name or detail"></td>
+            <td>
+              <select name="category" class="inp" style="height:34px">
+                <option value="">Uncategorised</option>
+                {% for c in categories %}
+                  <option value="{{ c.id }}">{{ c.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <select name="unit" class="inp unit-select" style="height:34px">
+                <option value="">Pieces</option>
+                {% for u in units %}
+                  <option value="{{ u.id }}">{{ u.name }}</option>
+                {% endfor %}
+                <option value="__new__">＋ Add new unit…</option>
+              </select>
+            </td>
+            <td><input type="number" step="0.01" name="price" value="0" class="inp money"
+                       style="height:34px;text-align:right"></td>
+            <td>
+              <select name="product_type" class="inp" style="height:34px">
+                <option value="P">Product</option>
+                <option value="S">Service</option>
+                <option value="BOM">BOM</option>
+              </select>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save all</button>
+      <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>
+      <span style="font-size:12.5px;color:var(--mut)">Rows left blank are skipped.</span>
+    </div>
+  </form>
 </div>
 {% endblock %}
 

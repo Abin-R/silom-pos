@@ -1,317 +1,143 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 01 — Dashboard.
 
-{% block title %}Dashboard — Brave POS{% endblock %}
+  The alert bar comes before the numbers. An owner opening this at 08:41
+  needs to know what is broken before they know what is selling: an unclosed
+  shift is unreconciled cash, so it earns the top of the page and a direct
+  link to fix it.
+
+  The previous window's line runs behind this one's in grey. Growth is the
+  whole question a dashboard answers, and a second line answers it without a
+  single number needing to be read.
+{% endcomment %}
+
+{% block title %}Dashboard{% endblock %}
+{% block body_class %}fixed-height{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_sub %}<div class="tb-sub">{{ now|date:"l j F Y" }} · {{ now|date:"H:i" }}</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
 
 {% block content %}
 
-{# ─── Top KPI tiles ─────────────────────────────────────────────────── #}
-<div class="row g-3 mb-3">
-  <div class="col-md-4">
-    <div class="card stat-card">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Sales</div>
-          <div class="value currency">฿{{ sales|floatformat:2|intcomma }}</div>
-        </div>
-        <i class="bi bi-cash-stack icon"></i>
-      </div>
-    </div>
+{% if stale_shifts %}
+<div class="banner b-amber">
+  <svg><use href="#i-alert"/></svg>
+  <span>
+    <b>{% for s in stale_shifts %}{{ s.branch.name|default:"A branch" }}{% if not forloop.last %}, {% endif %}{% endfor %}
+      {% if stale_shifts|length == 1 %}has{% else %}have{% endif %} not closed yesterday's shift.</b>
+    ฿{{ stale_cash|floatformat:0|intcomma }} in cash sales is still unreconciled.
+  </span>
+  <div class="spacer"></div>
+  <a class="btn btn-sm btn-amber" href="{% url 'backoffice:staff_list' %}?{{ qs }}">Open shifts</a>
+</div>
+{% endif %}
+
+{# ── Headline figures ─────────────────────────────────────────────────── #}
+<div class="stats s5">
+  <div class="stat">
+    <div class="ic" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-bars"/></svg></div>
+    <span class="k">Net sales</span>
+    <span class="v money">฿{{ sales|floatformat:0|intcomma }}</span>
+    {% include "backoffice/_delta.html" with value=sales_delta suffix=compare_label %}
   </div>
-  <div class="col-md-4">
-    <div class="card stat-card profit">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Profit</div>
-          <div class="value currency">฿{{ profit|floatformat:2|intcomma }}</div>
-        </div>
-        <i class="bi bi-emoji-smile icon"></i>
-      </div>
-    </div>
+  <div class="stat">
+    <div class="ic" style="background:var(--green-soft);color:var(--green)"><svg><use href="#i-orders"/></svg></div>
+    <span class="k">Transactions</span>
+    <span class="v money">{{ bills|intcomma }}</span>
+    {% include "backoffice/_delta.html" with value=bills_delta suffix=compare_label %}
   </div>
-  <div class="col-md-4">
-    <div class="card stat-card discount">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Discount</div>
-          <div class="value currency">฿{{ discount|floatformat:2|intcomma }}</div>
-        </div>
-        <i class="bi bi-tag icon"></i>
-      </div>
-    </div>
+  <div class="stat">
+    <div class="ic" style="background:var(--purple-soft);color:var(--purple)"><svg><use href="#i-recv"/></svg></div>
+    <span class="k">Average bill</span>
+    <span class="v money">฿{{ avg_per_bill|floatformat:2|intcomma }}</span>
+    {% include "backoffice/_delta.html" with value=avg_delta suffix=compare_label %}
+  </div>
+  <div class="stat">
+    <div class="ic" style="background:var(--amber-soft);color:var(--amber)"><svg><use href="#i-shield"/></svg></div>
+    <span class="k">VAT collected</span>
+    <span class="v money">฿{{ tax_amount|floatformat:0|intcomma }}</span>
+    <span class="d">{{ tax_percent|floatformat:"-2" }}% included in prices</span>
+  </div>
+  <div class="stat">
+    <div class="ic" style="background:var(--red-soft);color:var(--red-d)"><svg><use href="#i-x"/></svg></div>
+    <span class="k">Voids &amp; refunds</span>
+    <span class="v money">฿{{ void_value|floatformat:0|intcomma }}</span>
+    <span class="d {% if void_share > 2 %}down{% endif %}">{{ void_share|floatformat:1 }}% of sales · {{ cancel_bills }} bills</span>
   </div>
 </div>
 
-{# ─── Payment / Bill total / Tax breakdown ──────────────────────────── #}
-<div class="row g-3 mb-3">
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="section-title">Payment</div>
-        <div class="chart-box"><canvas id="paymentChart"></canvas></div>
+{# ── Trend, branches, latest ──────────────────────────────────────────── #}
+<div class="cols c-2" style="flex:1">
+  <div class="panel" style="display:flex;flex-direction:column;min-height:0">
+    <div class="panel-h">
+      Sales trend <span class="sm">{{ date_from }} → {{ date_to }}</span>
+      <div class="spacer"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#2563EB"></span> This period</span>
+        <span><span class="dot" style="background:#C9D2E0"></span> Previous {{ span_days }} days</span>
       </div>
     </div>
+    <div class="chart"><canvas id="trendChart"></canvas></div>
   </div>
 
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="section-title">Bill total</div>
-        <div class="breakdown-row">
-          <span>Total</span>
-          <span class="currency">{{ bills }} Bill</span>
-        </div>
-        <div class="breakdown-row muted">
-          <span>Average / bill</span>
-          <span class="currency">฿{{ avg_per_bill|floatformat:2|intcomma }}</span>
-        </div>
-        <hr class="my-2">
-        <div class="breakdown-row">
-          <span>Cancel</span>
-          <span class="currency">{{ cancel_bills }} Bill</span>
-        </div>
-        <div class="breakdown-row muted">
-          <span>Voidbill Total</span>
-          <span class="currency">฿0.00</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-md-4">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="section-title">Tax breakdown</div>
-        <div class="breakdown-row">
-          <span>Sub Total</span>
-          <span class="currency">฿{{ subtotal|floatformat:2|intcomma }}</span>
-        </div>
-        <div class="breakdown-row negative">
-          <span>Discount Amount</span>
-          <span class="currency">-฿{{ discount|floatformat:2|intcomma }}</span>
-        </div>
-        <div class="breakdown-row">
-          <span>Total (incl-Tax)</span>
-          <span class="currency">฿{{ total_incl_tax|floatformat:2|intcomma }}</span>
-        </div>
-        <div class="breakdown-row muted">
-          <span>Total (non-Tax)</span>
-          <span class="currency">฿{{ total_non_tax|floatformat:2|intcomma }}</span>
-        </div>
-        <div class="breakdown-row muted">
-          <span>Tax Amount {{ tax_percent|floatformat:0 }}%</span>
-          <span class="currency">฿{{ tax_amount|floatformat:2|intcomma }}</span>
-        </div>
-        <div class="breakdown-row total">
-          <span>Grand Total</span>
-          <span class="currency">฿{{ grand_total|floatformat:2|intcomma }}</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-{# ─── Inventory tiles ─────────────────────────────────────────────────── #}
-<div class="row g-3 mb-3">
-  <div class="col-md-4">
-    <div class="card stat-card">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Inventory Quantity</div>
-          <div class="value">{{ inv_qty|intcomma }} <small class="text-muted fs-6">Items</small></div>
-        </div>
-        <i class="bi bi-box-seam icon"></i>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card stat-card profit">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Total Cost Value</div>
-          <div class="value currency">฿{{ cost_value|floatformat:2|intcomma }}</div>
-        </div>
-        <i class="bi bi-coin icon"></i>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="card stat-card discount">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">Inventory Value</div>
-          <div class="value currency">฿{{ inv_value|floatformat:2|intcomma }}</div>
-        </div>
-        <i class="bi bi-currency-exchange icon"></i>
-      </div>
-    </div>
-  </div>
-</div>
-
-{# ─── Delivery Channels + Grab integration card ───────────────────── #}
-<div class="row g-3 mb-3">
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <div class="section-title mb-0">Delivery Channels</div>
-          <button type="button" class="btn btn-sm btn-success" disabled>
-            <i class="bi bi-info-circle"></i> see more
-          </button>
-        </div>
-        <div class="row g-2 mb-3">
-          <div class="col-6">
-            <div class="p-3 border rounded text-center" style="border-color: #e74c3c !important; border-width: 2px !important;">
-              <div class="text-muted small">TOTALS REVENUE</div>
-              <div class="h4 mb-0 currency" style="color: #e74c3c;">{{ delivery_totals_revenue|floatformat:2|intcomma }}</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="p-3 border rounded text-center" style="border-color: #9b59b6 !important; border-width: 2px !important;">
-              <div class="text-muted small">ORDER TOTAL</div>
-              <div class="h4 mb-0" style="color: #9b59b6;">{{ delivery_order_total|intcomma }}</div>
-            </div>
-          </div>
-        </div>
-        <div class="row g-2 align-items-center">
-          <div class="col-7">
-            {% for c in delivery_channels %}
-              <div class="d-flex align-items-center bg-light rounded p-2 mb-1 small">
-                <i class="bi bi-shop me-2 text-success"></i>
-                <div class="flex-grow-1">
-                  <div class="fw-semibold">{{ c.name }}</div>
-                  <div class="text-muted">QTY: {{ c.qty }} &nbsp; SALES: {{ c.sales|floatformat:2|intcomma }}</div>
-                </div>
+  <div class="stack">
+    <div class="panel">
+      <div class="panel-h">Branches <span class="sm">this period</span></div>
+      <table class="tbl">
+        <tbody>
+          {% for row in branch_rows %}
+          <tr>
+            <td>
+              <span class="branchdot" style="background:{{ row.branch|branch_color }}"></span>
+              <b style="font-weight:620">{{ row.branch.name }}</b>
+              <div class="sub {% if row.shift %}amber{% endif %}" style="margin-left:18px">
+                {{ row.bills }} bill{{ row.bills|pluralize }}
+                {% if row.shift %}· shift open{% else %}· closed{% endif %}
               </div>
-            {% empty %}
-              <div class="text-muted small">No channel sales in range.</div>
-            {% endfor %}
-          </div>
-          <div class="col-5 d-flex justify-content-center">
-            <div style="max-width: 160px; width: 100%;">
-              <canvas id="channelsChart"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
+            </td>
+            <td class="r">
+              <b class="money" style="font-size:15px">฿{{ row.sales|floatformat:0|intcomma }}</b>
+              <div style="margin-top:6px">
+                <span class="mini" style="width:72px"><i style="width:{{ row.share|floatformat:0 }}%;background:{{ row.branch|branch_color }}"></i></span>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td class="empty">No branches yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-  </div>
 
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <div class="d-flex align-items-center gap-2">
-            <div class="rounded-circle d-flex align-items-center justify-content-center"
-                 style="width: 36px; height: 36px; background: #00B14F; color: #fff; font-weight: 700;">G</div>
-            <h5 class="mb-0">Grab</h5>
-          </div>
-          <button type="button" class="btn btn-sm btn-success" disabled>
-            <i class="bi bi-info-circle"></i> see more
-          </button>
-        </div>
-        <div class="text-center py-4">
-          <div class="fs-3 fw-bold">
-            <span style="color: #2c3e50;">silompos</span>
-            <span class="text-muted mx-2">×</span>
-            <span style="color: #00B14F;">Grab</span>
-          </div>
-          <div class="text-muted small mt-2">
-            Connect your store to Grab for seamless delivery integration.
-          </div>
-          <button type="button" class="btn btn-success mt-3" disabled>
-            <i class="bi bi-link-45deg"></i> Connect Grab
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-{# ─── Table Usage total ────────────────────────────────────────────── #}
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <div class="section-title mb-0">Table Usage total</div>
-      <button type="button" class="btn btn-sm btn-success" disabled>
-        <i class="bi bi-info-circle"></i> see more
-      </button>
-    </div>
-    <div class="row text-center g-3">
-      <div class="col-md-3 border-end">
-        <div class="text-muted small mb-1">Items Avg.</div>
-        <div class="h5 mb-1" style="color: #00B14F;">{{ table_usage.items_avg|floatformat:0 }} Items/Bill/Table</div>
-        <div class="text-muted small">Total Item {{ table_usage.items_total|intcomma }} Items</div>
-      </div>
-      <div class="col-md-3 border-end">
-        <div class="text-muted small mb-1">Customer Avg.</div>
-        <div class="h5 mb-1" style="color: #00B14F;">{{ table_usage.customer_avg }} Person/Table</div>
-        <div class="text-muted small">Customer Total {{ table_usage.customer_total }} person</div>
-      </div>
-      <div class="col-md-3 border-end">
-        <div class="text-muted small mb-1">Table Usage</div>
-        <div class="h5 mb-1" style="color: #00B14F;">{{ table_usage.bill_per_table_per_day }} Bill/Table/Day</div>
-        <div class="text-muted small">Total of tables opened {{ table_usage.table_open_count }} Times</div>
-      </div>
-      <div class="col-md-3">
-        <div class="text-muted small mb-1">Time Avg.</div>
-        <div class="h5 mb-1" style="color: #00B14F;">{{ table_usage.time_avg_hours }} Hours {{ table_usage.time_avg_seconds }} Seconds /Table</div>
-        <div class="text-muted small">Total Time {{ table_usage.time_total_seconds }} Seconds</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-{# ─── Sales-by-time histogram ─────────────────────────────────────────── #}
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="section-title">Sales by {% if date_from == date_to %}hour{% else %}date{% endif %}</div>
-    <canvas id="salesChart" height="80"></canvas>
-  </div>
-</div>
-
-{# ─── Best sellers + categories ──────────────────────────────────────── #}
-<div class="row g-3 mb-3">
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="section-title">Best sellers</div>
-        <div class="chart-box"><canvas id="topProductsChart"></canvas></div>
-        <table class="table table-sm mt-3 mb-0">
-          <thead><tr><th>#</th><th>Product</th><th class="text-end">Qty</th><th class="text-end">Sales</th></tr></thead>
+    <div class="panel panel-grow">
+      <div class="panel-h">Latest transactions <div class="spacer"></div><span class="tag t-info">Live</span></div>
+      <div class="panel-scroll">
+        <table class="tbl">
           <tbody>
-            {% for p in top_products %}
+            {% for o in latest_orders %}
             <tr>
-              <td>{{ forloop.counter }}</td>
-              <td>{{ p.name }}</td>
-              <td class="text-end currency">{{ p.qty_sold }}</td>
-              <td class="text-end currency">฿{{ p.sales|floatformat:2|intcomma }}</td>
+              <td class="money" style="font-weight:620">
+                <a href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;o={{ o.id }}">#{{ o.order_number }}</a>
+              </td>
+              <td style="color:var(--mut)">{{ o.branch.name|default:"—" }}</td>
+              <td class="money" style="color:var(--mut)">{{ o.created_at|date:"H:i" }}</td>
+              <td class="r money" style="font-weight:640">฿{{ o.total|floatformat:2|intcomma }}</td>
+              <td class="r">
+                {% if o.status == 'cancel' %}
+                  <span class="tag t-red">Voided</span>
+                {% else %}
+                  {% include "backoffice/_payment_tag.html" with method=o.payment_method %}
+                {% endif %}
+              </td>
             </tr>
             {% empty %}
-            <tr><td colspan="4" class="text-center text-muted">No sales in range</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="card h-100">
-      <div class="card-body">
-        <div class="section-title">Best sellers category</div>
-        <div class="chart-box"><canvas id="topCategoriesChart"></canvas></div>
-        <table class="table table-sm mt-3 mb-0">
-          <thead><tr><th>#</th><th>Category</th><th class="text-end">Qty</th><th class="text-end">Sales</th></tr></thead>
-          <tbody>
-            {% for c in top_categories %}
-            <tr>
-              <td>{{ forloop.counter }}</td>
-              <td>{{ c.category_name }}</td>
-              <td class="text-end currency">{{ c.qty_sold }}</td>
-              <td class="text-end currency">฿{{ c.sales|floatformat:2|intcomma }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="4" class="text-center text-muted">No category sales in range</td></tr>
+            <tr><td class="empty">No bills in this window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -320,72 +146,119 @@
   </div>
 </div>
 
+{# ── Mix, top sellers, what needs doing ───────────────────────────────── #}
+<div class="cols c-3" style="flex:none">
+  <div class="panel">
+    <div class="panel-h">Payment mix</div>
+    <div class="mix">
+      {% for p in payment_mix %}
+      <div class="mixrow">
+        <div class="t"><span>{{ p.name }}</span><b class="money">฿{{ p.total|floatformat:0|intcomma }} · {{ p.pct|floatformat:0 }}%</b></div>
+        <div class="track"><i style="width:{{ p.pct|floatformat:0 }}%;background:{% cycle '#2563EB' '#16A34A' '#7C3AED' '#B45309' '#0EA5E9' %}"></i></div>
+      </div>
+      {% empty %}
+      <div style="color:var(--mut);font-size:13.5px">Nothing taken yet in this window.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">Top products</div>
+    <table class="tbl">
+      <tbody>
+        {% for p in top_products|slice:":4" %}
+        <tr>
+          <td><span class="rank">{{ forloop.counter }}</span>{{ p.name }}</td>
+          <td class="r money">{{ p.qty_sold|intcomma }}</td>
+          <td class="r money" style="font-weight:640">฿{{ p.sales|floatformat:0|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr><td class="empty">Nothing sold yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">Needs attention</div>
+    <table class="tbl">
+      <tbody>
+        <tr>
+          <td><span class="dot" style="background:var(--red);margin-right:10px"></span>
+            <a href="{% url 'backoffice:inventory' %}?{{ qs }}&amp;level=out">Out of stock</a></td>
+          <td class="r"><b class="money">{{ out_of_stock }}</b> <span style="color:var(--mut2);font-size:12px">SKUs</span></td>
+        </tr>
+        <tr>
+          <td><span class="dot" style="background:var(--amber);margin-right:10px"></span>
+            <a href="{% url 'backoffice:inventory' %}?{{ qs }}&amp;level=low">Below par level</a></td>
+          <td class="r"><b class="money">{{ low_stock }}</b> <span style="color:var(--mut2);font-size:12px">SKUs</span></td>
+        </tr>
+        <tr>
+          <td><span class="dot" style="background:var(--blue);margin-right:10px"></span>Shifts open now</td>
+          <td class="r"><b class="money">{{ open_shift_count }}</b>
+            {% if stale_shifts %}<span style="color:var(--amber);font-size:12px">{{ stale_shifts|length }} overnight</span>{% endif %}</td>
+        </tr>
+        <tr>
+          <td><span class="dot" style="background:var(--mut2);margin-right:10px"></span>Stock value at cost</td>
+          <td class="r"><b class="money">฿{{ cost_value|floatformat:0|intcomma }}</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
+{% comment %}
+  Chart.js is pulled in here rather than in base.html: the trend line is the
+  only chart in the backoffice, and every other page was paying ~200 KB for
+  a library it never called.
+{% endcomment %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+{{ sales_chart_json|json_script:"salesData" }}
 <script>
-  const PALETTE = ['#00B14F', '#3498db', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c', '#34495e'];
+  // Two lines on one axis: this window in blue, the one before it in grey.
+  // Point-for-point comparable because both series share the same buckets.
+  (function () {
+    var data = JSON.parse(document.getElementById('salesData').textContent);
+    var css = getComputedStyle(document.documentElement);
+    var blue = css.getPropertyValue('--blue').trim();
+    var ctx = document.getElementById('trendChart');
+    var fill = ctx.getContext('2d').createLinearGradient(0, 0, 0, 260);
+    fill.addColorStop(0, 'rgba(37,99,235,.20)');
+    fill.addColorStop(1, 'rgba(37,99,235,0)');
 
-  const paymentData     = {{ payment_chart_json|safe }};
-  const salesData       = {{ sales_chart_json|safe }};
-  const topProductsData = {{ top_products_chart_json|safe }};
-  const topCategoriesData = {{ top_categories_chart_json|safe }};
-  const channelsData    = {{ delivery_channels_chart_json|safe }};
-
-  function donut(canvasId, data, legendPosition) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx || !data.labels.length) return;
     new Chart(ctx, {
-      type: 'doughnut',
+      type: 'line',
       data: {
         labels: data.labels,
-        datasets: [{ data: data.values, backgroundColor: PALETTE, borderWidth: 1 }],
+        datasets: [
+          { label: 'Previous', data: data.previous, borderColor: '#C9D2E0',
+            borderWidth: 2, pointRadius: 0, tension: .35 },
+          { label: 'This period', data: data.values, borderColor: blue,
+            backgroundColor: fill, borderWidth: 2.6, fill: true,
+            pointRadius: 0, pointHoverRadius: 4, tension: .35 }
+        ]
       },
       options: {
-        responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: {
-            position: legendPosition || 'bottom',
-            labels: { boxWidth: 10, font: { size: 11 } },
-          },
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (c) { return c.dataset.label + ': ฿' + c.parsed.y.toLocaleString(); }
+            }
+          }
         },
-      },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 10, color: '#9AA3B2', font: { size: 10 } } },
+          y: { border: { display: false }, grid: { color: '#EEF1F6' },
+               ticks: { color: '#9AA3B2', font: { size: 10 },
+                        callback: function (v) { return '฿' + v.toLocaleString(); } } }
+        }
+      }
     });
-  }
-
-  function bars(canvasId, data, color) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: data.labels,
-        datasets: [{ data: data.values, backgroundColor: color, borderRadius: 4 }],
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true, ticks: { font: { size: 11 } } }, x: { ticks: { font: { size: 11 } } } },
-      },
-    });
-  }
-
-  function pie(canvasId, data) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx || !data.labels.length) return;
-    new Chart(ctx, {
-      type: 'pie',
-      data: { labels: data.labels, datasets: [{ data: data.values, backgroundColor: PALETTE, borderWidth: 1 }] },
-      options: { responsive: true, plugins: { legend: { display: false } } },
-    });
-  }
-
-  donut('paymentChart', paymentData);
-  bars('salesChart', salesData, 'rgba(0,177,79,0.35)');
-  // Best-sellers donuts use legend on top, matching the SilomPOS layout.
-  donut('topProductsChart', topProductsData, 'top');
-  donut('topCategoriesChart', topCategoriesData, 'top');
-  pie('channelsChart', channelsData);
+  })();
 </script>
 {% endblock %}

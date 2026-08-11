@@ -9,151 +9,137 @@ reads them the same way for both.
 Secrets are never emitted into the HTML: the key inputs start empty and show
 ••••1234 as placeholder text, so a saved key can be replaced but not read back
 off the page (or out of a browser's saved-form cache, or a screenshot).
+
+The Live/Test lane is the loudest thing in the panel because it is the one
+setting here whose consequence is real money.
 {% endcomment %}
 
-<div class="card mt-4">
-  <div class="card-header bg-white d-flex align-items-center gap-2">
-    <i class="bi bi-credit-card-2-front"></i>
-    <strong>Payment</strong>
+<div class="panel" style="margin-top:16px">
+  <div class="panel-h">
+    <svg style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-card"/></svg>
+    Payment
+    <div class="spacer"></div>
     {% if pay_is_test %}
-      <span class="badge text-bg-warning ms-2">Test mode — no real money</span>
+      <span class="tag t-low">Test — no real money</span>
     {% else %}
-      <span class="badge text-bg-success ms-2">Live — real money</span>
+      <span class="tag t-ok">Live — real money</span>
     {% endif %}
   </div>
-  <div class="card-body">
 
-    {% if payment_errors %}
-      <div class="alert alert-danger d-flex gap-2 mb-4">
-        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
-        <div>
-          <strong>Not saved — the keys don't match the mode.</strong>
-          <ul class="mb-0 mt-2 ps-3">
-            {% for err in payment_errors %}<li>{{ err }}</li>{% endfor %}
-          </ul>
-        </div>
-      </div>
-    {% endif %}
-
-    {% if payment_scope == 'template' %}
-      <div class="alert alert-secondary d-flex gap-2 py-2 mb-4">
-        <i class="bi bi-info-circle mt-1"></i>
-        <div class="small">
-          These are the <strong>defaults for new branches</strong>. A branch copies
-          them once, when it is created, and owns its copy from then on — so
-          changing anything here never affects a branch that is already trading.
-          To change a branch that exists, edit that branch.
-        </div>
-      </div>
-    {% else %}
-      <div class="alert alert-secondary d-flex gap-2 py-2 mb-4">
-        <i class="bi bi-info-circle mt-1"></i>
-        <div class="small">
-          This branch takes payments through the account below. It is this
-          branch's own copy — editing it affects no other branch.
-        </div>
-      </div>
-    {% endif %}
-
-    {# ─── Mode ─── #}
-    <div class="mb-4">
-      <label class="form-label">Mode</label>
-      <div class="d-flex flex-column gap-2" style="max-width:640px;">
-        <div class="form-check">
-          <input class="form-check-input" type="radio" name="payment_mode" value="live"
-                 id="payment-mode-live" {% if not pay_is_test %}checked{% endif %}>
-          <label class="form-check-label" for="payment-mode-live">
-            <strong>Live</strong> — real customer payments settle to the account below.
-          </label>
-        </div>
-        <div class="form-check">
-          <input class="form-check-input" type="radio" name="payment_mode" value="test"
-                 id="payment-mode-test" {% if pay_is_test %}checked{% endif %}>
-          <label class="form-check-label" for="payment-mode-test">
-            <strong>Test</strong> — Beam Playground. Payments look real on screen but
-            no money moves. For a training or demo branch.
-          </label>
-        </div>
-      </div>
-      <div class="form-text">
-        Set once and left alone. The POS app has no screen for this, so it cannot
-        be changed from a shop tablet.
-      </div>
+  {% if payment_errors %}
+  <div style="padding:16px 20px 0">
+    <div class="banner b-red">
+      <svg><use href="#i-alert"/></svg>
+      <span><b>Not saved — the keys don't match the mode.</b>
+        {% for err in payment_errors %}{{ err }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
     </div>
+  </div>
+  {% endif %}
 
-    <hr class="my-4">
+  <div class="srow">
+    <span class="si" style="background:var(--blue-soft);color:var(--blue)">
+      <svg><use href="#i-zap"/></svg></span>
+    <span class="sm">
+      {% if payment_scope == 'template' %}
+        <b>Defaults for new branches</b>
+        <u>A branch copies these once, when it is created, and owns its copy from then
+          on — so changing anything here never affects a branch that is already
+          trading. To change a branch that exists, edit that branch.</u>
+      {% else %}
+        <b>This branch's own account</b>
+        <u>This branch takes payments through the credentials below. They are its own
+          copy — editing them affects no other branch.</u>
+      {% endif %}
+    </span>
+  </div>
 
-    {# ─── Beam ─── #}
-    <h6 class="text-muted text-uppercase small mb-3">Beam — PromptPay QR &amp; card</h6>
-    <div class="row g-3 mb-4">
-      <div class="col-md-6">
-        <label class="form-label">Merchant ID</label>
-        <input type="text" name="beam_merchant_id" class="form-control"
-               value="{{ pay_obj.beam_merchant_id }}" placeholder="m_xxxxxxxxxxxxxxxx"
-               autocomplete="off" spellcheck="false">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">API Key</label>
-        <input type="text" name="beam_api_key" class="form-control"
-               value="" autocomplete="off" spellcheck="false"
-               placeholder="{% if pay_beam_key_mask %}{{ pay_beam_key_mask }} — type a new key to replace{% else %}Enter the Beam API key{% endif %}">
-        {% if pay_beam_key_mask %}
-          <div class="form-check mt-1">
-            <input class="form-check-input" type="checkbox" name="beam_api_key_clear"
-                   id="beam-api-key-clear">
-            <label class="form-check-label small text-danger" for="beam-api-key-clear">
-              Remove the stored key
-            </label>
-          </div>
-        {% else %}
-          <div class="form-text text-danger">No key stored — Beam payments will fail here.</div>
-        {% endif %}
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Card Processing Fee %</label>
-        <input type="text" name="beam_card_fee_percent" class="form-control"
-               value="{{ pay_obj.beam_card_fee_percent }}" placeholder="3.65">
-        <div class="form-text">Added to the customer's total on Beam Card, plus 7% VAT on the fee.</div>
-      </div>
+  {# ── Lane ────────────────────────────────────────────────────────────── #}
+  <div style="padding:18px 20px;border-bottom:1px solid var(--line2)">
+    <div class="flabel" style="margin-bottom:10px">Mode</div>
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:640px">
+      <label class="check" style="align-items:flex-start">
+        <input type="radio" name="payment_mode" value="live" style="margin-top:2px"
+               {% if not pay_is_test %}checked{% endif %}>
+        <span><b style="font-weight:650">Live</b> — real customer payments settle to the account below.</span>
+      </label>
+      <label class="check" style="align-items:flex-start">
+        <input type="radio" name="payment_mode" value="test" style="margin-top:2px"
+               {% if pay_is_test %}checked{% endif %}>
+        <span><b style="font-weight:650">Test</b> — Beam Playground. Payments look real on
+          screen but no money moves. For a training or demo branch.</span>
+      </label>
     </div>
-
-    {# ─── Omise ─── #}
-    <h6 class="text-muted text-uppercase small mb-3">Omise — credit card link</h6>
-    <div class="row g-3">
-      <div class="col-md-6">
-        <label class="form-label">Public Key</label>
-        <input type="text" name="omise_public_key" class="form-control"
-               value="{{ pay_obj.omise_public_key }}"
-               placeholder="{% if pay_is_test %}pkey_test_…{% else %}pkey_…{% endif %}"
-               autocomplete="off" spellcheck="false">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">Secret Key</label>
-        <input type="text" name="omise_secret_key" class="form-control"
-               value="" autocomplete="off" spellcheck="false"
-               placeholder="{% if pay_omise_key_mask %}{{ pay_omise_key_mask }} — type a new key to replace{% else %}{% if pay_is_test %}skey_test_…{% else %}skey_…{% endif %}{% endif %}">
-        {% if pay_omise_key_mask %}
-          <div class="form-check mt-1">
-            <input class="form-check-input" type="checkbox" name="omise_secret_key_clear"
-                   id="omise-secret-key-clear">
-            <label class="form-check-label small text-danger" for="omise-secret-key-clear">
-              Remove the stored key
-            </label>
-          </div>
-        {% endif %}
-        <div class="form-text">
-          Omise has no separate test switch — the key prefix decides.
-          A <strong>Test</strong> branch needs <code>skey_test_</code> keys;
-          a <strong>Live</strong> branch needs <code>skey_</code> keys.
-        </div>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">Processing Fee %</label>
-        <input type="text" name="omise_fee_percent" class="form-control"
-               value="{{ pay_obj.omise_fee_percent }}" placeholder="3.65">
-        <div class="form-text">Added to the customer's total on card payments, plus 7% VAT on the fee.</div>
-      </div>
+    <div class="hint" style="margin-top:10px">
+      Set once and left alone. The POS app has no screen for this, so it cannot be
+      changed from a shop tablet.
     </div>
+  </div>
 
+  {# ── Beam ────────────────────────────────────────────────────────────── #}
+  <div class="panel-h" style="border-top:0;font-size:13px">
+    <span class="lbl">Beam — PromptPay QR &amp; card</span>
+  </div>
+  <div class="form-grid" style="padding-top:16px">
+    <div class="field">
+      <label for="pay-beam-mid">Merchant ID</label>
+      <input id="pay-beam-mid" type="text" name="beam_merchant_id"
+             value="{{ pay_obj.beam_merchant_id }}" placeholder="m_xxxxxxxxxxxxxxxx"
+             autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="pay-beam-key">API key</label>
+      <input id="pay-beam-key" type="text" name="beam_api_key" value=""
+             autocomplete="off" spellcheck="false"
+             placeholder="{% if pay_beam_key_mask %}{{ pay_beam_key_mask }} — type a new key to replace{% else %}Enter the Beam API key{% endif %}">
+      {% if pay_beam_key_mask %}
+        <label class="check" style="font-size:12.5px;color:var(--red-d)">
+          <input type="checkbox" name="beam_api_key_clear"> Remove the stored key
+        </label>
+      {% else %}
+        <span class="hint" style="color:var(--red-d)">No key stored — Beam payments will fail here.</span>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="pay-beam-fee">Card processing fee %</label>
+      <input id="pay-beam-fee" type="text" name="beam_card_fee_percent"
+             value="{{ pay_obj.beam_card_fee_percent }}" placeholder="3.65">
+      <span class="hint">Added to the customer's total on Beam Card, plus VAT on the fee.</span>
+    </div>
+  </div>
+
+  {# ── Omise ───────────────────────────────────────────────────────────── #}
+  <div class="panel-h" style="border-top:1px solid var(--line2);font-size:13px">
+    <span class="lbl">Omise — credit card link</span>
+  </div>
+  <div class="form-grid" style="padding-top:16px">
+    <div class="field">
+      <label for="pay-omise-pk">Public key</label>
+      <input id="pay-omise-pk" type="text" name="omise_public_key"
+             value="{{ pay_obj.omise_public_key }}"
+             placeholder="{% if pay_is_test %}pkey_test_…{% else %}pkey_…{% endif %}"
+             autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="pay-omise-sk">Secret key</label>
+      <input id="pay-omise-sk" type="text" name="omise_secret_key" value=""
+             autocomplete="off" spellcheck="false"
+             placeholder="{% if pay_omise_key_mask %}{{ pay_omise_key_mask }} — type a new key to replace{% else %}{% if pay_is_test %}skey_test_…{% else %}skey_…{% endif %}{% endif %}">
+      {% if pay_omise_key_mask %}
+        <label class="check" style="font-size:12.5px;color:var(--red-d)">
+          <input type="checkbox" name="omise_secret_key_clear"> Remove the stored key
+        </label>
+      {% endif %}
+      <span class="hint">
+        Omise has no separate test switch — the key prefix decides. A Test branch
+        needs <b class="money">skey_test_</b> keys; a Live branch needs
+        <b class="money">skey_</b> keys.
+      </span>
+    </div>
+    <div class="field">
+      <label for="pay-omise-fee">Processing fee %</label>
+      <input id="pay-omise-fee" type="text" name="omise_fee_percent"
+             value="{{ pay_obj.omise_fee_percent }}" placeholder="3.65">
+      <span class="hint">Added to the customer's total on card payments, plus VAT on the fee.</span>
+    </div>
   </div>
 </div>

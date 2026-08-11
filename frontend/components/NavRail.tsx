@@ -27,10 +27,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
 import { C, R } from "../lib/theme";
+import { t as tr, useT } from "../lib/i18n";
 
 export type SidebarItem = {
   key: string;
-  label: string;
+  /** i18n key, not display text — resolved at render so the menu follows the
+   *  language. Holding the English word here would freeze it at import time,
+   *  because this array is built once when the module loads. */
+  labelKey: string;
   icon: any;
   adminOnly?: boolean;
 };
@@ -40,14 +44,14 @@ export type SidebarItem = {
 // All tabs are visible to both roles; cashier-vs-admin gating happens at the
 // action level (e.g. product add/edit/delete is hidden for cashier).
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: "shop", label: "Sale", icon: "cart-outline" },
-  { key: "transactions", label: "Orders", icon: "receipt-outline" },
-  { key: "customers", label: "Customers", icon: "people-outline" },
-  { key: "products", label: "Products", icon: "cube-outline" },
-  { key: "inventory", label: "Stock", icon: "layers-outline" },
-  { key: "reports", label: "Reports", icon: "bar-chart-outline" },
-  { key: "drawer", label: "Cash", icon: "wallet-outline" },
-  { key: "settings", label: "Settings", icon: "settings-outline" },
+  { key: "shop", labelKey: "nav.sale", icon: "cart-outline" },
+  { key: "transactions", labelKey: "common.orders", icon: "receipt-outline" },
+  { key: "customers", labelKey: "nav.customers", icon: "people-outline" },
+  { key: "products", labelKey: "common.products", icon: "cube-outline" },
+  { key: "inventory", labelKey: "common.stock", icon: "layers-outline" },
+  { key: "reports", labelKey: "nav.reports", icon: "bar-chart-outline" },
+  { key: "drawer", labelKey: "common.cash", icon: "wallet-outline" },
+  { key: "settings", labelKey: "common.settings", icon: "settings-outline" },
 ];
 
 export const RAIL_WIDTH = 195;
@@ -108,6 +112,7 @@ function RailBody({
   onToggleCollapse,
   anim,
 }: BodyProps & { anim?: Animated.Value }) {
+  useT(); // re-render this screen when the language changes
   const isAdmin = (role || "").toLowerCase() === "admin";
   const items = SIDEBAR_ITEMS.filter((it) => !it.adminOnly || isAdmin);
   // A 712px-tall tablet can't fit eight 52px rows plus the logo and user card
@@ -192,7 +197,7 @@ function RailBody({
               style={[s.collapseText, { opacity: labelOpacity }]}
               numberOfLines={1}
             >
-              Collapse
+              {tr("nav.collapse")}
             </Animated.Text>
           </Animated.View>
         </TouchableOpacity>
@@ -224,7 +229,7 @@ function RailBody({
                   style={[s.nvText, on && s.nvTextOn, { opacity: labelOpacity }]}
                   numberOfLines={1}
                 >
-                  {it.label}
+                  {tr(it.labelKey)}
                 </Animated.Text>
               </Animated.View>
             </TouchableOpacity>
@@ -242,7 +247,7 @@ function RailBody({
           <Animated.View style={[s.nv, { height: rowH, paddingLeft: rowPadLeft }]}>
             <Ionicons name="log-out-outline" size={21} color={C.navIcon} />
             <Animated.Text style={[s.nvText, { opacity: labelOpacity }]} numberOfLines={1}>
-              Logout
+              {tr("nav.logout")}
             </Animated.Text>
           </Animated.View>
         </TouchableOpacity>
@@ -262,10 +267,10 @@ function RailBody({
             pointerEvents={collapsed ? "none" : "auto"}
           >
             <Text style={s.userName} numberOfLines={1}>
-              {staff || "Admin"}
+              {staff || tr("common.admin")}
             </Text>
             <Text style={s.userRole} numberOfLines={1}>
-              {isAdmin ? "Admin" : "Cashier"}
+              {isAdmin ? tr("common.admin") : tr("common.cashier")}
             </Text>
           </Animated.View>
         </View>

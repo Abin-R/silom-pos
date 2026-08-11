@@ -1,87 +1,95 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Quick edit — the whole catalogue as an editable grid, for the day prices
+  move across the board. One save writes every row on the page, so the page
+  count is stated where the Save button is.
+{% endcomment %}
 
-{% block title %}Quick Edit Multiple Products — Brave POS{% endblock %}
+{% block title %}Quick edit products{% endblock %}
+{% block page_title %}Quick edit products{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ paginator.count|intcomma }} product{{ paginator.count|pluralize }}{% if branch %} · {{ branch.name }}{% endif %} · every change reaches the tills on save</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to catalogue</a>
+  <button type="submit" form="bulkEditForm" class="btn btn-blue">
+    <svg><use href="#i-check"/></svg> Save this page</button>
+{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h4 class="mb-0">Quick Edit Multiple Products</h4>
-      <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:product_list' %}?{{ qs }}">
-          <i class="bi bi-arrow-left"></i> Back
-        </a>
-        <button type="submit" form="bulkEditForm" class="btn btn-success">
-          <i class="bi bi-check2"></i> Save changes
-        </button>
-      </div>
+<div class="banner b-blue">
+  <svg><use href="#i-zap"/></svg>
+  <span>Saving writes <b>every row on this page</b>, changed or not.
+    Page through first, then save each page you edited.</span>
+</div>
+
+<div class="panel">
+  <form method="post" id="bulkEditForm">
+    {% csrf_token %}
+    <div style="overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:60px"></th>
+            <th>Barcode</th><th>Name</th><th>Description</th>
+            <th>Category</th><th>Unit</th>
+            <th class="r">Price</th><th class="r">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <input type="hidden" name="id" value="{{ p.id }}">
+            <td>
+              <span class="thumb">
+                {% if p.image_url %}<img src="{{ p.image_url }}" alt="">
+                {% else %}{{ p.name|initial }}{% endif %}
+              </span>
+            </td>
+            <td><input type="text" name="barcode" value="{{ p.barcode }}" class="inp" style="height:34px"></td>
+            <td><input type="text" name="name" value="{{ p.name }}" class="inp" style="height:34px"></td>
+            <td><input type="text" name="description" value="{{ p.name_th }}" class="inp" style="height:34px"
+                       placeholder="Thai name or detail"></td>
+            <td>
+              <select name="category" class="inp" style="height:34px">
+                <option value="">Uncategorised</option>
+                {% for c in categories %}
+                  <option value="{{ c.id }}" {% if p.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <select name="unit" class="inp unit-select" style="height:34px">
+                <option value="">Pieces</option>
+                {% for u in units %}
+                  <option value="{{ u.id }}" {% if p.unit_id == u.id %}selected{% endif %}>{{ u.name }}</option>
+                {% endfor %}
+                <option value="__new__">＋ Add new unit…</option>
+              </select>
+            </td>
+            <td><input type="number" step="0.01" name="price" value="{{ p.price }}" class="inp money"
+                       style="height:34px;text-align:right"></td>
+            <td><input type="number" step="0.01" name="cost" value="{{ p.cost }}" class="inp money"
+                       style="height:34px;text-align:right"></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8" class="empty">
+            <svg><use href="#i-box"/></svg>
+            No products to edit.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-
-    <div class="mb-3">
-      <strong>Product {{ paginator.count }} Items</strong>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save this page</button>
+      <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>
     </div>
-
-    <form method="post" id="bulkEditForm">
-      {% csrf_token %}
-      <div class="table-responsive">
-        <table class="table table-bordered align-middle">
-          <thead class="table-light">
-            <tr>
-              <th>Image</th>
-              <th>Barcode</th>
-              <th>Name</th>
-              <th>Product Description</th>
-              <th>Category</th>
-              <th>Unit</th>
-              <th class="text-end">Product price</th>
-              <th class="text-end">Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for p in products %}
-            <tr>
-              <input type="hidden" name="id" value="{{ p.id }}">
-              <td style="width:60px;">
-                {% if p.image_url %}
-                  <img src="{{ p.image_url }}" style="width:48px;height:48px;object-fit:cover;border-radius:4px;">
-                {% else %}
-                  <div style="width:48px;height:48px;background:#f5f7fa;border-radius:4px;"></div>
-                {% endif %}
-              </td>
-              <td><input type="text" name="barcode" value="{{ p.barcode }}" class="form-control form-control-sm"></td>
-              <td><input type="text" name="name" value="{{ p.name }}" class="form-control form-control-sm"></td>
-              <td><input type="text" name="description" value="{{ p.name_th }}" class="form-control form-control-sm" placeholder="Please fill product detail"></td>
-              <td>
-                <select name="category" class="form-select form-select-sm">
-                  <option value="">Uncategorised</option>
-                  {% for c in categories %}
-                    <option value="{{ c.id }}" {% if p.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-                  {% endfor %}
-                </select>
-              </td>
-              <td>
-                <select name="unit" class="form-select form-select-sm unit-select">
-                  <option value="">Unit</option>
-                  {% for u in units %}
-                    <option value="{{ u.id }}" {% if p.unit_id == u.id %}selected{% endif %}>{{ u.name }}</option>
-                  {% endfor %}
-                  <option value="__new__">➕ Add new unit…</option>
-                </select>
-              </td>
-              <td><input type="number" step="0.01" name="price" value="{{ p.price }}" class="form-control form-control-sm text-end"></td>
-              <td><input type="number" step="0.01" name="cost" value="{{ p.cost }}" class="form-control form-control-sm text-end"></td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="8" class="text-center text-muted py-4">No products to edit.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </form>
-
-    {% include "backoffice/_pagination.html" %}
-  </div>
+  </form>
+  {% include "backoffice/_pagination.html" %}
 </div>
 {% endblock %}
 

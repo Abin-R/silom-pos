@@ -1,255 +1,197 @@
 {% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Screen 11 — Settings.
 
-{% block title %}Shop — Bravepos{% endblock %}
+  Organisation-wide settings say so in the header. With several branches on
+  one account, the first question about any field is how far it reaches, so
+  each panel states its scope before its rows do: Business and Tax are
+  shop-wide, Receipt details belong to the selected branch alone.
+
+  The shared live payment account keeps its own tinted row rather than a
+  dialog shown once. It is a permanent fact about the wiring, and it should
+  be visible to whoever reads this page next.
+{% endcomment %}
+
+{% block title %}Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Organisation-wide, except where a panel says otherwise</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <span class="tag t-ok" style="height:34px;padding:0 13px">● Applies to every till</span>
+{% endblock %}
 
 {% block content %}
-<form method="post">
+<form method="post" id="settingsForm">
   {% csrf_token %}
 
-  <div class="card mb-4">
-    <div class="card-body p-4">
-      <div class="text-center mb-4">
-        <h4 class="mb-1">
-          {{ settings.shop_name }}
-          {% if branch_obj %} — {{ branch_obj.name }}{% endif %}
-        </h4>
-        <div class="text-muted small">Shop information management</div>
-        {% if not branch_obj %}
-        <div class="alert alert-warning mt-3 mb-0 py-2 small">
-          No branch selected — pick one from the filter bar above to edit
-          branch-level details (logo, tax ID, address, phone).
+  {% if payment_errors %}
+  <div class="banner b-red">
+    <svg><use href="#i-alert"/></svg>
+    <span><b>Nothing was saved — the payment keys don't match the mode.</b>
+      {% for err in payment_errors %}{{ err }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  <div class="cols c-2e" style="align-items:start">
+
+    {# ── Business ─────────────────────────────────────────────────────── #}
+    <div class="panel">
+      <div class="panel-h">Business <span class="sm">shop-wide</span></div>
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="f-shop">Shop name</label>
+          <input id="f-shop" type="text" name="shop_name" value="{{ settings.shop_name }}">
+          <span class="hint">Shown on the till, in this rail, and at the top of every export.</span>
         </div>
-        {% endif %}
-        <hr>
-      </div>
-
-      <div class="row g-4">
-        {# ─── Left column: Information ─── #}
-        <div class="col-md-6">
-          <h6 class="text-muted text-uppercase small fw-bold mb-3">Information</h6>
-
-          {# Logo block — per-branch #}
-          <div class="mb-3">
-            <label class="form-label">Logo</label>
-            <div class="d-flex flex-column align-items-center">
-              <div id="logoPreview"
-                   style="width:200px; height:200px; border:1px solid #dee2e6; border-radius:8px;
-                          background:#f5f7fa; display:flex; align-items:center; justify-content:center;
-                          overflow:hidden;">
-                {% if branch_obj.logo_url %}
-                  <img src="{{ branch_obj.logo_url }}" alt="{{ branch_obj.name }}"
-                       style="width:100%; height:100%; object-fit:contain;">
-                {% else %}
-                  <i class="bi bi-image text-muted fs-1"></i>
-                {% endif %}
-              </div>
-              <input type="hidden" name="logo_url" id="logoUrl" value="{{ branch_obj.logo_url }}">
-              <div class="d-flex align-items-center gap-2 mt-2 w-100">
-                <div class="input-group input-group-sm flex-grow-1">
-                  <input type="text" class="form-control form-control-sm" id="logoFileName"
-                         readonly placeholder="Selected File (File size no more than 2 MB.)">
-                  <label class="btn btn-outline-secondary btn-sm mb-0">
-                    Browse
-                    <input type="file" id="logoFile" accept="image/*" hidden>
-                  </label>
-                </div>
-              </div>
-              {% if branch_obj.logo_url %}
-              <button type="button" class="btn btn-link btn-sm text-danger mt-1" id="logoClear">
-                Remove logo
-              </button>
-              {% endif %}
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label"><span class="text-danger">*</span> Shop Name</label>
-            <input type="text" name="shop_name" required class="form-control"
-                   value="{{ settings.shop_name }}">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label"><span class="text-danger">*</span> Branch Name</label>
-            <input type="text" name="branch_name" required class="form-control"
-                   value="{{ branch_obj.name }}">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label"><span class="text-danger">*</span> Business Type</label>
-            <select name="business_type" class="form-select">
-              <option value="Restaurant" {% if settings.business_type == 'Restaurant' %}selected{% endif %}>Restaurant</option>
-              <option value="Cafe" {% if settings.business_type == 'Cafe' %}selected{% endif %}>Cafe</option>
-              <option value="Retail" {% if settings.business_type == 'Retail' %}selected{% endif %}>Retail</option>
-              <option value="Bakery" {% if settings.business_type == 'Bakery' %}selected{% endif %}>Bakery</option>
-              <option value="Bar" {% if settings.business_type == 'Bar' %}selected{% endif %}>Bar</option>
-              <option value="Other" {% if settings.business_type == 'Other' %}selected{% endif %}>Other</option>
-            </select>
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Company Name</label>
-            <input type="text" name="company_name" class="form-control"
-                   value="{{ settings.company_name }}"
-                   placeholder="e.g. บริษัท เบรฟ แบรนด์ จำกัด">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Tax ID</label>
-            <input type="text" name="tax_id" class="form-control"
-                   value="{{ branch_obj.tax_id }}">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Tax</label>
-            <div class="d-flex align-items-center gap-2">
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="tax_mode" id="taxExcl"
-                       value="exclusive" {% if settings.tax_mode == 'exclusive' %}checked{% endif %}>
-                <label class="form-check-label" for="taxExcl">Exclusive</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="tax_mode" id="taxIncl"
-                       value="inclusive" {% if settings.tax_mode == 'inclusive' %}checked{% endif %}>
-                <label class="form-check-label" for="taxIncl">Inclusive</label>
-              </div>
-              <div class="input-group input-group-sm" style="max-width: 140px;">
-                <input type="number" step="0.01" min="0" name="tax_percent"
-                       class="form-control" value="{{ settings.tax_percent }}">
-                <span class="input-group-text">%</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Service Charge</label>
-            <div class="input-group" style="max-width: 200px;">
-              <input type="number" step="0.01" min="0" name="service_charge"
-                     class="form-control" value="{{ settings.service_charge_percent }}">
-              <span class="input-group-text">%</span>
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Currency</label>
-            <select name="currency" class="form-select">
-              <option value="THB" {% if settings.currency == 'THB' %}selected{% endif %}>THB — Thai Baht</option>
-              <option value="USD" {% if settings.currency == 'USD' %}selected{% endif %}>USD — US Dollar</option>
-              <option value="EUR" {% if settings.currency == 'EUR' %}selected{% endif %}>EUR — Euro</option>
-              <option value="GBP" {% if settings.currency == 'GBP' %}selected{% endif %}>GBP — British Pound</option>
-              <option value="JPY" {% if settings.currency == 'JPY' %}selected{% endif %}>JPY — Japanese Yen</option>
-              <option value="SGD" {% if settings.currency == 'SGD' %}selected{% endif %}>SGD — Singapore Dollar</option>
-            </select>
-          </div>
+        <div class="field wide">
+          <label for="f-company">Legal name on receipts</label>
+          <input id="f-company" type="text" name="company_name" value="{{ settings.company_name }}">
+          <span class="hint">The registered company name, if it differs from the shop name.</span>
         </div>
-
-        {# ─── Right column: Hours + Address ─── #}
-        <div class="col-md-6">
-          <h6 class="text-muted text-uppercase small fw-bold mb-3">Open – Closed</h6>
-
-          <div class="alert alert-info py-2 small">
-            <i class="bi bi-info-circle"></i>
-            Changing the stores opening and closing hours will affect the calculation of bills
-            in the daily sales report. Please make the changes before processing the first bill
-            of the modified date.
-          </div>
-
-          <div class="row g-2 mb-4">
-            <div class="col-6">
-              <label class="form-label">Open</label>
-              <input type="time" name="open_time" class="form-control"
-                     value="{{ settings.open_time }}">
-            </div>
-            <div class="col-6">
-              <label class="form-label">Closed</label>
-              <input type="time" name="close_time" class="form-control"
-                     value="{{ settings.close_time }}">
-            </div>
-          </div>
-
-          <h6 class="text-muted text-uppercase small fw-bold mb-3">Address</h6>
-
-          <div class="mb-3">
-            <label class="form-label">Address Line 1</label>
-            <input type="text" name="address_line_1" class="form-control"
-                   value="{{ branch_obj.address_line_1 }}">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Address Line 2</label>
-            <input type="text" name="address_line_2" class="form-control"
-                   value="{{ branch_obj.address_line_2 }}">
-          </div>
-
-          <div class="mb-3">
-            <label class="form-label">Tel</label>
-            <input type="text" name="phone" class="form-control"
-                   value="{{ branch_obj.phone }}">
-          </div>
-
-          <h6 class="text-muted text-uppercase small fw-bold mb-2">Pin Shop's Location</h6>
-          <div class="alert alert-light border py-2 mb-2 small">
-            <i class="bi bi-info-circle text-primary"></i>
-            Store address for delivery and QR-Order service
-          </div>
-          <div class="alert alert-secondary py-3 text-center small mb-0">
-            The location has not been pinned yet
-          </div>
+        <div class="field">
+          <label for="f-type">Business type</label>
+          <input id="f-type" type="text" name="business_type" value="{{ settings.business_type }}">
+        </div>
+        <div class="field">
+          <label for="f-currency">Currency</label>
+          <input id="f-currency" type="text" name="currency" value="{{ settings.currency }}">
+        </div>
+        <div class="field">
+          <label for="f-open">Opens</label>
+          <input id="f-open" type="text" name="open_time" value="{{ settings.open_time }}">
+        </div>
+        <div class="field">
+          <label for="f-close">Closes</label>
+          <input id="f-close" type="text" name="close_time" value="{{ settings.close_time }}">
         </div>
       </div>
     </div>
 
-    {% include "backoffice/_payment_fields.html" with payment_scope='template' %}
+    {# ── Tax ──────────────────────────────────────────────────────────── #}
+    <div class="panel">
+      <div class="panel-h">Tax <span class="sm">shop-wide</span></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="f-taxpct">VAT rate</label>
+          <input id="f-taxpct" type="number" step="0.01" name="tax_percent" value="{{ settings.tax_percent }}">
+        </div>
+        <div class="field">
+          <label for="f-taxmode">How prices carry VAT</label>
+          <select id="f-taxmode" name="tax_mode">
+            <option value="inclusive" {% if settings.tax_mode == 'inclusive' %}selected{% endif %}>Included in the price</option>
+            <option value="exclusive" {% if settings.tax_mode != 'inclusive' %}selected{% endif %}>Added at the till</option>
+          </select>
+        </div>
+        <div class="field wide">
+          <label for="f-service">Service charge %</label>
+          <input id="f-service" type="number" step="0.01" name="service_charge" value="{{ settings.service_charge_percent }}">
+          <span class="hint">0 turns the service charge off entirely.</span>
+        </div>
+      </div>
+      <div class="srow" style="border-top:1px solid var(--line2)">
+        <span class="si" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-shield"/></svg></span>
+        <span class="sm">
+          <b>How the figures are derived</b>
+          <u>With VAT included, goods value is the total ÷ 1.{{ settings.tax_percent|floatformat:"0" }}
+            and output tax is the total × {{ settings.tax_percent|floatformat:"-2" }} ÷ 10{{ settings.tax_percent|floatformat:"0" }}.
+            Both formulas are printed on every export.</u>
+        </span>
+        <a class="btn btn-sm" href="{% url 'backoffice:report_tax' %}">Tax report</a>
+      </div>
+    </div>
 
-    <button type="submit" class="btn btn-success w-100 rounded-0 rounded-bottom">
-      <i class="bi bi-check2-circle"></i> Update data
-    </button>
+    {# ── Receipt details, per branch ──────────────────────────────────── #}
+    <div class="panel">
+      <div class="panel-h">
+        Receipt details
+        <span class="sm">{% if branch_obj %}{{ branch_obj.name }} only{% else %}no branch selected{% endif %}</span>
+      </div>
+      {% if branch_obj %}
+      <div class="form-grid">
+        <div class="field">
+          <label for="f-branch">Branch name</label>
+          <input id="f-branch" type="text" name="branch_name" value="{{ branch_obj.name }}">
+        </div>
+        <div class="field">
+          <label for="f-taxid">Tax ID</label>
+          <input id="f-taxid" type="text" name="tax_id" value="{{ branch_obj.tax_id }}">
+        </div>
+        <div class="field">
+          <label for="f-phone">Phone</label>
+          <input id="f-phone" type="text" name="phone" value="{{ branch_obj.phone }}">
+        </div>
+        <div class="field">
+          <label for="f-logo">Logo URL</label>
+          <input id="f-logo" type="text" name="logo_url" value="{{ branch_obj.logo_url }}">
+        </div>
+        <div class="field wide">
+          <label for="f-addr1">Address line 1</label>
+          <input id="f-addr1" type="text" name="address_line_1" value="{{ branch_obj.address_line_1 }}">
+        </div>
+        <div class="field wide">
+          <label for="f-addr2">Address line 2</label>
+          <input id="f-addr2" type="text" name="address_line_2" value="{{ branch_obj.address_line_2 }}">
+          <span class="hint">These two lines print on this branch's receipts and nowhere else. Switch branch in the header to edit another.</span>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">
+        <svg><use href="#i-store"/></svg>
+        No branch yet — receipt details belong to a branch.
+        <div style="margin-top:16px"><a class="btn btn-blue" href="{% url 'backoffice:branch_new' %}">Add a branch</a></div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ── Access & data ────────────────────────────────────────────────── #}
+    <div class="panel">
+      <div class="panel-h">Access &amp; data</div>
+      <div style="padding:4px 0">
+        <div class="srow">
+          <span class="si" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-users"/></svg></span>
+          <span class="sm"><b>Backoffice accounts</b>
+            <u>{{ nav_users }} web login{{ nav_users|pluralize }} — separate from till PINs</u></span>
+          <a class="btn btn-sm" href="{% url 'backoffice:user_list' %}">Manage</a>
+        </div>
+        <div class="srow">
+          <span class="si" style="background:var(--amber-soft);color:var(--amber)"><svg><use href="#i-shield"/></svg></span>
+          <span class="sm"><b>Catalogue edits need admin</b>
+            <u>Cashiers sell and refund; they cannot change prices</u></span>
+          <span class="tog on" title="Enforced in code, not configurable"><i></i></span>
+        </div>
+        <div class="srow">
+          <span class="si" style="background:#F1F4F8;color:var(--mut)"><svg><use href="#i-log"/></svg></span>
+          <span class="sm"><b>Audit log</b>
+            <u>Every price change, void and sign-in, with the IP it came from</u></span>
+          <a class="btn btn-sm" href="{% url 'backoffice:audit_log' %}">View</a>
+        </div>
+        <div class="srow notice">
+          <span class="si" style="background:#F6E2B8;color:var(--amber-d)"><svg><use href="#i-alert"/></svg></span>
+          <span class="sm"><b>One live payment account for every branch</b>
+            <u>A test sale on any terminal charges the shop for real. Set a branch's lane on its own page.</u></span>
+          <span class="tag t-low">Notice</span>
+        </div>
+        <div class="srow">
+          <span class="si" style="background:var(--green-soft);color:var(--green)"><svg><use href="#i-dl"/></svg></span>
+          <span class="sm"><b>Export everything</b>
+            <u>Full CSV of bills, products and tax for the current window</u></span>
+          <a class="btn btn-sm" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">Download</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% include "backoffice/_payment_fields.html" with payment_scope='template' %}
+
+  <div class="panel" style="margin-top:16px">
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save settings</button>
+      <span style="font-size:12.5px;color:var(--mut)">
+        Every till picks these up within seconds of saving.</span>
+    </div>
   </div>
 </form>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-  // File-to-data-URL: avoids needing MEDIA_ROOT / file storage. The image
-  // lives as a data: URL in the hidden `logo_url` field and persists with
-  // the rest of the form — matches the branch_form.html flow.
-  (function () {
-    const fileInput = document.getElementById('logoFile');
-    const urlInput  = document.getElementById('logoUrl');
-    const preview   = document.getElementById('logoPreview');
-    const nameInput = document.getElementById('logoFileName');
-    const clearBtn  = document.getElementById('logoClear');
-
-    function renderPreview(src) {
-      preview.innerHTML = src
-        ? `<img src="${src}" style="width:100%;height:100%;object-fit:contain;">`
-        : '<i class="bi bi-image text-muted fs-1"></i>';
-    }
-
-    if (fileInput) {
-      fileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        if (file.size > 2 * 1024 * 1024) {
-          nameInput.value = `Too large (${Math.round(file.size/1024)} KB) — keep under 2 MB`;
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          urlInput.value = ev.target.result;
-          renderPreview(ev.target.result);
-          nameInput.value = `${file.name} (${Math.round(file.size/1024)} KB)`;
-        };
-        reader.readAsDataURL(file);
-      });
-    }
-
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        urlInput.value = '';
-        renderPreview('');
-        nameInput.value = '';
-      });
-    }
-  })();
-</script>
 {% endblock %}

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import URLPattern, URLResolver, reverse
 from django.utils import timezone
 
@@ -147,3 +147,34 @@ class BackofficePageSmokeTests(TestCase):
         )
         # …,Sub Total,Discount,Total
         self.assertTrue(row.endswith("160.00,110.00,50.00"), row)
+
+
+@override_settings(DEBUG=False)
+class BackofficeStylesheetTests(TestCase):
+    """The design system's stylesheet must survive a production deploy.
+
+    Production runs `DJANGO_DEBUG=0`, where `django.contrib.staticfiles` stops
+    serving files, and this box has no STATIC_ROOT and no nginx
+    `location /static/`. A `{% static %}` link would 404 there and every
+    backoffice page would render unstyled — a failure no page-status smoke
+    test catches, because an unstyled page is still a 200.
+
+    So the stylesheet is served by a view, and these tests pin that: it must
+    be reachable with DEBUG off, reachable signed out (the login page needs
+    it), and actually linked by a page.
+    """
+
+    def test_stylesheet_is_served_with_debug_off(self):
+        response = self.client.get(reverse("backoffice:app_css"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/css")
+        self.assertIn(b"--navy", response.content, "not the design-system CSS")
+
+    def test_stylesheet_does_not_need_a_login(self):
+        """The sign-in page loads it before anyone is authenticated."""
+        response = self.client.get(reverse("backoffice:app_css"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_login_page_links_the_stylesheet(self):
+        page = self.client.get(reverse("backoffice:login"))
+        self.assertContains(page, reverse("backoffice:app_css"))

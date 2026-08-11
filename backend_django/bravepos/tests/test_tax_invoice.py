@@ -198,6 +198,41 @@ class TaxInvoiceTests(TestCase):
         self.assertIn(res.status_code, (401, 403))
 
 
+class ReceiptQrLandingTests(TestCase):
+    """The QR on every printed slip lands here.  It has to keep offering both
+    choices: a customer who only realises they need a tax invoice after leaving
+    has no cashier to ask, and this page is their only route in."""
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch()
+        self.order = Order.objects.create(
+            branch=self.branch, order_number='PS001019681', total=Decimal('650.00'),
+        )
+
+    def test_the_scan_lands_on_the_menu_not_a_redirect(self):
+        res = self.client.get(f'/receipt/{self.order.order_number}/')
+        self.assertEqual(res.status_code, 200)
+
+    def test_both_choices_are_offered(self):
+        res = self.client.get(f'/receipt/{self.order.order_number}/')
+        body = res.content.decode()
+        self.assertIn(f'/receipt/{self.order.order_number}/tax-invoice/', body)
+        self.assertIn('formaloo.me', body)
+
+    def test_the_review_link_carries_the_order(self):
+        # Without ``oid`` a submitted review can't be tied back to its sale.
+        res = self.client.get(f'/receipt/{self.order.order_number}/')
+        self.assertIn(f'oid={self.order.order_number}', res.content.decode())
+
+    def test_it_needs_no_login(self):
+        # Root-level and unauthenticated on purpose — the scanner is a customer
+        # with no session.  A login redirect here would break every printed QR.
+        res = self.client.get(f'/receipt/{self.order.order_number}/')
+        self.assertNotIn('login', res.get('Location', '').lower())
+        self.assertEqual(res.status_code, 200)
+
+
 class CustomerTaxIdentityTests(TestCase):
     """The buyer's details are also remembered on the Customer, so the next
     invoice for the same company is one tap away."""

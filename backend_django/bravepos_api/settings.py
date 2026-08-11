@@ -14,14 +14,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-dev-only-CHANGE-IN-PRODUCTION',
+)
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
+
+
 # ── Sentry (error + performance monitoring) ─────────────────────────────────
-# Only initialises when SENTRY_DSN is set, so local dev stays quiet.  The
-# Django integration is auto-enabled, capturing unhandled 500s and request
-# transactions (performance).  Set SENTRY_DSN + SENTRY_ENV in the VM's .env.
+# Needs a SENTRY_DSN *and* DEBUG off.  The DEBUG gate is the important half:
+# a dev machine that happens to have the DSN in its .env (to test reporting,
+# or just left over) would otherwise ship every local traceback and drown the
+# real issues.  The server runs DJANGO_DEBUG=0, so production still reports.
+# To check reporting from your machine, run once with DJANGO_DEBUG=0 and set
+# SENTRY_ENV to something other than `production` so it stays filterable.
 SENTRY_DSN = os.environ.get('SENTRY_DSN')
-if SENTRY_DSN:
+if SENTRY_DSN and not DEBUG:
     import sentry_sdk
     from django.core.exceptions import DisallowedHost
+
+    from .sentry_filters import before_send as _sentry_before_send
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,
@@ -35,15 +48,16 @@ if SENTRY_DSN:
         # rejects the Host header, Sentry pages us about it.  Nothing we can
         # fix in code — the request never belonged to us.
         ignore_errors=[DisallowedHost],
+        # One broken deploy used to mean 1,041 copies of the same traceback,
+        # because the tablets poll and every poll re-raised it.  This collapses
+        # a storm onto a log scale (~11 events for that same outage) without
+        # muting a fault that only fires once.  See sentry_filters.
+        before_send=_sentry_before_send,
+        # Tie every event to the commit actually running, so "is this fixed
+        # yet?" is answerable from the issue page.  The deploy script exports
+        # it; falling back to unset is fine (Sentry just omits the field).
+        release=os.environ.get('SENTRY_RELEASE') or None,
     )
-
-
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-dev-only-CHANGE-IN-PRODUCTION',
-)
-DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
 
 
 INSTALLED_APPS = [
@@ -98,6 +112,8 @@ TEMPLATES = [
                 # Required by login_required / template `user`/`messages`
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                # Shop name + the counts the backoffice rail carries.
+                'backoffice.context_processors.nav',
             ],
         },
     },
@@ -119,7 +135,19 @@ DATABASES = {
         'HOST': os.environ['DATABASE_HOST'],
         'PORT': '5432',
         'CONN_MAX_AGE': 60,
-        'OPTIONS': {'sslmode': 'require'},
+        # Persistent connections get killed out from under us — Postgres
+        # restarts, and the network path between here and the DB drops idle
+        # sockets.  Without this, the next request to reuse a dead connection
+        # raises `SSL SYSCALL error: EOF detected` instead of reconnecting.
+        # Django 4.1+ pings the connection first and transparently reopens it.
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'sslmode': 'require',
+            # Default is no timeout: if the DB host stops answering, gunicorn
+            # workers block until the 120s request timeout and the whole POS
+            # stalls.  Fail in 10s so the tablet gets an error it can retry.
+            'connect_timeout': 10,
+        },
     }
 }
 
@@ -149,6 +177,10 @@ REST_FRAMEWORK = {
 # we'll restrict to the actual web origin once that's stable.
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = False
+# Custom response headers are invisible to browser JS unless listed here, and
+# the web build is cross-origin (8081 -> 8000). Without this the Orders pager
+# cannot read the total and would show no page count.
+CORS_EXPOSE_HEADERS = ['X-Total-Count']
 
 
 # ── Misc ────────────────────────────────────────────────────────────────────

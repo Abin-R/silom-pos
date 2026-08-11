@@ -26,14 +26,14 @@ from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
     Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
-    StockMovement, StockDocument, StockDocumentItem,
+    StockMovement, StockDocument, StockDocumentItem, StockOutReason,
 )
 from .serializers import (
     BranchSerializer,
     CategorySerializer, CustomerSerializer, DrawerCategorySerializer,
     OrderSerializer, ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
-    StockDocumentSerializer,
+    StockDocumentSerializer, StockOutReasonSerializer,
 )
 
 logger = logging.getLogger("bravepos")
@@ -470,6 +470,24 @@ class DrawerCategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
         return qs
 
 
+class StockOutReasonViewSet(BranchScopedMixin, viewsets.ModelViewSet):
+    """Stock-out reason codes, branch-scoped + admin-editable.
+
+    The Stock-Out document form passes ``?active=true`` so a deactivated
+    reason disappears from the picker without breaking the documents that
+    already recorded it — those snapshot the name onto ``StockDocument.reason``.
+    """
+    queryset = StockOutReason.objects.all()
+    serializer_class = StockOutReasonSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        active = self.request.query_params.get('active')
+        if active in ('true', 'false'):
+            qs = qs.filter(active=(active == 'true'))
+        return qs
+
+
 class BranchViewSet(viewsets.ModelViewSet):
     """Branches (physical shop locations).
 
@@ -652,19 +670,100 @@ def settings_view(request):
 
 
 # ─── Orders ──────────────────────────────────────────────────────────────────
+ORDERS_MAX_LIMIT = 500
+
+
+def _parse_bound(raw):
+    """Parse an ISO-8601 ``from``/``to`` query bound into an aware datetime.
+
+    The client sends the *device's* local day boundary as a full ISO string
+    (with offset), because "today" on the till has to mean today on the wall
+    clock, not in UTC.  A naive value is read in the project timezone.
+    Returns None for anything unparseable so a typo widens the window instead
+    of 500-ing the till.
+    """
+    if not raw:
+        return None
+    raw = raw.strip().replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        # A "+07:00" offset that reached us unencoded arrives as a space.
+        # Restore it rather than silently widening the window to every order
+        # the branch has.  Re-raises if that wasn't the problem.
+        parsed = datetime.fromisoformat(raw.replace(' ', '+'))
+    if djtz.is_naive(parsed):
+        parsed = djtz.make_aware(parsed)
+    return parsed
+
+
 @api_view(['GET', 'POST'])
 @require_session
 def orders_list_create(request):
     branch = request.session_obj.branch
     if request.method == 'GET':
-        qs = Order.objects.filter(branch=branch)
+        # prefetch the lines: the serializer nests them, so without this a
+        # 500-order page issued 501 queries and the Transactions screen sat on
+        # a spinner for seconds.
+        # Explicit ordering: Order has no Meta.ordering, so an unordered
+        # slice is undefined in Postgres — pages could repeat or skip rows,
+        # and even the un-paged `[:limit]` was not guaranteed to be the newest.
+        # id breaks ties so two bills in the same second can't swap places.
+        qs = (
+            Order.objects.filter(branch=branch)
+            .select_related('branch')
+            .prefetch_related('items')
+            .order_by('-created_at', '-id')
+        )
         source = request.query_params.get('source')
         status_ = request.query_params.get('status')
         if source and source != 'all':
             qs = qs.filter(source=source)
         if status_:
             qs = qs.filter(status=status_)
-        return Response(OrderSerializer(qs[:500], many=True).data)
+
+        # Date window — Transactions asks only for the bucket it is showing
+        # (today / yesterday / last 7 days) rather than pulling every order the
+        # branch has ever rung up.
+        try:
+            created_from = _parse_bound(request.query_params.get('from'))
+            created_to = _parse_bound(request.query_params.get('to'))
+        except ValueError:
+            created_from = created_to = None
+        if created_from:
+            qs = qs.filter(created_at__gte=created_from)
+        if created_to:
+            qs = qs.filter(created_at__lt=created_to)
+
+        # Order-number search.  This has to happen server-side: the client
+        # only holds one page, so filtering there would quietly search 50 rows
+        # and report "no matching orders" for a bill sitting on page 2.
+        q = (request.query_params.get('q') or '').strip()
+        if q:
+            qs = qs.filter(order_number__icontains=q)
+
+        try:
+            limit = int(request.query_params.get('limit', ORDERS_MAX_LIMIT))
+        except (TypeError, ValueError):
+            limit = ORDERS_MAX_LIMIT
+        limit = max(1, min(limit, ORDERS_MAX_LIMIT))
+
+        # Paging.  Without an offset the client could only ever see the newest
+        # `limit` rows and had no way to reach the rest — "All" silently
+        # truncated at ORDERS_MAX_LIMIT with nothing on screen to say so.
+        try:
+            offset = int(request.query_params.get('offset', 0))
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
+
+        # The total is sent as a header rather than wrapping the body, so
+        # existing callers that expect a bare list keep working.
+        total = qs.count()
+        page = qs[offset:offset + limit]
+        response = Response(OrderSerializer(page, many=True).data)
+        response['X-Total-Count'] = str(total)
+        return response
 
     # POST
     payload = dict(request.data)
@@ -713,6 +812,10 @@ def orders_list_create(request):
         delivery_provider=payload.get('delivery_provider', '') or '',
         delivery_status=payload.get('delivery_status', '') or '',
     )
+    # A cash sale just changed what is in the drawer.  Update the shift's cached
+    # totals now so any reader — the Cash Drawer screen, the backoffice
+    # unreconciled-cash tile — sees the sale without waiting for the round to close.
+    refresh_shift_cash(order.shift)
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -804,6 +907,9 @@ def order_update_status(request, order_id):
         order.voided_at = None
         update_fields += ['voided_by', 'voided_at']
     order.save(update_fields=update_fields)
+    # Cancelling (or un-cancelling) a cash bill moves the drawer, so the shift's
+    # cash totals have to be recomputed against the new status.
+    refresh_shift_cash(order.shift)
     return Response(OrderSerializer(order).data)
 
 
@@ -892,6 +998,10 @@ def shift_current(request):
         # so the wire shape is the JSON literal `null`.
         from django.http import JsonResponse
         return JsonResponse(None, safe=False)
+    # Recompute before serialising.  The stored totals are a cache, and this is
+    # the read the Cash Drawer screen polls, so it must never hand back a figure
+    # that predates the last sale.
+    refresh_shift_cash(s)
     return Response(ShiftSerializer(s).data)
 
 
@@ -932,6 +1042,8 @@ def shift_movement(request):
     else:
         s.total_paid_out = (s.total_paid_out or 0) + amount
     s.save(update_fields=['total_paid_in', 'total_paid_out'])
+    # Paid in/out moves the drawer, so the expected figure has to follow it.
+    refresh_shift_cash(s)
     return Response(ShiftMovementSerializer(mv).data, status=201)
 
 
@@ -942,27 +1054,59 @@ def shift_close(request):
     s = Shift.objects.filter(branch=branch, status='open').first()
     if not s:
         return Response({'detail': 'No open shift'}, status=400)
-    from django.db.models import Sum
-    # Same order set the summary slip uses — prefers the stamped shift FK so a
-    # sale confirmed just after the round closed still counts against it.
-    cash_total = (
-        shift_orders(s)
-        .filter(payment_method__in=CASH_METHODS)
-        .aggregate(t=Sum('total'))['t'] or Decimal('0')
-    )
-    expected = (s.start_cash or 0) + cash_total + (s.total_paid_in or 0) - (s.total_paid_out or 0)
     s.status = 'closed'
     s.closed_at = djtz.now()
     s.closed_by = request.data.get('closed_by', 'Admin') or 'Admin'
     s.actual_in_drawer = Decimal(str(request.data.get('actual_in_drawer', 0) or 0))
-    s.total_sales_cash = cash_total
-    s.expected_in_drawer = expected
     s.save()
+    # Stamp the final cash figures *after* closed_at exists, so the window
+    # fallback in ``shift_orders`` is bounded by the real close time.
+    refresh_shift_cash(s)
     return Response({**ShiftSerializer(s).data, 'summary': _shift_summary(s)})
 
 
 # Cash-equivalent payment methods — money that actually lands in the drawer.
 CASH_METHODS = ['Cash', 'Easy Pay']
+
+
+def shift_cash_sales(shift):
+    """Cash that this round's sales put in the drawer.
+
+    Excludes cancelled bills — a voided cash sale is money handed back, so
+    counting it would overstate the drawer.  This is the same order set the
+    printed summary's ``cash_sales`` line uses; they must agree or the slip
+    doesn't add up.
+    """
+    from django.db.models import Sum
+    return (
+        shift_orders(shift)
+        .exclude(status='cancel')
+        .filter(payment_method__in=CASH_METHODS)
+        .aggregate(t=Sum('total'))['t'] or Decimal('0')
+    )
+
+
+def refresh_shift_cash(shift):
+    """Recompute and persist ``total_sales_cash`` / ``expected_in_drawer``.
+
+    Both columns are a *cache* of an aggregate over orders and movements.  They
+    used to be written only by ``shift_close``, so for the whole life of an open
+    round they read back as their 0 defaults: the Cash Drawer screen showed
+    "Total Sales (cash) 0.00" no matter how many bills were rung up, and the
+    backoffice's unreconciled-cash figure was always ฿0.  Call this from every
+    path that moves drawer cash so the stored numbers stay true between opens
+    and closes.
+    """
+    if shift is None:
+        return None
+    cash_total = shift_cash_sales(shift)
+    shift.total_sales_cash = cash_total
+    shift.expected_in_drawer = (
+        (shift.start_cash or 0) + cash_total
+        + (shift.total_paid_in or 0) - (shift.total_paid_out or 0)
+    )
+    shift.save(update_fields=['total_sales_cash', 'expected_in_drawer'])
+    return shift
 
 
 def shift_orders(shift):
@@ -1364,6 +1508,9 @@ def stock_documents(request):
             ref_no=payload.get('ref_no', '') or '',
             vendor=payload.get('vendor', '') or '',
             receiver=payload.get('receiver', '') or '',
+            # Stock-out only.  Snapshotted as text, not an FK, so renaming or
+            # deleting the reason later can't rewrite a saved document.
+            reason=(payload.get('reason', '') or '') if doc_type == 'out' else '',
             note=payload.get('note', '') or '',
             tax_included=bool(payload.get('tax_included', False)),
             avg_cost=bool(payload.get('avg_cost', False)),
@@ -1412,7 +1559,10 @@ def stock_documents(request):
                     product_name=product.name,
                     type=doc_type,
                     qty=int(qty),
-                    note=doc.note or doc.document_name,
+                    # Reason first for a stock-out: it is now the structured
+                    # field, and the movement ledger is what the Inventory
+                    # screen shows when you tap a product's history.
+                    note=doc.reason or doc.note or doc.document_name,
                     document_no=doc_no,
                 )
 

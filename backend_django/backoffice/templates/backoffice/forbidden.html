@@ -1,20 +1,26 @@
 {% extends "backoffice/base.html" %}
+{% comment %}
+  Named the two pages it guards rather than saying "forbidden": someone who
+  lands here needs to know what to ask for, not that they were refused.
+{% endcomment %}
 
-{% block title %}Not permitted — Bravepos{% endblock %}
+{% block title %}Admins only{% endblock %}
+{% block page_title %}Admins only{% endblock %}
 
 {% block content %}
-<div class="card">
-  <div class="card-body text-center py-5">
-    <i class="bi bi-shield-lock text-secondary" style="font-size:3rem;"></i>
-    <h4 class="mt-3 mb-2">Admins only</h4>
-    <p class="text-muted mb-4">
-      User management and the audit log are limited to accounts with the
-      <strong>Admin</strong> role. You're signed in as
-      <strong>{{ user.get_username }}</strong>.
-    </p>
-    <a class="btn btn-outline-secondary" href="{% url 'backoffice:dashboard' %}">
-      <i class="bi bi-arrow-left"></i> Back to dashboard
-    </a>
+<div class="panel" style="max-width:560px">
+  <div class="empty" style="padding:48px 32px">
+    <svg><use href="#i-shield"/></svg>
+    <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
+      This page needs an admin account</b>
+    <div style="line-height:1.6">
+      User management and the audit log are limited to accounts with the Admin role.
+      You are signed in as <b style="color:var(--txt)">{{ user.get_username }}</b>.
+    </div>
+    <div style="margin-top:20px">
+      <a class="btn btn-blue" href="{% url 'backoffice:dashboard' %}">
+        <svg><use href="#i-back"/></svg> Back to the dashboard</a>
+    </div>
   </div>
 </div>
 {% endblock %}

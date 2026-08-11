@@ -29,6 +29,7 @@ import {
   parseE164,
   validatePhone,
 } from '../lib/phone';
+import { t as tr, useT } from "../lib/i18n";
 
 type Props = {
   value: string;
@@ -46,6 +47,7 @@ export default function PhoneInput({
   defaultCountryCode,
   testID,
 }: Props) {
+  useT(); // re-render this screen when the language changes
   const initial = useMemo(() => {
     if (value) return parseE164(value);
     const c =
@@ -111,7 +113,7 @@ export default function PhoneInput({
           onPress={() => setShowPicker(false)}
         >
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Choose Country</Text>
+            <Text style={styles.modalTitle}>{tr("common.choose_country")}</Text>
             <FlatList
               data={COUNTRIES}
               keyExtractor={(c) => c.code}

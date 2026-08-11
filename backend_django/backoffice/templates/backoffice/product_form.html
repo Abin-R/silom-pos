@@ -1,284 +1,237 @@
 {% extends "backoffice/base.html" %}
-{% load humanize %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Add / edit a product.
 
-{% block title %}
-  {% if mode == 'new' %}Add Product{% else %}{{ product.name }}{% endif %} — Brave POS
+  Information is the only tab that persists anything today. The other four
+  are kept — they are where those features will land, and removing them would
+  lose the map — but each says plainly that it is not wired up yet rather
+  than presenting controls that quietly do nothing.
+{% endcomment %}
+
+{% block title %}{% if mode == 'new' %}Add product{% else %}{{ product.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add product{% else %}{{ product.name }}{% endif %}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">
+    {% if mode == 'new' %}New product{% else %}Product{% endif %}{% if branch %} · {{ branch.name }}{% endif %}
+    · reaches every till within seconds of saving
+  </div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to catalogue</a>
+  <button type="submit" form="productForm" class="btn btn-blue">
+    <svg><use href="#i-check"/></svg> Save</button>
 {% endblock %}
 
 {% block content %}
-<div class="row g-3">
-  {# Left sidebar — section tabs + thumbnail #}
-  <div class="col-md-3">
-    <div class="d-flex gap-2 mb-3">
-      <a class="btn btn-outline-secondary btn-sm" href="{% url 'backoffice:product_list' %}?{{ qs }}">
-        <i class="bi bi-arrow-left"></i> Back
-      </a>
-      <button type="button" class="btn btn-light btn-sm flex-grow-1" disabled>
-        {{ branch.name|default:"—" }}
-      </button>
-    </div>
+<div class="row" style="align-items:flex-start">
 
+  {# ── Tabs + thumbnail ─────────────────────────────────────────────── #}
+  <div style="width:220px;flex:none;display:flex;flex-direction:column;gap:12px">
     {% if mode == 'edit' %}
-    <div class="card mb-3">
-      <div class="card-body text-center p-3">
-        {% if product.image_url %}
-          <img src="{{ product.image_url }}" style="max-width:100%; max-height:120px; object-fit:contain;">
-        {% else %}
-          <div style="height:120px; background:#f5f7fa; display:flex;align-items:center;justify-content:center;">
-            <i class="bi bi-image text-muted fs-1"></i>
-          </div>
-        {% endif %}
-        <button type="button" class="btn btn-sm btn-outline-danger mt-2" disabled>
-          <i class="bi bi-trash"></i>
-        </button>
-      </div>
+    <div class="panel" style="padding:14px;text-align:center">
+      {% if product.image_url %}
+        <img src="{{ product.image_url }}" alt="" style="max-width:100%;max-height:130px;object-fit:contain;border-radius:10px">
+      {% else %}
+        <div style="height:120px;background:var(--sunk);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--mut2);font-size:30px">
+          {{ product.name|initial }}</div>
+      {% endif %}
     </div>
     {% endif %}
 
-    <div class="list-group" id="productTabs">
-      <button type="button" class="list-group-item list-group-item-action active" data-panel="info">
-        <i class="bi bi-card-text"></i> Information
-      </button>
-      <button type="button" class="list-group-item list-group-item-action" data-panel="addon">
-        <i class="bi bi-star"></i> Add-on Category
-      </button>
-      <button type="button" class="list-group-item list-group-item-action" data-panel="packaging">
-        <i class="bi bi-tag"></i> Other packaging sizes
-      </button>
-      <button type="button" class="list-group-item list-group-item-action" data-panel="channels">
-        <i class="bi bi-shop-window"></i> Sales Channels
-      </button>
-      <button type="button" class="list-group-item list-group-item-action" data-panel="prices">
-        <i class="bi bi-currency-dollar"></i> Other Prices
-      </button>
+    <div style="display:flex;flex-direction:column;gap:2px" id="productTabs">
+      <button type="button" class="nv on" style="color:var(--txt2);border:0;background:var(--blue-soft);width:100%;text-align:left" data-panel="info">
+        <svg style="stroke:var(--blue)"><use href="#i-orders"/></svg>Information</button>
+      <button type="button" class="nv" style="color:var(--txt2);border:0;background:transparent;width:100%;text-align:left" data-panel="addon">
+        <svg style="stroke:var(--mut2)"><use href="#i-plus"/></svg>Add-ons</button>
+      <button type="button" class="nv" style="color:var(--txt2);border:0;background:transparent;width:100%;text-align:left" data-panel="packaging">
+        <svg style="stroke:var(--mut2)"><use href="#i-box"/></svg>Pack sizes</button>
+      <button type="button" class="nv" style="color:var(--txt2);border:0;background:transparent;width:100%;text-align:left" data-panel="channels">
+        <svg style="stroke:var(--mut2)"><use href="#i-store"/></svg>Sales channels</button>
+      <button type="button" class="nv" style="color:var(--txt2);border:0;background:transparent;width:100%;text-align:left" data-panel="prices">
+        <svg style="stroke:var(--mut2)"><use href="#i-cash"/></svg>Other prices</button>
     </div>
   </div>
 
-  {# Right side — tab panels #}
-  <div class="col-md-9">
+  {# ── Panels ───────────────────────────────────────────────────────── #}
+  <div style="flex:1;min-width:0">
 
-    {# ── Information ── #}
     <div class="tab-panel" data-panel="info">
-    <form method="post">
+    <form method="post" id="productForm">
       {% csrf_token %}
-      <div class="card">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="mb-0">Information</h5>
-            <button type="submit" class="btn btn-success">
-              <i class="bi bi-check2"></i> Save
-            </button>
+      <div class="panel">
+        <div class="panel-h">Information</div>
+        <div class="form-grid">
+          <div class="field wide">
+            <label for="imgFile">Photo</label>
+            <input id="imgFile" type="file" accept="image/*" class="inp" style="padding:8px 12px">
+            <input type="hidden" name="image_url" id="imgUrl" value="{{ product.image_url }}">
+            <span class="hint">Resized to 512px in the browser before it is sent — a phone photo would otherwise be several megabytes.</span>
+            <img id="imgPreview" src="{{ product.image_url }}" alt=""
+                 style="max-height:96px;object-fit:contain;border-radius:10px;{% if not product.image_url %}display:none{% endif %}">
           </div>
 
-          <div class="row g-3">
-            {# Product image — browse / upload a local file (replaces URL field) #}
-            <div class="col-md-4 text-md-end pt-2 text-muted">Product image</div>
-            <div class="col-md-8">
-              <input type="file" accept="image/*" id="imgFile" class="form-control">
-              <input type="hidden" name="image_url" id="imgUrl" value="{{ product.image_url }}">
-              <div class="mt-2">
-                <img id="imgPreview" src="{{ product.image_url }}" alt=""
-                     style="max-height:90px; object-fit:contain; {% if not product.image_url %}display:none;{% endif %}">
-              </div>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted"><span class="text-danger">*</span> Product Name</div>
-            <div class="col-md-8">
-              <input type="text" name="name" required class="form-control"
-                     placeholder="Enter product name" value="{{ product.name }}">
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted"><span class="text-danger">*</span> Product price</div>
-            <div class="col-md-8">
-              <div class="input-group">
-                <input type="number" step="0.01" name="price" required class="form-control"
-                       value="{{ product.price|default:'0' }}">
-                <span class="input-group-text text-success"><i class="bi bi-check-lg"></i></span>
-              </div>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted">Cost</div>
-            <div class="col-md-8">
-              <div class="input-group">
-                <input type="number" step="0.01" name="cost" class="form-control"
-                       value="{{ product.cost|default:'0' }}">
-                <span class="input-group-text text-success"><i class="bi bi-check-lg"></i></span>
-              </div>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted">Barcode</div>
-            <div class="col-md-8">
-              <input type="text" name="barcode" class="form-control" placeholder="Barcode" value="{{ product.barcode }}">
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted"><span class="text-danger">*</span> Category</div>
-            <div class="col-md-8">
-              <select name="category" class="form-select">
-                <option value="">Category</option>
-                {% for c in categories %}
-                  <option value="{{ c.id }}" {% if product.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted"><span class="text-danger">*</span> Unit</div>
-            <div class="col-md-8">
-              <select name="unit" class="form-select unit-select">
-                <option value="">Please enter a product unit</option>
-                {% for u in units %}
-                  <option value="{{ u.id }}" {% if product.unit_id == u.id or not product.unit_id and u.name == 'ชิ้น' %}selected{% endif %}>{{ u.name }}</option>
-                {% endfor %}
-                <option value="__new__">➕ Add new unit…</option>
-              </select>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted">Product Description</div>
-            <div class="col-md-8">
-              <textarea name="name_th" id="descBox" maxlength="5000" class="form-control" rows="3"
-                        placeholder="Please fill product detail">{{ product.name_th }}</textarea>
-              <div class="form-text" id="descCount">(0/5000)</div>
-            </div>
-
-            {# Option toggles — two-column grid, matches SilomPOS #}
-            <div class="col-md-4 d-none d-md-block"></div>
-            <div class="col-md-8">
-              <div class="row g-2">
-                <div class="col-sm-6">
-                  <div class="form-check">
-                    <input type="hidden" name="tax_type" value="N">
-                    <input type="checkbox" class="form-check-input" id="taxIncl" name="tax_type" value="V"
-                           {% if product.tax_type == 'V' %}checked{% endif %}>
-                    <label class="form-check-label" for="taxIncl">Total (incl-Tax)</label>
-                  </div>
-                </div>
-                <div class="col-sm-6">
-                  <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="favorite" name="is_favorite" value="1"
-                           {% if product.is_favorite %}checked{% endif %}>
-                    <label class="form-check-label" for="favorite">Favorite</label>
-                  </div>
-                </div>
-                <div class="col-sm-6">
-                  <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="serviceCharge" name="service_charge" value="1">
-                    <label class="form-check-label" for="serviceCharge">Service Charge</label>
-                  </div>
-                </div>
-                <div class="col-sm-6">
-                  <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="showOnPos" name="show_on_pos" value="1" checked>
-                    <label class="form-check-label" for="showOnPos">Show on POS</label>
-                  </div>
-                </div>
-                <div class="col-sm-6">
-                  <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="negotiatePrice" name="negotiate_price" value="1">
-                    <label class="form-check-label" for="negotiatePrice">Negotiate Price</label>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="col-md-4 text-md-end pt-2 text-muted"><span class="text-danger">*</span> Product Type</div>
-            <div class="col-md-8">
-              <select name="product_type" class="form-select">
-                <option value="P" {% if product.product_type == 'P' %}selected{% endif %}>General Product</option>
-                <option value="BOM" {% if product.product_type == 'BOM' %}selected{% endif %}>Bill of Meterial</option>
-                <option value="SER" {% if product.product_type == 'SER' %}selected{% endif %}>Serial Product</option>
-                <option value="S" {% if product.product_type == 'S' %}selected{% endif %}>Service (non-stock)</option>
-              </select>
-            </div>
-
-            <input type="hidden" name="sku" value="{{ product.sku }}">
-            <input type="hidden" name="stock" value="{{ product.stock|default:'0' }}">
+          <div class="field">
+            <label for="f-name">Product name</label>
+            <input id="f-name" type="text" name="name" required value="{{ product.name }}"
+                   placeholder="What the cashier taps">
           </div>
+          <div class="field">
+            <label for="f-cat">Category</label>
+            <select id="f-cat" name="category">
+              <option value="">Uncategorised</option>
+              {% for c in categories %}
+                <option value="{{ c.id }}" {% if product.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="f-price">Price</label>
+            <input id="f-price" type="number" step="0.01" name="price" required
+                   value="{{ product.price|default:'0' }}">
+            <span class="hint">Includes VAT — the till never adds tax on top.</span>
+          </div>
+          <div class="field">
+            <label for="f-cost">Cost</label>
+            <input id="f-cost" type="number" step="0.01" name="cost" value="{{ product.cost|default:'0' }}">
+            <span class="hint">What you pay for one. Drives every margin figure in the reports.</span>
+          </div>
+
+          <div class="field">
+            <label for="f-stock">Stock on hand</label>
+            <input id="f-stock" type="number" name="stock" value="{{ product.stock|default:'0' }}">
+            <span class="hint">At zero the product disappears from the Sale screen.</span>
+          </div>
+          <div class="field">
+            <label for="f-par">Par level</label>
+            <input id="f-par" type="number" name="par_level" value="{{ product.par_level|default:'0' }}">
+            <span class="hint">Reorder point. Below this, Inventory flags it as low. Leave at 0 to track no level at all.</span>
+          </div>
+
+          <div class="field">
+            <label for="f-unit">Unit</label>
+            <select id="f-unit" name="unit" class="unit-select">
+              <option value="">Pieces</option>
+              {% for u in units %}
+                <option value="{{ u.id }}" {% if product.unit_id == u.id %}selected{% endif %}>{{ u.name }}</option>
+              {% endfor %}
+              <option value="__new__">＋ Add new unit…</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-type">Product type</label>
+            <select id="f-type" name="product_type">
+              <option value="P" {% if product.product_type == 'P' %}selected{% endif %}>General product</option>
+              <option value="BOM" {% if product.product_type == 'BOM' %}selected{% endif %}>Bill of materials</option>
+              <option value="SER" {% if product.product_type == 'SER' %}selected{% endif %}>Serial product</option>
+              <option value="S" {% if product.product_type == 'S' %}selected{% endif %}>Service — no stock</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="f-sku">SKU</label>
+            <input id="f-sku" type="text" name="sku" value="{{ product.sku }}" placeholder="e.g. BK-001">
+          </div>
+          <div class="field">
+            <label for="f-barcode">Barcode</label>
+            <input id="f-barcode" type="text" name="barcode" value="{{ product.barcode }}">
+          </div>
+
+          <div class="field wide">
+            <label for="descBox">Description</label>
+            <textarea id="descBox" name="name_th" maxlength="5000" rows="3"
+                      placeholder="Thai name, or anything the kitchen needs to know">{{ product.name_th }}</textarea>
+            <span class="hint" id="descCount">(0/5000)</span>
+          </div>
+
+          <div class="field wide">
+            <label>Options</label>
+            <div style="display:flex;gap:24px;flex-wrap:wrap">
+              <label class="check">
+                <input type="hidden" name="tax_type" value="N">
+                <input type="checkbox" name="tax_type" value="V" {% if product.tax_type == 'V' %}checked{% endif %}>
+                VAT applies to this product
+              </label>
+              <label class="check">
+                <input type="checkbox" name="is_favorite" value="1" {% if product.is_favorite %}checked{% endif %}>
+                Pin to the front of the Sale screen
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-blue">
+            <svg><use href="#i-check"/></svg>
+            {% if mode == 'new' %}Create product{% else %}Save changes{% endif %}</button>
+          <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>
+          <div class="spacer"></div>
+          {% if mode == 'edit' and product.price %}
+          <span style="font-size:12.5px;color:var(--mut)">
+            Margin <b class="money" style="color:var(--txt)">{{ product.price|sub:product.cost|pct_of:product.price|floatformat:0 }}%</b>
+          </span>
+          {% endif %}
         </div>
       </div>
     </form>
-    </div>{# /info #}
+    </div>
 
-    {# ── Add-on Category (placeholder) ── #}
-    <div class="tab-panel d-none" data-panel="addon">
-      <div class="card">
-        <div class="card-body">
-          <h5 class="mb-3">Add-on Category</h5>
-          <div class="row g-3">
-            <div class="col-md-7">
-              <div class="fw-semibold mb-2">Add-on Category</div>
-              <div class="border rounded p-4 text-center text-muted">
-                <i class="bi bi-star fs-3 d-block mb-2"></i>
-                No add-on categories yet.
-              </div>
-            </div>
-            <div class="col-md-5">
-              <div class="fw-semibold mb-2">Add On Active <span class="badge bg-secondary">Totals 0</span></div>
-              <div class="border rounded p-4 text-center text-muted">
-                Nothing active.
-              </div>
-            </div>
-          </div>
+    {% comment %}
+      The four panels below have no backend yet. Each says so instead of
+      offering controls that silently discard what you type.
+    {% endcomment %}
+    <div class="tab-panel" style="display:none" data-panel="addon">
+      <div class="panel">
+        <div class="panel-h">Add-ons <div class="spacer"></div><span class="tag t-out">Not wired up yet</span></div>
+        <div class="empty">
+          <svg><use href="#i-plus"/></svg>
+          Modifiers like “extra shot” or “less sweet” are typed free-hand on the till today.
+          Nothing set here would reach it.
         </div>
       </div>
-    </div>{# /addon #}
+    </div>
 
-    {# ── Other packaging sizes (placeholder) ── #}
-    <div class="tab-panel d-none" data-panel="packaging">
-      <div class="card">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="mb-0">Other packaging sizes</h5>
-            <button type="button" class="btn btn-info text-white btn-sm" disabled>
-              Add packaging sizes
-            </button>
-          </div>
-          <div class="border rounded p-5 text-center" style="max-width:320px;">
-            <i class="bi bi-plus-lg fs-1 text-success d-block mb-3"></i>
-            <button type="button" class="btn btn-success w-100" disabled>Add packaging sizes</button>
-          </div>
+    <div class="tab-panel" style="display:none" data-panel="packaging">
+      <div class="panel">
+        <div class="panel-h">Pack sizes <div class="spacer"></div><span class="tag t-out">Not wired up yet</span></div>
+        <div class="empty">
+          <svg><use href="#i-box"/></svg>
+          One product, one price for now. A box of six is a separate product until this lands.
         </div>
       </div>
-    </div>{# /packaging #}
+    </div>
 
-    {# ── Sales Channels (placeholder) ── #}
-    <div class="tab-panel d-none" data-panel="channels">
-      <div class="card">
-        <div class="card-body">
-          <h5 class="mb-3">Sales Channels</h5>
-          <div class="border rounded p-4 text-center text-muted">
-            <i class="bi bi-shop-window fs-3 d-block mb-2"></i>
-            No sales channels configured.
-          </div>
+    <div class="tab-panel" style="display:none" data-panel="channels">
+      <div class="panel">
+        <div class="panel-h">Sales channels <div class="spacer"></div><span class="tag t-out">Not wired up yet</span></div>
+        <div class="empty">
+          <svg><use href="#i-store"/></svg>
+          Every product is available on every channel the branch has enabled.
         </div>
       </div>
-    </div>{# /channels #}
+    </div>
 
-    {# ── Other Prices (interactive — UI only, not yet persisted) ── #}
-    <div class="tab-panel d-none" data-panel="prices">
-      <div class="card">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="mb-0">Other Prices</h5>
-            <button type="button" class="btn btn-info text-white" id="addPriceBtn">Add Price</button>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm align-middle" id="pricesTable">
-              <thead class="table-light">
-                <tr>
-                  <th>Quantity</th>
-                  <th>Cost</th>
-                  <th>Price</th>
-                  <th>Price / Unit</th>
-                  <th style="width:90px;"></th>
-                </tr>
-              </thead>
-              <tbody id="pricesBody">
-                <tr id="pricesEmpty"><td colspan="5" class="text-center text-muted py-3">No other prices.</td></tr>
-              </tbody>
-            </table>
-          </div>
+    <div class="tab-panel" style="display:none" data-panel="prices">
+      <div class="panel">
+        <div class="panel-h">
+          Other prices
+          <div class="spacer"></div>
+          <span class="tag t-low">Not saved</span>
+          <button type="button" class="btn btn-sm" id="addPriceBtn">Add a tier</button>
         </div>
+        <table class="tbl" id="pricesTable">
+          <thead><tr><th>Quantity</th><th>Cost</th><th>Price</th><th>Price per unit</th><th style="width:70px"></th></tr></thead>
+          <tbody id="pricesBody">
+            <tr id="pricesEmpty"><td colspan="5" class="empty" style="padding:32px">
+              No quantity tiers. Rows added here are a sketch — they are not stored yet.
+            </td></tr>
+          </tbody>
+        </table>
       </div>
-    </div>{# /prices #}
+    </div>
 
   </div>
 </div>
@@ -351,7 +304,7 @@
       });
     }
 
-    // Description character counter (matches SilomPOS 0/5000).
+    // Description character counter.
     const desc = document.getElementById('descBox');
     const count = document.getElementById('descCount');
     if (desc && count) {
@@ -360,31 +313,39 @@
       update();
     }
 
-    // Left-sidebar tabs — show the matching right-side panel.
+    // Left-rail tabs — show the matching panel.
     const tabs = document.querySelectorAll('#productTabs [data-panel]');
     const panels = document.querySelectorAll('.tab-panel[data-panel]');
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
         const target = tab.getAttribute('data-panel');
-        tabs.forEach((t) => t.classList.toggle('active', t === tab));
-        panels.forEach((p) => p.classList.toggle('d-none', p.getAttribute('data-panel') !== target));
+        tabs.forEach((t) => {
+          const on = t === tab;
+          t.classList.toggle('on', on);
+          t.style.background = on ? 'var(--blue-soft)' : 'transparent';
+          const icon = t.querySelector('svg');
+          if (icon) icon.style.stroke = on ? 'var(--blue)' : 'var(--mut2)';
+        });
+        panels.forEach((p) => {
+          p.style.display = p.getAttribute('data-panel') === target ? '' : 'none';
+        });
       });
     });
 
-    // Other Prices — add / edit / delete rows. UI only for now (no backend
-    // model yet), so rows are not persisted on save.
+    // Other Prices — add / edit / delete rows. A sketch: there is no model
+    // behind it, so nothing here is persisted on save.
     const addBtn = document.getElementById('addPriceBtn');
     const body = document.getElementById('pricesBody');
-    const empty = document.getElementById('pricesEmpty');
     function addPriceRow() {
+      const empty = document.getElementById('pricesEmpty');
       if (empty) empty.remove();
       const tr = document.createElement('tr');
       tr.innerHTML =
-        '<td><input type="number" min="1" value="1" class="form-control form-control-sm text-end"></td>' +
-        '<td><input type="number" step="0.01" value="0.00" class="form-control form-control-sm text-end"></td>' +
-        '<td><input type="number" step="0.01" value="0.00" class="form-control form-control-sm text-end"></td>' +
-        '<td><input type="number" step="0.01" value="0.00" class="form-control form-control-sm text-end" readonly></td>' +
-        '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger price-del"><i class="bi bi-trash"></i></button></td>';
+        '<td><input type="number" min="1" value="1" class="inp money" style="height:34px;text-align:right"></td>' +
+        '<td><input type="number" step="0.01" value="0.00" class="inp money" style="height:34px;text-align:right"></td>' +
+        '<td><input type="number" step="0.01" value="0.00" class="inp money" style="height:34px;text-align:right"></td>' +
+        '<td><input type="number" step="0.01" value="0.00" class="inp money" style="height:34px;text-align:right" readonly></td>' +
+        '<td class="r"><button type="button" class="ico-btn danger price-del">✕</button></td>';
       const [qty, cost, price, perUnit] = tr.querySelectorAll('input');
       const recalc = () => {
         const q = parseFloat(qty.value) || 0;
@@ -397,7 +358,7 @@
         if (!body.querySelector('tr')) {
           const er = document.createElement('tr');
           er.id = 'pricesEmpty';
-          er.innerHTML = '<td colspan="5" class="text-center text-muted py-3">No other prices.</td>';
+          er.innerHTML = '<td colspan="5" class="empty" style="padding:32px">No quantity tiers.</td>';
           body.appendChild(er);
         }
       });

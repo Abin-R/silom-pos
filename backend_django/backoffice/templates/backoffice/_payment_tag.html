@@ -1,0 +1,5 @@
+{% load backoffice_ui %}{% comment %}
+  A payment method as a coloured chip: cash green, PromptPay blue, card
+  purple. The POS writes free text, so the mapping lives in one filter pair
+  rather than a chain of {% if %} in every table that shows a bill.
+{% endcomment %}<span class="tag {{ method|payment_class }}">{{ method|payment_label }}</span>
