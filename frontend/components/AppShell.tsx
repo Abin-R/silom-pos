@@ -28,6 +28,16 @@ export function useIsWide() {
   return width >= WIDE;
 }
 
+/**
+ * Short-viewport flag. Real tablets are ~713-745px tall, not the 1024 the
+ * design was drawn at, so the generous vertical rhythm turns every screen
+ * into a scroll. Anything that stacks vertically should tighten on this.
+ */
+export function useDense() {
+  const { height } = useWindowDimensions();
+  return height < 820;
+}
+
 /** How much horizontal room the rail is actually taking right now. */
 export function railWidth(isWide: boolean, collapsed?: boolean) {
   if (!isWide) return 0;

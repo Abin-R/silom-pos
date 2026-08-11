@@ -84,7 +84,7 @@ const SHOP_DEFAULTS = {
   ],
   phone: "0644184887",
   tax_id: "0105563083534",
-  pos_id: "E020140003A0087",
+  pos_id: "E020140003A1363",
   pos_number: "001",
   tax_percent: 7,
 };
@@ -214,9 +214,12 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       ))}
       <Text style={s.companyCenter}>{sh.phone}</Text>
       <Text style={s.companyCenter}>{lbl("เลขประจำตัวผู้เสียภาษี", "Tax ID")}: {sh.tax_id}</Text>
-      {/* POS ID hidden until the Revenue Department issues an approved machine
-          number. Re-enable this line once the RD application is approved. */}
-      {/* <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text> */}
+      {/* Revenue Department issued the approved machine number, so this now
+          prints. It is only rendered when a value exists — a receipt asserting
+          an empty POS ID is worse than one that omits the line. */}
+      {!!sh.pos_id && (
+        <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text>
+      )}
 
       {isFull ? (
         <>

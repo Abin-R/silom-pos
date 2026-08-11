@@ -23,7 +23,7 @@ import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
-import { AppShell, TopBar, WIDE, railWidth } from "../components/AppShell";
+import { AppShell, TopBar, WIDE, railWidth, useDense } from "../components/AppShell";
 import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
@@ -31,6 +31,7 @@ import qrcode from "qrcode-generator";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
+import { methodLabel } from "../lib/payments";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -1665,6 +1666,9 @@ function PaymentModal({
 
   const { width: winW } = useWindowDimensions();
   const isNarrow = winW < 720;
+  // A 713px-tall tablet was clipping "Change to give" behind the footer, so a
+  // plain cash sale needed a scroll to read its own answer.
+  const dense = useDense();
 
   const onKey = (k: string) => {
     if (k === "clear") setAmount("");
@@ -1968,7 +1972,7 @@ function PaymentModal({
           testID="payment-modal"
         >
           {/* ── Header ── */}
-          <View style={styles.payHead}>
+          <View style={[styles.payHead, dense && { height: 60 }]}>
             <Text style={styles.payHeadTitle}>Checkout</Text>
             {!isNarrow && (
               // Tag defaults to flex-start so it never stretches in a column;
@@ -2020,7 +2024,7 @@ function PaymentModal({
                       style={[styles.pmText, on && styles.pmTextOn]}
                       numberOfLines={1}
                     >
-                      {m.key}
+                      {methodLabel(m.key)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -2038,16 +2042,16 @@ function PaymentModal({
 
             {/* ── Detail column ── */}
             <View style={styles.payRight}>
-              <View style={styles.due}>
+              <View style={[styles.due, dense && { paddingTop: 14, paddingBottom: 12 }]}>
                 <Text style={styles.dueLabel}>AMOUNT DUE</Text>
-                <Money style={styles.dueVal} numberOfLines={1}>
+                <Money style={[styles.dueVal, dense && { fontSize: 30 }]} numberOfLines={1}>
                   {THB(total)}
                 </Money>
               </View>
 
               <ScrollView
                 style={{ flex: 1 }}
-                contentContainerStyle={styles.payPane}
+                contentContainerStyle={[styles.payPane, dense && { padding: 18, paddingTop: 14 }]}
                 showsVerticalScrollIndicator={false}
               >
             {method === PAYMENT_METHODS.EASY_PAY ? (
@@ -2152,8 +2156,8 @@ function PaymentModal({
                     <Ionicons name="scan-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>Beam QR Payment</Text>
-                    <Text style={styles.beamSub}>PromptPay · e-Wallet · All banks</Text>
+                    <Text style={styles.beamTitle}>PromptPay QR</Text>
+                    <Text style={styles.beamSub}>Scan with any Thai banking app · via Beam</Text>
                   </View>
                 </View>
 
@@ -2215,7 +2219,7 @@ function PaymentModal({
                     <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>Credit Card</Text>
+                    <Text style={styles.beamTitle}>Card · Omise</Text>
                     <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
                   </View>
                 </View>
@@ -2303,7 +2307,7 @@ function PaymentModal({
                     <Ionicons name="card-outline" size={28} color={C.brand} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.beamTitle}>Beam Card</Text>
+                    <Text style={styles.beamTitle}>Card · Beam</Text>
                     <Text style={styles.beamSub}>VISA · Mastercard · JCB · scan to pay by card</Text>
                   </View>
                 </View>
@@ -2521,7 +2525,7 @@ function PaymentModal({
                       return (
                         <TouchableOpacity
                           key={t}
-                          style={[styles.qk, on && styles.qkOn]}
+                          style={[styles.qk, dense && { height: 50 }, on && styles.qkOn]}
                           onPress={() => setAmount(String(t))}
                           testID={`tender-${t}`}
                         >
@@ -2537,6 +2541,7 @@ function PaymentModal({
                       style={[
                         styles.qk,
                         { flexBasis: "48%" },
+                        dense && { height: 50 },
                         amount !== "" && parseFloat(amount) === total && styles.qkOn,
                       ]}
                       onPress={() => setAmount(String(total))}
@@ -2552,7 +2557,7 @@ function PaymentModal({
                       </Money>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.qk, { flexBasis: "48%" }, showPad && styles.qkOn]}
+                      style={[styles.qk, { flexBasis: "48%" }, dense && { height: 50 }, showPad && styles.qkOn]}
                       onPress={() => setShowPad((v) => !v)}
                       testID="tender-other"
                     >
@@ -2606,8 +2611,16 @@ function PaymentModal({
                     </View>
                   )}
 
-                  {/* Change is the answer, so change is the biggest number. */}
-                  <View style={styles.tender}>
+                </View>
+            )}
+              </ScrollView>
+
+              {/* Change is the answer to a cash sale, so it is pinned outside
+                  the scroll area — it was being clipped behind the footer on a
+                  713px screen, which made the cashier scroll to read it. */}
+              {method === PAYMENT_METHODS.CASH && (
+                <View style={styles.tenderPinned}>
+                  <View style={[styles.tender, dense && { marginTop: 12, paddingVertical: 12, gap: 8 }]}>
                     <View style={styles.tenderRow}>
                       <Text style={styles.tenderLbl}>Received</Text>
                       <Money style={styles.tenderVal}>
@@ -2620,28 +2633,27 @@ function PaymentModal({
                     </View>
                     <View style={[styles.tenderRow, styles.tenderChange]}>
                       <Text style={styles.tenderChangeLbl}>Change to give</Text>
-                      <Money style={styles.tenderChangeVal} numberOfLines={1}>
+                      <Money style={[styles.tenderChangeVal, dense && { fontSize: 26 }]} numberOfLines={1}>
                         {THB(change)}
                       </Money>
                     </View>
                   </View>
                 </View>
-            )}
-              </ScrollView>
+              )}
 
               {/* ── Footer ── */}
-              <View style={styles.payFoot}>
+              <View style={[styles.payFoot, dense && { padding: 14 }]}>
                 <Btn
                   label="Back"
                   icon="arrow-back"
-                  height={60}
+                  height={dense ? 52 : 60}
                   onPress={onClose}
                   style={{ flexGrow: 0, flexShrink: 0, width: isNarrow ? 120 : 170 }}
                 />
                 <Btn
                   label={confirmLabel}
                   variant="blue"
-                  height={60}
+                  height={dense ? 52 : 60}
                   disabled={!canConfirm}
                   onPress={handleConfirmPayment}
                   style={{ flex: 1 }}
@@ -3297,7 +3309,7 @@ function SuccessModal({
               {hasChange ? `Give ${THB(data.change)} change` : "Paid in full"}
             </Text>
             <Text style={styles.successOrder}>
-              {`${data.order_number} · ${data.method}`}
+              {`${data.order_number} · ${methodLabel(data.method)}`}
             </Text>
 
             <View style={styles.successTotal}>
@@ -3869,6 +3881,10 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
+  tenderPinned: {
+    paddingHorizontal: 24,
+    paddingBottom: 4,
+  },
   payFoot: {
     flexDirection: "row",
     gap: 12,

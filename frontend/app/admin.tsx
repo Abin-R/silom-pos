@@ -45,6 +45,7 @@ import { apiFetch, clearAuthToken } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert } from "../lib/dialog";
+import { methodLabel } from "../lib/payments";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
@@ -900,6 +901,10 @@ function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
   return { from: new Date(startOfToday.getTime() - 6 * dayMs).toISOString() };
 }
 
+// One screenful plus a little, so the pager is reachable without a long scroll
+// but a busy day is still a handful of pages rather than dozens.
+const PAGE_SIZE = 50;
+
 function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: ReprintFn; staff: string }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState<Order | null>(null);
@@ -910,6 +915,16 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   // every visit, which left the screen on a spinner for seconds.  The cashier
   // almost always wants the current day; the other buckets refetch on tap.
   const [dateFilter, setDateFilter] = useState<DateFilter>("today");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  // Debounced copy of `query` — the search now goes to the server, so firing
+  // on every keystroke would be a request per character.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Does the server understand offset/q/X-Total-Count? null until the first
+  // response answers it. The deployed API predates them, and an APK built
+  // against this code will meet that older server — without this the app
+  // would send `q`, be ignored, and show unfiltered rows as if they matched.
+  const [serverPaged, setServerPaged] = useState<boolean | null>(null);
   // Order items only snapshot name/price/qty, so we join to the live
   // product catalogue (by product_id) to show the thumbnail + barcode on
   // each receipt line — matching the reference Sale Transactions screen.
@@ -959,43 +974,60 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
       const params = new URLSearchParams();
       if (from) params.set("from", from);
       if (to) params.set("to", to);
-      const qs = params.toString();
+      if (debouncedQuery) params.set("q", debouncedQuery);
+      // Only page against a server that can. An older one ignores `offset`
+      // and would hand back page 1 forever while the pager claimed otherwise,
+      // so there we fall back to the previous behaviour: one large fetch.
+      if (serverPaged !== false) {
+        params.set("limit", String(PAGE_SIZE));
+        params.set("offset", String(page * PAGE_SIZE));
+      }
       try {
-        const res = await apiFetch(`${API}/orders${qs ? `?${qs}` : ""}`);
+        const res = await apiFetch(`${API}/orders?${params.toString()}`);
         const o: Order[] = await res.json();
         if (stale) return;
+        // The server sends the unpaged total in a header so the body stays a
+        // bare list. An older server won't send it — fall back to the page
+        // length so the pager degrades to "one page" instead of breaking.
+        const totalHeader = res.headers?.get?.("X-Total-Count");
+        const parsed = totalHeader ? parseInt(totalHeader, 10) : NaN;
+        const supported = Number.isFinite(parsed);
+        setServerPaged(supported);
+        // Legacy: everything we have is all there is, so one page.
+        setTotal(supported ? parsed : o.length);
         setOrders(o);
         setSelected((cur) => (cur ? cur : o[0] && isWide ? o[0] : null));
       } catch {
-        if (!stale) setOrders([]);
+        if (!stale) { setOrders([]); setTotal(0); }
       } finally {
         if (!stale) setLoading(false);
       }
     })();
     return () => { stale = true; };
-  }, [dateFilter, isWide]);
+  }, [dateFilter, isWide, page, debouncedQuery, serverPaged]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Changing the date bucket or the search restarts at page 1 — staying on
+  // page 4 of a filter that now has one page shows an empty list.
+  useEffect(() => { setPage(0); }, [dateFilter, debouncedQuery]);
 
   // Filter by order number (case-insensitive substring) and the chosen
   // date bucket.  Buckets are computed from the local-day boundary of the
   // *current* device so "Today" matches what the cashier sees on the wall
   // clock, not UTC.
+  // A new server has already applied the search, so this is a no-op there.
+  // Against the old one it is the only thing making search work at all.
   const filteredOrders = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dayMs = 24 * 60 * 60 * 1000;
-
-    return orders.filter((o) => {
-      if (q && !o.order_number.toLowerCase().includes(q)) return false;
-      if (dateFilter !== "all") {
-        const t = new Date(o.created_at).getTime();
-        if (dateFilter === "today" && t < startOfToday) return false;
-        if (dateFilter === "yesterday" && (t < startOfToday - dayMs || t >= startOfToday)) return false;
-        if (dateFilter === "week" && t < startOfToday - 6 * dayMs) return false;
-      }
-      return true;
-    });
-  }, [orders, query, dateFilter]);
+    if (serverPaged !== false) return orders;
+    const q = debouncedQuery.toLowerCase();
+    return q
+      ? orders.filter((o) => o.order_number.toLowerCase().includes(q))
+      : orders;
+  }, [orders, debouncedQuery, serverPaged]);
 
   // If the currently-selected order falls out of the filter, drop the
   // selection so the right-hand detail pane doesn't show a row the user
@@ -1042,6 +1074,8 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
   const { width: winW } = useWindowDimensions();
   const ORDER_COLS = winW >= 1440 ? ORDER_COLS_FULL : ORDER_COLS_COMPACT;
   const ocol = (k: string) => ORDER_COLS.find((c) => c.key === k)!;
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const takings = useMemo(
     () => filteredOrders.reduce((n, o) => (o.status === "cancel" ? n : n + o.total), 0),
@@ -1112,8 +1146,21 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
           {/* Takings sit in the panel header, so the number that matters is
               beside the rows it was computed from. */}
           <PanelHead
-            title={`${filteredOrders.length} ${filteredOrders.length === 1 ? "order" : "orders"}`}
-            right={<Money style={styles.takings}>{THB(takings)}</Money>}
+            title={
+              total > filteredOrders.length
+                ? `${page * PAGE_SIZE + 1}\u2013${page * PAGE_SIZE + filteredOrders.length} of ${total}`
+                : `${filteredOrders.length} ${filteredOrders.length === 1 ? "order" : "orders"}`
+            }
+            right={
+              // Only this page's rows are in hand, so don't let the figure
+              // sitting beside "of 78" read as the total for all 78.
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                <Money style={styles.takings}>{THB(takings)}</Money>
+                {total > filteredOrders.length && (
+                  <Text style={styles.takingsNote}>this page</Text>
+                )}
+              </View>
+            }
           />
           {loading ? (
             <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} testID="tx-loading" />
@@ -1163,7 +1210,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                             {o.order_number}
                           </Money>
                           <Text style={styles.billMeta} numberOfLines={1}>
-                            {`${o.created_time} · ${voided ? "Voided" : (o.payment_method || o.source || "—")}`}
+                            {`${o.created_time} · ${voided ? "Voided" : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
                           </Text>
                         </View>
                         <Money style={[styles.billAmount, voided && styles.txVoided]}>
@@ -1206,7 +1253,7 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                       )}
                       <TCell col={ocol("pay")}>
                         <TText muted={voided}>
-                          {o.payment_method || o.source || "—"}
+                          {o.payment_method ? methodLabel(o.payment_method) : (o.source || "—")}
                         </TText>
                       </TCell>
                       <TCell col={ocol("items")}>
@@ -1230,6 +1277,31 @@ function Transactions({ isWide, reprint, staff }: { isWide: boolean; reprint: Re
                   );
                 }}
               />
+              {pageCount > 1 && (
+                <View style={styles.pager}>
+                  <Btn
+                    label="Previous"
+                    icon="chevron-back"
+                    height={40}
+                    disabled={page === 0 || loading}
+                    onPress={() => setPage((p) => Math.max(0, p - 1))}
+                    testID="orders-prev"
+                  />
+                  <Spacer />
+                  <Money style={styles.pagerText}>
+                    {`Page ${page + 1} of ${pageCount}`}
+                  </Money>
+                  <Spacer />
+                  <Btn
+                    label="Next"
+                    iconRight="chevron-forward"
+                    height={40}
+                    disabled={page >= pageCount - 1 || loading}
+                    onPress={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                    testID="orders-next"
+                  />
+                </View>
+              )}
             </>
           )}
         </Panel>
@@ -5656,6 +5728,17 @@ function PrintersSection({
 // =================== STYLES ===================
 const styles = StyleSheet.create({
   // ── Back-office page furniture ─────────────────────────────────────────
+  pager: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: C.line2,
+  },
+  pagerText: { fontSize: 13.5, fontWeight: "600", color: C.ink2Soft },
+
   // Settings
   setNav: { width: 262, flexGrow: 0, flexShrink: 0 },
   setRow: {
@@ -5758,6 +5841,7 @@ const styles = StyleSheet.create({
   stackedCol: { flexDirection: "column" },
   detailCol: { width: 400, flexGrow: 0, flexShrink: 0 },
   takings: { fontSize: 15, fontWeight: "700", color: C.ink },
+  takingsNote: { fontSize: 12, color: C.ink3 },
 
   billsHead: {
     paddingHorizontal: 14, paddingTop: 16, paddingBottom: 10,
