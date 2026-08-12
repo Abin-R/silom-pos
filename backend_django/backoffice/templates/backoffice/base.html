@@ -132,17 +132,29 @@
         change, so there is nothing to press.
       {% endcomment %}
       {% if not hide_branch %}
-      <div class="ctl" title="Branch">
-        <svg><use href="#i-store"/></svg>
-        <select name="branch" form="filterForm" onchange="this.form.submit()">
-          {% for b in branches %}
-            <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
-          {% empty %}
-            <option value="">No branches</option>
-          {% endfor %}
-        </select>
-        <svg class="cv"><use href="#i-chev"/></svg>
-      </div>
+        {% comment %}
+          One branch is not a choice. Rendering a picker that can only ever
+          re-select what is already selected invites a click that does
+          nothing — so a single-branch shop gets a plain label saying which
+          shop these numbers are, which is the only job left.
+        {% endcomment %}
+        {% if branches|length > 1 %}
+        <div class="ctl">
+          <svg><use href="#i-store"/></svg>
+          <select name="branch" form="filterForm" aria-label="Branch"
+                  onchange="this.form.submit()">
+            {% for b in branches %}
+              <option value="{{ b.id }}" {% if branch and b.id == branch.id %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+          </select>
+          <svg class="cv"><use href="#i-chev"/></svg>
+        </div>
+        {% elif branch %}
+        <div class="ctl is-static" title="These figures cover {{ branch.name }}">
+          <svg><use href="#i-store"/></svg>
+          <b>{{ branch.name }}</b>
+        </div>
+        {% endif %}
       {% endif %}
 
       {% if not hide_dates %}

@@ -389,15 +389,43 @@ body.fixed-height .body { overflow: hidden; }
   padding: 0;
   outline: none;
   min-width: 0;
-  max-width: 200px;
   cursor: pointer;
 }
-.ctl > input[type="date"] { font-family: var(--mono); font-size: 12.5px; }
-.ctl > input[type="search"], .ctl > input[type="text"] {
-  font-weight: 500; cursor: text; width: 100%;
+/* The native arrow has to go: the wrapper already draws a chevron, and every
+   platform draws its own differently — leaving it on gave the branch picker
+   two arrows side by side. `appearance:none` is the only way to drop it, and
+   it needs the -webkit-/-moz- prefixes for Safari and older Firefox. */
+.ctl > select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  text-overflow: ellipsis;
+  /* Fill the control so the whole chip opens the menu, not just the words. */
+  flex: 1;
+  max-width: 220px;
 }
+.ctl > select::-ms-expand { display: none; }
+/* Decoration, not targets — clicking the store icon or the chevron should
+   open the select underneath rather than land on the icon and do nothing. */
+.ctl > svg { pointer-events: none; }
+.ctl > input[type="date"] { font-family: var(--mono); font-size: 12.5px; max-width: 200px; }
+.ctl > input[type="search"], .ctl > input[type="text"] {
+  font-weight: 500; cursor: text; width: 100%; max-width: none;
+}
+/* A control built around a select is one button: the whole thing lifts on
+   hover, so it reads as pressable before it is pressed. */
+.ctl:has(> select):hover { border-color: var(--line-strong); background: var(--sunk); }
 .ctl:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+.ctl:has(> select:focus-visible) { border-color: var(--blue); }
 .ctl .arrow { color: var(--mut2); font-size: 12px; flex: none; }
+/* States what a page is scoped to when there is nothing to choose. Reads as
+   a label rather than a control: no pointer, no hover, no chevron. */
+.ctl.is-static {
+  cursor: default;
+  background: var(--sunk);
+  color: var(--txt2);
+}
+.ctl.is-static:hover { border-color: var(--line); color: var(--txt2); }
 
 .btn {
   height: 40px;

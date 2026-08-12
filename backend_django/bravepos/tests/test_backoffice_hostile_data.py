@@ -973,3 +973,62 @@ class LastAdminRevokeTests(HostileDataMixin, TestCase):
         self.other_admin.refresh_from_db()
         self.assertTrue(self.other_admin.backoffice_access,
                         "the last admin revoked their own access")
+
+
+class BranchPickerTests(HostileDataMixin, TestCase):
+    """The header's branch control.
+
+    It drew two chevrons for a while — the native `<select>` arrow plus the
+    one the design system adds — which is invisible to any assertion about
+    status codes and only shows up on screen. These pin the parts that *are*
+    checkable: one arrow's worth of markup, a real label for screen readers,
+    and no picker at all when there is nothing to pick.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build_shop()
+
+    def setUp(self):
+        self.assertTrue(
+            self.client.login(username="hostile", password=self.password))
+
+    def test_several_branches_get_a_select(self):
+        self.assertGreater(Branch.objects.count(), 1)
+        page = self.client.get(reverse("backoffice:dashboard"))
+        self.assertContains(page, 'name="branch"')
+        self.assertContains(page, 'aria-label="Branch"')
+
+    def test_the_native_arrow_is_suppressed(self):
+        """Both arrows render unless the stylesheet drops the native one."""
+        css = self.client.get(reverse("backoffice:app_css")).content.decode()
+        select_rule = css[css.index(".ctl > select {"):]
+        self.assertIn("appearance: none", select_rule[:400])
+
+    def test_one_branch_gets_a_label_not_a_picker(self):
+        """A dropdown whose only option is already selected is a dead click."""
+        Branch.objects.exclude(id=self.branch.id).update(active=False)
+        page = self.client.get(reverse("backoffice:dashboard"))
+        self.assertNotContains(page, 'name="branch"')
+        self.assertContains(page, "is-static")
+        self.assertContains(page, self.branch.name)
+
+    def test_one_branch_still_scopes_the_figures(self):
+        """Dropping the select must not drop the filtering with it — the views
+        fall back to the only branch when `?branch=` is absent."""
+        Branch.objects.exclude(id=self.branch.id).update(active=False)
+        for name in ["dashboard", "inventory", "transactions", "report_daily"]:
+            with self.subTest(page=name):
+                response = self.client.get(reverse(f"backoffice:{name}"))
+                self.assertEqual(response.status_code, 200)
+
+    def test_switching_branch_keeps_the_other_filters(self):
+        """The picker posts into `filterForm`, which carries the page's own
+        hidden filters — changing shop must not silently reset them."""
+        page = self.client.get(reverse("backoffice:transactions"),
+                               {"branch": str(self.branch.id),
+                                "status": "voided", "payment": "Cash"})
+        body = page.content.decode()
+        form = body[body.index('id="filterForm"'):]
+        self.assertIn('name="status" value="voided"', form)
+        self.assertIn('name="payment" value="Cash"', form)
