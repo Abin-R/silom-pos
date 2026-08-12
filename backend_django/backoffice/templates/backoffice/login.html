@@ -85,7 +85,15 @@
       </div>
 
       <div class="field">
-        <label class="flabel" for="pwField" style="display:block;margin-bottom:7px">Password</label>
+        <div class="row-label">
+          <label class="flabel" for="pwField">Password</label>
+          {% comment %}
+            Reveal is useful on a shop tablet, where a mistyped password is
+            more likely than someone reading over your shoulder.
+          {% endcomment %}
+          <button type="button" class="id-switch" id="pwToggle"
+                  aria-controls="pwField" aria-pressed="false">Show</button>
+        </div>
         <input type="password" name="password" id="pwField" class="inp"
                autocomplete="current-password" required>
       </div>
@@ -103,6 +111,24 @@
   </div>
 
   <script>
+    // Password reveal. Deliberately not remembered between visits: the
+    // identifier mode is a preference, a shown password is not.
+    (function () {
+      const field = document.getElementById('pwField');
+      const button = document.getElementById('pwToggle');
+      if (!field || !button) return;
+      button.addEventListener('click', function () {
+        const shown = field.type === 'text';
+        field.type = shown ? 'password' : 'text';
+        button.textContent = shown ? 'Show' : 'Hide';
+        button.setAttribute('aria-pressed', String(!shown));
+        // Keep the caret where it was rather than dumping it at the start.
+        const at = field.value.length;
+        field.focus();
+        try { field.setSelectionRange(at, at); } catch (e) {}
+      });
+    })();
+
     // Identifier mode toggle. Remembered per browser so someone who signs in
     // with their email doesn't have to flip the switch every visit.
     (function () {

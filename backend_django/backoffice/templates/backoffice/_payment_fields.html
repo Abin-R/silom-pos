@@ -11,9 +11,14 @@ Secrets are never emitted into the HTML: the key inputs start empty and show
 off the page (or out of a browser's saved-form cache, or a screenshot).
 
 The Live/Test lane is the loudest thing in the panel because it is the one
-setting here whose consequence is real money.
+setting here whose consequence is real money — which is also why the whole
+block is admin-only. `views.can_edit_payment` gates the context, so for a
+cashier there is no merchant id, no key tail and no lane in the page at all,
+not merely hidden with CSS. The matching write guard is in
+`_apply_branch_form` / `shop_settings`; this template is the polite half.
 {% endcomment %}
 
+{% if can_edit_payment %}
 <div class="panel" style="margin-top:16px">
   <div class="panel-h">
     <svg style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-card"/></svg>
@@ -143,3 +148,22 @@ setting here whose consequence is real money.
     </div>
   </div>
 </div>
+{% else %}
+<div class="panel" style="margin-top:16px">
+  <div class="panel-h">
+    <svg style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-card"/></svg>
+    Payment
+    <div class="spacer"></div>
+    <span class="tag t-out">Admins only</span>
+  </div>
+  <div class="srow">
+    <span class="si" style="background:#F1F4F8;color:var(--mut)"><svg><use href="#i-userlock"/></svg></span>
+    <span class="sm">
+      <b>Where the money lands is set by an admin</b>
+      <u>The merchant account, its keys and the Live/Test lane decide which
+        account collects real payments, so they are not shown here. Everything
+        else on this page is yours to edit.</u>
+    </span>
+  </div>
+</div>
+{% endif %}

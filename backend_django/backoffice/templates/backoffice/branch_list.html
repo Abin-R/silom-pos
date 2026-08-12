@@ -82,7 +82,8 @@
       <tr>
         <th>Branch</th><th>Address</th><th class="r">Staff</th><th class="r">Bills</th>
         <th class="r">Net sales</th><th class="r">Cash variance</th>
-        <th>Payment lane</th><th class="r" style="width:110px"></th>
+        {% if can_edit_payment %}<th>Payment lane</th>{% endif %}
+        <th class="r" style="width:110px"></th>
       </tr>
     </thead>
     <tbody>
@@ -99,11 +100,13 @@
         <td class="r money" style="font-weight:650">฿{{ b.sales|floatformat:0|intcomma }}</td>
         <td class="r money" style="color:{% if b.variance < 0 %}var(--red-d){% elif b.variance > 0 %}var(--green){% else %}var(--mut){% endif %}">
           {% if b.variance > 0 %}+{% endif %}฿{{ b.variance|floatformat:0|intcomma }}</td>
+        {% if can_edit_payment %}
         <td>
           {% if b.beam_sandbox %}<span class="tag t-out">Test</span>
           {% else %}<span class="tag t-info">Live</span>{% endif %}
           <span class="money" style="font-size:11.5px;color:var(--mut2);margin-left:6px">{{ b.beam_key_mask|default:"no key" }}</span>
         </td>
+        {% endif %}
         <td class="r">
           <a class="btn btn-sm" href="{% url 'backoffice:branch_detail' b.id %}">Edit</a>
         </td>
@@ -114,7 +117,7 @@
       <tr>
         <td colspan="4">{{ branches_all|length }} branch{{ branches_all|length|pluralize:"es" }}</td>
         <td class="r money" style="color:var(--blue)">฿{{ total_sales|floatformat:0|intcomma }}</td>
-        <td colspan="3"></td>
+        <td colspan="{% if can_edit_payment %}3{% else %}2{% endif %}"></td>
       </tr>
     </tfoot>
   </table>

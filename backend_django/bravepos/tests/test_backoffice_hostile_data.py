@@ -638,3 +638,190 @@ class CataloguePageWeightTests(HostileDataMixin, TestCase):
         self.assertEqual(self.photo.price, Decimal("99"))
         self.assertEqual(self.photo.image_url, self.data_uri,
                          "saving a deferred row wiped the photo")
+
+
+class PaymentIsAdminOnlyTests(HostileDataMixin, TestCase):
+    """Where the money lands is admin-only, to read and to write.
+
+    Hiding the inputs is the cosmetic half. The half that matters is the
+    write guard: a crafted POST from a cashier must not be able to swap the
+    merchant account or flip a live branch into Test, which would leave every
+    screen saying "paid" while no real money arrived.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build_shop()
+        cls.branch.beam_merchant_id = "merchant-xyzzy-7f3a"
+        cls.branch.beam_api_key = "live-secret-key-quux9182"
+        cls.branch.omise_public_key = "pkey_live_plugh4421"
+        cls.branch.omise_secret_key = "skey_live_thud5566"
+        cls.branch.beam_sandbox = False          # a LIVE branch
+        cls.branch.save()
+
+        cls.cashier = Staff(
+            name="Till Cashier", username="tillcashier",
+            email="till@therollingpinn.com", role="cashier",
+            active=True, backoffice_access=True,
+        )
+        cls.cashier.set_password(cls.password)
+        cls.cashier.save()
+        cls.cashier.branches.add(cls.branch)
+
+    def as_cashier(self):
+        client = Client()
+        self.assertTrue(client.login(username="tillcashier",
+                                     password=self.password))
+        return client
+
+    def as_admin(self):
+        client = Client()
+        self.assertTrue(client.login(username="hostile",
+                                     password=self.password))
+        return client
+
+    # ── Reading ─────────────────────────────────────────────────────────
+    def test_a_cashier_sees_no_payment_details_anywhere(self):
+        client = self.as_cashier()
+        pages = [
+            (reverse("backoffice:shop_settings"), {"branch": str(self.branch.id)}),
+            (reverse("backoffice:branch_detail", args=[self.branch.id]), {}),
+            (reverse("backoffice:branch_new"), {}),
+            (reverse("backoffice:branch_list"), {}),
+        ]
+        # Everything that identifies the collecting account, including the
+        # masked tail — four characters of a live key is still four characters.
+        leaks = [b"merchant-xyzzy-7f3a", b"pkey_live_plugh4421", b"quux9182",
+                 b"9182",  # the masked tail is still four live characters
+                 b"beam_api_key", b"omise_secret_key", b"payment_mode"]
+        for url, params in pages:
+            response = client.get(url, params)
+            self.assertEqual(response.status_code, 200, url)
+            for leak in leaks:
+                self.assertNotIn(leak, response.content,
+                                 f"{url} leaked {leak!r} to a cashier")
+
+    def test_an_admin_still_sees_the_payment_block(self):
+        client = self.as_admin()
+        response = client.get(reverse("backoffice:branch_detail",
+                                      args=[self.branch.id]))
+        self.assertContains(response, "beam_merchant_id")
+        self.assertContains(response, "payment_mode")
+
+    def test_the_branches_list_hides_the_lane_from_a_cashier(self):
+        cashier_page = self.as_cashier().get(reverse("backoffice:branch_list"))
+        self.assertNotContains(cashier_page, "Payment lane")
+        admin_page = self.as_admin().get(reverse("backoffice:branch_list"))
+        self.assertContains(admin_page, "Payment lane")
+
+    # ── Writing ─────────────────────────────────────────────────────────
+    def test_a_cashier_cannot_rewrite_a_branch_payment_account(self):
+        """The attack this guard exists for: redirect the shop's takings.
+
+        The payload is deliberately *valid* — a Live lane with live-format
+        Omise keys — so `payment_errors` has no reason to refuse it. An
+        invalid one would be rejected by validation and the test would pass
+        whether or not the permission guard existed at all.
+        """
+        self.as_cashier().post(
+            reverse("backoffice:branch_detail", args=[self.branch.id]), {
+                "name": self.branch.name, "code": self.branch.code,
+                "tax_id": "", "pos_id": "", "address": "", "phone": "",
+                "logo_url": "", "open_time": "09:00", "close_time": "22:00",
+                "peak_account_code": "BSV003", "active": "on",
+                "payment_mode": "live",
+                "beam_merchant_id": "attacker-merchant",
+                "beam_api_key": "attacker-key",
+                "beam_card_fee_percent": "99",
+                "omise_public_key": "pkey_attacker",
+                "omise_secret_key": "skey_attacker",
+                "omise_fee_percent": "99",
+            })
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.beam_merchant_id, "merchant-xyzzy-7f3a")
+        self.assertEqual(self.branch.beam_api_key, "live-secret-key-quux9182")
+        self.assertEqual(self.branch.omise_secret_key, "skey_live_thud5566")
+        self.assertEqual(self.branch.beam_card_fee_percent, Decimal("3.65"))
+
+    def test_a_cashier_cannot_flip_a_live_branch_into_test_mode(self):
+        """The quieter attack: no key changes, just the lane.
+
+        Clearing the Omise keys keeps the payload valid for a Test lane, so
+        without the guard this save would succeed — and every screen would
+        keep saying "paid" while no real money arrived.
+        """
+        self.as_cashier().post(
+            reverse("backoffice:branch_detail", args=[self.branch.id]), {
+                "name": self.branch.name, "code": self.branch.code,
+                "tax_id": "", "pos_id": "", "address": "", "phone": "",
+                "logo_url": "", "open_time": "09:00", "close_time": "22:00",
+                "peak_account_code": "BSV003", "active": "on",
+                "payment_mode": "test",
+                "beam_merchant_id": self.branch.beam_merchant_id,
+                "beam_api_key": "", "beam_card_fee_percent": "3.65",
+                "omise_public_key": "", "omise_secret_key": "",
+                "omise_secret_key_clear": "on", "omise_fee_percent": "3.65",
+            })
+        self.branch.refresh_from_db()
+        self.assertFalse(self.branch.beam_sandbox,
+                         "a cashier flipped a live branch into Test mode")
+
+    def test_a_cashier_can_still_edit_the_rest_of_a_branch(self):
+        """The guard is surgical: it takes payment, not the whole form."""
+        self.as_cashier().post(
+            reverse("backoffice:branch_detail", args=[self.branch.id]), {
+                "name": self.branch.name, "code": self.branch.code,
+                "tax_id": "", "pos_id": "", "address": "9 New Road",
+                "phone": "021112222", "logo_url": "", "open_time": "06:30",
+                "close_time": "21:00", "peak_account_code": "BSV003",
+                "active": "on",
+            })
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.open_time, "06:30")
+        self.assertEqual(self.branch.phone, "021112222")
+
+    def test_a_cashier_cannot_rewrite_the_shop_payment_template(self):
+        settings_row = Settings.objects.first()
+        settings_row.beam_merchant_id = "shop-merchant"
+        settings_row.beam_api_key = "shop-key"
+        settings_row.save()
+
+        self.as_cashier().post(
+            reverse("backoffice:shop_settings") + f"?branch={self.branch.id}", {
+                "shop_name": "The Rolling Pinn", "business_type": "Bakery",
+                "company_name": "", "currency": "THB", "open_time": "07:00",
+                "close_time": "20:00", "tax_mode": "inclusive",
+                "tax_percent": "7", "service_charge": "0",
+                "branch_name": self.branch.name, "tax_id": "", "phone": "",
+                "address_line_1": "", "address_line_2": "", "logo_url": "",
+                # Valid on its own terms, so only the permission guard can
+                # stop it — see the branch test above.
+                "payment_mode": "live",
+                "beam_merchant_id": "attacker-merchant",
+                "beam_api_key": "attacker-key",
+                "beam_card_fee_percent": "99",
+                "omise_public_key": "", "omise_secret_key": "",
+                "omise_fee_percent": "99",
+            })
+        settings_row.refresh_from_db()
+        self.assertEqual(settings_row.beam_merchant_id, "shop-merchant")
+        self.assertEqual(settings_row.beam_api_key, "shop-key")
+        # …but their legitimate edits landed.
+        self.assertEqual(settings_row.open_time, "07:00")
+
+    def test_an_admin_can_still_change_payment(self):
+        self.as_admin().post(
+            reverse("backoffice:branch_detail", args=[self.branch.id]), {
+                "name": self.branch.name, "code": self.branch.code,
+                "tax_id": "", "pos_id": "", "address": "", "phone": "",
+                "logo_url": "", "open_time": "09:00", "close_time": "22:00",
+                "peak_account_code": "BSV003", "active": "on",
+                "payment_mode": "live",
+                "beam_merchant_id": "newmerchant",
+                "beam_api_key": "", "beam_card_fee_percent": "3.65",
+                "omise_public_key": "pkey_live_new", "omise_secret_key": "",
+                "omise_fee_percent": "3.65",
+            })
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.beam_merchant_id, "newmerchant",
+                         "the guard also blocked an admin")

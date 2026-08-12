@@ -145,26 +145,20 @@ FEEDBACK_FORM_URL = "https://rollingpinn.formaloo.me/zg8zkq"
 
 
 def customer_receipt(request, order_number: str):
-    """Public landing page for the receipt QR code.  No auth required —
-    customers scan the QR on their thermal receipt and land here.  Two CTAs:
-    request a full tax invoice (ใบกำกับภาษีเต็มรูป), or leave a review.
+    """Where the receipt QR points.  No auth required — the scanner is a
+    customer with no session — and it 302s straight to the feedback form.
 
-    This briefly 302'd straight to the review form on the reasoning that the
-    POS issues full tax invoices at the counter anyway.  It doesn't cover the
-    case the menu exists for: a customer who only realises they need a tax
-    invoice after they've walked away, when no cashier is involved any more.
-    So the choice is back.
+    This has gone back and forth.  It was a two-button menu (issue a full tax
+    invoice / leave a review), then a redirect, then the menu again on the
+    argument that a customer who only realises they need a tax invoice after
+    leaving has no cashier to ask.  It is a redirect again by decision: the
+    scan is for feedback, and the tax invoice is the counter's job.
 
-    The two paths do not collide.  This one fills ``Order.tax_invoice_data``
-    and drives Peak; the counter flow fills ``Order.pos_tax_invoice`` and
-    drives the printer.  See that field's comment on the model for why they
-    are deliberately separate."""
-    return render(request, "backoffice/customer_receipt.html", {
-        "order_number": order_number,
-        # Passed in rather than hardcoded in the template so the form URL has
-        # one home — the redirect above used to be its only reference.
-        "feedback_url": f"{FEEDBACK_FORM_URL}?oid={order_number}",
-    })
+    The tax-invoice views under ``/receipt/<n>/tax-invoice/`` stay mounted, so
+    anyone holding that link — a customer sent it directly, or a cashier
+    working a walked-away case — can still reach the form.  Only the automatic
+    landing page is gone."""
+    return HttpResponseRedirect(f"{FEEDBACK_FORM_URL}?oid={order_number}")
 
 
 def create_tax_invoice(request, order_number: str):
@@ -3363,13 +3357,32 @@ def payment_errors(obj) -> list[str]:
     return errors
 
 
-def _payment_context(obj) -> dict:
+def can_edit_payment(user) -> bool:
+    """Only admins may see or change where the shop's money lands.
+
+    Cashiers keep the rest of the backoffice (see the Users role matrix), but
+    payment is the one block where read and write are equally sensitive: the
+    merchant id, the key tail and the Live/Test lane together tell you which
+    account is collecting, and flipping a live branch to Test silently stops
+    real money arriving while every screen still says "paid".
+    """
+    return getattr(user, "role", "") == "admin"
+
+
+def _payment_context(obj, user=None) -> dict:
     """What the payment form needs to render without ever emitting a secret.
 
     ``pay_obj`` is whichever row is being edited (a Branch or the Settings
     template) so ``_payment_fields.html`` can serve both.
+
+    For a non-admin this returns the flag alone — no object, no masks, no
+    lane. The template hides the block, and there is nothing in the context
+    for a view-source to find either.
     """
+    if not can_edit_payment(user):
+        return {"can_edit_payment": False}
     return {
+        "can_edit_payment": True,
         "pay_obj": obj,
         "pay_beam_key_mask": mask_secret(obj.beam_api_key),
         "pay_omise_key_mask": mask_secret(obj.omise_secret_key),
@@ -3377,7 +3390,7 @@ def _payment_context(obj) -> dict:
     }
 
 
-def _apply_branch_form(b: Branch, post) -> Branch:
+def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.name = (post.get("name") or "").strip()
     b.code = (post.get("code") or "").strip()
     b.tax_id = (post.get("tax_id") or "").strip()
@@ -3389,7 +3402,10 @@ def _apply_branch_form(b: Branch, post) -> Branch:
     b.close_time = (post.get("close_time") or "22:00").strip() or "22:00"
     b.peak_account_code = (post.get("peak_account_code") or "BSV003").strip() or "BSV003"
     b.active = post.get("active") == "on"
-    _apply_payment_form(b, post)
+    # Hiding the inputs only stops honest mistakes — a crafted POST would
+    # otherwise still rewrite the keys, so the guard belongs here too.
+    if can_edit_payment(user):
+        _apply_payment_form(b, post)
     return b
 
 
@@ -3401,10 +3417,13 @@ def branch_list(request):
     rows = list(Branch.objects.all().order_by("name"))
     # Surface each branch's payment lane and key ending on the list, so "which
     # branches are live, and which still need a key" is one glance rather than
-    # opening every branch in turn.
+    # opening every branch in turn. Admins only — the lane and the key tail
+    # are the same sensitive pair the branch form gates, so a cashier gets
+    # neither the column nor the values behind it.
+    show_payment = can_edit_payment(request.user)
     for row in rows:
-        row.beam_key_mask = mask_secret(row.beam_api_key)
-        row.omise_key_mask = mask_secret(row.omise_secret_key)
+        row.beam_key_mask = mask_secret(row.beam_api_key) if show_payment else ""
+        row.omise_key_mask = mask_secret(row.omise_secret_key) if show_payment else ""
 
     # Comparison is the entire reason this page exists, so the cards carry
     # trade for the selected window and the one before it, not just settings.
@@ -3469,6 +3488,7 @@ def branch_list(request):
         "settings": Settings.objects.first(),
         "total_sales": sum((r.sales for r in rows), Decimal(0)),
         "short_branches": short,
+        "can_edit_payment": show_payment,
         "span_days": span,
         **_branch_topbar_context(),
         # The window actually used, so the header reflects the picker.
@@ -3485,7 +3505,7 @@ def branch_detail(request, branch_id):
     b = get_object_or_404(Branch, id=branch_id)
     errors = []
     if request.method == "POST":
-        _apply_branch_form(b, request.POST)
+        _apply_branch_form(b, request.POST, request.user)
         errors = payment_errors(b)
         if not errors:
             b.save()
@@ -3497,7 +3517,7 @@ def branch_detail(request, branch_id):
         "branch_obj": b,
         "mode": "edit",
         "payment_errors": errors,
-        **_payment_context(b),
+        **_payment_context(b, request.user),
         **_branch_topbar_context(),
     }
     return render(request, "backoffice/branch_form.html", context)
@@ -3508,7 +3528,7 @@ def branch_new(request):
     errors = []
     if request.method == "POST":
         b = Branch()
-        _apply_branch_form(b, request.POST)
+        _apply_branch_form(b, request.POST, request.user)
         # Validate against the config the branch will actually end up with —
         # seeding fills the write-only key fields the form leaves blank, and it
         # is those seeded keys that have to match the lane.
@@ -3522,7 +3542,7 @@ def branch_new(request):
             "branch_obj": b,
             "mode": "new",
             "payment_errors": errors,
-            **_payment_context(b),
+            **_payment_context(b, request.user),
             **_branch_topbar_context(),
         }
         return render(request, "backoffice/branch_form.html", context)
@@ -3536,7 +3556,7 @@ def branch_new(request):
         "branch_obj": blank,
         "mode": "new",
         "payment_errors": errors,
-        **_payment_context(blank),
+        **_payment_context(blank, request.user),
         **_branch_topbar_context(),
     }
     return render(request, "backoffice/branch_form.html", context)
@@ -3584,8 +3604,11 @@ def shop_settings(request):
         # Payment credentials on the Settings row are a *template*: they seed
         # branches created from here on and are never read at charge time, so
         # editing them cannot disturb a branch that is already trading.
-        _apply_payment_form(s, request.POST)
-        errors = payment_errors(s)
+        # Admins only — see `can_edit_payment`. A cashier POSTing this form
+        # saves the shop fields and leaves the payment template untouched.
+        if can_edit_payment(request.user):
+            _apply_payment_form(s, request.POST)
+        errors = payment_errors(s) if can_edit_payment(request.user) else []
         if errors:
             # Refuse the whole page rather than saving the non-payment half —
             # a template that says Live while holding test keys silently mints
@@ -3594,7 +3617,7 @@ def shop_settings(request):
                 "active": "shop_settings", "settings": s, "branch_obj": branch,
                 "branches": branches, "branch": branch, "hide_dates": True,
                 "payment_errors": errors,
-                **_payment_context(s),
+                **_payment_context(s, request.user),
             }
             return render(request, "backoffice/shop_settings.html", context)
         s.save()
@@ -3623,7 +3646,7 @@ def shop_settings(request):
         "branches": branches,
         "branch": branch,
         "hide_dates": True,
-        **_payment_context(s),
+        **_payment_context(s, request.user),
     }
     return render(request, "backoffice/shop_settings.html", context)
 
