@@ -8,9 +8,13 @@
   distinction — password here, PIN on the till, neither works on the other —
   is stated before the table, not buried in help.
 
-  The role matrix fills the space three rows would otherwise leave empty, so
-  "what does a cashier account actually get?" is answered where you assign it
-  rather than guessed at.
+  There was a "what each role can do" matrix here. It was written as design
+  intent and most of it was never enforced: the POS app stops a cashier
+  editing products, but the backoffice never got the same gate, so a cashier
+  could add staff, edit the catalogue and change the VAT rate in a browser
+  while the table showed a dash. A permissions table that a reader cannot
+  trust is worse than no table, so it is gone rather than corrected — the
+  chips in the Role column are the honest version.
 {% endcomment %}
 
 {% block title %}Users{% endblock %}
@@ -137,39 +141,11 @@
   <div class="panel-f" style="display:flex;align-items:center;gap:10px">
     <svg style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-slash"/></svg>
     The account you are signed in as cannot be revoked, and the last remaining admin cannot be removed.
-  </div>
-</div>
-
-<div class="panel">
-  <div class="panel-h">What each role can do</div>
-  <table class="tbl">
-    <thead><tr><th>Capability</th><th class="r" style="width:110px">Admin</th><th class="r" style="width:110px">Cashier</th></tr></thead>
-    <tbody>
-      <tr><td>Sell, refund and close a shift on the till</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td></tr>
-      <tr><td>View every report and export</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td></tr>
-      <tr><td>Add, edit or delete a product</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--mut2)">—</td></tr>
-      <tr><td>Add branches, staff and users</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--mut2)">—</td></tr>
-      <tr><td>Change payment and tax settings</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--mut2)">—</td></tr>
-      <tr><td>Read the audit log</td>
-        <td class="r" style="color:var(--green);font-weight:700">✓</td>
-        <td class="r" style="color:var(--mut2)">—</td></tr>
-    </tbody>
-  </table>
-  <div class="panel-f">
     Every sign-in attempt, successful or not, is written to the
     <a href="{% url 'backoffice:audit_log' %}">audit log</a> with its IP address.
   </div>
 </div>
+
 {% endblock %}
 
 {% block extra_scripts %}
