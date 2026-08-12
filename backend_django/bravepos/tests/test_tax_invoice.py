@@ -199,9 +199,12 @@ class TaxInvoiceTests(TestCase):
 
 
 class ReceiptQrLandingTests(TestCase):
-    """The QR on every printed slip lands here.  It has to keep offering both
-    choices: a customer who only realises they need a tax invoice after leaving
-    has no cashier to ask, and this page is their only route in."""
+    """The QR on every printed slip lands here, and goes straight to feedback.
+
+    The scan is for a review; issuing a tax invoice is the counter's job.  The
+    tax-invoice URLs stay reachable for anyone sent one directly, so these pin
+    the redirect *and* that the form behind it did not go away with the menu.
+    """
 
     def setUp(self):
         make_shop()
@@ -210,27 +213,28 @@ class ReceiptQrLandingTests(TestCase):
             branch=self.branch, order_number='PS001019681', total=Decimal('650.00'),
         )
 
-    def test_the_scan_lands_on_the_menu_not_a_redirect(self):
+    def test_the_scan_redirects_to_the_feedback_form(self):
         res = self.client.get(f'/receipt/{self.order.order_number}/')
-        self.assertEqual(res.status_code, 200)
-
-    def test_both_choices_are_offered(self):
-        res = self.client.get(f'/receipt/{self.order.order_number}/')
-        body = res.content.decode()
-        self.assertIn(f'/receipt/{self.order.order_number}/tax-invoice/', body)
-        self.assertIn('formaloo.me', body)
+        self.assertEqual(res.status_code, 302)
+        self.assertIn('formaloo.me', res['Location'])
 
     def test_the_review_link_carries_the_order(self):
         # Without ``oid`` a submitted review can't be tied back to its sale.
         res = self.client.get(f'/receipt/{self.order.order_number}/')
-        self.assertIn(f'oid={self.order.order_number}', res.content.decode())
+        self.assertIn(f'oid={self.order.order_number}', res['Location'])
 
     def test_it_needs_no_login(self):
         # Root-level and unauthenticated on purpose — the scanner is a customer
         # with no session.  A login redirect here would break every printed QR.
         res = self.client.get(f'/receipt/{self.order.order_number}/')
-        self.assertNotIn('login', res.get('Location', '').lower())
+        self.assertNotIn('login', res['Location'].lower())
+
+    def test_the_tax_invoice_form_is_still_reachable(self):
+        """Only the landing menu went away.  A customer sent the link directly
+        must still be able to fill the form."""
+        res = self.client.get(f'/receipt/{self.order.order_number}/tax-invoice/')
         self.assertEqual(res.status_code, 200)
+        self.assertIn('tax-invoice/save/', res.content.decode())
 
 
 class CustomerTaxIdentityTests(TestCase):
