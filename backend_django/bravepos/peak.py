@@ -39,6 +39,7 @@ from typing import Any, Optional
 import httpx
 
 from django.db import transaction
+from django.utils import timezone as djtz
 
 from .models import (
     ConsolidatedReceipt,
@@ -466,6 +467,11 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
             queue_id = _enqueue_peak_receipt(locked)
             locked.peak_queue_id = queue_id
             locked.save(update_fields=["peak_queue_id"])
+            # This bill now documents itself at Peak, so the consolidation
+            # must stop counting it.  Future runs exclude it on peak_queue_id;
+            # a run that already happened filed a receipt that includes it,
+            # and only a reissue can take it back out.
+            flag_branch_day_for_reissue(locked)
             return None
 
     # Subsequent poll: a single quick status check, outside the lock.
@@ -478,6 +484,44 @@ def create_peak_receipt_for_order(order: Order) -> Optional[str]:
 # tax invoice, this bills a whole branch-day to the standing "bravepos"
 # contact.  Both end up at POST /receipts/queue; the difference is what goes
 # in the products list and who the contact is.
+
+
+def flag_branch_day_for_reissue(order: Order) -> bool:
+    """Mark the consolidated receipt covering ``order`` as stale.  Returns
+    whether a branch-day was actually flagged.
+
+    A consolidated receipt is a snapshot of what a branch-day sold, filed the
+    morning after.  Two things invalidate it afterwards: the bill gets its own
+    Peak tax invoice, so the consolidation now bills that sale a second time;
+    or it is voided (or un-voided), so the day's total is simply wrong.
+    Neither is exotic — a customer can ask for a full tax invoice days later,
+    and a mis-rung bill is often only caught the next morning.
+
+    Flagging is all that happens here.  The correction is a void plus a
+    replacement document: slow, able to fail, and no business running inside
+    the request a cashier or customer is waiting on.  The sweep in
+    ``consolidate_daily --issue`` does that work — this is the
+    ``is_reconsolidate`` flag the SilomPOS job filters on, under our name for
+    it.
+
+    A day nobody has billed yet has no row to flag and needs none: it gets
+    consolidated correctly the first time, because the consolidation reads the
+    orders as they stand when it runs.
+    """
+    if not order.branch_id or not order.created_at:
+        return False
+    day = djtz.localtime(order.created_at).date()
+    return bool(
+        ConsolidatedReceipt.objects
+        .filter(branch_id=order.branch_id, date=day)
+        # No queue id means nothing was ever filed for this branch-day, so
+        # there is no stale document to correct.
+        .exclude(peak_queue_id="")
+        # .update() skips auto_now, and updated_at is how you tell a row that
+        # was touched tonight from one that has been failing to reissue.
+        .update(needs_reissue=True, updated_at=djtz.now())
+    )
+
 
 # Peak's "Receipt not found" on a void.  There is no live document under this
 # code — already voided, or never materialised — so nothing is left billing
@@ -702,6 +746,13 @@ def issue_consolidated_receipt(day, branch, branch_payload: dict,
         poll_consolidated_receipt(cr, attempts=poll_attempts)
         return cr, "polled"
 
+    # Reissuing a day whose first attempt never confirmed: check the queue once
+    # more before replacing it.  Peak may have materialised that document after
+    # the earlier poll gave up, and a reissue that skipped the void because the
+    # code was not yet *recorded* would leave two live receipts for the day.
+    if cr and cr.peak_queue_id and not cr.peak_code:
+        poll_consolidated_receipt(cr, attempts=1)
+
     # Void first, issue second.  The other order double-bills the branch-day
     # whenever the void fails.
     if cr and cr.peak_code:
@@ -731,3 +782,35 @@ def issue_consolidated_receipt(day, branch, branch_payload: dict,
 
     poll_consolidated_receipt(cr, attempts=poll_attempts)
     return cr, "issued"
+
+
+def retire_consolidated_receipt(cr: ConsolidatedReceipt) -> None:
+    """Void a branch-day's receipt and leave that day billed by nothing.
+
+    The end state of a flagged day with nothing left to consolidate: every bill
+    on it was cancelled, or every one of them issued its own tax invoice.  Peak
+    will not accept a receipt with no products, so there is no replacement to
+    file — and leaving the old document live keeps billing sales that are no
+    longer its to bill.
+
+    The row is kept, emptied.  It is the record that this branch-day was billed
+    once and now deliberately is not, and holding the (branch, date) slot means
+    a bill that later lands on that day still consolidates through the ordinary
+    path.  Raises :class:`PeakVoidFailed` if the void is refused, leaving the
+    row flagged for the next sweep to retry.
+    """
+    # Same reasoning as the reissue path: a queue id with no recorded code may
+    # still have become a live document, and voiding is the only way to be sure
+    # it stops billing.
+    if cr.peak_queue_id and not cr.peak_code:
+        poll_consolidated_receipt(cr, attempts=1)
+    if cr.peak_code:
+        void_receipt(cr.peak_code)
+
+    cr.peak_queue_id = ""
+    cr.response = None
+    cr.needs_reissue = False
+    cr.save(update_fields=[
+        "peak_queue_id", "response", "needs_reissue", "updated_at",
+    ])
+    cr.orders.clear()

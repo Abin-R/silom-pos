@@ -34,6 +34,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { C, MONO, R } from "../lib/theme";
 import { Btn, Tag } from "../lib/ui";
+import { WIDE } from "../components/AppShell";
 import { t as tr, useT, formatLongDate, formatClock } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -70,7 +71,9 @@ export default function Login() {
   const { lang } = useT();
   const router = useRouter();
   const { width, height } = useWindowDimensions();
-  const isWide = width >= 900;
+  // Same threshold as every other screen — a second copy is how login ended
+  // up on the phone layout while the rest of the app was on the tablet one.
+  const isWide = width >= WIDE;
   const insets = useSafeAreaInsets();
   // Pack things tighter on shorter phones so the keypad never hits the
   // gesture-nav strip. Tested visually against ~640px-tall androids.
@@ -375,7 +378,7 @@ export default function Login() {
         </TouchableOpacity>
 
         {open && (
-          <View style={s.popover}>
+          <View style={s.popoverInline}>
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
@@ -572,13 +575,9 @@ export default function Login() {
           </View>
 
           <View style={[s.padCol, compact && { paddingVertical: 24 }]}>
-            {showStaffPicker && (
-              <TouchableOpacity
-                style={s.popoverBackdrop}
-                activeOpacity={1}
-                onPress={() => setShowStaffPicker(false)}
-              />
-            )}
+            {/* No outside-tap backdrop: the list is in normal flow now, so a
+                full-bleed catcher would sit on top of it and eat every tap.
+                Closing happens on select, on the control, or on a digit. */}
             <Text style={[s.h1, compact && { fontSize: 24 }]} numberOfLines={1}>
               {selectedUser ? `Hi, ${selectedUser.name}` : tr("login.whos_on_the_till")}
             </Text>
@@ -783,7 +782,7 @@ const s = StyleSheet.create({
   // ── Staff select ──
   // The wrapper owns the stacking context so the popover paints over the dots
   // and keypad below it rather than being clipped by them.
-  selectWrap: { marginTop: 24, zIndex: 20 },
+  selectWrap: { marginTop: 24 },
   select: {
     flexDirection: "row",
     alignItems: "center",
@@ -817,13 +816,13 @@ const s = StyleSheet.create({
   selectPlaceholder: { fontSize: 16, fontWeight: "600", color: C.ink3 },
   selectHint: { fontSize: 12, color: C.ink3, marginTop: 2 },
 
-  popover: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    right: 0,
+  // In normal flow, not absolute. An absolutely-positioned dropdown renders
+  // outside its parent's bounds, and Android refuses to deliver touches there
+  // — the list appeared but would not scroll past the few rows that happened
+  // to overlap the control. Pushing the keypad down is the lesser evil.
+  popoverInline: {
+    maxHeight: 232,
     marginTop: -2,
-    maxHeight: 250,
     backgroundColor: C.surface,
     borderWidth: 2,
     borderTopWidth: 0,
@@ -831,11 +830,6 @@ const s = StyleSheet.create({
     borderBottomLeftRadius: R.card,
     borderBottomRightRadius: R.card,
     overflow: "hidden",
-    shadowColor: "#0B2050",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    elevation: 10,
   },
   sRow: {
     flexDirection: "row",
@@ -861,14 +855,6 @@ const s = StyleSheet.create({
   sRole: { fontSize: 12, color: C.ink2Soft, marginTop: 1 },
 
   // ── Keypad column ──
-  popoverBackdrop: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 10,
-  },
   padCol: {
     flex: 1,
     minWidth: 0,

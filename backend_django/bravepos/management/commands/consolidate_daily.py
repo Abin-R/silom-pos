@@ -39,6 +39,17 @@ What is counted, and why:
   ``qty × price`` no longer equals what was actually charged, and the
   difference would have to be smuggled out as a fake discount. One row per
   price keeps every row arithmetically true.
+
+Both of those exclusions are decided at the moment the day is billed, and a
+day can change afterwards: a customer asks for a full tax invoice on Thursday
+for a bill rung on Monday, or a mistake is voided the next morning. The
+receipt already filed for that day is then wrong — the sale is billed twice,
+or billed when it should not be. So ``--issue`` ends with a **reissue sweep**:
+every ``ConsolidatedReceipt`` a write path flagged ``needs_reissue`` is voided
+at Peak and replaced with one rebuilt from the orders as they stand now. This
+is the SilomPOS ``is_reconsolidate`` filter under our name for it, and unlike
+ordinary issuing it runs for any date — a flagged row is a replacement for a
+document already known to be wrong, not a new document nobody asked for.
 """
 from __future__ import annotations
 
@@ -51,7 +62,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Prefetch, Q
 from django.utils import timezone as djtz
 
-from bravepos.models import Branch, Order, OrderItem
+from bravepos.models import Branch, ConsolidatedReceipt, Order, OrderItem
 from bravepos.peak import (
     CONSOLIDATION_CONTACT_ID_ENV,
     CONSOLIDATION_CONTACT_NAME,
@@ -59,6 +70,7 @@ from bravepos.peak import (
     consolidation_contact_id,
     create_consolidation_contact,
     issue_consolidated_receipt,
+    retire_consolidated_receipt,
 )
 
 
@@ -126,6 +138,11 @@ class Command(BaseCommand):
             "--backfill", action="store_true",
             help="With --issue: lift the yesterday-only rule and issue every "
                  "day in the --date/--days range. For catching up history.",
+        )
+        parser.add_argument(
+            "--skip-reissue-sweep", action="store_true",
+            help="With --issue: do NOT correct branch-days flagged stale by a "
+                 "late tax invoice or void. They stay flagged for a later run.",
         )
         parser.add_argument(
             "--skip-date", action="append", default=[], metavar="YYYY-MM-DD",
@@ -209,6 +226,12 @@ class Command(BaseCommand):
 
         if opts["issue"]:
             self._issue(payload, contact_id, reissue=opts["reissue"])
+            # After the ordinary billing, not before: a day billed tonight is
+            # built from the orders as they stand, so it is never stale, and
+            # doing it in this order keeps the flagged-day corrections at the
+            # bottom of the log where someone reading it will see them.
+            if not opts["skip_reissue_sweep"]:
+                self._reissue_sweep(contact_id, branches)
 
     # ── argument resolution ──────────────────────────────────────────────
     def _resolve_contact(self, create: bool) -> str:
@@ -507,6 +530,108 @@ class Command(BaseCommand):
             except PeakVoidFailed as e:
                 # The superseded receipt is still live, so the branch-day is
                 # billed (staler than we'd like) rather than billed twice.
+                self.stderr.write(self.style.ERROR(
+                    f"  {label}: not reissued — {e}"
+                ))
+                continue
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(f"  {label}: {e}"))
+                continue
+
+            code = cr.peak_code or f"queued {cr.peak_queue_id}"
+            self.stdout.write(
+                f"  {label}: {action} → {code} "
+                f"({bp['grand_total']:,.2f} THB, {bp['order_count']} bills)"
+            )
+
+    # ── reissue sweep ────────────────────────────────────────────────────
+    def _reissue_sweep(self, contact_id: str, branches: list[Branch] | None) -> None:
+        """Void and replace every branch-day flagged stale since the last run.
+
+        A bill that gained its own Peak tax invoice, or was voided, after its
+        branch-day had already been billed leaves that consolidated receipt
+        overstating the day — the sale is filed twice, or filed at all when it
+        should not be. The write paths flag the row (see
+        :func:`flag_branch_day_for_reissue`); this is where the correction
+        happens, and it is the whole reason ``needs_reissue`` exists.
+
+        Runs on any date, unlike ordinary issuing. The yesterday-only rule
+        exists to stop a stray ``--days`` filing a pile of *new* documents
+        nobody asked for; every row here is a replacement for a document
+        already known to be wrong, and the flag is the request.
+
+        Each day is rebuilt from the orders as they stand now, so the
+        replacement reflects every change since — not just the one that
+        happened to set the flag. A day that fails stays flagged and is
+        retried on the next run.
+        """
+        stale = (
+            ConsolidatedReceipt.objects
+            .filter(needs_reissue=True)
+            .select_related("branch")
+            .order_by("date", "branch__name")
+        )
+        if branches is not None:
+            stale = stale.filter(branch__in=branches)
+        stale = list(stale)
+        if not stale:
+            return
+
+        self.stdout.write(self.style.MIGRATE_HEADING(
+            f"reissuing {len(stale)} stale branch-day(s)"
+        ))
+
+        for cr in stale:
+            branch = cr.branch
+            label = f"{cr.date} {branch.name}"
+
+            if branch.name in EXCLUDED_BRANCH_NAMES:
+                # Should not be reachable — these are never billed, so they
+                # have no receipt to go stale. If one exists it was filed by
+                # hand, and correcting it is a decision for a person.
+                self.stderr.write(self.style.WARNING(
+                    f"  {label}: flagged but never billed — left alone"
+                ))
+                continue
+
+            # Rebuild that one branch-day from scratch. Naming the branch
+            # bypasses the excluded-names filter inside _consolidate, which is
+            # why the check above is done here instead.
+            day_payload = self._consolidate(cr.date, [branch])
+            bp = next(
+                (b for b in day_payload["branches"]
+                 if b["branch_id"] == str(branch.id)),
+                None,
+            )
+
+            if bp is None or not bp["items"]:
+                # Nothing left to bill: every bill on the day was cancelled or
+                # is now invoiced at Peak in its own right. Peak rejects a
+                # receipt with no products, so the correction is to take the
+                # old document down and leave the day filed by nothing.
+                try:
+                    retire_consolidated_receipt(cr)
+                except PeakVoidFailed as e:
+                    self.stderr.write(self.style.ERROR(
+                        f"  {label}: not retired — {e}"
+                    ))
+                    continue
+                except Exception as e:
+                    self.stderr.write(self.style.ERROR(f"  {label}: {e}"))
+                    continue
+                self.stdout.write(
+                    f"  {label}: retired — nothing left to bill"
+                )
+                continue
+
+            try:
+                cr, action = issue_consolidated_receipt(
+                    cr.date, branch, bp, contact_id, reissue=True,
+                )
+            except PeakVoidFailed as e:
+                # The superseded receipt is still live, so the branch-day stays
+                # billed by stale figures rather than by two documents at once.
+                # The row keeps its flag and the next run tries again.
                 self.stderr.write(self.style.ERROR(
                     f"  {label}: not reissued — {e}"
                 ))

@@ -84,7 +84,10 @@ def create_order_from_items(
     discount_value: Decimal = Decimal('0'),
     discount_amount: Decimal = Decimal('0'),
     paid_amount: Decimal | None = None,
-    status: str = 'new',
+    # Paid means done.  The kanban that used to walk a bill through
+    # new → preparing → completed is switched off, so anything left in an
+    # earlier state would sit there forever with nothing to advance it.
+    status: str = 'completed',
     source: str = 'table',
     staff: str = '',
     customer_id=None,

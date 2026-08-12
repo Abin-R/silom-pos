@@ -583,6 +583,7 @@ const en = {
     promptpay: "PromptPay",
     promptpay_qr: "PromptPay QR",
     receipt_printed: "Receipt printed",
+    rounding: "Rounding",
     received: "Received",
     register: "Register",
     retrieve: "Retrieve",
@@ -635,6 +636,7 @@ const en = {
     credit_card: "Credit Card",
     credit: "Credit",
     custom: "Custom",
+    n_queued: "%{count} queued",
     receipts_waiting_to_print: {
       one: "%{count} receipt waiting to print",
       other: "%{count} receipts waiting to print",

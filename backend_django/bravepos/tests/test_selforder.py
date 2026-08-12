@@ -336,7 +336,7 @@ class PromotionTests(TestCase):
 
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(order.source, 'kiosk')
-        self.assertEqual(order.status, 'new')
+        self.assertEqual(order.status, 'completed')
         self.assertEqual(order.staff, 'Self Order')
         self.assertEqual(order.total, Decimal('200.00'))
         self.assertIsNotNone(order.queue_number)

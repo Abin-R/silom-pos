@@ -58,6 +58,10 @@ export const RAIL_WIDTH = 195;
 /** Icon-only rail. Collapsing frees ~123px — enough for the category column
  *  to come back beside the grid on a 1200px tablet. */
 export const RAIL_COLLAPSED_WIDTH = 72;
+/** Width of a row once the rail is collapsed: the rail minus the list's own
+ *  padding. Icons sit in a box exactly this wide, so they are centred when
+ *  collapsed and can never be clipped by the row's overflow. */
+const COLLAPSED_ROW = RAIL_COLLAPSED_WIDTH - 24;
 /** One duration for every part of the collapse, so the width, the labels and
  *  the chevron all land together instead of arriving in three waves. */
 const COLLAPSE_MS = 220;
@@ -127,39 +131,20 @@ function RailBody({
     inputRange: [0, 0.55, 1],
     outputRange: [1, 0, 0],
   });
-  // Collapsed, a row is RAIL_COLLAPSED_WIDTH minus the list's own padding —
-  // 48px. Centring a 21px icon in that needs 13.5, not the 25 that was pushing
-  // every glyph right of its own highlight.
-  const rowPadLeft = t.interpolate({
-    inputRange: [0, 1],
-    outputRange: [16, (RAIL_COLLAPSED_WIDTH - 24 - 21) / 2],
-  });
-  // Same sum for the 18px collapse chevron.
-  const chevronPadLeft = t.interpolate({
-    inputRange: [0, 1],
-    outputRange: [12, (RAIL_COLLAPSED_WIDTH - 24 - 18) / 2],
-  });
-  // ...and for the 34px logo tile, which spans the full rail (no list padding).
-  const logoPadLeft = t.interpolate({
-    inputRange: [0, 1],
-    outputRange: [18, (RAIL_COLLAPSED_WIDTH - 34) / 2],
-  });
 
   return (
     <>
       <Animated.View
-        style={[
-          s.logo,
-          { paddingLeft: logoPadLeft },
-          dense && { minHeight: 76, paddingVertical: 10 },
-        ]}
+        style={[s.logo, dense && { minHeight: 76, paddingVertical: 10 }]}
       >
-        <View style={s.logoTile}>
+        <View style={s.logoTileBox}>
+          <View style={s.logoTile}>
           <Image
             source={require("../assets/images/icon.png")}
             style={s.logoImg}
-            resizeMode="cover"
-          />
+              resizeMode="cover"
+            />
+          </View>
         </View>
         <Animated.View
           style={{ flex: 1, minWidth: 0, opacity: labelOpacity }}
@@ -178,9 +163,11 @@ function RailBody({
 
       {!!onToggleCollapse && (
         <TouchableOpacity onPress={onToggleCollapse} activeOpacity={0.8} testID="rail-collapse">
-          <Animated.View style={[s.collapseBtn, { paddingLeft: chevronPadLeft }]}>
+          <Animated.View style={s.collapseBtn}>
           <Animated.View
             style={{
+              width: COLLAPSED_ROW,
+              alignItems: "center",
               transform: [
                 {
                   rotate: t.interpolate({
@@ -217,14 +204,14 @@ function RailBody({
               activeOpacity={0.8}
               testID={`side-${it.key}`}
             >
-              <Animated.View
-                style={[s.nv, { height: rowH, paddingLeft: rowPadLeft }, on && s.nvOn]}
-              >
-                <Ionicons
-                  name={it.icon}
-                  size={21}
-                  color={on ? C.surface : C.navIcon}
-                />
+              <Animated.View style={[s.nv, { height: rowH }, on && s.nvOn]}>
+                <View style={s.nvIcon}>
+                  <Ionicons
+                    name={it.icon}
+                    size={21}
+                    color={on ? C.surface : C.navIcon}
+                  />
+                </View>
                 <Animated.Text
                   style={[s.nvText, on && s.nvTextOn, { opacity: labelOpacity }]}
                   numberOfLines={1}
@@ -244,8 +231,10 @@ function RailBody({
           activeOpacity={0.8}
           testID="sidebar-logout"
         >
-          <Animated.View style={[s.nv, { height: rowH, paddingLeft: rowPadLeft }]}>
-            <Ionicons name="log-out-outline" size={21} color={C.navIcon} />
+          <Animated.View style={[s.nv, { height: rowH }]}>
+            <View style={s.nvIcon}>
+              <Ionicons name="log-out-outline" size={21} color={C.navIcon} />
+            </View>
             <Animated.Text style={[s.nvText, { opacity: labelOpacity }]} numberOfLines={1}>
               {tr("nav.logout")}
             </Animated.Text>
@@ -364,12 +353,16 @@ const s = StyleSheet.create({
   drawerPanel: { width: 232 },
   overlay: { flex: 1, flexDirection: "row", backgroundColor: C.scrim },
 
+  logoTileBox: {
+    width: RAIL_COLLAPSED_WIDTH,
+    flexShrink: 0,
+    alignItems: "center",
+  },
   logo: {
     minHeight: 96,
     backgroundColor: C.navDark,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
     paddingRight: 18,
     paddingVertical: 14,
     overflow: "hidden",
@@ -409,9 +402,13 @@ const s = StyleSheet.create({
     borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
-    paddingRight: 16,
     overflow: "hidden",
+  },
+  nvIcon: {
+    width: COLLAPSED_ROW,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
   },
   // With no label to read, the highlight is the only thing saying where you
   // are — so it gets a lift off the navy rather than a flat fill.
@@ -430,7 +427,7 @@ const s = StyleSheet.create({
     letterSpacing: -0.15,
     // Fixed, not flexible — a shrinking label would re-wrap on every frame of
     // the animation instead of being clipped cleanly by the rail.
-    width: RAIL_WIDTH - 16 - 21 - 14 - 16,
+    width: RAIL_WIDTH - 24 - COLLAPSED_ROW,
   },
   nvTextOn: { color: C.surface, fontWeight: "700" },
 

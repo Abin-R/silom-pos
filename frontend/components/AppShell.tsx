@@ -20,8 +20,15 @@ import { C } from "../lib/theme";
 import { Spacer } from "../lib/ui";
 import { NavRail, NavDrawer, RAIL_WIDTH, RAIL_COLLAPSED_WIDTH } from "./NavRail";
 
-/** Tablet threshold. Below this the rail collapses and columns stack. */
-export const WIDE = 900;
+/**
+ * Tablet threshold. Below this the rail collapses and columns stack.
+ *
+ * 900 was too high: a Galaxy Tab A9 is ~893 CSS px in landscape, so it fell
+ * seven pixels short and got the phone layout — no rail, no cart column — on
+ * an actual tablet. 820 clears every tablet we ship to while still leaving
+ * landscape phones (~800 and below) on the stacked layout they need.
+ */
+export const WIDE = 820;
 
 export function useIsWide() {
   const { width } = useWindowDimensions();

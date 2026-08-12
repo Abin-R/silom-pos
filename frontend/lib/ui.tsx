@@ -921,8 +921,11 @@ const s = StyleSheet.create({
     color: C.ink3,
     marginTop: 6,
     textAlign: "center",
-    maxWidth: 320,
+    // Thai has no spaces, so a long phrase cannot wrap at a word boundary and
+    // overflows a narrow box instead. Give it room and let it break anywhere.
+    maxWidth: 400,
     lineHeight: 20,
+    paddingHorizontal: 12,
   },
 
   kv: {

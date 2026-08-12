@@ -165,31 +165,38 @@ export function useStarPrinter() {
   // ─── Auto-retry queue drainer ─────────────────────────────────────
   // Only pulls from the persisted retry queue when nothing is already in
   // flight, so live prints (a cashier tapping Pay) always take priority.
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
+  const stoppedRef = useRef(false);
 
-    const tryDrain = async () => {
-      if (stopped || jobsRef.current.length > 0) return;
-      const job = await queue.nextDueJob(QUEUE_POLL_MS);
-      if (!job) return;
-      // nextDueJob has already *claimed* the job in the inFlight Set.  If we
-      // bail now without releasing it, that claim leaks for the process
-      // lifetime and the receipt never retries.
-      if (stopped) { queue.release(job.id); return; }
-      setJobs((prev) => [...prev, {
-        config: job.config,
-        order: job.order,
-        shop: job.shop,
-        queueId: job.id,
-        resolve: () => {/* queue path — caller already returned */},
-      }]);
-    };
-
-    tryDrain();
-    timer = setInterval(tryDrain, QUEUE_POLL_MS);
-    return () => { stopped = true; if (timer) clearInterval(timer); };
+  const tryDrain = useCallback(async () => {
+    if (stoppedRef.current || jobsRef.current.length > 0) return;
+    const job = await queue.nextDueJob(QUEUE_POLL_MS);
+    if (!job) return;
+    // nextDueJob has already *claimed* the job in the inFlight Set.  If we
+    // bail now without releasing it, that claim leaks for the process
+    // lifetime and the receipt never retries.
+    if (stoppedRef.current) { queue.release(job.id); return; }
+    setJobs((prev) => [...prev, {
+      config: job.config,
+      order: job.order,
+      shop: job.shop,
+      queueId: job.id,
+      resolve: () => {/* queue path — caller already returned */},
+    }]);
   }, []);
+
+  useEffect(() => {
+    stoppedRef.current = false;
+    tryDrain();
+    const timer = setInterval(tryDrain, QUEUE_POLL_MS);
+    return () => { stoppedRef.current = true; clearInterval(timer); };
+  }, [tryDrain]);
+
+  /** Make everything due now and start draining — "the printer is back". */
+  const retryQueuedNow = useCallback(async () => {
+    const n = await queue.retryAll();
+    await tryDrain();
+    return n;
+  }, [tryDrain]);
 
   // ─── Public API ────────────────────────────────────────────────────
   const printReceipt = useCallback(
@@ -251,5 +258,5 @@ export function useStarPrinter() {
     );
   }, [active]);
 
-  return { printReceipt, reprint, ReceiptOverlay };
+  return { printReceipt, reprint, retryQueuedNow, ReceiptOverlay };
 }

@@ -208,6 +208,19 @@ class Branch(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            # The POS ID is the machine number the Revenue Department issues to
+            # one till, and it is printed on that till's tax invoices — two
+            # branches sharing one would be filing each other's sales.  Blank is
+            # exempt: a branch that has not been registered yet has no number,
+            # and any number of branches may be in that state (they simply
+            # cannot issue a full tax invoice — see the POS Reprint menu).
+            models.UniqueConstraint(
+                fields=["pos_id"],
+                condition=~models.Q(pos_id=""),
+                name="branch_pos_id_unique_when_set",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -882,7 +895,12 @@ class ConsolidatedReceipt(models.Model):
       a later reissue must void first.
     * ``needs_reissue`` — a late or voided bill landed in a day already
       billed, so the figures are stale. SilomPOS calls this
-      ``is_reconsolidate``.
+      ``is_reconsolidate``. Raised by ``peak.flag_branch_day_for_reissue``
+      from the write paths that can invalidate a filed receipt (a bill
+      getting its own tax invoice, a void, an un-void), and cleared only by
+      the reissue sweep in ``consolidate_daily --issue`` once the stale
+      document has actually been voided and replaced. A row that stays
+      flagged is a branch-day Peak is still describing wrongly.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(

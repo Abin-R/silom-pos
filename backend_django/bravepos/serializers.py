@@ -17,6 +17,13 @@ class BranchSerializer(serializers.ModelSerializer):
     # baked into the create flow; if admin manually assigns multiple, we just
     # show the first.
     cashier_email = serializers.SerializerMethodField()
+    # Declared, and with no validators, purely to keep DRF's own uniqueness
+    # machinery off this field: ``branch_pos_id_unique_when_set`` would
+    # otherwise generate a UniqueValidator whose message ("branch with this pos
+    # id already exists") names no branch, which is the one fact the person
+    # fixing the clash needs.  ``validate_pos_id`` below does the check instead.
+    pos_id = serializers.CharField(
+        max_length=64, required=False, allow_blank=True, validators=[])
 
     class Meta:
         model = Branch
@@ -28,10 +35,37 @@ class BranchSerializer(serializers.ModelSerializer):
                   'peak_account_code', 'active', 'created_at', 'cashier_email',
                   'self_order_enabled']
         read_only_fields = ['created_at', 'cashier_email', 'self_order_enabled']
+        # The other half of that: from the same constraint DRF also builds a
+        # serializer-level UniqueTogetherValidator, and that one forces every
+        # field it covers to be *required* on create — a new branch normally has
+        # no machine number yet, so branch creation would start 400-ing.
+        validators = []
 
     def get_cashier_email(self, obj):
         s = obj.staff.filter(role='cashier').order_by('created_at').first()
         return s.email if s else ''
+
+    def validate_pos_id(self, value):
+        """One Revenue Department machine number, one branch.
+
+        The database enforces this too (``branch_pos_id_unique_when_set``), but
+        an IntegrityError reaches the caller as a 500 — this turns it into a 400
+        that names the branch already holding the number.  Blank is always
+        allowed: it means "not registered yet", which any number of branches
+        may be.
+        """
+        value = (value or '').strip()
+        if not value:
+            return value
+        clash = Branch.objects.filter(pos_id=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        other = clash.first()
+        if other:
+            raise serializers.ValidationError(
+                f'POS ID "{value}" already belongs to {other.name}.'
+            )
+        return value
 
 
 class CategorySerializer(serializers.ModelSerializer):

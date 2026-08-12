@@ -22,6 +22,7 @@ from rest_framework.response import Response
 
 from . import audit, gateways
 from .orders import create_order_from_items
+from .peak import flag_branch_day_for_reissue
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
     Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
@@ -769,12 +770,13 @@ def orders_list_create(request):
     payload = dict(request.data)
     items_data = payload.pop('items', []) or []
 
-    # Silom-style workflow: after payment, the order lands in the "New Order"
-    # kanban column so kitchen staff can pick it up and progress it through
-    # Preparing → Completed manually.  Callers can still send an explicit
-    # status (e.g. "completed" for an over-the-counter walk-in) to skip the queue.
+    # A rung-up sale is finished the moment it is paid, so it lands as
+    # "completed".  It used to land as "new" for the Order Hub kanban to walk
+    # through Preparing → Completed, but that screen is switched off and no one
+    # was using it — an order left in "new" would now have nothing to advance
+    # it.  An explicit status is still honoured for any caller that wants one.
     requested_status = payload.get('status')
-    initial_status = requested_status if requested_status in dict(Order.STATUS_CHOICES) else 'new'
+    initial_status = requested_status if requested_status in dict(Order.STATUS_CHOICES) else 'completed'
 
     order = create_order_from_items(
         branch=branch,
@@ -892,6 +894,9 @@ def order_update_status(request, order_id):
     new_status = (request.data or {}).get('status')
     if new_status not in dict(Order.STATUS_CHOICES):
         return Response({'detail': 'Invalid status'}, status=400)
+    # Only cancelled-ness decides whether this bill's money is part of the day.
+    # new/preparing/completed are kitchen flow and change nothing downstream.
+    void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
     order.status = new_status
     update_fields = ['status']
     # Stamp the void audit the first time a bill is cancelled so the
@@ -910,6 +915,13 @@ def order_update_status(request, order_id):
     # Cancelling (or un-cancelling) a cash bill moves the drawer, so the shift's
     # cash totals have to be recomputed against the new status.
     refresh_shift_cash(order.shift)
+    # Voiding (or un-voiding) changes what the branch-day sold, so a consolidated
+    # receipt already filed for that day now states the wrong total.  Flag it for
+    # the nightly void-and-reissue; a day not yet billed has nothing to flag.
+    # Gated on an actual change of state: every flag costs a live Peak document
+    # its number when the sweep replaces it, so a re-cancel must not raise one.
+    if void_state_changed:
+        flag_branch_day_for_reissue(order)
     return Response(OrderSerializer(order).data)
 
 

@@ -24,7 +24,22 @@ const MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 // After this many failed attempts we stop retrying.  Saves us from
 // spamming an offline printer indefinitely if e.g. the IP changed.
-const MAX_ATTEMPTS = 60;        // 60 × 30s = 30 min of retries
+//
+// With the old fixed 30s cadence this capped retries at 30 minutes while
+// MAX_AGE_MS kept the job for two hours — so a printer fixed 40 minutes later
+// never drained: the receipts were still listed and still counted, but
+// nextDueJob skipped them forever. Backing off instead means the attempt
+// budget now outlasts MAX_AGE_MS, and age is the only thing that gives up.
+const MAX_ATTEMPTS = 60;
+
+// Retry cadence grows with failures: quick while the printer is probably just
+// waking up, then slow so a genuinely dead printer isn't hammered.
+const RETRY_MIN_MS = 30_000;
+const RETRY_MAX_MS = 5 * 60_000;
+
+function retryDelayFor(attempts: number): number {
+  return Math.min(RETRY_MAX_MS, RETRY_MIN_MS * Math.pow(2, Math.floor(attempts / 4)));
+}
 
 export type PrintJob = {
   id: string;
@@ -130,7 +145,9 @@ export async function nextDueJob(retryIntervalMs: number): Promise<PrintJob | nu
   for (const j of fresh) {
     if (inFlight.has(j.id)) continue;                  // claimed by another drainer
     if (j.attempts >= MAX_ATTEMPTS) continue;
-    if (now - j.lastAttemptAt < retryIntervalMs) continue;
+    // `retryIntervalMs` is the caller's floor; back off beyond it as attempts
+    // pile up rather than polling a dead printer every 30s for two hours.
+    if (now - j.lastAttemptAt < Math.max(retryIntervalMs, retryDelayFor(j.attempts))) continue;
     // Atomic claim: from here until release(j.id) no other drainer can
     // pick this job.  The Set.add + return below is synchronous so
     // there's no await between checking and claiming.
@@ -138,4 +155,19 @@ export async function nextDueJob(retryIntervalMs: number): Promise<PrintJob | nu
     return j;
   }
   return null;
+}
+
+
+/**
+ * Make every queued job due immediately.
+ *
+ * The case this exists for: the printer was off, receipts queued, someone
+ * fixed the printer. Without this the cashier can see "2 queued" and has no
+ * way to act on it — they just have to hope the backoff comes round.
+ */
+export async function retryAll(): Promise<number> {
+  const jobs = await listJobs();
+  if (!jobs.length) return 0;
+  await save(jobs.map((j) => ({ ...j, attempts: 0, lastAttemptAt: 0 })));
+  return jobs.length;
 }

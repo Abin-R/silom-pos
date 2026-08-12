@@ -24,6 +24,9 @@ const LABELS: Record<string, string> = {
   "QR Kbank": "QR · KBank",
   "Easy Pay": "Easy Pay",
   EDC: "Card terminal",
+  // Stored bare as "Custom" (plus a " · provider" suffix). Say "Custom Pay" so
+  // the till, the receipt and the backoffice report column all read the same.
+  Custom: "Custom Pay",
 };
 
 /**

@@ -214,12 +214,15 @@ export default function POS() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [parkedCount, setParkedCount] = useState(0);
-  const [orderHubCount, setOrderHubCount] = useState(0);
+  // Order Hub is switched off — nobody was using the kanban, and a paid bill
+  // now lands as "completed" rather than waiting in a column.  Left commented
+  // rather than deleted so it can come back if a kitchen screen is wanted.
+  // const [orderHubCount, setOrderHubCount] = useState(0);
 
   // modal states
   const [showPayment, setShowPayment] = useState(false);
   const [showCustomer, setShowCustomer] = useState(false);
-  const [showOrderHub, setShowOrderHub] = useState(false);
+  // const [showOrderHub, setShowOrderHub] = useState(false);
   const [showParked, setShowParked] = useState(false);
   const [showCart, setShowCart] = useState(false); // mobile cart sheet
   const [showSuccess, setShowSuccess] = useState<null | {
@@ -339,14 +342,13 @@ export default function POS() {
 
   const refreshBadges = async () => {
     try {
-      const [po, oh] = await Promise.all([
-        apiFetch(`${API}/parked-orders`).then((r) => safeJson<any[]>(r, [])),
-        apiFetch(`${API}/orders?source=delivery`).then((r) => safeJson<Order[]>(r, [])),
-      ]);
+      const po = await apiFetch(`${API}/parked-orders`).then((r) => safeJson<any[]>(r, []));
       setParkedCount(po.length);
-      // count active (non-delivered) delivery orders
-      const active = oh.filter((o: Order) => o.delivery_status === "DELIVERING").length;
-      setOrderHubCount(active);
+      // The /orders?source=delivery fetch that used to run alongside this one
+      // existed only to count active deliveries for the Order Hub badge, so it
+      // goes with the hub.
+      // const oh = await apiFetch(`${API}/orders?source=delivery`).then((r) => safeJson<Order[]>(r, []));
+      // setOrderHubCount(oh.filter((o: Order) => o.delivery_status === "DELIVERING").length);
     } catch {}
   };
 
@@ -394,7 +396,16 @@ export default function POS() {
     () => cart.reduce((s, i) => s + Math.min(i.discount || 0, i.price * i.qty), 0),
     [cart]
   );
-  const total = Math.max(0, subtotal - discountAmount);
+  // Rounding lives on the bill, not on the discount. Folding it into the
+  // discount changed a typed ฿10.50 into ฿10.00 and would have distorted
+  // discount reporting; subtotal and discount_amount now stay exactly as
+  // entered and the whole-baht adjustment is its own figure.
+  //
+  // Only a discounted bill rounds. Rounding an undiscounted ฿89.50 line would
+  // silently change the shelf price of something nobody discounted.
+  const netTotal = Math.max(0, subtotal - discountAmount);
+  const total = discountAmount > 0 ? Math.round(netTotal) : netTotal;
+  const roundingAdj = total - netTotal;
   const cartCount = cart.reduce((s, i) => s + i.qty, 0);
 
   // Cart ops
@@ -433,11 +444,19 @@ export default function POS() {
     setCustomer(null);
   };
 
+  // Two fingers landing together fire both handlers, and nothing stopped the
+  // second from POSTing a second /orders — a duplicate bill, and money taken
+  // twice. A ref rather than state: both touches in one frame would read the
+  // same stale state value and sail past a state-based guard.
+  const payingRef = useRef(false);
+
   const handlePaySuccess = async (
     method: string,
     paid: number,
     meta?: { beamChargeId?: string; beamLinkId?: string; omiseLinkId?: string; omiseChargeId?: string }
   ) => {
+    if (payingRef.current) return;
+    payingRef.current = true;
     try {
       const res = await apiFetch(`${API}/orders`, {
         method: "POST",
@@ -556,6 +575,9 @@ export default function POS() {
         tr("pos.order_not_saved"),
         tr("pos.order_not_saved_body") + "\n\n" + tr("pos.order_not_saved_action"),
       );
+    } finally {
+      // Released on failure too, so the cashier can retry the save.
+      payingRef.current = false;
     }
   };
 
@@ -659,14 +681,15 @@ export default function POS() {
       onPress: () => setShowParked(true),
       testId: "toolbar-parked",
     },
-    {
-      icon: "globe-outline",
-      label: tr("pos.online_orders"),
-      short: tr("common.orders"),
-      badge: orderHubCount,
-      onPress: () => setShowOrderHub(true),
-      testId: "toolbar-order-hub",
-    },
+    // Order Hub button — switched off with the hub itself.
+    // {
+    //   icon: "globe-outline",
+    //   label: tr("pos.online_orders"),
+    //   short: tr("common.orders"),
+    //   badge: orderHubCount,
+    //   onPress: () => setShowOrderHub(true),
+    //   testId: "toolbar-order-hub",
+    // },
     {
       icon: "albums-outline",
       label: tr("pos.cash_drawer"),
@@ -761,7 +784,7 @@ export default function POS() {
                 >
                   <Ionicons name="print-outline" size={16} color={C.warnDark} />
                   <Text style={[styles.statusText, { color: C.warnDark }]}>
-                    {`${queuedPrints} queued`}
+                    {tr("pos.n_queued", { count: queuedPrints })}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -945,6 +968,7 @@ export default function POS() {
               customer={customer}
               subtotal={subtotal}
               discountAmount={discountAmount}
+              roundingAdj={roundingAdj}
               total={total}
               cartCount={cartCount}
               onClear={clearCart}
@@ -1062,6 +1086,7 @@ export default function POS() {
               customer={customer}
               subtotal={subtotal}
               discountAmount={discountAmount}
+              roundingAdj={roundingAdj}
               total={total}
               cartCount={cartCount}
               onClear={() => {
@@ -1112,13 +1137,13 @@ export default function POS() {
           setShowCustomer(false);
         }}
       />
-      <OrderHubModal
+      {/* <OrderHubModal
         visible={showOrderHub}
         onClose={() => {
           setShowOrderHub(false);
           refreshBadges();
         }}
-      />
+      /> */}
       <ParkedOrdersModal
         visible={showParked}
         onClose={() => setShowParked(false)}
@@ -1336,6 +1361,7 @@ function CartSidebar({
   customer,
   subtotal,
   discountAmount,
+  roundingAdj,
   total,
   cartCount,
   onClear,
@@ -1353,6 +1379,8 @@ function CartSidebar({
   customer: Customer | null;
   subtotal: number;
   discountAmount: number;
+  /** Whole-baht adjustment applied to the bill, kept off the discount. */
+  roundingAdj: number;
   total: number;
   cartCount: number;
   onClear: () => void;
@@ -1419,6 +1447,7 @@ function CartSidebar({
         style={{ flex: 1 }}
         contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
         showsVerticalScrollIndicator={false}
+        ItemSeparatorComponent={() => <View style={styles.crowSep} />}
         ListEmptyComponent={
           <Empty
             icon="cart-outline"
@@ -1436,10 +1465,16 @@ function CartSidebar({
               <Text style={styles.crowName} numberOfLines={2}>
                 {item.name}
               </Text>
-              <Money style={styles.crowUnit}>{`${THB(item.price)} / ea`}</Money>
-              {!!item.discount && item.discount > 0 && (
+              {/* One secondary line, not two. A discount is the thing worth
+                  saying; the unit price only earns the space when there is no
+                  discount to report. */}
+              {item.discount && item.discount > 0 ? (
                 <Money style={styles.crowDisc}>
-                  {`Discount −${THB(item.discount)}`}
+                  {`${THB(item.price)} · −${THB(item.discount)}`}
+                </Money>
+              ) : (
+                <Money style={styles.crowUnit}>
+                  {item.qty > 1 ? `${THB(item.price)} / ea` : THB(item.price)}
                 </Money>
               )}
             </TouchableOpacity>
@@ -1495,6 +1530,14 @@ function CartSidebar({
           <Text style={styles.trLabel}>{tr("pos.vat_7_pct_included")}</Text>
           <Money style={styles.trValue}>{THB(vat)}</Money>
         </View>
+        {Math.abs(roundingAdj) > 0.001 && (
+          <View style={styles.tr}>
+            <Text style={styles.trLabel}>{tr("pos.rounding")}</Text>
+            <Money style={styles.trValue}>
+              {`${roundingAdj > 0 ? "+" : "−"}${THB(Math.abs(roundingAdj))}`}
+            </Money>
+          </View>
+        )}
         <View style={styles.dash} />
         <View style={styles.trBig}>
           <Text style={styles.trBigLabel}>{tr("common.total")}</Text>
@@ -1576,21 +1619,31 @@ function PaymentModal({
     }
   }, [visible]);
 
-  // For now, only Cash and Beam are exposed.  Other methods are still
-  // implemented (EasyPay, Credit, PromptPay, QR Kbank, EDC, Custom) —
-  // we just hide their tiles from the payment modal.  Re-enable by
-  // un-commenting any of the lines below.
+  // Cash, Beam QR, the Beam card link and Custom Pay are exposed.  The rest
+  // are still implemented (Omise card link, EasyPay, Credit, PromptPay,
+  // QR Kbank, EDC) — we just hide their tiles from the payment modal.
+  // Re-enable by un-commenting any of the lines below.
+  //
+  // Card goes through Beam only: running two card rails side by side made the
+  // cashier choose between two tiles that look identical to the guest, and the
+  // surcharges differ.  Omise stays wired for orders already taken on it.
+  //
+  // Custom Pay is the catch-all for money taken outside the till's own rails
+  // (a bank EDC terminal, a co-pay scheme): the cashier records which provider
+  // settled the bill and the amount is marked paid in full.  Nothing is
+  // charged from here, so it must stay a deliberate pick — `isCustomReady`
+  // keeps Confirm disabled until a provider is chosen.
   const methods = [
     { key: PAYMENT_METHODS.CASH, icon: "cash-outline" as const },
     { key: PAYMENT_METHODS.BEAM, icon: "scan-outline" as const },
-    { key: PAYMENT_METHODS.CARD_LINK, icon: "card-outline" as const },
     { key: PAYMENT_METHODS.BEAM_CARD, icon: "card-outline" as const },
+    { key: PAYMENT_METHODS.CUSTOM, icon: "wallet-outline" as const },
+    // { key: PAYMENT_METHODS.CARD_LINK, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.EASY_PAY, icon: "qr-code-outline" as const },
     // { key: PAYMENT_METHODS.CREDIT, icon: "card-outline" as const },
     // { key: PAYMENT_METHODS.PROMPTPAY, icon: "phone-portrait-outline" as const },
     // { key: PAYMENT_METHODS.QR_KBANK, icon: "qr-code" as const },
     // { key: PAYMENT_METHODS.EDC, icon: "print-outline" as const },
-    // { key: PAYMENT_METHODS.CUSTOM, icon: "wallet-outline" as const },
   ];
 
   const customOptions = [
@@ -1965,6 +2018,9 @@ function PaymentModal({
     [PAYMENT_METHODS.QR_KBANK]: { bg: C.brandTintSoft, fg: C.brand },
     [PAYMENT_METHODS.CARD_LINK]: { bg: C.accentTint, fg: C.accentDark },
     [PAYMENT_METHODS.BEAM_CARD]: { bg: C.accentTint, fg: C.accentDark },
+    // Custom Pay settles off the till, so it gets no rail colour — grey on
+    // purpose, not a fall-through.
+    [PAYMENT_METHODS.CUSTOM]: { bg: C.neutralTint, fg: C.ink2Soft },
   };
 
   return (
@@ -2033,13 +2089,8 @@ function PaymentModal({
                 );
               })}
 
-              {!isNarrow && (
-                <View style={styles.payNote}>
-                  <Text style={styles.payNoteText}>
-                    {tr("pos.splitting_the_bill_take_one_method")}
-                  </Text>
-                </View>
-              )}
+              {/* Split-bill note removed — it explained a flow the till
+                  does not actually offer yet. */}
             </ScrollView>
 
             {/* ── Detail column ── */}
@@ -2051,6 +2102,7 @@ function PaymentModal({
                 </Money>
               </View>
 
+              {method !== PAYMENT_METHODS.CASH && (
               <ScrollView
                 style={{ flex: 1 }}
                 contentContainerStyle={[styles.payPane, dense && { padding: 18, paddingTop: 14 }]}
@@ -2516,9 +2568,17 @@ function PaymentModal({
                   ))}
                 </View>
               </ScrollView>
-            ) : (
-              <View style={styles.cashPane} testID="cash-pane">
-                  <Text style={styles.paneLbl}>{tr("pos.cash_received")}</Text>
+            ) : null}
+              </ScrollView>
+              )}
+
+              {/* Cash is laid out fixed, not scrolled: the tenders, "Other
+                  amount" and the change owed all have to be reachable without
+                  a swipe. The keypad is the only optional part, so it is the
+                  only part allowed to scroll. */}
+              {method === PAYMENT_METHODS.CASH && (
+                <View style={styles.cashFixed} testID="cash-pane">
+                  {!showPad && (
                   <View style={styles.quickGrid}>
                     {tenders.map((t) => {
                       const on = amount !== "" && parseFloat(amount) === t;
@@ -2526,7 +2586,10 @@ function PaymentModal({
                         <TouchableOpacity
                           key={t}
                           style={[styles.qk, dense && { height: 50 }, on && styles.qkOn]}
-                          onPress={() => setAmount(String(t))}
+                          onPress={() => {
+                            setAmount(String(t));
+                            setShowPad(false);
+                          }}
                           testID={`tender-${t}`}
                         >
                           <Money style={[styles.qkText, on && styles.qkTextOn]}>
@@ -2536,15 +2599,19 @@ function PaymentModal({
                       );
                     })}
                   </View>
-                  <View style={[styles.quickGrid, { marginTop: 10 }]}>
+                  )}
+                  <View style={[styles.quickGrid, !showPad && { marginTop: 10 }]}>
                     <TouchableOpacity
                       style={[
                         styles.qk,
-                        { flexBasis: "48%" },
+                        { flexBasis: "46%" },
                         dense && { height: 50 },
                         amount !== "" && parseFloat(amount) === total && styles.qkOn,
                       ]}
-                      onPress={() => setAmount(String(total))}
+                      onPress={() => {
+                        setAmount(String(total));
+                        setShowPad(false);
+                      }}
                       testID="tender-exact"
                     >
                       <Money
@@ -2557,8 +2624,13 @@ function PaymentModal({
                       </Money>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.qk, { flexBasis: "48%" }, dense && { height: 50 }, showPad && styles.qkOn]}
-                      onPress={() => setShowPad((v) => !v)}
+                      style={[styles.qk, { flexBasis: "46%" }, dense && { height: 50 }, showPad && styles.qkOn]}
+                      onPress={() => {
+                        setShowPad((v) => {
+                          if (!v) setAmount("");
+                          return !v;
+                        });
+                      }}
                       testID="tender-other"
                     >
                       <Text
@@ -2572,7 +2644,7 @@ function PaymentModal({
                   {/* Keypad — only when the chips don't cover what was handed
                       over, so the common case stays two taps. */}
                   {showPad && (
-                    <View style={styles.padWrap}>
+                    <ScrollView style={styles.padScroll} showsVerticalScrollIndicator={false}>
                       <View style={styles.padDisplay}>
                         <Text style={styles.padDisplayLbl}>{tr("pos.thb")}</Text>
                         <Money style={styles.padDisplayVal} testID="amount-display">
@@ -2584,7 +2656,7 @@ function PaymentModal({
                           (k) => (
                             <TouchableOpacity
                               key={k}
-                              style={styles.padBtn}
+                              style={[styles.padBtn, dense && { height: 46 }]}
                               onPress={() => onKey(k)}
                               testID={`pad-${k}`}
                             >
@@ -2608,30 +2680,19 @@ function PaymentModal({
                       >
                         <Text style={styles.padClearText}>{tr("pos.clear")}</Text>
                       </TouchableOpacity>
-                    </View>
+                    </ScrollView>
                   )}
 
-                </View>
-            )}
-              </ScrollView>
-
-              {/* Change is the answer to a cash sale, so it is pinned outside
-                  the scroll area — it was being clipped behind the footer on a
-                  713px screen, which made the cashier scroll to read it. */}
-              {method === PAYMENT_METHODS.CASH && (
-                <View style={styles.tenderPinned}>
                   <View style={[styles.tender, dense && { marginTop: 12, paddingVertical: 12, gap: 8 }]}>
-                    <View style={styles.tenderRow}>
-                      <Text style={styles.tenderLbl}>{tr("pos.received")}</Text>
-                      <Money style={styles.tenderVal}>
-                        {amount ? THB(parseFloat(amount) || 0) : "—"}
-                      </Money>
-                    </View>
-                    <View style={styles.tenderRow}>
-                      <Text style={styles.tenderLbl}>{tr("pos.bill_total")}</Text>
-                      <Money style={styles.tenderValSoft}>{THB(total)}</Money>
-                    </View>
-                    <View style={[styles.tenderRow, styles.tenderChange]}>
+                    {!showPad && (
+                      <View style={styles.tenderRow}>
+                        <Text style={styles.tenderLbl}>{tr("pos.received")}</Text>
+                        <Money style={styles.tenderVal}>
+                          {amount ? THB(parseFloat(amount) || 0) : "—"}
+                        </Money>
+                      </View>
+                    )}
+                    <View style={[styles.tenderRow, !showPad && styles.tenderChange]}>
                       <Text style={styles.tenderChangeLbl}>{tr("pos.change_to_give")}</Text>
                       <Money style={[styles.tenderChangeVal, dense && { fontSize: 26 }]} numberOfLines={1}>
                         {THB(change)}
@@ -2640,6 +2701,7 @@ function PaymentModal({
                   </View>
                 </View>
               )}
+
 
               {/* ── Footer ── */}
               <View style={[styles.payFoot, dense && { padding: 14 }]}>
@@ -2690,7 +2752,11 @@ function CartItemModal({
     if (item) {
       setQty(item.qty);
       setDisc(item.discount ? String(item.discount) : "");
-      setDiscMode("thb");
+      // Percent is what a cashier is normally given ("10% off"), so that is
+      // the default for a fresh discount. A discount already on the line is
+      // stored in baht — stay in baht for it, or the saved 119.60 would be
+      // re-read as 119.6% and wipe the line.
+      setDiscMode(item.discount ? "thb" : "pct");
     }
   }, [item]);
 
@@ -2701,8 +2767,8 @@ function CartItemModal({
   // Resolve the entered value into an absolute ฿ amount (the cart stores ฿).
   const discAmount =
     discMode === "pct" ? Math.min(gross, (gross * entered) / 100) : Math.min(gross, entered);
-  const discPct = gross > 0 ? (discAmount / gross) * 100 : 0;
   const lineTotal = Math.max(0, gross - discAmount);
+  const discPct = gross > 0 ? (discAmount / gross) * 100 : 0;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
@@ -3565,9 +3631,8 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingHorizontal: 24,
     paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line2,
   },
+  crowSep: { height: 1, marginHorizontal: 24, backgroundColor: C.line2 },
   crowInfo: { flex: 1, minWidth: 0 },
   crowName: {
     fontSize: 15.5,
@@ -3887,10 +3952,14 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  tenderPinned: {
+  cashFixed: {
+    flex: 1,
+    minHeight: 0,
     paddingHorizontal: 24,
+    paddingTop: 10,
     paddingBottom: 4,
   },
+  padScroll: { marginTop: 10, flex: 1, minHeight: 0 },
   payFoot: {
     flexDirection: "row",
     gap: 12,
