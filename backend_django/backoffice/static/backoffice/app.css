@@ -418,6 +418,13 @@ body.fixed-height .body { overflow: hidden; }
 .ctl:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
 .ctl:has(> select:focus-visible) { border-color: var(--blue); }
 .ctl .arrow { color: var(--mut2); font-size: 12px; flex: none; }
+/* Search chips carry their width as a class, not an inline style, so the
+   narrow-screen rules can widen them — an inline `style="width:230px"` wins
+   against any media query and left them as slivers on a phone. */
+.ctl-search { width: 240px; }
+/* The side pane on Transactions, Customers and Staff. A class, not an
+   inline width, for the same reason. */
+.detail-narrow { width: 352px; }
 /* States what a page is scoped to when there is nothing to choose. Reads as
    a label rather than a control: no pointer, no hover, no chevron. */
 .ctl.is-static {
@@ -897,23 +904,116 @@ body.fixed-height .body { overflow: hidden; }
 
 .msg { display: flex; flex-direction: column; gap: 10px; }
 
-/* ══ NARROW SCREENS ══════════════════════════════════════════════════════ */
+/* ══ NARROW SCREENS ══════════════════════════════════════════════════════
+   Three sizes, and the rail changes kind between them.
+
+   On a desktop it is furniture: always there, collapsible if you want the
+   width back. On a tablet or phone there is no width to spare, so it becomes
+   an overlay drawer that is *closed by default* and dims the page behind it.
+   Those are different behaviours, not one behaviour at two widths, which is
+   why the drawer has its own `.open` class rather than reusing `.collapsed`
+   — a rail collapsed on a laptop must not come back as an open drawer on a
+   phone, and vice versa.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.rail-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 22, 45, .5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 55;
+}
 
 @media (max-width: 1400px) {
   .s5 { grid-template-columns: repeat(3, 1fr); }
 }
-@media (max-width: 1200px) {
+
+/* ── Laptop ─────────────────────────────────────────────────────────── */
+@media (max-width: 1280px) {
   .s4, .s5 { grid-template-columns: repeat(2, 1fr); }
-  .c-2, .c-2e, .c-3 { grid-template-columns: 1fr; }
+  .c-2, .c-2e { grid-template-columns: 1fr; }
+  .c-3 { grid-template-columns: repeat(2, 1fr); }
   .detail { width: 320px; }
 }
-@media (max-width: 900px) {
-  body.fixed-height { height: auto; overflow: visible; }
-  body.fixed-height .shell { height: auto; }
-  .side { position: fixed; z-index: 40; }
-  .side:not(.collapsed) + .main { margin-left: 0; }
+
+/* ── Tablet and phone: the rail becomes a drawer ────────────────────── */
+@media (max-width: 1023px) {
+  /* Pages that pin themselves to the viewport give that up — on a short
+     screen a table scrolling inside a panel inside a fixed page is two
+     nested scrollbars and no way out. Let the document scroll instead. */
+  body.fixed-height, body.fixed-height .shell { height: auto; overflow: visible; }
+  body.fixed-height .body { overflow: visible; }
+  .panel-grow, .panel-scroll { min-height: 0; }
+
+  .side {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    height: 100%;
+    z-index: 60;
+    /* The desktop collapse must not leak in here, in either direction. */
+    margin-left: 0;
+    transform: translateX(-100%);
+    transition: transform .24s ease;
+    box-shadow: 0 0 60px rgba(4, 14, 40, .45);
+  }
+  .side.collapsed { margin-left: 0; }
+  .side.open { transform: translateX(0); }
+  .rail-backdrop.on { opacity: 1; pointer-events: auto; }
+
+  .body { padding: 16px; gap: 14px; }
+  .topbar { padding: 12px 16px; }
   .row { flex-direction: column; }
-  .detail { width: 100%; }
-  .form-grid { grid-template-columns: 1fr; }
+  .detail, .detail-narrow { width: 100%; }
+  .cols { grid-template-columns: 1fr; }
+  .c-3 { grid-template-columns: repeat(2, 1fr); }
+
+  /* Wide data tables scroll sideways rather than crushing twelve columns
+     into a phone. Only the ones already built to scroll get a floor — the
+     small summary tables (three columns, no header) shrink happily. */
+  .panel, .panel-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .panel-scroll .tbl { min-width: 720px; }
+}
+
+/* ── Phone ──────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .s2, .s3, .s4, .s5 { grid-template-columns: repeat(2, 1fr); }
+  .c-3 { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; padding: 16px; }
+
+  /* The header stacks: what the page is, then what scopes it. Controls go
+     full width so they are thumb-sized instead of a row of slivers. */
+  .topbar { align-items: stretch; padding: 12px 14px; gap: 10px; }
+  .topbar > .spacer { display: none; }
+  .tb-title { font-size: 19px; }
+  .ctl, .ctl-search, .btn, .seg { width: 100%; justify-content: flex-start; }
+  .ctl > select, .ctl > input { max-width: none; }
+  .btn { justify-content: center; }
+  .seg { overflow-x: auto; }
+  .seg a, .seg span, .seg button { flex: 1; justify-content: center; }
+
+  .body { padding: 14px; }
+  .panel-h { padding: 12px 16px; }
+  .tbl th, .tbl td { padding: 10px 12px; }
+  .stat { padding: 14px 16px; }
+  .stat .v { font-size: 22px; }
+  .stat .ic { margin-bottom: 10px; }
+}
+
+@media (max-width: 460px) {
   .s2, .s3, .s4, .s5 { grid-template-columns: 1fr; }
+}
+
+/* A phone is a touch target, not a cursor. Anything tappable gets a
+   comfortable minimum regardless of how compact its desktop size is. */
+@media (hover: none) and (pointer: coarse) {
+  .btn-sm, .ico-btn, .seg a, .seg span, .seg button { min-height: 38px; }
+  .nv { height: 46px; }
+}
+
+@media print {
+  .side, .topbar, .rail-backdrop, .pager { display: none !important; }
+  .body { padding: 0; }
+  .panel { border: 1px solid #ccc; break-inside: avoid; }
 }

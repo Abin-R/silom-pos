@@ -1032,3 +1032,76 @@ class BranchPickerTests(HostileDataMixin, TestCase):
         form = body[body.index('id="filterForm"'):]
         self.assertIn('name="status" value="voided"', form)
         self.assertIn('name="payment" value="Cash"', form)
+
+
+class ResponsiveShellTests(HostileDataMixin, TestCase):
+    """Phone and tablet layout.
+
+    Layout itself is not assertable from a test client, so these pin the
+    pieces that are: the drawer's markup exists, no template pins a width
+    inline where a media query needs to override it, and the stylesheet still
+    carries the breakpoints. The bug this replaces was a rail that went
+    `position: fixed` under 900px and was never hidden — it simply covered the
+    page, which no status-code test would ever notice.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build_shop()
+
+    def setUp(self):
+        self.assertTrue(
+            self.client.login(username="hostile", password=self.password))
+        self.css = self.client.get(
+            reverse("backoffice:app_css")).content.decode()
+
+    def test_the_page_declares_a_viewport(self):
+        """Without it a phone renders at 980px and scales the lot down."""
+        page = self.client.get(reverse("backoffice:dashboard"))
+        self.assertContains(page, 'name="viewport"')
+        self.assertContains(page, "width=device-width")
+
+    def test_the_drawer_has_a_backdrop_and_a_labelled_toggle(self):
+        page = self.client.get(reverse("backoffice:dashboard")).content.decode()
+        self.assertIn('id="railBackdrop"', page)
+        self.assertIn('id="sidebarToggle"', page)
+        self.assertIn("matchMedia", page, "the toggle does not know about width")
+
+    def test_the_drawer_starts_closed(self):
+        """A rail remembered as expanded on a laptop must not open itself over
+        the page on a phone — that was the original bug."""
+        page = self.client.get(reverse("backoffice:dashboard")).content.decode()
+        rail = page[page.index('id="sidebar"'):page.index('id="sidebar"') + 120]
+        self.assertNotIn("open", rail)
+        self.assertIn("hidden", page[page.index('id="railBackdrop"'):
+                                     page.index('id="railBackdrop"') + 80])
+
+    def test_the_breakpoints_are_present(self):
+        for query in ["max-width: 1023px", "max-width: 720px", "max-width: 460px"]:
+            with self.subTest(query=query):
+                self.assertIn(query, self.css)
+        # The rail must actually be moved off-screen, not just repositioned.
+        narrow = self.css[self.css.index("@media (max-width: 1023px)"):]
+        self.assertIn("translateX(-100%)", narrow[:1600])
+
+    def test_wide_tables_get_a_scroll_floor(self):
+        """Twelve columns on a phone should scroll sideways, not crush."""
+        narrow = self.css[self.css.index("@media (max-width: 1023px)"):]
+        self.assertIn("overflow-x: auto", narrow[:1800])
+        self.assertIn(".panel-scroll .tbl", narrow[:1800])
+
+    def test_no_template_pins_a_control_width_inline(self):
+        """An inline `style="width:230px"` beats every media query, so the
+        search chips stayed slivers on a phone. They carry classes now."""
+        import pathlib
+        from django.conf import settings as dj
+
+        offenders = []
+        root = pathlib.Path(__file__).resolve().parents[2] / "backoffice" / "templates" / "backoffice"
+        for path in root.glob("*.html"):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if 'class="ctl' in line and "style=\"width:" in line:
+                    offenders.append(f"{path.name}:{number}")
+                if 'class="detail"' in line and "style=\"width:" in line:
+                    offenders.append(f"{path.name}:{number}")
+        self.assertEqual(offenders, [], "inline widths override the media queries")

@@ -31,6 +31,8 @@
 <body class="{% block body_class %}{% endblock %}">
 {% include "backoffice/_icons.html" %}
 
+<div class="rail-backdrop" id="railBackdrop" hidden></div>
+
 <div class="shell">
   {# ══ RAIL ══════════════════════════════════════════════════════════════ #}
   <nav id="sidebar" class="side">
@@ -194,17 +196,59 @@
 </div>
 
 <script>
-  // Rail collapse. Remembered in localStorage so it survives navigation —
-  // every backoffice page is a full page load.
+  // The rail is two different things depending on the screen.
+  //
+  // On a desktop it is furniture you can collapse to reclaim 240px, and that
+  // preference is worth remembering. On a tablet or phone it is an overlay
+  // drawer that must start closed — remembering "expanded" from someone's
+  // laptop and applying it to a phone would open a full-height panel over the
+  // page on first load, which is exactly the bug this replaces.
   (function () {
     var rail = document.getElementById('sidebar');
     var toggle = document.getElementById('sidebarToggle');
+    var backdrop = document.getElementById('railBackdrop');
     var KEY = 'bravepos.sidebar.collapsed';
+    var narrow = window.matchMedia('(max-width: 1023px)');
+
+    function isDrawer() { return narrow.matches; }
+
+    function closeDrawer() {
+      rail.classList.remove('open');
+      backdrop.classList.remove('on');
+      backdrop.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function openDrawer() {
+      rail.classList.add('open');
+      backdrop.hidden = false;
+      // Next frame, so the transition has a from-state to animate out of.
+      requestAnimationFrame(function () { backdrop.classList.add('on'); });
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+
+    // Desktop preference only — never consulted while in drawer mode.
     if (localStorage.getItem(KEY) === '1') rail.classList.add('collapsed');
-    toggle.addEventListener('click', function () {
+    toggle.setAttribute('aria-controls', 'sidebar');
+    toggle.setAttribute('aria-expanded', 'false');
+
+    toggle.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (isDrawer()) {
+        rail.classList.contains('open') ? closeDrawer() : openDrawer();
+        return;
+      }
       rail.classList.toggle('collapsed');
       localStorage.setItem(KEY, rail.classList.contains('collapsed') ? '1' : '0');
     });
+
+    backdrop.addEventListener('click', closeDrawer);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && rail.classList.contains('open')) closeDrawer();
+    });
+    // Rotating a tablet into landscape shouldn't strand an open overlay over
+    // a layout that now has room for the rail in flow.
+    narrow.addEventListener('change', closeDrawer);
   })();
 
   // The user menu. Fifteen lines instead of a 250 KB CSS+JS framework that
