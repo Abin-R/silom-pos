@@ -3050,11 +3050,20 @@ def _css_payload() -> tuple[bytes, str]:
 
 def backoffice_css(request):
     body, version = _css_payload()
+    if request.headers.get("If-None-Match") == f'"{version}"':
+        return HttpResponseNotModified()
+
     response = HttpResponse(body, content_type="text/css")
-    # Safe to cache hard: the URL carries the content hash, so a new build is
-    # a new URL rather than a stale hit.
-    response["Cache-Control"] = "public, max-age=31536000, immutable"
     response["ETag"] = f'"{version}"'
+    # Only promise immutability when the caller asked for the version we
+    # actually have. `pos.rollingpinn.com` sits behind Cloudflare, and an
+    # unconditional year-long `immutable` pinned the bare URL in its edge
+    # cache against a file that changes every deploy — harmless only because
+    # nothing links the bare URL. A stale-able URL has to stay revalidatable.
+    if request.GET.get("v") == version:
+        response["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response["Cache-Control"] = "public, max-age=300"
     return response
 
 

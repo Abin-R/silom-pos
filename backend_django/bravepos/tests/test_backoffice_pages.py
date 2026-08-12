@@ -178,3 +178,20 @@ class BackofficeStylesheetTests(TestCase):
     def test_login_page_links_the_stylesheet(self):
         page = self.client.get(reverse("backoffice:login"))
         self.assertContains(page, reverse("backoffice:app_css"))
+
+    def test_only_the_versioned_url_is_cached_forever(self):
+        """`pos.rollingpinn.com` is behind Cloudflare. An unconditional
+        `immutable` pinned the bare URL in its edge cache for a year against a
+        file that changes every deploy, with no way to bust it."""
+        bare = self.client.get(reverse("backoffice:app_css"))
+        self.assertNotIn("immutable", bare["Cache-Control"])
+
+        version = bare["ETag"].strip('"')
+        versioned = self.client.get(reverse("backoffice:app_css"), {"v": version})
+        self.assertIn("immutable", versioned["Cache-Control"])
+
+    def test_a_matching_etag_is_not_resent(self):
+        first = self.client.get(reverse("backoffice:app_css"))
+        again = self.client.get(reverse("backoffice:app_css"),
+                                HTTP_IF_NONE_MATCH=first["ETag"])
+        self.assertEqual(again.status_code, 304)
