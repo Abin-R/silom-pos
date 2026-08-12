@@ -17,6 +17,14 @@
 {% endblock %}
 
 {% block content %}
+{% if form_errors %}
+<div class="banner b-red" style="max-width:880px;margin-bottom:16px">
+  <svg><use href="#i-alert"/></svg>
+  <span><b>Not saved.</b>
+    {% for e in form_errors %}{{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+</div>
+{% endif %}
+
 <form method="post" style="max-width:880px">
   {% csrf_token %}
 
@@ -69,7 +77,11 @@
       </div>
       <div class="field">
         <label for="f-posid">POS ID</label>
-        <input id="f-posid" type="text" name="pos_id" value="{{ branch_obj.pos_id }}">
+        <input id="f-posid" type="text" name="pos_id" value="{{ branch_obj.pos_id }}"
+               data-taken="{{ taken_pos_ids }}">
+        <span class="hint" id="posIdHint">The Revenue Department's machine number for this
+          branch's till — one number per branch, never shared. Blank means this branch
+          can't issue a full tax invoice yet, so the till stops offering one.</span>
       </div>
       <div class="field">
         <label for="f-phone">Phone</label>
@@ -121,6 +133,34 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script>
+  // POS ID clash, caught while the cursor is still in the box. The number is
+  // one till's registration with the Revenue Department, and the usual way to
+  // duplicate one is pasting into the wrong branch — so say whose it is at the
+  // moment of the paste, not after a save round trip. The server checks again
+  // (branch_errors) and is what actually refuses the save; this only warns.
+  (function () {
+    const input = document.getElementById('f-posid');
+    const hint  = document.getElementById('posIdHint');
+    if (!input || !hint) return;
+
+    let taken = {};
+    try { taken = JSON.parse(input.dataset.taken || '{}'); } catch (e) { return; }
+    const original = hint.textContent;
+
+    function check() {
+      const owner = taken[input.value.trim()];
+      input.style.borderColor = owner ? 'var(--red)' : '';
+      hint.style.color = owner ? 'var(--red-d)' : '';
+      hint.textContent = owner
+        ? `Already used by ${owner}. Two branches can't share a POS ID — this won't save.`
+        : original;
+    }
+
+    input.addEventListener('input', check);
+    check();   // a rejected save comes back with the clashing value still typed
+  })();
+</script>
 <script>
   // Inline file-to-data-URL conversion. Lets users "upload" without us
   // needing MEDIA_ROOT / file storage — image lives as a data: URL in the

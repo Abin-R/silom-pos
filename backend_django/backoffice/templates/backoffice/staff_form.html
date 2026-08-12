@@ -77,4 +77,54 @@
     </div>
   </div>
 </form>
+
+{% comment %}
+  Deleting is separated from the edit form on purpose — its own panel, its own
+  POST, below the Save button rather than beside it. It also names the
+  reversible alternative, because "stop them signing in" is what is usually
+  wanted and the Status switch above already does it without losing anything.
+{% endcomment %}
+{% if mode != 'new' and user.role == 'admin' %}
+<div class="panel" style="max-width:760px;margin-top:16px;border-color:var(--red-line)">
+  <div class="panel-h">Delete this staff member</div>
+  <div class="srow">
+    <span class="si" style="background:var(--red-soft);color:var(--red-d)"><svg><use href="#i-trash"/></svg></span>
+    <span class="sm">
+      <b>Permanent, and not the usual choice</b>
+      <u>
+        {% comment %}
+          Last-admin leads, even on your own record: it is the reason with
+          something you can do about it. (In practice it is only ever your own
+          record — an admin looking at another admin means two exist, so
+          neither is the last. The view guard still matters for the race where
+          two admins both have the page open.)
+        {% endcomment %}
+        {% if member.role == 'admin' and is_last_admin %}
+          {{ member.name }} is the last admin — deleting {% if member.id == user.id %}this account{% else %}them{% endif %}
+          would leave nobody able to reach Users, the audit log or payment.
+          Make someone else an admin first.
+        {% elif member.id == user.id %}
+          This is the account you are signed in as, so it cannot be deleted.
+        {% else %}
+          Past bills and shifts keep {{ member.name }}'s name, and the audit log
+          keeps it too — what is lost is the link back to a live account. To
+          simply stop them signing in, turn off <b>Show on the branch's login
+          picker</b> above instead; that keeps everything and can be undone.
+        {% endif %}
+      </u>
+    </span>
+    {% if member.id == user.id or member.role == 'admin' and is_last_admin %}
+      <span class="btn btn-sm dis">Delete</span>
+    {% else %}
+      <form method="post" action="{% url 'backoffice:staff_delete' member.id %}?{{ qs }}"
+            style="margin:0"
+            onsubmit="return confirm('Delete {{ member.name|escapejs }} for good?\n\nTheir past bills and shifts keep their name. To just stop them signing in, cancel and turn off the login picker switch instead.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-danger">
+          <svg><use href="#i-trash"/></svg> Delete</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 {% endblock %}

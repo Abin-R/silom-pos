@@ -825,3 +825,151 @@ class PaymentIsAdminOnlyTests(HostileDataMixin, TestCase):
         self.branch.refresh_from_db()
         self.assertEqual(self.branch.beam_merchant_id, "newmerchant",
                          "the guard also blocked an admin")
+
+
+class StaffDeletionTests(HostileDataMixin, TestCase):
+    """Deleting a till login: possible, guarded, and honest about what it costs.
+
+    Both refusals are unrecoverable from inside the product — you cannot undo
+    deleting the account you are signed in as, and you cannot promote anyone
+    once the last admin is gone — so each is enforced in the view, not just
+    greyed out in the template.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build_shop()
+        cls.second_admin = Staff(
+            name="Second Admin", username="second", email="second@x.local",
+            role="admin", active=True, backoffice_access=True,
+        )
+        cls.second_admin.set_password(cls.password)
+        cls.second_admin.save()
+
+    def setUp(self):
+        self.assertTrue(
+            self.client.login(username="hostile", password=self.password))
+
+    def _cashier_client(self):
+        cashier = Staff(name="Till", username="tilluser", email="till2@x.local",
+                        role="cashier", active=True, backoffice_access=True)
+        cashier.set_password(self.password)
+        cashier.save()
+        client = Client()
+        self.assertTrue(client.login(username="tilluser", password=self.password))
+        return client
+
+    def test_the_form_offers_a_delete_button(self):
+        member = Staff.objects.create(name="Deletable", email="del@x.local",
+                                      role="cashier")
+        page = self.client.get(
+            reverse("backoffice:staff_detail", args=[member.id]))
+        self.assertContains(page, reverse("backoffice:staff_delete", args=[member.id]))
+        self.assertContains(page, "Delete")
+
+    def test_deleting_a_staff_member_works(self):
+        member = Staff.objects.create(name="Goodbye", email="bye@x.local",
+                                      role="cashier")
+        response = self.client.post(
+            reverse("backoffice:staff_delete", args=[member.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Staff.objects.filter(id=member.id).exists())
+
+    def test_history_survives_the_deletion(self):
+        """Bills and shifts store the name as text, so the record stays."""
+        member = Staff.objects.create(name="Nok Srisai", email="nok@x.local",
+                                      role="cashier")
+        AuditLog.objects.create(
+            actor=member, actor_label=member.name, actor_role="cashier",
+            action="update", model="Product", object_label="Croissant",
+        )
+        Order.objects.create(
+            branch=self.branch, order_number="DEL-0001", staff=member.name,
+            subtotal=Decimal("10"), total=Decimal("10"), status="completed",
+        )
+        self.client.post(reverse("backoffice:staff_delete", args=[member.id]))
+
+        entry = AuditLog.objects.get(object_label="Croissant")
+        self.assertIsNone(entry.actor_id, "the FK should go null, not cascade")
+        self.assertEqual(entry.actor_label, "Nok Srisai",
+                         "the audit log forgot who did it")
+        self.assertEqual(
+            Order.objects.get(order_number="DEL-0001").staff, "Nok Srisai",
+            "the bill forgot its cashier")
+
+    def test_you_cannot_delete_yourself(self):
+        self.client.post(reverse("backoffice:staff_delete", args=[self.admin.id]))
+        self.assertTrue(Staff.objects.filter(id=self.admin.id).exists(),
+                        "deleted the signed-in account")
+
+    def test_you_cannot_delete_the_last_admin(self):
+        # Sign in as the second admin, then try to delete the first…
+        self.second_admin.role = "admin"
+        self.second_admin.save()
+        client = Client()
+        self.assertTrue(client.login(username="second", password=self.password))
+        client.post(reverse("backoffice:staff_delete", args=[self.admin.id]))
+        self.assertFalse(Staff.objects.filter(id=self.admin.id).exists(),
+                         "two admins exist, so deleting one is fine")
+
+        # …now only `second_admin` is left, and it is signed in as itself.
+        client.post(reverse("backoffice:staff_delete", args=[self.second_admin.id]))
+        self.assertTrue(Staff.objects.filter(id=self.second_admin.id).exists())
+
+    def test_the_form_names_the_last_admin_reason_over_the_self_one(self):
+        """Both refusals can apply at once; the actionable one should lead.
+
+        Being the last admin is only ever reachable on your own record — an
+        admin viewing another admin means two exist — so if the self-reason
+        won, the message would never tell anyone to promote a colleague.
+        """
+        Staff.objects.filter(role="admin").exclude(id=self.admin.id).update(
+            role="cashier")
+        page = self.client.get(
+            reverse("backoffice:staff_detail", args=[self.admin.id]))
+        self.assertContains(page, "last admin")
+        self.assertContains(page, "Make someone else an admin first")
+
+    def test_a_cashier_cannot_delete_staff(self):
+        member = Staff.objects.create(name="Target", email="target@x.local",
+                                      role="cashier")
+        response = self._cashier_client().post(
+            reverse("backoffice:staff_delete", args=[member.id]))
+        self.assertNotEqual(response.status_code, 302)
+        self.assertTrue(Staff.objects.filter(id=member.id).exists(),
+                        "a cashier deleted a colleague")
+
+    def test_a_get_never_deletes(self):
+        """A crawler or a prefetch must not be able to remove someone."""
+        member = Staff.objects.create(name="Safe", email="safe@x.local",
+                                      role="cashier")
+        self.client.get(reverse("backoffice:staff_delete", args=[member.id]))
+        self.assertTrue(Staff.objects.filter(id=member.id).exists())
+
+
+class LastAdminRevokeTests(HostileDataMixin, TestCase):
+    """The Users page footer promises this; until now it was only text."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build_shop()
+        cls.other_admin = Staff(
+            name="Other Admin", username="other", email="other@x.local",
+            role="admin", active=True, backoffice_access=True,
+        )
+        cls.other_admin.set_password(cls.password)
+        cls.other_admin.save()
+
+    def test_revoking_the_last_admin_is_refused(self):
+        client = Client()
+        self.assertTrue(client.login(username="other", password=self.password))
+        # Two admins: revoking one is allowed.
+        client.post(reverse("backoffice:user_delete", args=[self.admin.id]))
+        self.admin.refresh_from_db()
+        self.assertFalse(self.admin.backoffice_access)
+
+        # `other` is now the only admin, and cannot revoke itself either way.
+        client.post(reverse("backoffice:user_delete", args=[self.other_admin.id]))
+        self.other_admin.refresh_from_db()
+        self.assertTrue(self.other_admin.backoffice_access,
+                        "the last admin revoked their own access")

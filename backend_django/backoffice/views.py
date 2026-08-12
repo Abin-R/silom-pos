@@ -10,9 +10,11 @@ import hashlib
 import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from pathlib import Path
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import Http404, HttpResponse, HttpResponseNotModified, HttpResponseRedirect
@@ -77,6 +79,27 @@ def _pct_change(now, before):
     if not before:
         return None
     return float((Decimal(now) - Decimal(before)) / Decimal(before) * 100)
+
+
+def admin_required(view):
+    """Restrict a view to `role == "admin"` accounts.
+
+    Deliberately the *only* permission check in the backoffice — there's no
+    role matrix yet. It exists because user management and the audit log are
+    the two screens where "any signed-in account can do this" is unacceptable:
+    one hands out credentials, the other is the record of who did what.
+    """
+    @wraps(view)
+    @login_required
+    def wrapped(request, *args, **kwargs):
+        if getattr(request.user, "role", "") != "admin":
+            return render(request, "backoffice/forbidden.html", {
+                "active": "users",
+                "hide_dates": True,
+                **_branch_topbar_context(),
+            }, status=403)
+        return view(request, *args, **kwargs)
+    return wrapped
 
 
 def _common_filters(request):
@@ -2903,6 +2926,9 @@ def staff_detail(request, staff_id):
         "branch": branch,
         "member": member,
         "mode": "edit",
+        # The delete panel explains *why* it is disabled rather than just
+        # greying out, so it needs the same answer the view will give.
+        "is_last_admin": _last_admin(member),
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -2944,12 +2970,49 @@ def staff_new(request):
     return render(request, "backoffice/staff_form.html", context)
 
 
-@login_required
+def _last_admin(member) -> bool:
+    """Is this the only admin account left that can still sign in?
+
+    Losing it locks everyone out of Users, the audit log and payment — with
+    no way back in through the product itself.
+    """
+    return not (
+        Staff.objects.filter(role="admin", active=True)
+        .exclude(id=member.id)
+        .exists()
+    )
+
+
+@admin_required
 def staff_delete(request, staff_id):
-    """Remove a staff member (deletes the PIN login entirely)."""
+    """Delete a till login for good.
+
+    Admin-only, matching `user_delete`: removing a colleague's access is not
+    a cashier's job. Two refusals, because both are unrecoverable from inside
+    the product — you cannot delete the account you are signed in as, and you
+    cannot delete the last admin.
+
+    History survives. Bills and shifts store the cashier's name as text, not
+    a foreign key, and audit rows keep `actor_label`; what is lost is the
+    link from those rows back to a live account. The Status switch on the
+    form is the reversible option and the form says so.
+    """
     member = get_object_or_404(Staff, id=staff_id)
-    if request.method == "POST":
+    if request.method != "POST":
+        return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+
+    if str(member.id) == str(request.user.id):
+        messages.error(request, "You cannot delete the account you are signed in as.")
+    elif member.role == "admin" and _last_admin(member):
+        messages.error(
+            request,
+            f"{member.name} is the last admin. Make someone else an admin first, "
+            f"or nobody will be able to reach Users, the audit log or payment.",
+        )
+    else:
+        name = member.name
         member.delete()
+        messages.success(request, f"{name} was deleted. Their past bills and shifts keep their name.")
     return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
 
@@ -3390,6 +3453,44 @@ def _payment_context(obj, user=None) -> dict:
     }
 
 
+def branch_errors(b: Branch) -> list[str]:
+    """Blocking problems with the branch itself (payment is checked separately).
+
+    The POS ID is the machine number the Revenue Department issues to one till
+    and it is printed on that till's tax invoices, so two branches cannot share
+    one: whichever branch pasted it second would be filing its sales under the
+    other's registration.  The database refuses it too (see the
+    ``branch_pos_id_unique_when_set`` constraint), but a constraint can only
+    500 — checking here is what lets the page name the branch already holding
+    the number, with the rest of the form still filled in.
+    """
+    errors = []
+    if b.pos_id:
+        clash = Branch.objects.filter(pos_id=b.pos_id).exclude(pk=b.pk).first()
+        if clash:
+            errors.append(
+                f'POS ID "{b.pos_id}" already belongs to {clash.name}. '
+                "Every branch needs its own Revenue Department machine number — "
+                "check the number for this branch, or clear it on the other one first."
+            )
+    return errors
+
+
+def _taken_pos_ids(b: Branch) -> str:
+    """``{"<pos id>": "<branch name>"}`` for every *other* branch, as JSON.
+
+    Feeds the POS ID field's as-you-type warning, so pasting a number that is
+    already in use is caught while the cursor is still in the box rather than
+    after a round trip.  ``branch_errors`` is still what refuses the save — this
+    is only the fast half of the same check, and the values are branch numbers
+    an admin can already read on the branch pages.
+    """
+    return json.dumps({
+        row.pos_id: row.name
+        for row in Branch.objects.exclude(pos_id="").exclude(pk=b.pk).only("pos_id", "name")
+    })
+
+
 def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.name = (post.get("name") or "").strip()
     b.code = (post.get("code") or "").strip()
@@ -3503,11 +3604,12 @@ def branch_list(request):
 @login_required
 def branch_detail(request, branch_id):
     b = get_object_or_404(Branch, id=branch_id)
-    errors = []
+    errors, form_errors = [], []
     if request.method == "POST":
         _apply_branch_form(b, request.POST, request.user)
         errors = payment_errors(b)
-        if not errors:
+        form_errors = branch_errors(b)
+        if not errors and not form_errors:
             b.save()
             return redirect("backoffice:branch_list")
         # Fall through and re-render with the submitted values still in place,
@@ -3517,6 +3619,8 @@ def branch_detail(request, branch_id):
         "branch_obj": b,
         "mode": "edit",
         "payment_errors": errors,
+        "form_errors": form_errors,
+        "taken_pos_ids": _taken_pos_ids(b),
         **_payment_context(b, request.user),
         **_branch_topbar_context(),
     }
@@ -3525,7 +3629,7 @@ def branch_detail(request, branch_id):
 
 @login_required
 def branch_new(request):
-    errors = []
+    errors, form_errors = [], []
     if request.method == "POST":
         b = Branch()
         _apply_branch_form(b, request.POST, request.user)
@@ -3534,7 +3638,8 @@ def branch_new(request):
         # is those seeded keys that have to match the lane.
         seed_branch_payment(b)
         errors = payment_errors(b)
-        if not errors:
+        form_errors = branch_errors(b)
+        if not errors and not form_errors:
             b.save()
             return redirect("backoffice:branch_list")
         context = {
@@ -3542,6 +3647,8 @@ def branch_new(request):
             "branch_obj": b,
             "mode": "new",
             "payment_errors": errors,
+            "form_errors": form_errors,
+            "taken_pos_ids": _taken_pos_ids(b),
             **_payment_context(b, request.user),
             **_branch_topbar_context(),
         }
@@ -3556,6 +3663,8 @@ def branch_new(request):
         "branch_obj": blank,
         "mode": "new",
         "payment_errors": errors,
+        "form_errors": form_errors,
+        "taken_pos_ids": _taken_pos_ids(blank),
         **_payment_context(blank, request.user),
         **_branch_topbar_context(),
     }
@@ -3656,7 +3765,6 @@ def shop_settings(request):
 # the Staff page above which manages in-app PIN logins. Both live in the same
 # `bravepos_staff` table — `backoffice_access` is what separates them.
 import secrets as _secrets
-from functools import wraps
 
 # Ambiguous glyphs (0/O, 1/l/I) removed so a generated password survives being
 # read aloud or copied off a screen.
@@ -3665,27 +3773,6 @@ _PASSWORD_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 def generate_password(length: int = 14) -> str:
     return "".join(_secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
-
-
-def admin_required(view):
-    """Restrict a view to `role == "admin"` accounts.
-
-    Deliberately the *only* permission check in the backoffice — there's no
-    role matrix yet. It exists because user management and the audit log are
-    the two screens where "any signed-in account can do this" is unacceptable:
-    one hands out credentials, the other is the record of who did what.
-    """
-    @wraps(view)
-    @login_required
-    def wrapped(request, *args, **kwargs):
-        if getattr(request.user, "role", "") != "admin":
-            return render(request, "backoffice/forbidden.html", {
-                "active": "users",
-                "hide_dates": True,
-                **_branch_topbar_context(),
-            }, status=403)
-        return view(request, *args, **kwargs)
-    return wrapped
 
 
 def _user_form_errors(post, instance=None) -> list[str]:
@@ -3884,11 +3971,30 @@ def user_delete(request, staff_id):
     PIN login it also has keeps working.
     """
     member = get_object_or_404(Staff, id=staff_id)
-    if request.method == "POST" and str(member.id) != str(request.user.id):
+    if request.method != "POST":
+        return redirect("backoffice:user_list")
+
+    # The page footer promises both of these refusals; until now only the
+    # first was enforced, so revoking the last admin would have locked
+    # everyone out of Users and the audit log with the UI still claiming it
+    # could not happen.
+    if str(member.id) == str(request.user.id):
+        messages.error(request, "You cannot revoke the account you are signed in as.")
+    elif member.role == "admin" and _last_admin(member):
+        messages.error(
+            request,
+            f"{member.name} is the last admin. Promote someone else first, or "
+            f"nobody will be able to reach Users or the audit log.",
+        )
+    else:
         member.backoffice_access = False
         member.username = None
         member.set_password(_uuid.uuid4().hex)
         member.save(update_fields=["backoffice_access", "username", "password_hash"])
+        messages.success(
+            request,
+            f"{member.name} can no longer sign in here. Any till PIN they have still works.",
+        )
     return redirect("backoffice:user_list")
 
 
