@@ -19,6 +19,8 @@ Run:
 """
 from __future__ import annotations
 
+import re
+
 from decimal import Decimal
 
 from django.test import Client, TestCase
@@ -1054,6 +1056,10 @@ class ResponsiveShellTests(HostileDataMixin, TestCase):
             self.client.login(username="hostile", password=self.password))
         self.css = self.client.get(
             reverse("backoffice:app_css")).content.decode()
+        # Comments explain the rules and often quote the very thing a rule
+        # removed, so assertions about what the stylesheet *does* have to look
+        # at the declarations alone.
+        self.rules = re.sub(r"/\*.*?\*/", "", self.css, flags=re.S)
 
     def test_the_page_declares_a_viewport(self):
         """Without it a phone renders at 980px and scales the lot down."""
@@ -1079,14 +1085,38 @@ class ResponsiveShellTests(HostileDataMixin, TestCase):
     def test_the_breakpoints_are_present(self):
         for query in ["max-width: 1023px", "max-width: 720px", "max-width: 460px"]:
             with self.subTest(query=query):
-                self.assertIn(query, self.css)
+                self.assertIn(query, self.rules)
         # The rail must actually be moved off-screen, not just repositioned.
-        narrow = self.css[self.css.index("@media (max-width: 1023px)"):]
+        narrow = self.rules[self.rules.index("@media (max-width: 1023px)"):]
         self.assertIn("translateX(-100%)", narrow[:1600])
+
+    def test_nothing_pins_the_page_to_the_viewport(self):
+        """A 100vh page with `overflow: hidden` does not scroll — it clips.
+
+        Every list and report page used to opt into that, betting the content
+        always fits. On a short window it did not, and the overflow was not
+        reachable by any means: no scrollbar, no keyboard, nothing.
+        """
+        self.assertNotIn("fixed-height", self.rules)
+        for name in ["dashboard", "transactions", "inventory", "report_sku",
+                     "report_daily", "customer_list", "audit_log",
+                     "product_list", "staff_list", "report_sell"]:
+            with self.subTest(page=name):
+                page = self.client.get(reverse(f"backoffice:{name}"))
+                self.assertNotContains(page, "fixed-height")
+
+        # The rail and header keep their place while the document scrolls —
+        # that was the part of the pinned layout worth keeping.
+        self.assertIn("position: sticky", self.rules)
+
+    def test_the_chart_cannot_collapse(self):
+        """Chart.js fills its container; unbounded, that can be ~0px."""
+        chart = self.rules[self.rules.index(".chart {"):]
+        self.assertIn("min-height: 240px", chart[:200])
 
     def test_wide_tables_get_a_scroll_floor(self):
         """Twelve columns on a phone should scroll sideways, not crush."""
-        narrow = self.css[self.css.index("@media (max-width: 1023px)"):]
+        narrow = self.rules[self.rules.index("@media (max-width: 1023px)"):]
         self.assertIn("overflow-x: auto", narrow[:1800])
         self.assertIn(".panel-scroll .tbl", narrow[:1800])
 

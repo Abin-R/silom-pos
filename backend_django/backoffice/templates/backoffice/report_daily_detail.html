@@ -7,7 +7,6 @@
 {% endcomment %}
 
 {% block title %}{{ day|date:"j M Y" }}{% endblock %}
-{% block body_class %}fixed-height{% endblock %}
 {% block page_title %}{{ day|date:"l j F Y" }}{% endblock %}
 {% block page_sub %}
   <div class="tb-sub">{{ rows|length }} bill{{ rows|length|pluralize }}{% if branch %} at {{ branch.name }}{% endif %}</div>

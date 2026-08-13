@@ -115,11 +115,18 @@ body {
   background: var(--bg);
 }
 
-/* Pages that fit the viewport (tables that scroll inside their own panel)
-   opt in with `body.fixed-height`; everything else scrolls the document. */
-body.fixed-height { height: 100vh; overflow: hidden; }
-body.fixed-height .shell { height: 100vh; }
-body.fixed-height .body { overflow: hidden; }
+/* The document scrolls. Full stop.
+
+   Every list and report page used to opt into `body.fixed-height` — 100vh
+   with `overflow: hidden`, so the table scrolled inside its own panel and the
+   stat cards stayed put. That is a bet that the content always fits the
+   viewport, and the bet loses on any short window: a laptop, a split screen,
+   a browser carrying three toolbars, or a page zoomed for readability. When
+   it lost, the overflow was not scrolled to — it was clipped and simply
+   unreachable.
+
+   The rail and header are `position: sticky`, so they still stay put while
+   the page scrolls. That was the part worth keeping. */
 
 .body {
   flex: 1;
@@ -749,8 +756,12 @@ body.fixed-height .body { overflow: hidden; }
 
 /* ══ CHARTS ══════════════════════════════════════════════════════════════ */
 
-.chart { padding: 18px 20px 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.chart svg, .chart canvas { width: 100%; flex: 1; min-height: 0; display: block; }
+/* `min-height` matters: Chart.js fills its container, and with the page no
+   longer pinned to the viewport a flex child can resolve to nearly nothing.
+   A floor means the trend line is always drawn at a readable size instead of
+   collapsing to a sliver on a short window. */
+.chart { padding: 18px 20px 0; flex: 1; min-height: 240px; display: flex; flex-direction: column; }
+.chart svg, .chart canvas { width: 100%; flex: 1; min-height: 200px; display: block; }
 .xaxis {
   display: flex;
   padding: 8px 20px 16px;
@@ -943,8 +954,6 @@ body.fixed-height .body { overflow: hidden; }
   /* Pages that pin themselves to the viewport give that up — on a short
      screen a table scrolling inside a panel inside a fixed page is two
      nested scrollbars and no way out. Let the document scroll instead. */
-  body.fixed-height, body.fixed-height .shell { height: auto; overflow: visible; }
-  body.fixed-height .body { overflow: visible; }
   .panel-grow, .panel-scroll { min-height: 0; }
 
   .side {
