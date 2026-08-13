@@ -584,6 +584,7 @@ const en = {
     promptpay_qr: "PromptPay QR",
     receipt_printed: "Receipt printed",
     rounding: "Rounding",
+    print_now: "Print now",
     received: "Received",
     register: "Register",
     retrieve: "Retrieve",

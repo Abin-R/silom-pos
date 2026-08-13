@@ -108,7 +108,7 @@ export default function POS() {
   // Receipt-printing hook.  printReceipt renders ReceiptImage to a PNG
   // and ships it via the native module's printImage().  ReceiptOverlay
   // is the off-screen component that gets captured — must be in JSX.
-  const { printReceipt, ReceiptOverlay } = useStarPrinter();
+  const { printReceipt, retryQueuedNow, ReceiptOverlay } = useStarPrinter();
   // The URL is just a display hint.  Real auth state lives in AsyncStorage and
   // gets loaded on mount, so manual URL edits can't desync role / branch from
   // the actual session token.
@@ -778,6 +778,17 @@ export default function POS() {
                     showAlert(
                       tr("pos.receipts_waiting_to_print", { count: queuedPrints }),
                       tr("pos.the_printer_was_unreachable_so_these"),
+                      [
+                        { text: tr("dialog.cancel"), style: "cancel" },
+                        {
+                          text: tr("pos.print_now"),
+                          onPress: async () => {
+                            await retryQueuedNow();
+                            const jobs = await listJobs().catch(() => []);
+                            setQueuedPrints(jobs.length);
+                          },
+                        },
+                      ],
                     )
                   }
                   testID="status-print-queue"

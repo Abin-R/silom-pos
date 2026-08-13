@@ -578,6 +578,7 @@ const th = {
     promptpay_qr: "QR พร้อมเพย์",
     receipt_printed: "พิมพ์ใบเสร็จแล้ว",
     rounding: "ปัดเศษ",
+    print_now: "พิมพ์เดี๋ยวนี้",
     received: "รับเงิน",
     register: "สมัคร",
     retrieve: "เรียกคืน",
