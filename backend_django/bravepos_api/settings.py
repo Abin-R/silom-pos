@@ -96,6 +96,10 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    # Makes `/backoffice/branches` and `/backoffice/branches/` both work, in
+    # both directions and without dropping a POST body — the job APPEND_SLASH
+    # below only half does. See bravepos_api/middleware.py.
+    'bravepos_api.middleware.SlashTolerantMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     # Custom Staff-aware auth middleware. Django's default
     # AuthenticationMiddleware hydrates request.user by int-coercing the
@@ -205,6 +209,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Frontend calls /api/categories (no trailing slash); the router below is
 # configured to match.  Disabling APPEND_SLASH avoids 301-redirecting POSTs,
 # which silently drops the request body.
+#
+# Stays off: SlashTolerantMiddleware does the same job in both directions and
+# redirects unsafe methods with a 308, which clients must replay with the
+# original method and body.  Turning this back on would reintroduce the 301.
 APPEND_SLASH = False
 
 # Product images are stored as base64 data URLs in a normal form field (the
