@@ -3465,15 +3465,41 @@ def _payment_context(obj, user=None) -> dict:
 def branch_errors(b: Branch) -> list[str]:
     """Blocking problems with the branch itself (payment is checked separately).
 
+    Two of a branch's fields belong to one branch only, and the database says
+    so for both — but a constraint can only 500.  That is what production did
+    on 2026-08-18: "Khlong San" saved, the form was submitted a second time,
+    the repeat hit ``bravepos_branch_name_key``, and the admin got an error
+    page instead of being told the branch already existed.  Checking here is
+    what lets the page name the branch already holding the value, with the
+    rest of the form still filled in.
+
+    The name is how a branch is chosen — on the POS login screen, in the
+    branch picker, on the receipt — so two branches cannot answer to one.  The
+    check is case-insensitive where the constraint is not: Postgres would take
+    "khlong san" alongside "Khlong San", which is the same mistake with a
+    worse ending, because afterwards nobody can tell the two tills apart.
+
     The POS ID is the machine number the Revenue Department issues to one till
     and it is printed on that till's tax invoices, so two branches cannot share
     one: whichever branch pasted it second would be filing its sales under the
-    other's registration.  The database refuses it too (see the
-    ``branch_pos_id_unique_when_set`` constraint), but a constraint can only
-    500 — checking here is what lets the page name the branch already holding
-    the number, with the rest of the form still filled in.
+    other's registration (see the ``branch_pos_id_unique_when_set``
+    constraint).
     """
     errors = []
+    name = (b.name or "").strip()
+    if not name:
+        # The input is `required`, so this is a hand-made POST — still a form
+        # error rather than a 500, and blank would otherwise save once and
+        # clash on the next one.
+        errors.append("Branch name is required.")
+    else:
+        clash = Branch.objects.filter(name__iexact=name).exclude(pk=b.pk).first()
+        if clash:
+            errors.append(
+                f'A branch called "{clash.name}" already exists. '
+                "Branch names are how staff pick a till at login, so no two can "
+                "share one — rename this branch, or edit the existing one instead."
+            )
     if b.pos_id:
         clash = Branch.objects.filter(pos_id=b.pos_id).exclude(pk=b.pk).first()
         if clash:
@@ -3497,6 +3523,19 @@ def _taken_pos_ids(b: Branch) -> str:
     return json.dumps({
         row.pos_id: row.name
         for row in Branch.objects.exclude(pos_id="").exclude(pk=b.pk).only("pos_id", "name")
+    })
+
+
+def _taken_branch_names(b: Branch) -> str:
+    """``{"<name lowercased>": "<name>"}`` for every *other* branch, as JSON.
+
+    The name half of the warning ``_taken_pos_ids`` feeds.  Keys are folded to
+    lower case because ``branch_errors`` compares that way, and a warning that
+    disagreed with the check that refuses the save would be worse than none.
+    """
+    return json.dumps({
+        row.name.strip().lower(): row.name
+        for row in Branch.objects.exclude(pk=b.pk).only("name")
     })
 
 
@@ -3630,6 +3669,7 @@ def branch_detail(request, branch_id):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(b),
+        "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
         **_branch_topbar_context(),
     }
@@ -3658,6 +3698,7 @@ def branch_new(request):
             "payment_errors": errors,
             "form_errors": form_errors,
             "taken_pos_ids": _taken_pos_ids(b),
+            "taken_names": _taken_branch_names(b),
             **_payment_context(b, request.user),
             **_branch_topbar_context(),
         }
@@ -3674,6 +3715,7 @@ def branch_new(request):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(blank),
+        "taken_names": _taken_branch_names(blank),
         **_payment_context(blank, request.user),
         **_branch_topbar_context(),
     }

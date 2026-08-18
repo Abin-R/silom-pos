@@ -64,7 +64,9 @@
       <div class="field">
         <label for="f-name">Branch name</label>
         <input id="f-name" type="text" name="name" required value="{{ branch_obj.name }}"
-               placeholder="e.g. Central Chidlom">
+               placeholder="e.g. Central Chidlom" data-taken="{{ taken_names }}">
+        <span class="hint" id="nameHint">Shown on the POS login screen and printed on
+          this branch's receipts — one name per branch, never repeated.</span>
       </div>
       <div class="field">
         <label for="f-code">Short code</label>
@@ -134,31 +136,53 @@
 
 {% block extra_scripts %}
 <script>
-  // POS ID clash, caught while the cursor is still in the box. The number is
-  // one till's registration with the Revenue Department, and the usual way to
-  // duplicate one is pasting into the wrong branch — so say whose it is at the
-  // moment of the paste, not after a save round trip. The server checks again
-  // (branch_errors) and is what actually refuses the save; this only warns.
+  // A value another branch already holds, caught while the cursor is still in
+  // the box rather than after a save round trip.
+  //
+  // Both fields duplicate the same way. A POS ID is one till's registration
+  // with the Revenue Department and gets pasted into the wrong branch; a name
+  // gets typed again by someone who could not tell whether the first save went
+  // through — which is exactly how production ended up posting "Khlong San"
+  // twice. Either way the useful moment to speak is while it is being typed.
+  //
+  // The server checks again (branch_errors) and is what actually refuses the
+  // save; this only warns.
   (function () {
-    const input = document.getElementById('f-posid');
-    const hint  = document.getElementById('posIdHint');
-    if (!input || !hint) return;
+    const FIELDS = [
+      {
+        input: 'f-name', hint: 'nameHint',
+        // Folded, because branch_errors compares names case-insensitively.
+        fold: true,
+        message: (owner) => `"${owner}" already exists. Branch names can't be `
+          + `shared — this won't save.`,
+      },
+      {
+        input: 'f-posid', hint: 'posIdHint', fold: false,
+        message: (owner) => `Already used by ${owner}. Two branches can't share `
+          + `a POS ID — this won't save.`,
+      },
+    ];
 
-    let taken = {};
-    try { taken = JSON.parse(input.dataset.taken || '{}'); } catch (e) { return; }
-    const original = hint.textContent;
+    for (const field of FIELDS) {
+      const input = document.getElementById(field.input);
+      const hint  = document.getElementById(field.hint);
+      if (!input || !hint) continue;
 
-    function check() {
-      const owner = taken[input.value.trim()];
-      input.style.borderColor = owner ? 'var(--red)' : '';
-      hint.style.color = owner ? 'var(--red-d)' : '';
-      hint.textContent = owner
-        ? `Already used by ${owner}. Two branches can't share a POS ID — this won't save.`
-        : original;
+      let taken = {};
+      try { taken = JSON.parse(input.dataset.taken || '{}'); } catch (e) { continue; }
+      const original = hint.textContent;
+
+      const check = () => {
+        const typed = input.value.trim();
+        const owner = taken[field.fold ? typed.toLowerCase() : typed];
+        input.style.borderColor = owner ? 'var(--red)' : '';
+        hint.style.color = owner ? 'var(--red-d)' : '';
+        hint.textContent = owner ? field.message(owner) : original;
+      };
+
+      input.addEventListener('input', check);
+      check();  // a rejected save comes back with the clashing value still typed
     }
-
-    input.addEventListener('input', check);
-    check();   // a rejected save comes back with the clashing value still typed
   })();
 </script>
 <script>

@@ -7,6 +7,7 @@ apps that share the database.
 """
 from pathlib import Path
 import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -30,7 +31,17 @@ ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
 # To check reporting from your machine, run once with DJANGO_DEBUG=0 and set
 # SENTRY_ENV to something other than `production` so it stays filterable.
 SENTRY_DSN = os.environ.get('SENTRY_DSN')
-if SENTRY_DSN and not DEBUG:
+
+# An interactive `manage.py shell` is a person at a prompt, and their typos are
+# not the product's bugs.  PYTHON-DJANGO-6 was four copies of `SyntaxError:
+# invalid syntax (<string>, line 29)` raised by one-liners being pasted into
+# `shell -c` — whoever ran it was already reading the traceback on their own
+# terminal, so the report only cost quota and cluttered triage.  Every *other*
+# management command still reports (the reconcile_selforders and
+# consolidate_daily crons especially), because nobody is watching those run.
+_INTERACTIVE_SHELL = len(sys.argv) > 1 and sys.argv[1] == 'shell'
+
+if SENTRY_DSN and not DEBUG and not _INTERACTIVE_SHELL:
     import sentry_sdk
     from django.core.exceptions import DisallowedHost
 
