@@ -78,7 +78,7 @@
     {% if not shop.address_line_1 and shop.address %}<div class="hdr-line">{{ shop.address|linebreaksbr }}</div>{% endif %}
     {% if shop.phone %}<div class="hdr-line">{{ shop.phone }}</div>{% endif %}
     {% if shop.tax_id %}<div class="hdr-line">TAX ID: {{ shop.tax_id }}</div>{% endif %}
-    <div class="hdr-line">POS ID: {{ shop.pos_id|default:"" }}</div>
+    {% if pos_id %}<div class="hdr-line">POS ID: {{ pos_id }}</div>{% endif %}
 
     <div class="center bold" style="margin-top:6px;">&#3651;&#3610;&#3648;&#3626;&#3619;&#3655;&#3592;&#3619;&#3633;&#3610;&#3648;&#3591;&#3636;&#3609;/&#3651;&#3610;&#3585;&#3635;&#3585;&#3633;&#3610;&#3616;&#3634;&#3625;&#3637;&#3629;&#3618;&#3656;&#3634;&#3591;&#3618;&#3656;&#3629;</div>
 

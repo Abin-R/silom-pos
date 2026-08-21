@@ -84,7 +84,9 @@ const SHOP_DEFAULTS = {
   ],
   phone: "0644184887",
   tax_id: "0105563083534",
-  pos_id: "E020140003A1363",
+  // No pos_id default.  It used to be BIO HOUSE's real RD machine number, and
+  // because the merge below used `||`, every branch with a blank POS ID fell
+  // through to it and printed BIO HOUSE's number as its own.
   pos_number: "001",
   tax_percent: 7,
 };
@@ -145,7 +147,10 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
     address: addressLines,
     phone: shop?.phone || SHOP_DEFAULTS.phone,
     tax_id: shop?.tax_id || SHOP_DEFAULTS.tax_id,
-    pos_id: shop?.pos_id || SHOP_DEFAULTS.pos_id,
+    // Per branch, so it comes off the order — the shop-wide Settings value
+    // would put one branch's registered machine number on every branch's
+    // receipts.  Blank (branch has no RD number yet) omits the line below.
+    pos_id: order.branch_pos_id || "",
     pos_number: shop?.pos_number || SHOP_DEFAULTS.pos_number,
     tax_percent: Number(shop?.tax_percent ?? SHOP_DEFAULTS.tax_percent),
   };
@@ -214,9 +219,9 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       ))}
       <Text style={s.companyCenter}>{sh.phone}</Text>
       <Text style={s.companyCenter}>{lbl("เลขประจำตัวผู้เสียภาษี", "Tax ID")}: {sh.tax_id}</Text>
-      {/* Revenue Department issued the approved machine number, so this now
-          prints. It is only rendered when a value exists — a receipt asserting
-          an empty POS ID is worse than one that omits the line. */}
+      {/* Only rendered when this branch actually has an RD-issued machine
+          number. A receipt asserting an empty — or worse, another branch's —
+          POS ID is worse than one that omits the line. */}
       {!!sh.pos_id && (
         <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text>
       )}

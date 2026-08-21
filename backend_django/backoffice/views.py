@@ -1031,6 +1031,10 @@ def receipt_print(request, order_number):
         "thai_date": thai_date,
         "short_code": short_code,
         "pos_number": (settings_row.pos_number if settings_row else "") or "001",
+        # Per branch, never shop-wide — printing another branch's RD machine
+        # number on this receipt would misstate which till issued it.  Blank
+        # means this branch has no RD number yet and the line is omitted.
+        "pos_id": order.branch.pos_id if order.branch_id else "",
         "items": items,
         "item_count": item_count,
         "gross_subtotal": gross_subtotal,
@@ -1567,7 +1571,9 @@ def _report_tax_rows(branch, dfrom, dto):
 
 def _report_tax_header(branch):
     """Taxpayer identity block the RD format requires above the table.
-    Branch-level tax_id/pos_id override the shop-wide Settings values."""
+    Branch-level tax_id overrides the shop-wide Settings value; pos_id is
+    branch-only and has no shop-wide fallback, because falling back would put
+    one branch's RD machine number on another branch's report."""
     settings_row = Settings.objects.first()
     return {
         "company_name": (
@@ -1578,10 +1584,7 @@ def _report_tax_header(branch):
             (branch.tax_id if branch and branch.tax_id else None)
             or (settings_row.tax_id if settings_row else "")
         ),
-        "pos_id": (
-            (branch.pos_id if branch and branch.pos_id else None)
-            or (settings_row.pos_id if settings_row else "")
-        ),
+        "pos_id": (branch.pos_id if branch else "") or "",
         "tax_percent": settings_row.tax_percent if settings_row else Decimal("7"),
     }
 

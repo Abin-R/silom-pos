@@ -119,6 +119,13 @@ export type ReceiptOrder = {
   // is required for 'full' and ignored otherwise.
   doc_type?: 'abbreviated' | 'full';
   tax_invoice?: TaxInvoiceParty;
+
+  // The Revenue Department's approved machine number for the branch this bill
+  // was rung up at (``Order.branch_pos_id`` from the API).  It rides on the
+  // *order*, not the shop, because it differs per branch — the same reason
+  // ``branch_name`` does.  Empty means the branch has no RD number yet and the
+  // receipt omits the POS ID line.
+  branch_pos_id?: string;
 };
 
 export type ReceiptShop = {
@@ -131,7 +138,8 @@ export type ReceiptShop = {
   company_name?: string;
   phone?: string;
   tax_id?: string;
-  pos_id?: string;
+  // No pos_id here on purpose.  It is per branch, so it lives on ReceiptOrder
+  // above; Settings' shop-wide value must never reach a printed receipt.
   pos_number?: string;
   tax_percent?: number;
   tax_mode?: 'inclusive' | 'exclusive';

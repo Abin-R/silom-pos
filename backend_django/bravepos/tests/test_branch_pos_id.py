@@ -17,8 +17,8 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
 
-from bravepos.models import Branch, Settings, Staff
-from bravepos.serializers import BranchSerializer
+from bravepos.models import Branch, Order, Settings, Staff
+from bravepos.serializers import BranchSerializer, OrderSerializer
 
 
 class BranchPosIdConstraintTests(TestCase):
@@ -147,3 +147,41 @@ class BranchPosIdBackofficeTests(TestCase):
             reverse("backoffice:branch_detail", args=[self.emq.id]))
         self.assertContains(page, "E020140003A1363")   # in data-taken
         self.assertContains(page, "data-taken")
+
+
+class ReceiptPosIdIsBranchWideTests(TestCase):
+    """The number on a printed receipt is the *branch's*, or nothing.
+
+    Regression test for a live bug: the receipt read a shop-wide
+    ``Settings.pos_id``, so a bill rung up at Silom — which has no RD machine
+    number — printed BIO HOUSE's registered number as if Silom's till had
+    issued it. The serializer now carries the branch's own number, and a branch
+    without one yields "" so the receipt omits the line entirely.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.bio = Branch.objects.create(name="Bio", pos_id="E020140003A1363")
+        cls.silom = Branch.objects.create(name="Silom", code="SLM", pos_id="")
+
+    def _order(self, branch, number):
+        return Order.objects.create(branch=branch, order_number=number, total=100)
+
+    def test_a_registered_branch_carries_its_own_number(self):
+        data = OrderSerializer(self._order(self.bio, "PS-BIO-1")).data
+        self.assertEqual(data["branch_pos_id"], "E020140003A1363")
+
+    def test_an_unregistered_branch_carries_nothing(self):
+        """Not the other branch's number, and not a placeholder — empty."""
+        data = OrderSerializer(self._order(self.silom, "PS-SLM-1")).data
+        self.assertEqual(data["branch_pos_id"], "")
+
+    def test_a_branchless_order_carries_nothing(self):
+        data = OrderSerializer(self._order(None, "PS-NONE-1")).data
+        self.assertEqual(data["branch_pos_id"], "")
+
+    def test_there_is_no_shop_wide_pos_id_to_fall_back_to(self):
+        """The field is gone from Settings, so no future code can reach for it
+        and reintroduce one branch's number on every branch's receipts."""
+        self.assertFalse(hasattr(Settings(), "pos_id"))
+        self.assertNotIn("pos_id", [f.name for f in Settings._meta.get_fields()])

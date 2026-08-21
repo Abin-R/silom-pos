@@ -134,7 +134,7 @@ type Order = {
   payment_method?: string; delivery_provider?: string; delivery_status?: string;
   staff?: string; voided_by?: string; voided_at?: string | null;
   subtotal?: number; paid_amount?: number; change?: number;
-  discount_amount?: number; branch_name?: string;
+  discount_amount?: number; branch_name?: string; branch_pos_id?: string;
   customer_id?: string | null; customer_name?: string;
   // Buyer of record, set once a full tax invoice has been issued for this
   // bill.  Present → the form prefills from it on a re-issue.
@@ -162,7 +162,10 @@ type Dashboard = {
 };
 type Settings = {
   shop_name: string; business_type: string; tax_id?: string;
-  pos_id: string; branch: string; pos_number: string;
+  // No pos_id: the RD machine number is issued per till, so it lives on the
+  // Branch and is edited in the backoffice branch form.  A shop-wide one made
+  // every branch print the same number.
+  branch: string; pos_number: string;
   open_time: string; close_time: string;
   tax_percent: number; tax_mode: string;
   service_charge_enabled: boolean; service_charge_percent: number;
@@ -1463,6 +1466,9 @@ function TransactionDetail({
     taxInvoice?: TaxInvoiceData,
   ): ReceiptOrder => ({
     order_number: order.order_number,
+    // The RD machine number of the branch this bill was rung up at — not the
+    // shop-wide Settings value, which is one number for every branch.
+    branch_pos_id: order.branch_pos_id || "",
     items: order.items.map((it: any) => ({ name: it.name, qty: it.qty, price: it.price })),
     subtotal: Number(order.subtotal) || 0,
     discount_amount: Number(order.discount_amount) || 0,
@@ -5118,9 +5124,6 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
             <View style={{ flexDirection: "row", gap: 12 }}>
               <Field label={tr("admin.tax_id")} flex>
                 <TextInput style={styles.formInput} value={s.tax_id || ""} onChangeText={(v) => update({ tax_id: v })} placeholder="—" />
-              </Field>
-              <Field label={tr("admin.pos_id")} flex>
-                <TextInput style={styles.formInput} value={s.pos_id} onChangeText={(v) => update({ pos_id: v })} />
               </Field>
               <Field label={tr("admin.branch")} flex>
                 <TextInput style={styles.formInput} value={s.branch} onChangeText={(v) => update({ branch: v })} />

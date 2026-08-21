@@ -42,11 +42,14 @@ type ApiOrder = {
   paid_amount?: number;
   created_at?: string;
   staff?: string;
+  branch_pos_id?: string;
 };
 
 function toReceiptOrder(o: ApiOrder): ReceiptOrder {
   return {
     order_number: o.order_number,
+    // This branch's RD machine number; blank omits the POS ID line.
+    branch_pos_id: o.branch_pos_id || "",
     // Server-assigned, per branch per day. Without this the receipt falls back
     // to slicing the global order_number, and the number on the paper wouldn't
     // match the one the customer was shown on their phone.

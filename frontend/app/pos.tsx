@@ -530,6 +530,8 @@ export default function POS() {
               // order number, which collided across branches and wrapped every
               // 100 sales — and it's the number the customer gets called by.
               queue_number: order.queue_number ?? undefined,
+              // This branch's RD machine number; blank omits the POS ID line.
+              branch_pos_id: order.branch_pos_id || "",
               items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
               subtotal,
               discount_amount: discountAmount,

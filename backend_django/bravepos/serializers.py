@@ -154,6 +154,14 @@ class OrderSerializer(serializers.ModelSerializer):
     # without raising AttributeError.
     branch_id = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
+    # The Revenue Department's approved machine number for the till that rang
+    # this bill up.  Comes from the *Branch*, never from Settings: Settings
+    # holds one shop-wide value, so a receipt printed at Silom used to carry
+    # BIO HOUSE's registered number.  A branch with no RD number yet returns
+    # "" and the receipt then omits the POS ID line entirely, which is the only
+    # safe answer — asserting someone else's machine number on a tax invoice is
+    # worse than printing none.
+    branch_pos_id = serializers.SerializerMethodField()
 
     def get_branch_id(self, obj):
         return str(obj.branch_id) if obj.branch_id else None
@@ -161,11 +169,14 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_branch_name(self, obj):
         return obj.branch.name if obj.branch_id else ""
 
+    def get_branch_pos_id(self, obj):
+        return obj.branch.pos_id if obj.branch_id else ""
+
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'items',
-            'branch_id', 'branch_name',
+            'branch_id', 'branch_name', 'branch_pos_id',
             'subtotal', 'discount_type', 'discount_value', 'discount_amount', 'total',
             'vat_amount', 'processing_fee', 'processing_fee_vat',
             'payment_method', 'paid_amount', 'change',
