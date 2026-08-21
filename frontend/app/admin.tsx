@@ -916,6 +916,15 @@ function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
 // but a busy day is still a handful of pages rather than dozens.
 const PAGE_SIZE = 50;
 
+// TEMPORARY OVERRIDE (2026-08-21, tech@therollingpinn.com): every branch may
+// issue a full tax invoice, POS ID or not, until the Revenue Department has
+// issued a machine number for each till.  Set this back to `false` to restore
+// the per-branch gate below — that is the whole revert, nothing else changed.
+// While it is `true` a branch with a blank POS ID prints a full tax invoice
+// with no "POS ID:" line on it (ReceiptImage only renders that line when the
+// value is set), so the document goes out without a machine number.
+const FULL_TAX_INVOICE_EVERYWHERE: boolean = true;
+
 function Transactions({ isWide, reprint, staff, branchId }: {
   isWide: boolean; reprint: ReprintFn; staff: string; branchId: string;
 }) {
@@ -966,7 +975,8 @@ function Transactions({ isWide, reprint, staff, branchId }: {
       .catch(() => { if (!cancelled) setBranchPosId(null); });
     return () => { cancelled = true; };
   }, [branchId]);
-  const canIssueTaxInvoice = branchPosId === null || branchPosId.length > 0;
+  const canIssueTaxInvoice =
+    FULL_TAX_INVOICE_EVERYWHERE || branchPosId === null || branchPosId.length > 0;
 
   // Merge a server-updated order (after a void, or after a full tax invoice is
   // issued) back into the list and the open detail pane so the new state shows
