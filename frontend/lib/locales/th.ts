@@ -530,6 +530,7 @@ const th = {
     clear: "ล้าง",
     completed: "เสร็จสิ้น",
     connect_brave_pos_with_electronic_data: "เชื่อมต่อ Brave POS กับเครื่องรูดบัตร (EDC) ไม่ต้องกรอกข้อมูลเอง รองรับทั้งบัตรเครดิตและบัตรเดบิต (VISA, MasterCard, JCB, UnionPay)",
+    couldnt_park_order: "พักออเดอร์ไม่สำเร็จ",
     count_the_drawer_first_the_figure: "นับเงินในลิ้นชักก่อน ตัวเลขที่กรอกจะใช้เป็นเกณฑ์ตรวจสอบตอนปิดรอบ",
     current_order: "ออเดอร์ปัจจุบัน",
     delivery_menu: "เมนูเดลิเวอรี",

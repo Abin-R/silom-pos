@@ -536,6 +536,7 @@ const en = {
     clear: "Clear",
     completed: "Completed",
     connect_brave_pos_with_electronic_data: "Connect Brave POS with Electronic Data Capture (EDC) payment terminal no need to manual input data, supporting both credit and debit cards (VISA, MasterCard, JCB, UnionPay)",
+    couldnt_park_order: "Couldn't park order",
     count_the_drawer_first_the_figure: "Count the drawer first — the figure you enter is what the close is measured against.",
     current_order: "Current Order",
     delivery_menu: "Delivery Menu",

@@ -93,9 +93,11 @@ type Order = {
 };
 type ParkedOrder = {
   id: string;
-  label: string;
+  // Matches the backend's ParkedOrderSerializer, which exposes `name` (not
+  // `label`) and has no `subtotal` field at all — the amount shown in the
+  // list is computed client-side from `items` instead.
+  name: string;
   items: CartItem[];
-  subtotal: number;
   created_at: string;
 };
 
@@ -585,15 +587,24 @@ export default function POS() {
 
   const parkCurrentOrder = async () => {
     if (cart.length === 0) return;
-    await apiFetch(`${API}/parked-orders`, {
+    // `name`, not `label` — the backend's ParkedOrderSerializer requires
+    // `name` and has no `subtotal` field, so sending either of the old keys
+    // made every park attempt fail its validation with HTTP 400.  Clearing
+    // the cart unconditionally afterwards meant the cashier lost the order
+    // outright: the modal closed as if it had saved, and there was nothing
+    // to retrieve.
+    const res = await apiFetch(`${API}/parked-orders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        label: `Order ${new Date().toLocaleTimeString().slice(0, 5)}`,
+        name: `Order ${new Date().toLocaleTimeString().slice(0, 5)}`,
         items: cart,
-        subtotal,
       }),
     });
+    if (!res.ok) {
+      showAlert(tr("pos.couldnt_park_order"), tr("pos.please_try_again"));
+      return;
+    }
     clearCart();
     setShowParked(false);
     refreshBadges();
@@ -3288,7 +3299,9 @@ function ParkedOrdersModal({
 
   const load = async () => {
     const res = await apiFetch(`${API}/parked-orders`);
-    setParked(await res.json());
+    // safeJson, not res.json(): nothing awaits `load`, so a half-received
+    // body would reject into nowhere and report as a frontend SyntaxError.
+    setParked(await safeJson<ParkedOrder[]>(res, []));
   };
   useEffect(() => {
     if (visible) load();
@@ -3331,9 +3344,10 @@ function ParkedOrdersModal({
             renderItem={({ item }) => (
               <View style={styles.parkRow} testID={`parked-${item.id}`}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.parkLabel}>{item.label}</Text>
+                  <Text style={styles.parkLabel}>{item.name}</Text>
                   <Text style={styles.parkSub}>
-                    {item.items.length} {tr("pos.item_s")} {THB(item.subtotal)}
+                    {item.items.length} {tr("pos.item_s")}{" "}
+                    {THB(item.items.reduce((s, i) => s + i.price * i.qty, 0))}
                   </Text>
                 </View>
                 <TouchableOpacity
