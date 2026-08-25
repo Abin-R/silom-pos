@@ -794,15 +794,31 @@ class DrawerCategory(models.Model):
 # here rather than inside the migration that first writes them so the
 # new-branch signal and the migration can't drift apart — a branch created
 # today must offer the same list as one created before the feature existed.
+#
+# The wording and the split mirror the shop's stock-out spreadsheet: damage is
+# recorded separately for in-store and in-transit because the two have
+# different owners (the branch vs the delivery run), and grouping them under
+# one "Damaged" made the sheet unable to tell them apart.
 DEFAULT_STOCK_OUT_REASONS = [
-    ("Waste / Expired", "ของเสีย / หมดอายุ"),
-    ("Damaged", "สินค้าชำรุด"),
-    ("Staff consumption", "พนักงานบริโภค"),
-    ("Tasting / Sample", "ชิม / ตัวอย่าง"),
-    ("Transfer to branch", "โอนไปสาขาอื่น"),
-    ("Return to vendor", "คืนผู้ขาย"),
-    ("Complimentary", "ของแถม / โปรโมชั่น"),
-    ("Other", "อื่นๆ"),
+    ("Expired", "หมดอายุ"),
+    ("Tasting", "ชิม"),
+    ("Damaged (In-Store)", "สินค้าชำรุด (ในร้าน)"),
+    ("Damaged (In-Transit)", "สินค้าชำรุด (ระหว่างขนส่ง)"),
+    ("Stock Transfer", "โอนสต๊อก"),
+]
+
+# The list this replaced.  Migration 0040 uses it to recognise a row no admin
+# has touched, so it can retire the superseded defaults without deleting a
+# reason someone renamed or added by hand.
+SUPERSEDED_STOCK_OUT_REASONS = [
+    "Waste / Expired",
+    "Damaged",
+    "Staff consumption",
+    "Tasting / Sample",
+    "Transfer to branch",
+    "Return to vendor",
+    "Complimentary",
+    "Other",
 ]
 
 
