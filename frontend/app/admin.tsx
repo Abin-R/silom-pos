@@ -3697,11 +3697,18 @@ const CUST_COLS: Col[] = [
 
 
 // =================== PRODUCTS ===================
+const ALL = "__all";
+const NONE = "__none";
+
 function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
   useT(); // re-render this screen when the language changes
   const [cats, setCats] = useState<Category[]>([]);
   const [prods, setProds] = useState<Product[]>([]);
-  const [activeCat, setActiveCat] = useState<string>("");
+  // Two pseudo-categories alongside the real ones. Without them the column
+  // could only ever show products that *have* a category, so anything
+  // uncategorised — or pointing at a category that was later deleted — was
+  // invisible unless you happened to search for it by name.
+  const [activeCat, setActiveCat] = useState<string>(ALL);
   const [edit, setEdit] = useState<Product | "new" | null>(null);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"custom" | "name">("custom");
@@ -3713,7 +3720,6 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
       apiFetch(`${API}/products`).then((r) => safeJson<Product[]>(r, [])),
     ]);
     setCats(c); setProds(p);
-    if (!activeCat && c.length) setActiveCat(c[0].id);
   };
   useEffect(() => { load(); }, []);
 
@@ -3722,10 +3728,18 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
     try { await load(); } finally { setRefreshing(false); }
   };
 
+  // A product counts as uncategorised if it has no category, or if its
+  // category no longer exists — an orphan is just as unreachable as a blank.
+  const isUncategorised = useCallback(
+    (p: Product) => !p.category_id || !cats.some((c) => c.id === p.category_id),
+    [cats],
+  );
+
   const filtered = useMemo(() => {
     let list = prods;
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()));
-    else if (activeCat) {
+    else if (activeCat === NONE) list = list.filter(isUncategorised);
+    else if (activeCat && activeCat !== ALL) {
       const cat = cats.find((c) => c.id === activeCat);
       if (cat?.name === "Favorite") list = list.filter((p) => p.is_favorite);
       else list = list.filter((p) => p.category_id === activeCat);
@@ -3734,9 +3748,37 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
       list = [...list].sort((a, b) => a.name.localeCompare(b.name));
     }
     return list;
-  }, [prods, cats, activeCat, q, sort]);
+  }, [prods, cats, activeCat, q, sort, isUncategorised]);
 
   const curCat = cats.find((c) => c.id === activeCat);
+
+  // The pseudo-buckets, plus the real categories. "Uncategorised" only appears
+  // when there is something in it — an always-visible empty bucket is noise.
+  const uncategorisedCount = prods.filter(isUncategorised).length;
+  const catRows = useMemo(
+    () => [
+      { id: ALL, name: tr("admin.all_products"), color: C.ink3, count: prods.length },
+      ...cats.map((c) => ({
+        id: c.id,
+        name: c.name,
+        color: c.color,
+        count: prods.filter((p) =>
+          c.name === "Favorite" ? p.is_favorite : p.category_id === c.id,
+        ).length,
+      })),
+      ...(uncategorisedCount > 0
+        ? [{ id: NONE, name: tr("admin.uncategorised"), color: C.warn, count: uncategorisedCount }]
+        : []),
+    ],
+    [cats, prods, uncategorisedCount],
+  );
+
+  const activeCatLabel =
+    activeCat === ALL
+      ? tr("admin.all_products")
+      : activeCat === NONE
+        ? tr("admin.uncategorised")
+        : curCat?.name || tr("common.products");
 
   const toggleFav = async (p: Product) => {
     await apiFetch(`${API}/products/${p.id}`, {
@@ -3815,11 +3857,9 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             <Lbl style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 }}>
               {tr("admin.categories")}
             </Lbl>
-            {cats.map((c) => {
+            {catRows.map((c) => {
               const active = activeCat === c.id && !q;
-              const count = prods.filter((p) =>
-                c.name === "Favorite" ? p.is_favorite : p.category_id === c.id,
-              ).length;
+              const count = c.count;
               return (
                 <TouchableOpacity
                   key={c.id}
@@ -3849,7 +3889,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
             style={{ flexGrow: 0 }}
             contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
           >
-            {cats.map((c) => (
+            {catRows.map((c) => (
               <Pill
                 key={c.id}
                 label={c.name}
@@ -3863,7 +3903,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
 
         <Panel style={{ flex: 1, minWidth: 0 }}>
           <PanelHead
-            title={q ? `Results for “${q}”` : curCat?.name || tr("common.products")}
+            title={q ? `Results for “${q}”` : activeCatLabel}
             right={
               <Text style={styles.prodCount}>
                 {filtered.length} {filtered.length === 1 ? tr("admin.product") : tr("admin.products")}

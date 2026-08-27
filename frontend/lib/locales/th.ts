@@ -52,6 +52,8 @@ const th = {
     cash_drawer: "ลิ้นชักเก็บเงิน",
     cash_in: "เงินสดเข้า",
     cash_out: "เงินสดออก",
+    all_products: "สินค้าทั้งหมด",
+    uncategorised: "ยังไม่จัดหมวดหมู่",
     categories: "หมวดหมู่",
     category: "หมวดหมู่",
     category_name: "ชื่อหมวดหมู่",

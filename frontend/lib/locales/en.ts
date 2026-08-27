@@ -53,6 +53,8 @@ const en = {
     cash_drawer: "Cash drawer",
     cash_in: "Cash In",
     cash_out: "Cash Out",
+    all_products: "All products",
+    uncategorised: "Uncategorised",
     categories: "Categories",
     category: "Category",
     category_name: "Category name",
