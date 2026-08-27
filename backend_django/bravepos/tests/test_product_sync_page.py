@@ -174,6 +174,97 @@ class ProductSyncPageTests(TestCase):
             "targets": [str(b.id) for b in (targets or [self.silom])],
         }
 
+    # ── Removals travel too ─────────────────────────────────────────────
+    def _remove_at_source(self, name):
+        """Take a product off sale at the source, the way the catalogue page
+        does it — `active=False`, not a row delete."""
+        product = Product.objects.get(branch=self.source, name=name)
+        product.active = False
+        product.save(update_fields=["active"])
+        return product
+
+    def test_removing_at_the_source_takes_the_copy_off_sale(self):
+        """The bug this fixes.
+
+        `source_catalogue` reads active rows only, so a removed product simply
+        dropped out of the payload — the copy at the target was never looked at
+        and stayed on sale, and re-syncing could not fix it because there was
+        nothing left to carry the removal.
+        """
+        self.client.post(self.url, self._params(), follow=True)
+        copy = Product.objects.get(branch=self.silom, name="Brownie")
+        self.assertTrue(copy.active, "precondition: the copy is on sale")
+
+        self._remove_at_source("Brownie")
+        self.client.post(self.url, self._params(), follow=True)
+
+        copy.refresh_from_db()
+        self.assertFalse(copy.active)
+        # The other product is untouched.
+        self.assertTrue(
+            Product.objects.get(branch=self.silom, name="Choco Gems").active)
+
+    def test_the_copy_is_retired_not_deleted(self):
+        """Same bargain as the catalogue page: the row survives, so the
+        target's own sales history and profit figures do not move."""
+        self.client.post(self.url, self._params(), follow=True)
+        self._remove_at_source("Brownie")
+        self.client.post(self.url, self._params(), follow=True)
+
+        self.assertTrue(
+            Product.objects.filter(branch=self.silom, name="Brownie").exists())
+
+    def test_it_never_creates_a_removed_product_at_the_target(self):
+        """A branch that never had the product must not gain a dead row: the
+        retire pass matches existing rows only."""
+        self._remove_at_source("Brownie")
+        self.client.post(self.url, self._params(), follow=True)
+
+        self.assertFalse(
+            Product.objects.filter(branch=self.silom, name="Brownie").exists())
+        self.assertTrue(
+            Product.objects.filter(branch=self.silom, name="Choco Gems").exists())
+
+    def test_the_preview_names_what_it_would_take_off_sale(self):
+        """This page writes to branches nobody is looking at, so a removal has
+        to be visible before it happens, not only after."""
+        self.client.post(self.url, self._params(), follow=True)
+        self._remove_at_source("Brownie")
+
+        res = self.client.get(self.url, self._params())
+        self.assertContains(res, "Off sale: Brownie")
+
+    def test_the_message_reports_the_removals(self):
+        self.client.post(self.url, self._params(), follow=True)
+        self._remove_at_source("Brownie")
+        res = self.client.post(self.url, self._params(), follow=True)
+
+        self.assertContains(res, "1 product taken off sale")
+        self.assertContains(res, "BIO HOUSE has removed it")
+
+    def test_unticking_the_box_leaves_the_copy_on_sale(self):
+        """The escape hatch: a branch that still sells something the source has
+        dropped can be synced without losing it."""
+        self.client.post(self.url, self._params(), follow=True)
+        self._remove_at_source("Brownie")
+
+        params = self._params()
+        params["retire"] = "off"
+        self.client.post(self.url, params, follow=True)
+
+        self.assertTrue(
+            Product.objects.get(branch=self.silom, name="Brownie").active)
+
+    def test_a_branch_that_already_retired_it_is_not_reported_again(self):
+        """Idempotent: pressing sync twice reports the removal once, because
+        the second pass finds nothing still on sale to retire."""
+        self.client.post(self.url, self._params(), follow=True)
+        self._remove_at_source("Brownie")
+        self.client.post(self.url, self._params(), follow=True)
+
+        res = self.client.post(self.url, self._params(), follow=True)
+        self.assertContains(res, "Nothing was changed")
+
     def test_the_page_lists_every_branch(self):
         res = self.client.get(self.url)
         self.assertEqual(res.status_code, 200)

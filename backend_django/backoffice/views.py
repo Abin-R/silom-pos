@@ -2838,13 +2838,23 @@ def _sync_message(source, targets, results):
     prices survived, and hearing it only in the docs is too late.
     """
     added = sum(1 for r in results for p in r["products"] if p["action"] == "created")
+    retired = sum(len(r.get("retired") or []) for r in results)
     where = ", ".join(t.name for t in targets)
-    if not added:
-        return (f"{where} already had every product in {source.name}'s "
-                f"catalogue. Nothing was changed.")
-    return (f"{added} product{'' if added == 1 else 's'} copied from "
-            f"{source.name} to {where}. Products those branches already had "
-            f"were left exactly as they were.")
+
+    if not added and not retired:
+        return (f"{where} already matched {source.name}'s catalogue. "
+                f"Nothing was changed.")
+
+    parts = []
+    if added:
+        parts.append(f"{added} product{'' if added == 1 else 's'} copied from "
+                     f"{source.name} to {where}")
+    if retired:
+        parts.append(f"{retired} product{'' if retired == 1 else 's'} taken off "
+                     f"sale there because {source.name} has removed "
+                     f"{'it' if retired == 1 else 'them'}")
+    return ("; ".join(parts) + ". Products those branches already had and still "
+            "sell were left exactly as they were.")
 
 
 @login_required
@@ -2884,25 +2894,39 @@ def product_sync(request):
     # syncing onto itself would read and write the same rows.
     targets = [by_id[t] for t in posted if t in by_id and (not source or t != str(source.id))]
 
+    # Removals travel too, unless the box is unticked. Without this a product
+    # taken off sale at the source stayed on sale at every branch it had been
+    # copied to, and no amount of re-syncing fixed it — the removed row simply
+    # dropped out of the payload.
+    retire = (request.POST.get("retire", "on") if request.method == "POST"
+              else request.GET.get("retire", "on")) == "on"
+
     previews, results = [], []
     if source and targets:
         catalogue = catalog.source_catalogue(source)
+        removed = catalog.removed_catalogue(source) if retire else []
 
         if request.method == "POST":
             with transaction.atomic():
                 results = [
-                    catalog.copy_catalogue(source, t, catalogue=catalogue)
+                    catalog.copy_catalogue(
+                        source, t, catalogue=catalogue,
+                        removed=removed, retire=retire,
+                    )
                     for t in targets
                 ]
             messages.success(request, _sync_message(source, targets, results))
             return redirect(
                 reverse("backoffice:product_sync") + "?" + urlencode(
                     [("source", str(source.id))]
-                    + [("targets", str(t.id)) for t in targets],
+                    + [("targets", str(t.id)) for t in targets]
+                    + ([] if retire else [("retire", "off")]),
                 )
             )
 
-        previews = [catalog.preview(source, t, catalogue) for t in targets]
+        previews = [
+            catalog.preview(source, t, catalogue, removed=removed) for t in targets
+        ]
 
     context = {
         "active": "products",
@@ -2913,6 +2937,7 @@ def product_sync(request):
         "targets": targets,
         "target_ids": {str(t.id) for t in targets},
         "previews": previews,
+        "retire": retire,
         "source_count": source.products.filter(active=True).count() if source else 0,
         "qs": _filter_qs(request),
     }

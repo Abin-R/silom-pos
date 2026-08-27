@@ -113,7 +113,8 @@
         <th>Branch</th>
         <th class="r" style="width:120px">Will be added</th>
         <th class="r" style="width:130px">Left as-is</th>
-        <th>Products it will gain</th>
+        <th class="r" style="width:140px">Taken off sale</th>
+        <th>What changes there</th>
       </tr>
     </thead>
     <tbody>
@@ -130,10 +131,19 @@
           {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
         </td>
         <td class="r money" style="color:var(--mut2)">{{ p.already }}</td>
+        <td class="r money">
+          {% if p.retiring %}<b style="color:var(--red-d)">{{ p.retiring|length }}</b>
+          {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
+        </td>
         <td style="color:var(--txt2)">
-          {% if p.adding %}{{ p.adding|join:", " }}
-          {% else %}<span style="color:var(--mut2)">Nothing — this branch already
-            has every product in {{ source.name }}'s catalogue.</span>
+          {% if p.adding %}<div>{{ p.adding|join:", " }}</div>{% endif %}
+          {% if p.retiring %}
+          <div style="color:var(--red-d);{% if p.adding %}margin-top:4px{% endif %}">
+            Off sale: {{ p.retiring|join:", " }}</div>
+          {% endif %}
+          {% if not p.adding and not p.retiring %}
+          <span style="color:var(--mut2)">Nothing — this branch already matches
+            {{ source.name }}'s catalogue.</span>
           {% endif %}
         </td>
       </tr>
@@ -142,16 +152,27 @@
   </table>
 </div>
 
+{% comment %}
+  The retire box is on by default: a product removed at the source used to stay
+  on sale at every branch it had been copied to, and re-syncing never fixed it.
+  It stays a box rather than being unconditional because this writes to branches
+  nobody is looking at — and the preview above names every row it would touch,
+  so nothing is taken off sale unseen.
+{% endcomment %}
 <form method="post" action="{% url 'backoffice:product_sync' %}"
-      onsubmit="return confirm('Copy the missing products from {{ source.name|escapejs }}?\n\nProducts those branches already have are not touched.');">
+      onsubmit="return confirm('Sync {{ source.name|escapejs }} onto the branches above?\n\nPrices and stock they already have are not touched.');">
   {% csrf_token %}
   <input type="hidden" name="source" value="{{ source.id }}">
   {% for t in targets %}
   <input type="hidden" name="targets" value="{{ t.id }}">
   {% endfor %}
+  <label class="check" style="padding:10px 0">
+    <input type="checkbox" name="retire" value="on" {% if retire %}checked{% endif %}>
+    Also take off sale the products {{ source.name }} has removed
+  </label>
   <div class="form-actions" style="margin-top:16px">
     <button type="submit" class="btn btn-blue">
-      <svg><use href="#i-check"/></svg> Add the missing products</button>
+      <svg><use href="#i-check"/></svg> Sync these branches</button>
     <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>
     <div class="spacer"></div>
     <span style="font-size:12.5px;color:var(--mut)">

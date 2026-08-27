@@ -68,6 +68,21 @@ def source_catalogue(branch):
     return cats, prods
 
 
+def removed_catalogue(branch):
+    """Products ``branch`` has taken off sale.
+
+    Deliberately not folded into `source_catalogue`: these travel for the
+    opposite reason. An active product travels to be *created* at the target;
+    a removed one travels only to retire a copy the target already has, and
+    must never be created there.
+
+    Without this, removing a product at the source could not propagate at all —
+    it simply dropped out of the payload, so the target's copy was never looked
+    at and stayed on sale.
+    """
+    return list(branch.products.filter(active=False).only("id", "name"))
+
+
 # ── Matching ────────────────────────────────────────────────────────────────
 def _find(qs, name):
     name = (name or "").strip()
@@ -155,8 +170,29 @@ def upsert_product(target, prod, category, *, update_existing, copy_stock=False)
     return dest, "skipped", []
 
 
+def retire_removed(target, removed):
+    """Take off sale at ``target`` the products the source has removed.
+
+    Matched by name, exactly the way `upsert_product` matches, so this retires
+    the same row an earlier sync would have created — no more.
+
+    Only rows already on sale are touched, and nothing is ever created: a
+    product the target never had is not this sync's business. Reversible from
+    the target branch's own Removed view, like any other removal.
+    """
+    retired = []
+    for prod in removed:
+        dest = _find(target.products.filter(active=True), prod.name)
+        if dest is None:
+            continue
+        dest.active = False
+        dest.save(update_fields=["active"])
+        retired.append(dest.name)
+    return retired
+
+
 def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
-                   catalogue=None):
+                   catalogue=None, removed=None, retire=False):
     """Copy ``source``'s catalogue onto ``target``.  Returns a per-item report.
 
     ``catalogue`` is the ``(cats, prods)`` pair from `source_catalogue`, passed
@@ -188,11 +224,13 @@ def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
             {"name": prod.name, "action": action, "changed": changed},
         )
 
+    report["retired"] = retire_removed(target, removed or []) if retire else []
+
     return report
 
 
 # ── Preview ─────────────────────────────────────────────────────────────────
-def preview(source, target, catalogue=None):
+def preview(source, target, catalogue=None, removed=None):
     """What a sync would add to ``target``, writing nothing.
 
     Names the products rather than only counting them: "18 products will be
@@ -210,9 +248,22 @@ def preview(source, target, catalogue=None):
     }
 
     adding = [p.name for p in prods if (p.name or "").strip().lower() not in existing]
+
+    # Only rows the target is currently selling can be retired, so the preview
+    # counts those and not every name that happens to match.
+    on_sale = {
+        n.strip().lower()
+        for n in target.products.filter(active=True).values_list("name", flat=True) if n
+    }
+    retiring = [
+        p.name for p in (removed or [])
+        if (p.name or "").strip().lower() in on_sale
+    ]
+
     return {
         "branch": target,
         "adding": adding,
+        "retiring": retiring,
         "already": len(prods) - len(adding),
         "categories_adding": [
             c.name for c in cats if (c.name or "").strip().lower() not in have_cats
