@@ -443,6 +443,20 @@ class ProductViewSet(BranchScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(category_id=category_id)
         if active in ('true', 'false'):
             qs = qs.filter(active=(active == 'true'))
+        elif self.action == 'list':
+            # Listings hide removed products unless asked otherwise.
+            #
+            # The default used to be "everything", and the till was the one
+            # caller that never passed a filter — so a product taken off sale
+            # in the backoffice stayed on the cashier's Sale screen while it
+            # had already vanished from the self-order menu and the catalogue.
+            # Fixing it here rather than in the app fixes every till at once,
+            # including builds that are already installed and will not be
+            # updated for a while.
+            #
+            # Only `list` is narrowed: retrieve and update still resolve any
+            # row by id, so a removed product can still be read and restored.
+            qs = qs.filter(active=True)
         return qs
 
 

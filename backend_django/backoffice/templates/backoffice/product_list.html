@@ -78,9 +78,22 @@
   {# ── Products ───────────────────────────────────────────────────────── #}
   <div class="panel panel-grow" style="flex:1;min-width:0">
     <div class="panel-h">
-      All products
+      {% if archived %}Removed products{% else %}All products{% endif %}
       <div class="spacer"></div>
+      {% comment %}
+        The Removed tab carries its count so archived products stay findable,
+        and is only offered once something is in there — an always-visible tab
+        reading "Removed 0" is noise on a screen people use every day.
+      {% endcomment %}
+      {% if archived or archived_count %}
+      <div class="seg sm">
+        <a class="{% if not archived %}on{% endif %}" href="?{% qs_replace request archived=None page=None %}">On sale</a>
+        <a class="{% if archived %}on{% endif %}" href="?{% qs_replace request archived='1' page=None %}">Removed {{ archived_count }}</a>
+      </div>
+      {% endif %}
+      {% if not archived %}
       <a class="btn btn-sm" href="{% url 'backoffice:product_bulk_edit' %}?{{ qs }}">Bulk edit prices</a>
+      {% endif %}
       <div class="seg sm">
         <a class="{% if sort == 'name' %}on{% endif %}" href="?{% qs_replace request sort='name' page=None %}">A–Z</a>
         <a class="{% if sort == 'price_max' %}on{% endif %}" href="?{% qs_replace request sort='price_max' page=None %}">Price</a>
@@ -94,7 +107,7 @@
             <th style="width:28%">Product</th><th>Category</th>
             <th class="r">Price</th><th class="r">Cost</th><th class="r">Margin</th>
             <th class="r">On hand</th><th class="r">Sold 30d</th>
-            <th class="r" style="width:96px">On tills</th>
+            <th class="r" style="width:96px">{% if archived %}{% else %}On tills{% endif %}</th>
           </tr>
         </thead>
         <tbody>
@@ -128,17 +141,27 @@
             <td class="r money" {% if p.stock <= 0 %}style="color:var(--red-d);font-weight:650"{% endif %}>{{ p.stock }}</td>
             <td class="r money">{{ p.sold_30d|intcomma }}</td>
             <td class="r">
-              {% if p.stock > 0 %}
+              {% if archived %}
+              <form method="post" action="{% url 'backoffice:product_restore' p.id %}?{{ qs }}"
+                    style="margin:0;display:inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm">Restore</button>
+              </form>
+              {% elif p.stock > 0 %}
                 <span class="tog on"><i></i></span>
               {% else %}
-                <span class="tog" title="Out of stock — hidden from the Sale screen"><i></i></span>
+                {% comment %}
+                  The old title here claimed zero stock hides a product from
+                  the Sale screen. Nothing enforces that, so it is not claimed.
+                {% endcomment %}
+                <span class="tog"><i></i></span>
               {% endif %}
             </td>
           </tr>
           {% empty %}
           <tr><td colspan="8" class="empty">
             <svg><use href="#i-box"/></svg>
-            {% if q %}No product matches “{{ q }}”.{% else %}No products in this catalogue yet.{% endif %}
+            {% if q %}No product matches “{{ q }}”.{% elif archived %}Nothing has been removed from this catalogue.{% else %}No products in this catalogue yet.{% endif %}
           </td></tr>
           {% endfor %}
         </tbody>

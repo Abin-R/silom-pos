@@ -203,6 +203,66 @@
         </div>
       </div>
     </form>
+
+    {% comment %}
+      Removing sits below Save in its own panel with its own POST, never beside
+      it — the same shape as the staff form.
+
+      It archives (`active=False`) rather than deleting the row, because that is
+      how the rest of the system retires a product, and because a row delete
+      rewrites history: OrderItem never snapshotted cost, so profit is read live
+      through the FK and every past bill for this product would jump to 100%
+      margin the moment it went.
+
+      Both claims below are checked. Reports are untouched (the row survives, so
+      every FK still resolves). Tills stop offering it because the API's product
+      listings exclude inactive rows — server-side, so it holds on builds that
+      are already installed.
+    {% endcomment %}
+    {% if mode == 'edit' %}
+    {% if product.active %}
+    <div class="panel" style="margin-top:16px;border-color:var(--red-line)">
+      <div class="panel-h">Remove from the catalogue</div>
+      <div class="srow">
+        <span class="si" style="background:var(--red-soft);color:var(--red-d)"><svg><use href="#i-trash"/></svg></span>
+        <span class="sm">
+          <b>Stops it being sold — and can be undone</b>
+          <u>Cashiers stop seeing it on the Sale screen and it leaves the
+            self-order menu. Every report is untouched: past bills, Product
+            Performance and the margin figures all still name it, because the
+            product is archived rather than destroyed. Find it again under
+            <b>Removed</b> in the catalogue.</u>
+        </span>
+        <form method="post" action="{% url 'backoffice:product_archive' product.id %}?{{ qs }}"
+              style="margin:0"
+              onsubmit="return confirm('Remove \u201c{{ product.name|escapejs }}\u201d from the catalogue?\n\nIt stops being sellable. Reports keep it, and you can restore it from Removed.');">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-danger">
+            <svg><use href="#i-trash"/></svg> Remove</button>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-h">Removed from the catalogue</div>
+      <div class="srow">
+        <span class="si"><svg><use href="#i-box"/></svg></span>
+        <span class="sm">
+          <b>Not on sale</b>
+          <u>No till or self-order menu is showing this product. Its sales
+            history is intact — restoring puts it straight back on the Sale
+            screen with everything below unchanged.</u>
+        </span>
+        <form method="post" action="{% url 'backoffice:product_restore' product.id %}?{{ qs }}"
+              style="margin:0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-blue">
+            <svg><use href="#i-check"/></svg> Restore</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
     </div>
 
     {% comment %}

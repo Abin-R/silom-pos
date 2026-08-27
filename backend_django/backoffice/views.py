@@ -2302,8 +2302,12 @@ def product_list(request):
     # into the markup — this page was 574 KB against ~20 KB for its siblings.
     # `defer` keeps them out of the query; the annotation is all the template
     # needs to know, and `backoffice:product_image` serves the bytes.
+    # "Removed" is a view of this same page, not a separate screen: the search,
+    # the category rail and the sort all have to work there too.
+    archived = request.GET.get("archived") == "1"
+
     qs = (
-        Product.objects.filter(active=True)
+        Product.objects.filter(active=not archived)
         .select_related("category")
         .defer("image_url", "image_base64")
         .annotate(image_len=Length("image_url") + Length("image_base64"))
@@ -2347,8 +2351,8 @@ def product_list(request):
         category_qs = category_qs.filter(Q(branch=branch) | Q(branch__isnull=True))
     counts = {
         row["category"]: row["n"]
-        for row in (Product.objects.filter(active=True, branch=branch)
-                    if branch else Product.objects.filter(active=True))
+        for row in (Product.objects.filter(active=not archived, branch=branch)
+                    if branch else Product.objects.filter(active=not archived))
         .values("category").annotate(n=Count("id"))
     }
     categories = [
@@ -2395,6 +2399,13 @@ def product_list(request):
         "paginator": paginator,
         "sort": sort,
         "view": view,
+        "archived": archived,
+        # The count keeps removed products findable — an unlabelled tab nobody
+        # has a reason to click is where a soft delete goes to be forgotten.
+        "archived_count": (
+            Product.objects.filter(active=False, branch=branch).count()
+            if branch else Product.objects.filter(active=False).count()
+        ),
         "hide_dates": True,
         "qs": _filter_qs(
             request,
@@ -2403,6 +2414,7 @@ def product_list(request):
             q=q or None,
             view=view,
             cat=selected_category or None,
+            archived="1" if archived else None,
         ),
     }
     return render(request, "backoffice/product_list.html", context)
@@ -2617,6 +2629,52 @@ def product_detail(request, product_id):
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_form.html", context)
+
+
+@login_required
+def product_archive(request, product_id):
+    """Take a product off sale without destroying what it sold.
+
+    ``active=False`` rather than a row delete, because that is already how the
+    rest of this system retires a catalogue row: the self-order menu and the
+    suggestion engine filter ``active=True``, self-order checkout refuses an
+    inactive product with "deactivated or deleted" as one case, and this
+    catalogue has always listed active rows only. ``ProductViewSet`` now
+    narrows its listings the same way, so the till honours it too.
+
+    Keeping the row is not sentiment. ``OrderItem`` never snapshotted cost, so
+    `_profit_expr` reads ``product__cost`` live across the FK — destroy the row
+    and every past bill's profit silently jumps to equal its revenue, while
+    Product Performance relabels the line "(deleted product)". Archiving leaves
+    both untouched.
+
+    Reversible, and the catalogue's "Removed" view is where it is reversed.
+    """
+    product = get_object_or_404(Product, id=product_id)
+    if request.method != "POST":
+        return redirect("backoffice:product_detail", product_id=product.id)
+
+    product.active = False
+    product.save(update_fields=["active"])
+    messages.success(
+        request,
+        f"\u201c{product.name}\u201d was removed from the catalogue. "
+        f"Reports keep it, and Removed products can restore it.",
+    )
+    return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
+
+
+@login_required
+def product_restore(request, product_id):
+    """Put a removed product back on sale."""
+    product = get_object_or_404(Product, id=product_id)
+    if request.method != "POST":
+        return redirect("backoffice:product_detail", product_id=product.id)
+
+    product.active = True
+    product.save(update_fields=["active"])
+    messages.success(request, f"\u201c{product.name}\u201d is back in the catalogue.")
+    return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
 
 
 @login_required

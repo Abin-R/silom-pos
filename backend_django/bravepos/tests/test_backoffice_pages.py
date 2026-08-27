@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import URLPattern, URLResolver, reverse
 from django.utils import timezone
 
-from bravepos.models import Branch, Category, Order, OrderItem, Product, Settings, Staff
+from bravepos.models import (
+    AuditLog, Branch, Category, Order, OrderItem, Product, Settings, Staff,
+)
 
 
 def _no_arg_backoffice_urls() -> list[str]:
@@ -147,6 +149,221 @@ class BackofficePageSmokeTests(TestCase):
         )
         # …,Sub Total,Discount,Total
         self.assertTrue(row.endswith("160.00,110.00,50.00"), row)
+
+
+class ProductArchiveTests(TestCase):
+    """The catalogue had no way to take a product off sale.
+
+    Removing archives (``active=False``) rather than deleting the row, which is
+    what the rest of the system already means by retiring a product. These pin
+    both halves of what the red panel promises: it stops being sellable, and
+    the reports do not move.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.password = "correct-horse-battery"
+        cls.admin = Staff(
+            name="Arc Admin", username="arcadmin", email="arc@therollingpinn.com",
+            role="admin", active=True, backoffice_access=True,
+        )
+        cls.admin.set_password(cls.password)
+        cls.admin.save()
+
+        Settings.objects.get_or_create(id="shop")
+        cls.branch = Branch.objects.create(name="Arc Branch", code="ARC")
+        cls.category = Category.objects.create(name="Bakery", branch=cls.branch)
+
+    def setUp(self):
+        self.client.post(reverse("backoffice:login"), {
+            "username": "arcadmin", "password": self.password,
+        })
+
+    def _product(self, name="Mooncake Box"):
+        return Product.objects.create(
+            name=name, price=Decimal("599.00"), cost=Decimal("400.00"), stock=4,
+            branch=self.branch, category=self.category,
+        )
+
+    def _sold(self, product):
+        order = Order.objects.create(
+            branch=self.branch, order_number="ARC-0001",
+            subtotal=Decimal("599.00"), total=Decimal("599.00"),
+            created_at=timezone.now(),
+        )
+        OrderItem.objects.create(
+            order=order, product=product, name=product.name, qty=1,
+            price=Decimal("599.00"), category_name="Bakery",
+        )
+        return order
+
+    # ── The control exists ──────────────────────────────────────────────
+    def test_the_edit_form_offers_remove(self):
+        product = self._product()
+        page = self.client.get(
+            reverse("backoffice:product_detail", args=[product.id]))
+        self.assertContains(
+            page, reverse("backoffice:product_archive", args=[product.id]))
+
+    def test_an_archived_product_is_offered_restore_instead(self):
+        product = self._product()
+        product.active = False
+        product.save(update_fields=["active"])
+        page = self.client.get(
+            reverse("backoffice:product_detail", args=[product.id]))
+        self.assertContains(
+            page, reverse("backoffice:product_restore", args=[product.id]))
+        self.assertNotContains(
+            page, reverse("backoffice:product_archive", args=[product.id]))
+
+    def test_a_new_product_form_offers_neither(self):
+        page = self.client.get(reverse("backoffice:product_new"))
+        self.assertNotContains(page, "Remove from the catalogue")
+
+    # ── What it does ────────────────────────────────────────────────────
+    def test_post_archives_and_returns_to_the_catalogue(self):
+        product = self._product()
+        response = self.client.post(
+            reverse("backoffice:product_archive", args=[product.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("backoffice:product_list"), response["Location"])
+        product.refresh_from_db()
+        self.assertFalse(product.active)
+
+    def test_get_does_not_archive(self):
+        """It has to be a POST — otherwise a link prefetch, a crawler or a
+        stray tap on browser history empties the Sale screen."""
+        product = self._product()
+        self.client.get(reverse("backoffice:product_archive", args=[product.id]))
+        product.refresh_from_db()
+        self.assertTrue(product.active)
+
+    def test_it_needs_a_login(self):
+        # A fresh client rather than `logout()`: the test client's logout
+        # hydrates request.user through `get_user_model()`, which is auth.User
+        # with an integer PK, while our Staff PK is a UUID — see
+        # `backoffice.middleware.StaffAuthMiddleware`.
+        product = self._product()
+        response = Client().post(
+            reverse("backoffice:product_archive", args=[product.id]))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("backoffice:login"), response["Location"])
+        product.refresh_from_db()
+        self.assertTrue(product.active)
+
+    def test_a_cashier_is_no_longer_offered_it(self):
+        """The claim on the panel. `menu_for` is the public self-order menu;
+        the till gets the same answer because `ProductViewSet` narrows its
+        listings to active rows."""
+        from bravepos.selforder import menu_for
+
+        product = self._product()
+        self.assertIn("Mooncake Box", [i["name"] for i in menu_for(self.branch)])
+
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+        self.assertNotIn("Mooncake Box", [i["name"] for i in menu_for(self.branch)])
+
+    # ── What it must NOT do ─────────────────────────────────────────────
+    def test_the_reports_do_not_move(self):
+        """The whole reason this archives instead of deleting.
+
+        `OrderItem` snapshots name, price and category but never cost, so
+        `_profit_expr` reads `product__cost` live across the FK. Destroy the
+        row and that FK goes NULL, cost coalesces to 0, and a closed day's
+        profit silently jumps to equal its revenue while Product Performance
+        relabels the line "(deleted product)". Archiving keeps the row, so
+        every figure is identical before and after — and this fails the moment
+        someone swaps the archive back for a `.delete()`.
+        """
+        from backoffice.views import _report_daily_rows, _report_sku_rows
+
+        product = self._product()
+        self._sold(product)
+        today = timezone.localdate()
+
+        before_sku = _report_sku_rows(self.branch, today, today)
+        before_daily = _report_daily_rows(self.branch, today, today)
+
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+
+        self.assertEqual(_report_sku_rows(self.branch, today, today), before_sku)
+        self.assertEqual(_report_daily_rows(self.branch, today, today), before_daily)
+
+        row = _report_sku_rows(self.branch, today, today)[0]
+        self.assertEqual(row["name"], "Mooncake Box")
+        self.assertEqual(row["category"], "Bakery")
+        self.assertEqual(row["profit"], Decimal("199.00"))
+
+    def test_past_bills_keep_the_line(self):
+        product = self._product()
+        order = self._sold(product)
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+
+        line = OrderItem.objects.get(order=order)
+        self.assertEqual(line.product_id, product.id)
+        self.assertEqual(line.name, "Mooncake Box")
+
+        export = self.client.get(reverse("backoffice:report_sell_export"),
+                                 {"branch": str(self.branch.id)})
+        self.assertIn("Mooncake Box", export.content.decode())
+
+    # ── Getting it back ─────────────────────────────────────────────────
+    def test_the_catalogue_hides_it_and_the_removed_view_finds_it(self):
+        product = self._product()
+        scope = {"branch": str(self.branch.id)}
+        # `follow=True` so the success banner — which names the product — is
+        # consumed on the redirect rather than landing on the page under test.
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]),
+                         follow=True)
+
+        on_sale = self.client.get(reverse("backoffice:product_list"), scope)
+        self.assertNotContains(on_sale, "Mooncake Box")
+
+        removed = self.client.get(reverse("backoffice:product_list"),
+                                  {**scope, "archived": "1"})
+        self.assertContains(removed, "Mooncake Box")
+        self.assertContains(
+            removed, reverse("backoffice:product_restore", args=[product.id]))
+
+    def test_restore_puts_it_back_on_sale(self):
+        product = self._product()
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+        self.client.post(reverse("backoffice:product_restore", args=[product.id]),
+                         follow=True)
+
+        product.refresh_from_db()
+        self.assertTrue(product.active)
+        self.assertContains(
+            self.client.get(reverse("backoffice:product_list"),
+                            {"branch": str(self.branch.id)}),
+            "Mooncake Box",
+        )
+
+    def test_editing_an_archived_product_does_not_silently_restore_it(self):
+        """`_apply_product_form` doesn't touch `active`, and it must not start
+        to — otherwise saving a typo on a removed product puts it back on every
+        till without anyone asking for that."""
+        product = self._product()
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+
+        self.client.post(reverse("backoffice:product_detail", args=[product.id]), {
+            "name": "Mooncake Box 2026", "price": "599", "cost": "400",
+            "stock": "4", "par_level": "0", "category": str(self.category.id),
+            "tax_type": "V", "product_type": "P",
+        })
+
+        product.refresh_from_db()
+        self.assertFalse(product.active)
+
+    def test_the_audit_log_names_who_removed_it(self):
+        product = self._product()
+        self.client.post(reverse("backoffice:product_archive", args=[product.id]))
+
+        entry = AuditLog.objects.filter(model="Product", action="update").latest("at")
+        self.assertEqual(entry.object_id, str(product.id))
+        self.assertEqual(entry.actor_id, self.admin.id)
+        self.assertEqual(entry.source, "backoffice")
+        self.assertEqual(entry.changes.get("active"), {"from": True, "to": False})
 
 
 @override_settings(DEBUG=False)

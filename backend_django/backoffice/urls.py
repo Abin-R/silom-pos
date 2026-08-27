@@ -63,6 +63,8 @@ urlpatterns = [
     path("products/bulk-add", views.product_bulk_add, name="product_bulk_add"),
     path("products/bulk-edit", views.product_bulk_edit, name="product_bulk_edit"),
     path("products/<uuid:product_id>", views.product_detail, name="product_detail"),
+    path("products/<uuid:product_id>/archive", views.product_archive, name="product_archive"),
+    path("products/<uuid:product_id>/restore", views.product_restore, name="product_restore"),
 
     # Categories
     path("categories", views.category_list, name="category_list"),

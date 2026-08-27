@@ -4135,12 +4135,6 @@ function ProductEditModal({
     onSaved();
   };
 
-  const del = async () => {
-    if (!product || product === "new") return;
-    await apiFetch(`${API}/products/${(product as Product).id}`, { method: "DELETE" });
-    onSaved();
-  };
-
   return (
     <Modal visible={!!product} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
@@ -4225,12 +4219,19 @@ function ProductEditModal({
               <TouchableOpacity style={styles.primaryBtn} onPress={save} testID="prod-save">
                 <Text style={styles.primaryBtnText}>{isNew ? tr("admin.create") : tr("admin.save_changes")}</Text>
               </TouchableOpacity>
-              {!isNew && (
-                <TouchableOpacity style={styles.dangerBtn} onPress={del} testID="prod-delete">
-                  <Ionicons name="trash-outline" size={16} color={C.danger} />
-                  <Text style={{ color: C.danger, fontWeight: "600" }}>{tr("admin.delete_product")}</Text>
-                </TouchableOpacity>
-              )}
+              {/*
+                No delete here. Removing a product is a backoffice job now.
+
+                This button called DELETE /products/<id>, which destroys the
+                row — and profit is computed live off `product.cost`, because
+                OrderItem snapshots name and price but never cost. So deleting
+                a product rewrote the margin on bills that were already closed:
+                a 599 sale at 400 cost stopped reading 199 profit and started
+                reading 599. Nothing on screen said so.
+
+                The backoffice equivalent takes it off sale and leaves every
+                past figure alone, and it can be undone.
+              */}
             </ScrollView>
           </View>
         )}
