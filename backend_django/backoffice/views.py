@@ -96,20 +96,54 @@ def admin_required(view):
             return render(request, "backoffice/forbidden.html", {
                 "active": "users",
                 "hide_dates": True,
-                **_branch_topbar_context(),
+                **_branch_topbar_context(request),
             }, status=403)
         return view(request, *args, **kwargs)
     return wrapped
+
+
+# The branch picker sits in the header of every page, but each page is its own
+# GET request: leave Catalogue and the `?branch=` stays behind with it, so the
+# next tab fell back to whichever branch sorts first. Which branch you are
+# looking at is a property of the session, not of one URL — so it is remembered
+# here. An explicit `?branch=` still wins, and is what updates the memory, so a
+# shared or bookmarked link keeps meaning exactly what it said.
+SESSION_BRANCH_KEY = "backoffice_branch"
+
+
+def _select_branch(request, branches, remember=True):
+    """The branch this request is scoped to: `?branch=` when it names an active
+    branch, else the one last picked in this session, else the first.
+
+    `remember=False` for the one page whose `?branch=` is its own filter rather
+    than the header picker — reading it as a new global scope would let a
+    throwaway filter follow the user onto every other page.
+    """
+    by_id = {str(b.id): b for b in branches}
+
+    requested = request.GET.get("branch") or ""
+    if remember and requested in by_id:
+        # Only write on a change — an unconditional assignment marks the
+        # session dirty and re-saves it on every page view.
+        if request.session.get(SESSION_BRANCH_KEY) != requested:
+            request.session[SESSION_BRANCH_KEY] = requested
+        return by_id[requested]
+
+    # A branch that has since been archived is no longer a choice, so a stale
+    # id in the session falls through to the default rather than pinning the
+    # whole backoffice to a branch the picker can't even show.
+    remembered = by_id.get(request.session.get(SESSION_BRANCH_KEY) or "")
+    if remembered is not None:
+        return remembered
+
+    return branches[0] if branches else None
 
 
 def _common_filters(request):
     """Branch / date-range filter values that every report page uses."""
     today = timezone.localdate()
     branches = list(Branch.objects.filter(active=True).order_by("name"))
-    requested_branch = request.GET.get("branch") or ""
-    branch = next((b for b in branches if str(b.id) == requested_branch), None)
-    if branch is None and branches:
-        branch = branches[0]
+    branch = _select_branch(request, branches)
     dfrom = _parse_date(request.GET.get("from"), today)
     dto = _parse_date(request.GET.get("to"), today)
     if dto < dfrom:
@@ -315,10 +349,7 @@ def tax_invoice_process(request, order_number: str):
 def dashboard(request):
     today = timezone.localdate()
     branches = list(Branch.objects.filter(active=True).order_by("name"))
-    requested_branch = request.GET.get("branch") or ""
-    branch = next((b for b in branches if str(b.id) == requested_branch), None)
-    if branch is None and branches:
-        branch = branches[0]
+    branch = _select_branch(request, branches)
 
     dfrom = _parse_date(request.GET.get("from"), today)
     dto = _parse_date(request.GET.get("to"), today)
@@ -3532,13 +3563,19 @@ def customer_detail(request, customer_id):
 
 
 # ─── Shops & Branches ───────────────────────────────────────────────────
-def _branch_topbar_context():
+def _branch_topbar_context(request, remember=True):
     """Shared topbar context (branch dropdown + date inputs) for pages that
-    don't actually filter by branch/date. Keeps the topbar consistent."""
+    don't actually filter by branch/date. Keeps the topbar consistent.
+
+    These pages don't read the branch, but they still show the picker, and a
+    picker that displays something other than the branch every other page is
+    scoped to is a lie — so it shows, and can set, the same remembered choice.
+    """
     today = timezone.localdate().isoformat()
+    branches = list(Branch.objects.filter(active=True).order_by("name"))
     return {
-        "branches": list(Branch.objects.filter(active=True).order_by("name")),
-        "branch": None,
+        "branches": branches,
+        "branch": _select_branch(request, branches, remember=remember),
         "date_from": today,
         "date_to": today,
     }
@@ -3867,7 +3904,7 @@ def branch_list(request):
         "short_branches": short,
         "can_edit_payment": show_payment,
         "span_days": span,
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request),
         # The window actually used, so the header reflects the picker.
         "date_from": dfrom.isoformat(),
         "date_to": dto.isoformat(),
@@ -3899,7 +3936,7 @@ def branch_detail(request, branch_id):
         "taken_pos_ids": _taken_pos_ids(b),
         "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request),
     }
     return render(request, "backoffice/branch_form.html", context)
 
@@ -3928,7 +3965,7 @@ def branch_new(request):
             "taken_pos_ids": _taken_pos_ids(b),
             "taken_names": _taken_branch_names(b),
             **_payment_context(b, request.user),
-            **_branch_topbar_context(),
+            **_branch_topbar_context(request),
         }
         return render(request, "backoffice/branch_form.html", context)
     # Show the payment config this branch is about to inherit rather than an
@@ -3945,7 +3982,7 @@ def branch_new(request):
         "taken_pos_ids": _taken_pos_ids(blank),
         "taken_names": _taken_branch_names(blank),
         **_payment_context(blank, request.user),
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request),
     }
     return render(request, "backoffice/branch_form.html", context)
 
@@ -3964,8 +4001,7 @@ def shop_settings(request):
     singleton Settings row that the POS app's `/api/settings` endpoint
     returns. Both update in one form."""
     branches = list(Branch.objects.filter(active=True).order_by("name"))
-    requested = request.GET.get("branch") or ""
-    branch = next((b for b in branches if str(b.id) == requested), None) or (branches[0] if branches else None)
+    branch = _select_branch(request, branches)
 
     s = _get_or_create_settings()
 
@@ -4130,7 +4166,7 @@ def _user_context(request, member, mode, errors=()):
             [str(b.id) for b in member.branches.all()] if member.pk else []
         ),
         "hide_dates": True,
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request),
     }
 
 
@@ -4151,7 +4187,7 @@ def user_list(request):
         "users": users,
         "issued": issued,
         "hide_dates": True,
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request),
     }
     return render(request, "backoffice/user_list.html", context)
 
@@ -4405,7 +4441,7 @@ def audit_log(request):
         # header one would silently drop every other filter.
         "hide_dates": True,
         "hide_branch": True,
-        **_branch_topbar_context(),
+        **_branch_topbar_context(request, remember=False),
     }
     return render(request, "backoffice/audit_log.html", context)
 
