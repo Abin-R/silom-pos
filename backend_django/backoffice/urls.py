@@ -60,6 +60,7 @@ urlpatterns = [
     # Products
     path("products", views.product_list, name="product_list"),
     path("products/new", views.product_new, name="product_new"),
+    path("products/sync", views.product_sync, name="product_sync"),
     path("products/bulk-add", views.product_bulk_add, name="product_bulk_add"),
     path("products/bulk-edit", views.product_bulk_edit, name="product_bulk_edit"),
     path("products/<uuid:product_id>", views.product_detail, name="product_detail"),

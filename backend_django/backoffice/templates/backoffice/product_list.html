@@ -25,6 +25,8 @@
 {% endblock %}
 
 {% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_sync' %}?{{ qs }}">
+    <svg><use href="#i-store"/></svg> Sync to branch</a>
   <a class="btn" href="{% url 'backoffice:product_bulk_add' %}?{{ qs }}">
     <svg><use href="#i-plus"/></svg> Bulk add</a>
   <a class="btn btn-blue" href="{% url 'backoffice:product_new' %}?{{ qs }}">

@@ -1,0 +1,176 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Screen — Sync products between branches.
+
+  Two jobs, one screen: a branch that has just opened needs a menu, and a
+  product added at one shop needs to reach the others. Both are "make that
+  branch's list look like this one".
+
+  The page only ever *adds*. A product the target already has keeps its own
+  price, cost, photo and stock. That is said three times on purpose — in the
+  banner, in the preview column, and beside the button — because the one thing
+  an admin must be sure of before pressing this on a live branch is that it
+  cannot rewrite the prices that branch is trading on.
+
+  Two forms, not one. Choosing branches is a GET that only previews; the copy
+  is a separate POST carrying the same choices as hidden fields. So the write
+  can only be reached from a preview that is on screen — with the two folded
+  into one form, a browser with JS off would submit straight to the copy and
+  skip the preview entirely.
+
+  The preview names the products rather than counting them. "18 will be added"
+  is not something anybody can check, and this page writes to branches nobody
+  is looking at.
+{% endcomment %}
+
+{% block title %}Sync products{% endblock %}
+{% block page_title %}Sync products{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Copy a branch's catalogue onto another · missing products
+    are added, existing ones are never touched</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Catalogue</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="banner b-blue">
+  <svg><use href="#i-zap"/></svg>
+  <span>This only adds what is missing.
+    <b>A product the target branch already has keeps its own price, cost, photo
+      and stock — nothing it is already selling is rewritten.</b></span>
+</div>
+
+{# ── Choosing branches: a GET, so it can only ever preview ───────────── #}
+<form method="get" action="{% url 'backoffice:product_sync' %}" id="pickForm">
+  <div class="row" style="gap:16px;align-items:flex-start;flex-wrap:wrap">
+
+    <div class="panel" style="flex:1;min-width:280px">
+      <div class="panel-h">Copy from</div>
+      <div style="padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+        {% for b in all_branches %}
+        <label class="check" style="padding:8px 10px;border-radius:8px;
+               {% if source and b.id == source.id %}background:var(--blue-soft){% endif %}">
+          <input type="radio" name="source" value="{{ b.id }}"
+                 onchange="this.form.submit()"
+                 {% if source and b.id == source.id %}checked{% endif %}>
+          <b style="font-weight:620">{{ b.name }}</b>
+        </label>
+        {% endfor %}
+      </div>
+      {% if source %}
+      <div class="srow">
+        <span class="si"><svg><use href="#i-box"/></svg></span>
+        <span class="sm">
+          <b>{{ source_count }} product{{ source_count|pluralize }} on sale</b>
+          <u>Only products that are on sale travel. Anything removed from
+            {{ source.name }}'s catalogue stays removed — seeding a new branch
+            with it would undo that decision at the new shop.</u>
+        </span>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="panel" style="flex:1;min-width:280px">
+      <div class="panel-h">Copy to</div>
+      <div style="padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+        {% for b in all_branches %}
+        {% if not source or b.id != source.id %}
+        <label class="check" style="padding:8px 10px;border-radius:8px">
+          <input type="checkbox" name="targets" value="{{ b.id }}"
+                 onchange="this.form.submit()"
+                 {% if b.id|stringformat:'s' in target_ids %}checked{% endif %}>
+          <b style="font-weight:620">{{ b.name }}</b>
+        </label>
+        {% endif %}
+        {% endfor %}
+        {% if all_branches|length < 2 %}
+        <div class="hint">There is only one branch — nothing to sync to yet.</div>
+        {% endif %}
+      </div>
+      {% comment %}
+        The boxes submit on change where there is JS. This button is what makes
+        the page work without it, rather than leaving the selection unreachable.
+      {% endcomment %}
+      <div class="srow">
+        <button type="submit" class="btn btn-sm">
+          <svg><use href="#i-search"/></svg> Show what will change</button>
+      </div>
+    </div>
+  </div>
+</form>
+
+{# ── The copy: a POST, reachable only from a preview that is on screen ── #}
+{% if previews %}
+<div class="panel" style="margin-top:16px">
+  <div class="panel-h">What this will do</div>
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Branch</th>
+        <th class="r" style="width:120px">Will be added</th>
+        <th class="r" style="width:130px">Left as-is</th>
+        <th>Products it will gain</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in previews %}
+      <tr>
+        <td>
+          <b style="font-weight:620;color:var(--txt)">{{ p.branch.name }}</b>
+          {% if not p.product_total %}
+          <span class="tag t-out" style="margin-left:6px">Empty branch</span>
+          {% endif %}
+        </td>
+        <td class="r money">
+          {% if p.adding %}<b style="color:var(--blue)">{{ p.adding|length }}</b>
+          {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
+        </td>
+        <td class="r money" style="color:var(--mut2)">{{ p.already }}</td>
+        <td style="color:var(--txt2)">
+          {% if p.adding %}{{ p.adding|join:", " }}
+          {% else %}<span style="color:var(--mut2)">Nothing — this branch already
+            has every product in {{ source.name }}'s catalogue.</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<form method="post" action="{% url 'backoffice:product_sync' %}"
+      onsubmit="return confirm('Copy the missing products from {{ source.name|escapejs }}?\n\nProducts those branches already have are not touched.');">
+  {% csrf_token %}
+  <input type="hidden" name="source" value="{{ source.id }}">
+  {% for t in targets %}
+  <input type="hidden" name="targets" value="{{ t.id }}">
+  {% endfor %}
+  <div class="form-actions" style="margin-top:16px">
+    <button type="submit" class="btn btn-blue">
+      <svg><use href="#i-check"/></svg> Add the missing products</button>
+    <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>
+    <div class="spacer"></div>
+    <span style="font-size:12.5px;color:var(--mut)">
+      Stock is never copied — a new copy starts at zero and each shop counts
+      its own shelves.</span>
+  </div>
+</form>
+
+{% elif source %}
+<div class="panel" style="margin-top:16px">
+  <div class="srow">
+    <span class="si"><svg><use href="#i-store"/></svg></span>
+    <span class="sm">
+      <b>Pick the branches to copy onto</b>
+      <u>Tick one or more branches above and this page will list exactly which
+        products each of them would gain, before anything is written.</u>
+    </span>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

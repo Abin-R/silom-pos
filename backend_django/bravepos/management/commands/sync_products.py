@@ -27,6 +27,12 @@ recreated under the target so the copy never points at another branch's row.
 ``--dry-run`` does every write for real and then rolls the transaction back,
 so what it reports is what the live run does — not a second implementation of
 it that can drift.
+
+The copying itself lives in ``bravepos.catalog``, shared with the backoffice
+Sync products page.  One implementation, so the page and the terminal cannot
+disagree about what a copy looks like.  They differ in one setting: this
+command passes ``update_existing=True`` — pushing a price change out is what it
+was written for — while the page only ever adds what is missing.
 """
 from __future__ import annotations
 
@@ -34,18 +40,8 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from bravepos.models import Branch, Category, Product, Unit
-
-# Copied verbatim from source to target. Everything absent from this list is
-# either identity (id, branch), a foreign key resolved per-branch below
-# (category, unit), or deliberately branch-local (stock — see module docstring).
-PRODUCT_FIELDS = (
-    "name_th", "price", "cost", "par_level", "sku", "barcode",
-    "image_url", "image_base64", "is_favorite", "tax_type", "product_type",
-    "active", "sort_order",
-)
-
-CATEGORY_FIELDS = ("name_th", "color", "order", "source", "active")
+from bravepos import catalog
+from bravepos.models import Branch
 
 
 def _resolve_branch(ref: str) -> Branch:
@@ -140,25 +136,27 @@ class Command(BaseCommand):
         # the catalogue it started with, not half of someone else's. It is
         # also what makes --dry-run truthful — same writes, then a rollback.
         with transaction.atomic():
-            cat_map = {}
-            for cat in cats:
-                dest, created, changed = self._upsert_category(target, cat)
-                cat_map[cat.id] = dest
-                if created:
+            report = catalog.copy_catalogue(
+                source, target, update_existing=True, copy_stock=copy_stock,
+                catalogue=(cats, prods),
+            )
+            for row in report["categories"]:
+                if row["action"] == "created":
                     counts.cat_new += 1
-                    self.stdout.write(f"    + category {cat.name!r}")
-                elif changed:
+                    self.stdout.write(f"    + category {row['name']!r}")
+                elif row["action"] == "updated":
                     counts.cat_upd += 1
-                    self.stdout.write(f"    ~ category {cat.name!r} ({', '.join(changed)})")
+                    self.stdout.write(
+                        f"    ~ category {row['name']!r} ({', '.join(row['changed'])})")
 
-            for prod in prods:
-                created, changed = self._upsert_product(target, prod, cat_map, copy_stock)
-                if created:
+            for row in report["products"]:
+                if row["action"] == "created":
                     counts.prod_new += 1
-                    self.stdout.write(f"    + {prod.name}")
-                elif changed:
+                    self.stdout.write(f"    + {row['name']}")
+                elif row["action"] == "updated":
                     counts.prod_upd += 1
-                    self.stdout.write(f"    ~ {prod.name} ({', '.join(changed)})")
+                    self.stdout.write(
+                        f"    ~ {row['name']} ({', '.join(row['changed'])})")
 
             if dry:
                 transaction.set_rollback(True)
@@ -168,69 +166,6 @@ class Command(BaseCommand):
             f"{counts.prod_new} new / {counts.prod_upd} updated products"
         )
         return counts
-
-    def _upsert_category(self, target, cat):
-        dest = target.categories.filter(name__iexact=cat.name).first()
-        if dest is None:
-            dest = Category(branch=target, name=cat.name)
-            for field in CATEGORY_FIELDS:
-                setattr(dest, field, getattr(cat, field))
-            dest.save()
-            return dest, True, []
-
-        changed = [f for f in CATEGORY_FIELDS if getattr(dest, f) != getattr(cat, f)]
-        if changed:
-            for field in changed:
-                setattr(dest, field, getattr(cat, field))
-            dest.save(update_fields=changed)
-        return dest, False, changed
-
-    def _upsert_product(self, target, prod, cat_map, copy_stock):
-        category = cat_map.get(prod.category_id) if prod.category_id else None
-        unit = self._unit_for(target, prod.unit)
-
-        dest = target.products.filter(name__iexact=prod.name).first()
-        if dest is None:
-            dest = Product(branch=target, name=prod.name)
-            for field in PRODUCT_FIELDS:
-                setattr(dest, field, getattr(prod, field))
-            dest.category = category
-            dest.unit = unit
-            dest.stock = prod.stock if copy_stock else 0
-            dest.save()
-            return True, []
-
-        fields = list(PRODUCT_FIELDS) + (["stock"] if copy_stock else [])
-        changed = [f for f in fields if getattr(dest, f) != getattr(prod, f)]
-        if dest.category_id != (category.pk if category else None):
-            changed.append("category")
-        if dest.unit_id != (unit.pk if unit else None):
-            changed.append("unit")
-
-        if changed:
-            for field in changed:
-                if field == "category":
-                    dest.category = category
-                elif field == "unit":
-                    dest.unit = unit
-                else:
-                    setattr(dest, field, getattr(prod, field))
-            # update_fields so a sync can't clobber a column it wasn't asked
-            # to touch — notably stock, edited from the POS as this runs.
-            dest.save(update_fields=changed)
-        return False, changed
-
-    def _unit_for(self, target, unit):
-        """Reuse a shop-wide unit; recreate a branch-scoped one under target."""
-        if unit is None or unit.branch_id is None:
-            return unit
-        dest = target.units.filter(name__iexact=unit.name).first()
-        if dest is None:
-            dest = Unit(
-                branch=target, name=unit.name, order=unit.order, active=unit.active,
-            )
-            dest.save()
-        return dest
 
 
 class Counts:

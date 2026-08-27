@@ -12,12 +12,14 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import Http404, HttpResponse, HttpResponseNotModified, HttpResponseRedirect
+from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Max, Min, Sum, Q
 from django.db.models.functions import Coalesce, Length, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
@@ -40,7 +42,7 @@ from bravepos.models import (
     StockMovement,
     Unit,
 )
-from bravepos import images
+from bravepos import catalog, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
@@ -2746,6 +2748,95 @@ def product_new(request):
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_form.html", context)
+
+
+def _sync_message(source, targets, results):
+    """What the sync did, in a sentence.
+
+    Says what was left alone as well as what was added: an admin pressing this
+    on a branch that has been trading for a month needs to hear that its own
+    prices survived, and hearing it only in the docs is too late.
+    """
+    added = sum(1 for r in results for p in r["products"] if p["action"] == "created")
+    where = ", ".join(t.name for t in targets)
+    if not added:
+        return (f"{where} already had every product in {source.name}'s "
+                f"catalogue. Nothing was changed.")
+    return (f"{added} product{'' if added == 1 else 's'} copied from "
+            f"{source.name} to {where}. Products those branches already had "
+            f"were left exactly as they were.")
+
+
+@login_required
+def product_sync(request):
+    """Copy one branch's catalogue onto others — the new-branch and new-product path.
+
+    Two jobs, one screen.  A branch that has just opened has an empty product
+    list and nobody is going to retype forty-four cakes into it; and a product
+    added at BIO HOUSE has to reach the other shops without an admin editing
+    each one by hand.  Both are "make that branch's list look like this one".
+
+    **It only adds.**  A product the target already has is left exactly as it
+    is — its price, its cost, its photo, its stock, untouched.  That is what
+    makes this safe to press on a branch that has been trading for a month with
+    prices of its own, and safe to press twice.  Overwriting is deliberately
+    not on this page; ``manage.py sync_products`` is where that lives, because
+    it needs someone who knows they are doing it.
+
+    ``source`` and ``targets``, not ``from`` and ``to``: the latter are the
+    date-range filter every other page uses, and `_filter_qs` carries them.
+
+    GET previews — naming the products, because "18 will be added" is not
+    something an admin can check, and this page writes to branches nobody is
+    looking at.  POST does it.
+    """
+    branches, branch, _, _ = _common_filters(request)
+    all_branches = list(Branch.objects.filter(active=True).order_by("name"))
+
+    by_id = {str(b.id): b for b in all_branches}
+    source = by_id.get(request.POST.get("source") or request.GET.get("source") or "")
+    if source is None:
+        source = branch if branch in all_branches else (all_branches[0] if all_branches else None)
+
+    posted = request.POST.getlist("targets") or request.GET.getlist("targets")
+    # Filtered against the branches actually offered rather than trusted from
+    # the request: these ids arrive from a form anyone can edit, and a branch
+    # syncing onto itself would read and write the same rows.
+    targets = [by_id[t] for t in posted if t in by_id and (not source or t != str(source.id))]
+
+    previews, results = [], []
+    if source and targets:
+        catalogue = catalog.source_catalogue(source)
+
+        if request.method == "POST":
+            with transaction.atomic():
+                results = [
+                    catalog.copy_catalogue(source, t, catalogue=catalogue)
+                    for t in targets
+                ]
+            messages.success(request, _sync_message(source, targets, results))
+            return redirect(
+                reverse("backoffice:product_sync") + "?" + urlencode(
+                    [("source", str(source.id))]
+                    + [("targets", str(t.id)) for t in targets],
+                )
+            )
+
+        previews = [catalog.preview(source, t, catalogue) for t in targets]
+
+    context = {
+        "active": "products",
+        "branches": branches,
+        "branch": branch,
+        "all_branches": all_branches,
+        "source": source,
+        "targets": targets,
+        "target_ids": {str(t.id) for t in targets},
+        "previews": previews,
+        "source_count": source.products.filter(active=True).count() if source else 0,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/product_sync.html", context)
 
 
 @login_required
