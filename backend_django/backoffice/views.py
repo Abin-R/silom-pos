@@ -2598,7 +2598,13 @@ def _product_save_blocked(request, form_errors, duplicate) -> bool:
 
 @login_required
 def product_detail(request, product_id):
-    """View + edit a single product. POST saves and stays on the page."""
+    """View + edit a single product. POST saves and stays on the page.
+
+    Saving redirects back to this same URL, so without the message below a
+    successful save and a save that never happened look identical: the same
+    form, the same values, no banner.  That ambiguity is what produced the
+    duplicate rows `product_duplicate` warns about — see its docstring.
+    """
     branches, branch, _, _ = _common_filters(request)
     product = get_object_or_404(Product, id=product_id)
     form_errors, duplicate = [], None
@@ -2610,6 +2616,7 @@ def product_detail(request, product_id):
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
             product.save()
+            messages.success(request, f"{product.name} was saved.")
             return redirect("backoffice:product_detail", product_id=product.id)
         # Nothing was saved; `product` still carries what was typed, so the
         # form below comes back filled in rather than reverting to the row in
@@ -2639,14 +2646,15 @@ def product_archive(request, product_id):
     rest of this system retires a catalogue row: the self-order menu and the
     suggestion engine filter ``active=True``, self-order checkout refuses an
     inactive product with "deactivated or deleted" as one case, and this
-    catalogue has always listed active rows only. ``ProductViewSet`` now
-    narrows its listings the same way, so the till honours it too.
+    catalogue has always listed active rows only. Since the API narrowed its
+    product listings to active rows, the till honours it too.
 
     Keeping the row is not sentiment. ``OrderItem`` never snapshotted cost, so
     `_profit_expr` reads ``product__cost`` live across the FK — destroy the row
     and every past bill's profit silently jumps to equal its revenue, while
     Product Performance relabels the line "(deleted product)". Archiving leaves
-    both untouched.
+    both untouched. `ProductViewSet.perform_destroy` already reasons this way
+    for *sibling* branches; this is the same argument applied to the original.
 
     Reversible, and the catalogue's "Removed" view is where it is reversed.
     """
@@ -2690,6 +2698,7 @@ def product_new(request):
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
             product.save()
+            messages.success(request, f"{product.name} was added to the catalogue.")
             return redirect("backoffice:product_detail", product_id=product.id)
 
     context = {
@@ -2732,6 +2741,9 @@ def product_bulk_add(request):
             p.save()
             saved += 1
         if saved:
+            messages.success(
+                request,
+                f"{saved} product{'' if saved == 1 else 's'} added to the catalogue.")
             return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
 
     # GET: render N blank rows. Default 5; bumpable up to 10.
@@ -2773,6 +2785,7 @@ def product_bulk_edit(request):
 
     if request.method == "POST":
         ids = request.POST.getlist("id")
+        saved = 0
         for idx, pid in enumerate(ids):
             try:
                 p = Product.objects.get(id=pid)
@@ -2788,6 +2801,10 @@ def product_bulk_edit(request):
             unit = request.POST.getlist("unit")[idx] or ""
             p.unit_id = unit or None
             p.save()
+            saved += 1
+        if saved:
+            messages.success(
+                request, f"{saved} product{'' if saved == 1 else 's'} saved.")
         return redirect(reverse("backoffice:product_bulk_edit") + f"?{_filter_qs(request)}")
 
     paginator = Paginator(qs, 10)  # SilomPOS shows 10/page on this view

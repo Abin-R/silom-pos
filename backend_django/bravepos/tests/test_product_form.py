@@ -56,10 +56,18 @@ class ProductFormTestCase(TestCase):
         data.update(overrides)
         return data
 
-    def post_new(self, branch=None, **overrides):
+    def post_new(self, branch=None, follow=False, **overrides):
+        """POST the create form.
+
+        ``follow`` lands on the page the save redirects to — which is where
+        the confirmation banner is rendered, and rendering is what clears it
+        from the session.  A test that leaves a message unrendered carries it
+        into its next request.
+        """
         url = reverse("backoffice:product_new")
         branch = self.branch if branch is None else branch
-        return self.client.post(f"{url}?branch={branch.id}", self.form(**overrides))
+        return self.client.post(
+            f"{url}?branch={branch.id}", self.form(**overrides), follow=follow)
 
     def assertNotSaved(self, response, *, count=0):
         """The form came back rather than redirecting, and nothing was written."""
@@ -254,3 +262,42 @@ class RefusedSaveKeepsTheTypingTests(ProductFormTestCase):
             reverse("backoffice:product_detail", args=[product.id]),
             self.form(name="Renamed", price="ten baht"))
         self.assertContains(response, "Renamed")
+
+
+class SavedProductSaysSoTests(ProductFormTestCase):
+    """A save that worked has to look different from one that did not.
+
+    Both forms redirect to the product's own page, which is what a *refused*
+    save renders too, minus a red banner — same fields, same values, nothing
+    that says the write happened.  The admin's only way to check was to open
+    the catalogue and look, and the alternative they actually took was to
+    press Save again: that is how one product got created twice on 26 August
+    (see `DuplicateProductTests`).  The duplicate warning catches the second
+    press; this catches the doubt that causes it.
+    """
+
+    def test_creating_a_product_confirms_it(self):
+        response = self.post_new(follow=True)
+        self.assertContains(
+            response, "Cherry Mousse Pop was added to the catalogue.")
+
+    def test_saving_an_edit_confirms_it(self):
+        self.post_new(follow=True)
+        product = Product.objects.get()
+        response = self.client.post(
+            reverse("backoffice:product_detail", args=[product.id]),
+            self.form(price="130.00"), follow=True)
+        self.assertContains(response, "Cherry Mousse Pop was saved.")
+        product.refresh_from_db()
+        self.assertEqual(product.price, Decimal("130.00"))
+
+    def test_a_refused_save_does_not_claim_it_saved(self):
+        response = self.post_new(price="ten baht")
+        self.assertNotSaved(response)
+        self.assertNotContains(response, "added to the catalogue")
+
+    def test_the_duplicate_warning_is_not_a_confirmation(self):
+        self.post_new(follow=True)
+        response = self.post_new()
+        self.assertEqual(Product.objects.count(), 1)
+        self.assertNotContains(response, "added to the catalogue")
