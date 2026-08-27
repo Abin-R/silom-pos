@@ -3307,9 +3307,41 @@ function ParkedOrdersModal({
     if (visible) load();
   }, [visible]);
 
+  // Ids with a DELETE in flight.  The buttons gave no sign that anything was
+  // happening, so a cashier tapped again — and the second DELETE 404'd,
+  // because the first had already removed the row.  That is REACT-NATIVE-4:
+  // 291 reports across 5 cashiers, every one of them a tap that had worked.
+  const deletingRef = useRef<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState<string[]>([]);
+
+  const markDeleting = (id: string, on: boolean) => {
+    if (on) deletingRef.current.add(id);
+    else deletingRef.current.delete(id);
+    setDeleting([...deletingRef.current]);
+  };
+
   const del = async (id: string) => {
-    await apiFetch(`${API}/parked-orders/${id}`, { method: "DELETE" });
-    load();
+    // The ref, not `deleting` — two taps inside one frame both read the same
+    // stale state and both would pass.  A ref updates synchronously, so the
+    // second tap sees the first.  `disabled` below is the visible half of
+    // this; it only takes effect on the next render, which is one frame too
+    // late for a fast double-tap.
+    if (deletingRef.current.has(id)) return;
+    markDeleting(id, true);
+    try {
+      await apiFetch(`${API}/parked-orders/${id}`, { method: "DELETE" });
+      await load();
+    } finally {
+      markDeleting(id, false);
+    }
+  };
+
+  const retrieve = (item: ParkedOrder) => {
+    // Guarded the same way: without it a double-tap loads the cart twice as
+    // well as firing the second DELETE.
+    if (deletingRef.current.has(item.id)) return;
+    onRetrieve(item.items);
+    del(item.id);
   };
 
   return (
@@ -3352,16 +3384,25 @@ function ParkedOrdersModal({
                 </View>
                 <TouchableOpacity
                   style={styles.retrieveBtn}
-                  onPress={() => {
-                    onRetrieve(item.items);
-                    del(item.id);
-                  }}
+                  disabled={deleting.includes(item.id)}
+                  onPress={() => retrieve(item)}
                   testID={`retrieve-${item.id}`}
                 >
                   <Text style={styles.retrieveBtnText}>{tr("pos.retrieve")}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => del(item.id)} testID={`park-del-${item.id}`}>
-                  <Ionicons name="trash-outline" size={20} color={C.danger} />
+                <TouchableOpacity
+                  onPress={() => del(item.id)}
+                  disabled={deleting.includes(item.id)}
+                  testID={`park-del-${item.id}`}
+                >
+                  {/* Greying out is the feedback that was missing: the reason
+                      the second tap happened at all was that the first left
+                      the row looking untouched. */}
+                  <Ionicons
+                    name="trash-outline"
+                    size={20}
+                    color={deleting.includes(item.id) ? C.lineStrong : C.danger}
+                  />
                 </TouchableOpacity>
               </View>
             )}

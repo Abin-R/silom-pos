@@ -132,6 +132,20 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     return res;
   }
 
+  if (res.status === 404 && method === "DELETE") {
+    // The row is already gone — which is exactly what this DELETE asked for.
+    // HTTP defines DELETE as idempotent, so a repeat landing on nothing is
+    // the expected ending, not a failure.
+    //
+    // Reporting it made REACT-NATIVE-4 the noisiest issue in the project:
+    // 291 warnings across 5 cashiers, every one of them a second tap on a
+    // button that had already worked.  Same reasoning as the 401 above —
+    // expected control flow, deliberately not reported.  Narrow to DELETE on
+    // purpose: a 404 on a GET means something is missing that should be
+    // there, and that is still worth hearing about.
+    return res;
+  }
+
   if (!res.ok) {
     // Read from a clone so the caller's res.json()/res.text() still works.
     const body = await res.clone().text().catch(() => "");
