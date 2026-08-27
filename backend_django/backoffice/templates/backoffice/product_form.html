@@ -61,6 +61,29 @@
     <div class="tab-panel" data-panel="info">
     <form method="post" id="productForm">
       {% csrf_token %}
+      {% if form_errors %}
+      <div class="banner b-red" style="margin-bottom:16px">
+        <svg><use href="#i-alert"/></svg>
+        <span><b>Not saved.</b>
+          {% for e in form_errors %}{{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+      </div>
+      {% endif %}
+      {% if duplicate %}
+      {% comment %}
+        Carrying this back means the Save button the admin already has is the
+        confirm — a second press saves. It is rendered only while the warning
+        is on screen, so it cannot silence a duplicate nobody was shown.
+      {% endcomment %}
+      <input type="hidden" name="confirm_duplicate" value="1">
+      <div class="banner b-amber" style="margin-bottom:16px">
+        <svg><use href="#i-alert"/></svg>
+        <span><b>Not saved — this may already exist.</b>
+          <a href="{% url 'backoffice:product_detail' duplicate.id %}">{{ duplicate.name }}</a>
+          is already in {% if duplicate.branch %}{{ duplicate.branch.name }}{% else %}the catalogue{% endif %}.
+          If your last save looked like it failed, it may have gone through anyway.
+          Press Save again to add a second one.</span>
+      </div>
+      {% endif %}
       <div class="panel">
         <div class="panel-h">Information</div>
         <div class="form-grid">
@@ -75,8 +98,8 @@
 
           <div class="field">
             <label for="f-name">Product name</label>
-            <input id="f-name" type="text" name="name" required value="{{ product.name }}"
-                   placeholder="What the cashier taps">
+            <input id="f-name" type="text" name="name" required maxlength="200"
+                   value="{{ product.name }}" placeholder="What the cashier taps">
           </div>
           <div class="field">
             <label for="f-cat">Category</label>
@@ -90,13 +113,14 @@
 
           <div class="field">
             <label for="f-price">Price</label>
-            <input id="f-price" type="number" step="0.01" name="price" required
-                   value="{{ product.price|default:'0' }}">
+            <input id="f-price" type="number" step="0.01" min="0" max="99999999.99"
+                   name="price" required value="{{ product.price|default:'0' }}">
             <span class="hint">Includes VAT — the till never adds tax on top.</span>
           </div>
           <div class="field">
             <label for="f-cost">Cost</label>
-            <input id="f-cost" type="number" step="0.01" name="cost" value="{{ product.cost|default:'0' }}">
+            <input id="f-cost" type="number" step="0.01" min="0" max="99999999.99"
+                   name="cost" value="{{ product.cost|default:'0' }}">
             <span class="hint">What you pay for one. Drives every margin figure in the reports.</span>
           </div>
 
@@ -133,18 +157,20 @@
 
           <div class="field">
             <label for="f-sku">SKU</label>
-            <input id="f-sku" type="text" name="sku" value="{{ product.sku }}" placeholder="e.g. BK-001">
+            <input id="f-sku" type="text" name="sku" maxlength="64"
+                   value="{{ product.sku }}" placeholder="e.g. BK-001">
           </div>
           <div class="field">
             <label for="f-barcode">Barcode</label>
-            <input id="f-barcode" type="text" name="barcode" value="{{ product.barcode }}">
+            <input id="f-barcode" type="text" name="barcode" maxlength="64"
+                   value="{{ product.barcode }}">
           </div>
 
           <div class="field wide">
             <label for="descBox">Description</label>
-            <textarea id="descBox" name="name_th" maxlength="5000" rows="3"
+            <textarea id="descBox" name="name_th" maxlength="200" rows="3"
                       placeholder="Thai name, or anything the kitchen needs to know">{{ product.name_th }}</textarea>
-            <span class="hint" id="descCount">(0/5000)</span>
+            <span class="hint" id="descCount">(0/200)</span>
           </div>
 
           <div class="field wide">
@@ -308,7 +334,10 @@
     const desc = document.getElementById('descBox');
     const count = document.getElementById('descCount');
     if (desc && count) {
-      const update = () => { count.textContent = '(' + desc.value.length + '/5000)'; };
+      // 200 is the column, not a style rule — see Product.name_th. The
+      // counter said 5000, which the database would have refused.
+      const LIMIT = desc.maxLength > 0 ? desc.maxLength : 200;
+      const update = () => { count.textContent = '(' + desc.value.length + '/' + LIMIT + ')'; };
       desc.addEventListener('input', update);
       update();
     }

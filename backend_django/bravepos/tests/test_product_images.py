@@ -123,11 +123,13 @@ class WritePathTests(TestCase):
         from backoffice.views import _apply_product_form
 
         product = Product(branch=self.branch)
+        errors = []
         _apply_product_form(product, {
             'name': 'Manggo Cake', 'price': '120', 'cost': '0', 'stock': '1',
             'image_url': data_uri(1915, 1021),
-        }, self.branch)
+        }, self.branch, errors)
 
+        self.assertEqual(errors, [])
         self.assertLessEqual(len(product.image_url), images.MAX_CHARS)
 
 

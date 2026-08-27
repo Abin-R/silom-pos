@@ -2422,20 +2422,100 @@ def _product_form_units(branch):
     return list(qs.order_by("order", "name"))
 
 
-def _apply_product_form(product, post, branch):
+# Column widths, read off the model rather than written out again, so a
+# migration that widens a column widens the form check with it.
+_PRODUCT_MAX_LEN = {
+    name: Product._meta.get_field(name).max_length
+    for name in ("name", "name_th", "sku", "barcode")
+}
+
+# `numeric(10, 2)` and `integer` respectively.  Postgres raises past either,
+# which is a 500 with every other field the admin typed lost along with it.
+_PRODUCT_PRICE_MAX = Decimal("99999999.99")
+_PRODUCT_INT_MAX = 2147483647
+
+
+def _product_text(post, field, label, errors) -> str:
+    """A text field off the form, with over-length reported not truncated.
+
+    The value is handed back whole even when it is too long, so the form comes
+    back with the typing intact and the admin trims the one field that is
+    wrong — truncating silently would save something they did not write.
+    """
+    value = (post.get(field) or "").strip()
+    limit = _PRODUCT_MAX_LEN[field]
+    if len(value) > limit:
+        errors.append(
+            f"{label} is {len(value)} characters — the most that fits is {limit}."
+        )
+    return value
+
+
+def _product_decimal(post, field, label, errors) -> Decimal:
+    """A money field off the form, as a Decimal, never raising.
+
+    ``Decimal`` on raw POST text raises ``InvalidOperation`` on anything that
+    is not a number, and — worse, because it looks like it worked — accepts
+    two values the column will not: "NaN" and "Infinity".  Every one of those
+    is a 500 on save, so all three become form errors instead.
+    """
+    raw = (post.get(field) or "").strip()
+    if not raw:
+        return Decimal("0")
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        errors.append(f"{label} must be a number — “{raw}” isn't one.")
+        return Decimal("0")
+    if not value.is_finite():
+        errors.append(f"{label} must be a number.")
+        return Decimal("0")
+    if value > _PRODUCT_PRICE_MAX:
+        errors.append(f"{label} can't be more than {_PRODUCT_PRICE_MAX:,}.")
+    return value
+
+
+def _product_int(post, field, label, errors) -> int:
+    """A whole-number field off the form, never raising.
+
+    Same shape as ``_product_decimal``: ``int`` raises on "1.5" or "ten", and
+    a number past 2^31 is accepted here only to overflow the column on save.
+    """
+    raw = (post.get(field) or "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        errors.append(f"{label} must be a whole number — “{raw}” isn't one.")
+        return 0
+    if abs(value) > _PRODUCT_INT_MAX:
+        errors.append(f"{label} is too large.")
+        return 0
+    return value
+
+
+def _apply_product_form(product, post, branch, errors):
     """Pull fields out of a POSTed product form onto a Product instance.
-    Used by both `product_new` and `product_detail` to save."""
+
+    Used by both `product_new` and `product_detail` to save.  Anything the
+    column cannot hold is appended to ``errors`` rather than raised: the value
+    still lands on the instance, so the page can come back with the form as it
+    was typed and one field flagged, instead of an error page that loses all
+    of it.  Every field here was previously passed straight to the column,
+    where the only available answer was a 500.
+    """
     product.branch = branch
-    product.name = (post.get("name") or "").strip()
-    product.name_th = (post.get("name_th") or "").strip()
-    product.barcode = (post.get("barcode") or "").strip()
-    product.sku = (post.get("sku") or "").strip()
-    product.price = Decimal(post.get("price") or "0")
-    product.cost = Decimal(post.get("cost") or "0")
-    product.stock = int(post.get("stock") or 0)
+    product.name = _product_text(post, "name", "Product name", errors)
+    product.name_th = _product_text(post, "name_th", "Description", errors)
+    product.barcode = _product_text(post, "barcode", "Barcode", errors)
+    product.sku = _product_text(post, "sku", "SKU", errors)
+    product.price = _product_decimal(post, "price", "Price", errors)
+    product.cost = _product_decimal(post, "cost", "Cost", errors)
+    product.stock = _product_int(post, "stock", "Stock on hand", errors)
     # 0 means "not tracked" — Inventory says so rather than flagging the
     # product against a threshold nobody set.
-    product.par_level = int(post.get("par_level") or 0)
+    product.par_level = _product_int(post, "par_level", "Par level", errors)
     cat_id = post.get("category") or ""
     product.category_id = cat_id if cat_id else None
     product.tax_type = post.get("tax_type") or "V"
@@ -2450,16 +2530,78 @@ def _apply_product_form(product, post, branch):
     return product
 
 
+def product_errors(product) -> list[str]:
+    """Blocking problems with the assembled product.
+
+    Per-field limits are collected by `_apply_product_form` as it parses; what
+    is left is the one rule that needs the whole instance.  A product with no
+    name is a blank row on the Sale screen that a cashier cannot identify and
+    the catalogue sorts to the top — the input is `required`, but a hand-made
+    POST is not.
+    """
+    errors = []
+    if not product.name:
+        errors.append("Product name is required.")
+    return errors
+
+
+def product_duplicate(product):
+    """Another product in the same branch already answering to this name.
+
+    Not an error — a shop may deliberately keep two rows with one name while
+    renaming a variant, and nothing in the schema forbids it.  It is a warning
+    because of how the duplicates actually get made: nothing on Product is
+    unique, so a resubmitted create form is indistinguishable from a new
+    product, and an admin who could not tell whether the first save went
+    through gets two.  That is what happened on 26 August — one form POSTed
+    twice eleven seconds apart, two rows in the catalogue, and ten minutes
+    spent afterwards editing both.  Saying so before the second save is the
+    whole fix; `confirm_duplicate` is what lets it through anyway.
+
+    Compared case-insensitively, and scoped to the branch, because that is the
+    pair a cashier sees side by side on one till.
+    """
+    name = (product.name or "").strip()
+    if not name:
+        return None
+    return (Product.objects
+            .filter(branch=product.branch, name__iexact=name)
+            .exclude(pk=product.pk)
+            .first())
+
+
+def _product_save_blocked(request, form_errors, duplicate) -> bool:
+    """Whether this POST should stop short of saving.
+
+    A form error always stops it.  A duplicate stops it exactly once: the
+    re-rendered form carries `confirm_duplicate`, so pressing Save a second
+    time goes through.  The warning is there for the admin who cannot tell
+    whether their last save landed — not to refuse a second row outright,
+    which is sometimes what they want.
+    """
+    if form_errors:
+        return True
+    return bool(duplicate) and not request.POST.get("confirm_duplicate")
+
+
 @login_required
 def product_detail(request, product_id):
     """View + edit a single product. POST saves and stays on the page."""
     branches, branch, _, _ = _common_filters(request)
     product = get_object_or_404(Product, id=product_id)
+    form_errors, duplicate = [], None
 
     if request.method == "POST":
-        _apply_product_form(product, request.POST, product.branch or branch)
-        product.save()
-        return redirect("backoffice:product_detail", product_id=product.id)
+        _apply_product_form(product, request.POST, product.branch or branch,
+                            form_errors)
+        form_errors += product_errors(product)
+        duplicate = product_duplicate(product)
+        if not _product_save_blocked(request, form_errors, duplicate):
+            product.save()
+            return redirect("backoffice:product_detail", product_id=product.id)
+        # Nothing was saved; `product` still carries what was typed, so the
+        # form below comes back filled in rather than reverting to the row in
+        # the database.
 
     context = {
         "active": "products",
@@ -2469,6 +2611,8 @@ def product_detail(request, product_id):
         "categories": _product_form_categories(product.branch or branch),
         "units": _product_form_units(product.branch or branch),
         "mode": "edit",
+        "form_errors": form_errors,
+        "duplicate": duplicate,
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -2479,21 +2623,27 @@ def product_detail(request, product_id):
 def product_new(request):
     """Add a single product. POST creates and redirects to its detail page."""
     branches, branch, _, _ = _common_filters(request)
+    product = Product(branch=branch)
+    form_errors, duplicate = [], None
 
     if request.method == "POST":
-        product = Product()
-        _apply_product_form(product, request.POST, branch)
-        product.save()
-        return redirect("backoffice:product_detail", product_id=product.id)
+        _apply_product_form(product, request.POST, branch, form_errors)
+        form_errors += product_errors(product)
+        duplicate = product_duplicate(product)
+        if not _product_save_blocked(request, form_errors, duplicate):
+            product.save()
+            return redirect("backoffice:product_detail", product_id=product.id)
 
     context = {
         "active": "products",
         "branches": branches,
         "branch": branch,
-        "product": Product(branch=branch),
+        "product": product,
         "categories": _product_form_categories(branch),
         "units": _product_form_units(branch),
         "mode": "new",
+        "form_errors": form_errors,
+        "duplicate": duplicate,
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
