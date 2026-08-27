@@ -1,160 +1,174 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Create peak receipt for {{ order_number }}</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-  <style>
-    body {
-      background: #f3f4f5;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                   "Helvetica Neue", Arial, sans-serif;
-      margin: 0;
-    }
-    /* Sticky teal page header — matches the reference mockup. */
-    .page-header {
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      background: #2cae87;
-      color: #ffffff;
-      padding: 0.85rem 1.25rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
-    }
-    .page-header h1 {
-      font-size: 1.05rem;
-      font-weight: 600;
-      margin: 0;
-      letter-spacing: 0;
-    }
-    .page-header .save-btn {
-      position: absolute;
-      right: 1rem;
-      top: 50%;
-      transform: translateY(-50%);
-      background: #ffffff;
-      color: #2cae87;
-      border: 0;
-      border-radius: 6px;
-      padding: 0.4rem 1rem;
-      font-weight: 600;
-      font-size: 0.9rem;
-    }
-    .page-header .save-btn:hover { background: #f3f4f5; }
+{% extends base_template %}
+{% load humanize %}
+{% comment %}
+  Buyer particulars for a full tax invoice (ใบกำกับภาษีเต็มรูป) issued through
+  Peak.  Submitting hands the bill to Peak, which mints the document and hands
+  back a link the next page waits for.
 
-    /* Each form row: gray label band above a white input row, edge-to-edge. */
-    .form-row {
-      border-bottom: 1px solid #e5e7e8;
-    }
-    .form-row .label {
-      background: #f3f4f5;
-      color: #5b6770;
-      font-size: 0.78rem;
-      padding: 0.45rem 1.25rem 0.35rem;
-    }
-    .form-row .field {
-      background: #ffffff;
-      padding: 0.55rem 1.25rem 0.7rem;
-    }
-    .form-row .field input,
-    .form-row .field select,
-    .form-row .field textarea {
-      width: 100%;
-      border: 0;
-      outline: 0;
-      box-shadow: none;
-      padding: 0;
-      font-size: 0.95rem;
-      color: #2b2f33;
-      background: transparent;
-    }
-    .form-row .field input::placeholder,
-    .form-row .field textarea::placeholder {
-      color: #c4c9cd;
-    }
-    /* Subtle teal underline on the focused row, like the reference. */
-    .form-row.focused {
-      box-shadow: inset 0 -2px 0 #2cae87;
-    }
-    /* Native select arrow on the right — kept as a plain native control. */
-    .form-row .field select {
-      appearance: none;
-      -webkit-appearance: none;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' fill='none' stroke='%235b6770' stroke-width='1.5' stroke-linecap='round'/></svg>");
-      background-repeat: no-repeat;
-      background-position: right 0 center;
-      background-size: 14px;
-      padding-right: 22px;
-    }
-  </style>
-</head>
-<body>
-  <form method="post" action="{% url 'save_tax_invoice' order_number=order_number %}" id="tax-invoice-form">
+  This used to be a teal Bootstrap page copied from SilomPOS: stacked grey
+  label bands over borderless inputs, a title bar, a Save button, and nothing
+  else on screen.  It is reached from Transactions, so it now looks like
+  Transactions — the same panels, fields and blue commit button as every other
+  form in the backoffice.
+
+  `base_template` decides which shell it lands in.  An admin gets the rail and
+  the bill they clicked; a buyer holding the link has no login, so they get the
+  chrome-less shell and a blank form — bill numbers are sequential, and the
+  buyer identity on someone else's bill is not theirs to read.
+{% endcomment %}
+
+{% block title %}Full tax invoice{% endblock %}
+{% block page_title %}Full tax invoice{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">
+    ใบกำกับภาษีเต็มรูป · Bill #{{ order_number }}{% if order and order.branch %} · {{ order.branch.name }}{% endif %}
+  </div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if user.is_authenticated %}
+  <a class="btn" href="{% url 'backoffice:transactions' %}">
+    <svg><use href="#i-back"/></svg> Back to transactions</a>
+  {% endif %}
+  <button type="submit" form="taxInvoiceForm" class="btn btn-blue">
+    <svg><use href="#i-check"/></svg> Issue tax invoice</button>
+{% endblock %}
+
+{% block content %}
+<div class="row" style="align-items:flex-start">
+
+  <form method="post" id="taxInvoiceForm"
+        action="{% url 'save_tax_invoice' order_number=order_number %}"
+        style="flex:1;min-width:0;max-width:760px;display:flex;flex-direction:column;gap:16px">
     {% csrf_token %}
-    <header class="page-header">
-      <h1>Create peak receipt for {{ order_number }}</h1>
-      <button type="submit" class="save-btn">Save</button>
-    </header>
 
-    <div class="form-row">
-      <div class="label">Name</div>
-      <div class="field"><input type="text" name="name" placeholder="Name" required></div>
+    {% if prefill.name or prefill.tax_id %}
+    {% comment %}
+      Filled in from what this bill already knows — either an earlier submit of
+      this same form, the slip the till issued, or the customer on the bill.
+      Said out loud, because an invoice issued to a prefilled buyer nobody
+      re-read is exactly the mistake this saves typing on.
+    {% endcomment %}
+    <div class="banner b-blue">
+      <svg><use href="#i-alert"/></svg>
+      <span><b>Prefilled from this bill.</b> Check every line against the
+        buyer's own paperwork before issuing — Peak creates the document from
+        what is on screen.</span>
     </div>
+    {% endif %}
 
-    <div class="form-row">
-      <div class="label">Tax ID</div>
-      <div class="field"><input type="text" name="tax_id" placeholder="Tax ID" required></div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Customer Type</div>
-      <div class="field">
-        <select name="customer_type">
-          <option value="">---------</option>
-          <option>Individual</option>
-          <option>Company</option>
-        </select>
+    <div class="panel">
+      <div class="panel-h">Buyer <span class="sm">as it must appear on the invoice</span></div>
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="f-name">Name <span class="sm">ชื่อผู้เสียภาษี</span></label>
+          <input id="f-name" type="text" name="name" value="{{ prefill.name }}"
+                 autocomplete="organization" required>
+          <span class="hint">The registered company name, or the buyer's full name for an individual.</span>
+        </div>
+        <div class="field">
+          <label for="f-tax">Tax ID <span class="sm">เลขประจำตัวผู้เสียภาษี</span></label>
+          <input id="f-tax" type="text" name="tax_id" value="{{ prefill.tax_id }}"
+                 class="money" inputmode="numeric" required>
+          <span class="hint">The 13 digits issued by the Revenue Department.</span>
+        </div>
+        <div class="field">
+          <label for="f-type">Customer type</label>
+          <select id="f-type" name="customer_type">
+            <option value="">—</option>
+            <option value="Individual" {% if prefill.customer_type == "Individual" %}selected{% endif %}>Individual · บุคคลธรรมดา</option>
+            <option value="Company" {% if prefill.customer_type == "Company" %}selected{% endif %}>Company · นิติบุคคล</option>
+          </select>
+        </div>
       </div>
     </div>
 
-    <div class="form-row focused">
-      <div class="label">Registered Address</div>
-      <div class="field"><input type="text" name="registered_address"></div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Registered Country</div>
-      <div class="field">
-        <select name="registered_country">
-          <option>Thailand</option>
-        </select>
+    <div class="panel">
+      <div class="panel-h">Registered address <span class="sm">ที่อยู่จดทะเบียน</span></div>
+      {% comment %}
+        The field names are the ones Peak's contact payload is built from and
+        must not change: `registered_city` is sent as Peak's `subDistrict` and
+        `registered_district` as its `district`.  The labels say so — "City"
+        over a box that has to hold แขวง/ตำบล is how that ends up populated
+        with "Bangkok".
+      {% endcomment %}
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="f-addr">Address</label>
+          <textarea id="f-addr" name="registered_address" rows="2">{{ prefill.registered_address }}</textarea>
+          <span class="hint">Building or house number, street, and the buyer's own
+            branch designation if they have one (สำนักงานใหญ่ / Head Office).
+            A full tax invoice is not valid without it.</span>
+        </div>
+        <div class="field">
+          <label for="f-sub">Sub-district <span class="sm">แขวง · ตำบล</span></label>
+          <input id="f-sub" type="text" name="registered_city" value="{{ prefill.registered_city }}">
+        </div>
+        <div class="field">
+          <label for="f-district">District <span class="sm">เขต · อำเภอ</span></label>
+          <input id="f-district" type="text" name="registered_district" value="{{ prefill.registered_district }}">
+        </div>
+        <div class="field">
+          <label for="f-province">Province <span class="sm">จังหวัด</span></label>
+          <input id="f-province" type="text" name="registered_province" value="{{ prefill.registered_province }}">
+        </div>
+        <div class="field">
+          <label for="f-post">Postal code <span class="sm">รหัสไปรษณีย์</span></label>
+          <input id="f-post" type="text" name="registered_postal_code" class="money"
+                 inputmode="numeric" maxlength="10" value="{{ prefill.registered_postal_code }}">
+        </div>
+        <div class="field wide">
+          <label for="f-country">Country</label>
+          <select id="f-country" name="registered_country">
+            <option value="Thailand">Thailand</option>
+          </select>
+        </div>
       </div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Registered Province</div>
-      <div class="field"><input type="text" name="registered_province" placeholder="Registered Province"></div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Registered City</div>
-      <div class="field"><input type="text" name="registered_city" placeholder="Registered City"></div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Registered District</div>
-      <div class="field"><input type="text" name="registered_district" placeholder="Registered District"></div>
-    </div>
-
-    <div class="form-row">
-      <div class="label">Registered Postal Code</div>
-      <div class="field"><input type="text" name="registered_postal_code" placeholder="Registered Postal Code"></div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-blue">
+          <svg><use href="#i-check"/></svg> Issue tax invoice</button>
+        {% if user.is_authenticated %}
+        <a class="btn" href="{% url 'backoffice:transactions' %}">Cancel</a>
+        {% endif %}
+        <span class="spacer"></span>
+        <span style="font-size:12px;color:var(--mut)">Issuing sends the bill to Peak. One document per bill.</span>
+      </div>
     </div>
   </form>
-</body>
-</html>
+
+  {% comment %}
+    The bill itself, so whoever is issuing can see what they are invoicing
+    without a second tab.  Signed-in only — the view withholds `order` from
+    anonymous visitors.
+  {% endcomment %}
+  {% if order %}
+  <aside class="detail">
+    <div class="panel">
+      <div class="panel-h">Bill #{{ order.order_number }}</div>
+      <div class="dsec">
+        <div class="dkv"><span>Date &amp; time</span>
+          <b class="money">{{ order.created_at|date:"j M Y, H:i" }}</b></div>
+        <div class="dkv"><span>Branch</span><b>{{ order.branch.name|default:"—" }}</b></div>
+        <div class="dkv"><span>Cashier</span><b>{{ order.staff|default:"—" }}</b></div>
+        <div class="dkv"><span>Customer</span><b>{{ order.customer_name|default:"Walk-in" }}</b></div>
+      </div>
+      <div class="dsec" style="border-bottom:0">
+        <div class="dkv"><span>Goods</span>
+          <b class="money">฿{{ row.total_non_tax|floatformat:2|intcomma }}</b></div>
+        <div class="dkv"><span>VAT {{ tax_percent|floatformat:"-2" }}% (included)</span>
+          <b class="money">฿{{ row.tax_amount|floatformat:2|intcomma }}</b></div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:12px;margin-top:8px;border-top:1px solid var(--line2)">
+          <b style="font-size:16px;font-weight:670">Total</b>
+          <b class="money" style="font-size:22px;font-weight:700;color:var(--blue);letter-spacing:-.03em">฿{{ order.total|floatformat:2|intcomma }}</b>
+        </div>
+      </div>
+      <div class="panel-f">
+        Peak issues one tax invoice per bill. Come back to this link afterwards
+        and it opens the document rather than the form.
+      </div>
+    </div>
+  </aside>
+  {% endif %}
+
+</div>
+{% endblock %}

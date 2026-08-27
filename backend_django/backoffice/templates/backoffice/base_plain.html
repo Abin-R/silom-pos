@@ -1,0 +1,64 @@
+{% comment %}
+  The backoffice shell, minus the backoffice.
+
+  One page — the Peak full-tax-invoice form — is opened from two places. An
+  admin reaches it from Transactions and should stay in the backoffice they
+  were already in. A buyer handed the link directly has no login at all, and
+  `base.html` cannot serve them: its rail is fourteen doors that all lead to
+  /backoffice/login/, and its header carries branch and date filters that mean
+  nothing to someone typing in a tax ID.
+
+  So the page picks its shell at render time (`base_template`, set by the
+  view) and this is the second one: the same stylesheet, the same header and
+  panels, no rail and no filters. The blocks match `base.html`'s names so a
+  template can extend either without knowing which it got.
+{% endcomment %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Backoffice{% endblock %} — {{ shop_name|default:"Brave POS" }}</title>
+  <link href="{% url 'backoffice:app_css' %}?v={{ css_version }}" rel="stylesheet">
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% include "backoffice/_icons.html" %}
+
+<div class="shell">
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <div class="tb-title">{% block page_title %}{{ page_title }}{% endblock %}</div>
+        {% block page_sub %}{% endblock %}
+      </div>
+
+      <div class="spacer"></div>
+
+      {% block topbar %}{% endblock %}
+      {% block topbar_end %}{% endblock %}
+    </header>
+
+    {% if messages %}
+    <div style="padding:16px 24px 0" class="msg">
+      {% for m in messages %}
+        <div class="banner {% if m.tags == 'error' %}b-red{% elif m.tags == 'warning' %}b-amber{% elif m.tags == 'success' %}b-green{% else %}b-blue{% endif %}">
+          <svg><use href="#i-alert"/></svg><span>{{ m }}</span>
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% comment %}
+      No rail means no 240px of furniture holding the content off the left
+      edge, and nothing beside the content either — a page that reaches
+      someone without a login is one column of it. So the column centres
+      itself rather than sitting against the left edge of a wide monitor.
+    {% endcomment %}
+    <main class="body" style="width:100%;max-width:820px;margin:0 auto">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

@@ -1,120 +1,105 @@
-<!DOCTYPE html>
+{% comment %}
+  The wait between pressing "Issue tax invoice" and Peak handing back a
+  document link.  Its own page rather than a spinner on the form, so a refresh
+  re-polls instead of re-submitting.
+
+  Chrome-less on purpose — there is nothing to do here but wait — but on the
+  backoffice stylesheet, so the admin who just left the form doesn't land on a
+  page from a different product.  The polling below is unchanged; only what it
+  is wrapped in is new.
+{% endcomment %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Creating tax invoice for {{ order_number }}…</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>Issuing tax invoice — {{ shop_name|default:"Brave POS" }}</title>
+  <link href="{% url 'backoffice:app_css' %}?v={{ css_version }}" rel="stylesheet">
   <style>
-    body {
-      background: #ffacef;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      margin: 0;
-    }
-    .card-wrap {
-      background: #ffffff;
-      border-radius: 18px;
-      padding: 2.25rem 1.75rem;
-      max-width: 380px;
-      width: 92%;
-      text-align: center;
-      box-shadow: 0 14px 48px rgba(164, 13, 26, 0.18);
-    }
-    .spinner {
-      width: 56px;
-      height: 56px;
-      border: 5px solid #f3f4f5;
-      border-top-color: #d61222;
-      border-radius: 50%;
-      animation: spin 0.9s linear infinite;
-      margin: 0.5rem auto 1.25rem;
+    body { display: flex; align-items: center; justify-content: center;
+           min-height: 100vh; padding: 24px; }
+    .spin {
+      width: 42px; height: 42px; margin: 0 auto 20px;
+      border: 4px solid var(--line); border-top-color: var(--blue);
+      border-radius: 50%; animation: spin .9s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    h1 { font-size: 1.15rem; font-weight: 600; color: #2b2f33; margin: 0 0 0.4rem; }
-    p  { font-size: 0.92rem; color: #6b7178; margin: 0; line-height: 1.45; }
-    .ref {
-      margin-top: 1.25rem;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.82rem;
-      color: #98a2ad;
-      letter-spacing: 0.05em;
-    }
-    .error {
-      margin-top: 1rem;
-      font-size: 0.85rem;
-      color: #a40d1a;
-      display: none;
-    }
+    @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
   </style>
 </head>
 <body>
-  <div class="card-wrap">
-    <div class="spinner" aria-hidden="true"></div>
-    <h1>Creating your tax invoice…</h1>
-    <p>This usually takes 10–30 seconds. Please don't close this page.</p>
-    <div class="ref">Receipt #{{ order_number }}</div>
-    <div class="error" id="error"></div>
+{% include "backoffice/_icons.html" %}
+
+<div class="panel" style="width:100%;max-width:420px">
+  <div style="padding:34px 26px;text-align:center">
+    <div class="spin" aria-hidden="true"></div>
+    <div style="font-size:17px;font-weight:660;letter-spacing:-.02em">Issuing the tax invoice…</div>
+    <div style="font-size:13.5px;color:var(--mut);line-height:1.6;margin-top:8px">
+      Peak is creating the document. This usually takes 10–30 seconds —
+      please don't close this page.
+    </div>
+    <div class="lbl" style="margin-top:20px">Bill #{{ order_number }}</div>
   </div>
+  <div class="banner b-red" id="error" style="display:none;margin:0 16px 16px">
+    <svg><use href="#i-alert"/></svg><span id="errorText"></span>
+  </div>
+</div>
 
-  <script>
-    // Poll the process endpoint until Peak returns a documentLink (200)
-    // or a hard error (500/400).  Each successful "still processing" tick
-    // returns 202 and we retry; we cap the total wait at ~3 minutes so a
-    // broken Peak side doesn't keep the customer spinning forever.
-    var PROCESS_URL = "{{ process_url|escapejs }}";
-    var MAX_ATTEMPTS = 18;   // 18 × 10s = 3 minutes total
-    var POLL_INTERVAL_MS = 10000;
-    var attempt = 0;
-    var errorEl = document.getElementById("error");
+<script>
+  // Poll the process endpoint until Peak returns a documentLink (200)
+  // or a hard error (500/400).  Each successful "still processing" tick
+  // returns 202 and we retry; we cap the total wait at ~3 minutes so a
+  // broken Peak side doesn't keep the customer spinning forever.
+  var PROCESS_URL = "{{ process_url|escapejs }}";
+  var MAX_ATTEMPTS = 18;   // 18 × 10s = 3 minutes total
+  var POLL_INTERVAL_MS = 10000;
+  var attempt = 0;
+  var errorEl = document.getElementById("error");
+  var errorText = document.getElementById("errorText");
 
-    function showError(msg) {
-      errorEl.textContent = msg;
-      errorEl.style.display = "block";
-    }
+  function showError(msg) {
+    errorText.textContent = msg;
+    errorEl.style.display = "flex";
+  }
 
-    function poll() {
-      attempt += 1;
-      fetch(PROCESS_URL, { method: "GET", credentials: "same-origin" })
-        .then(function (resp) {
-          if (resp.status === 200) {
-            return resp.json().then(function (data) {
-              if (data.url) {
-                window.location.replace(data.url);
-              } else {
-                showError("Tax invoice ready but no URL returned. Please refresh the page.");
-              }
-            });
-          }
-          if (resp.status === 202) {
-            // Still processing — schedule another poll.
-            if (attempt < MAX_ATTEMPTS) {
-              setTimeout(poll, POLL_INTERVAL_MS);
+  function poll() {
+    attempt += 1;
+    fetch(PROCESS_URL, { method: "GET", credentials: "same-origin" })
+      .then(function (resp) {
+        if (resp.status === 200) {
+          return resp.json().then(function (data) {
+            if (data.url) {
+              window.location.replace(data.url);
             } else {
-              showError("Still processing after 3 minutes. Please refresh the page in a moment.");
+              showError("Tax invoice ready but no URL returned. Please refresh the page.");
             }
-            return;
-          }
-          // 4xx / 5xx — show the error message from the body if any.
-          return resp.json().catch(function () { return {}; }).then(function (data) {
-            showError(data.error || "Could not create tax invoice. Please contact the shop.");
           });
-        })
-        .catch(function () {
+        }
+        if (resp.status === 202) {
+          // Still processing — schedule another poll.
           if (attempt < MAX_ATTEMPTS) {
             setTimeout(poll, POLL_INTERVAL_MS);
           } else {
-            showError("Network error. Please refresh the page.");
+            showError("Still processing after 3 minutes. Please refresh the page in a moment.");
           }
+          return;
+        }
+        // 4xx / 5xx — show the error message from the body if any.
+        return resp.json().catch(function () { return {}; }).then(function (data) {
+          showError(data.error || "Could not create tax invoice. Please contact the shop.");
         });
-    }
+      })
+      .catch(function () {
+        if (attempt < MAX_ATTEMPTS) {
+          setTimeout(poll, POLL_INTERVAL_MS);
+        } else {
+          showError("Network error. Please refresh the page.");
+        }
+      });
+  }
 
-    // First poll fires immediately so the request can start the long-
-    // running Peak call right away; subsequent polls back off to 10s.
-    poll();
-  </script>
+  // First poll fires immediately so the request can start the long-
+  // running Peak call right away; subsequent polls back off to 10s.
+  poll();
+</script>
 </body>
 </html>

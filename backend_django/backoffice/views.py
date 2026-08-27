@@ -220,23 +220,102 @@ def customer_receipt(request, order_number: str):
     return HttpResponseRedirect(f"{FEEDBACK_FORM_URL}?oid={order_number}")
 
 
+def _public_chrome(request) -> dict:
+    """The page chrome the rail's context processor only fills in for a
+    signed-in user.  A page reachable without a login has to name the shop
+    itself, or a customer reads the product's name where the shop's belongs."""
+    if request.user.is_authenticated:
+        return {}
+    settings_row = Settings.objects.first()
+    return {"shop_name": settings_row.shop_name if settings_row else "Brave POS"}
+
+
+def _tax_invoice_prefill(order) -> dict:
+    """Values to open the Peak tax-invoice form with, in the form's own schema.
+
+    Three sources, most-recently-stated first:
+
+      * ``tax_invoice_data`` — this exact form, submitted before.  A bill only
+        keeps it when Peak never returned a document (it errored, or the page
+        was closed while it was queueing), so re-opening the form should show
+        what was typed rather than an empty one.
+      * ``pos_tax_invoice`` — the slip the till already issued for this bill.
+        Same buyer, different schema: one ``address`` block, which is this
+        form's ``registered_address``.
+      * the ``Customer`` on the bill, whose tax identity is captured once and
+        reused on every later invoice for that buyer.
+
+    Only ever handed to a signed-in admin.  Bill numbers are sequential, so an
+    anonymous visitor who can guess one must not be shown the buyer's tax ID
+    and registered address on it.
+    """
+    if order is None:
+        return {}
+
+    submitted = order.tax_invoice_data or {}
+    if submitted:
+        return submitted
+
+    issued = order.pos_tax_invoice or {}
+    customer = order.customer
+    name = issued.get("name") or ""
+    if not name and customer is not None:
+        name = " ".join(p for p in (customer.name, customer.last_name) if p)
+    return {
+        "name": name,
+        "tax_id": issued.get("tax_id") or (customer.tax_id if customer else ""),
+        "registered_address": issued.get("address") or (customer.address if customer else ""),
+        "registered_country": "Thailand",
+    }
+
+
 def create_tax_invoice(request, order_number: str):
     """Tax-invoice creation form for a given order.  The Save button
     POSTs the form to :func:`save_tax_invoice` which then hands off to
-    the Peak flow.  Linked from the customer receipt landing page's
-    'Issue Full Tax Invoice' button.
+    the Peak flow.  Reached from Transactions, or by anyone sent the link.
 
     If this order already has a Peak tax invoice (e.g. the customer scans
     the QR a second time and presses the button again), skip the form and
-    redirect straight to the existing document — one order, one receipt."""
-    order = Order.objects.filter(order_number=order_number).first()
+    redirect straight to the existing document — one order, one receipt.
+
+    Two audiences, one form, so the shell is chosen here rather than baked in.
+    An admin arrives from Transactions and stays in the backoffice: the rail,
+    the bill they clicked, and whatever the bill already knows about the buyer.
+    A buyer holding the link has no login, so they get the same design system
+    with none of the chrome — and a blank form over an unnamed bill, because
+    the particulars on a guessable bill number are not theirs to read.
+    """
+    order = (
+        Order.objects.select_related("branch", "customer")
+        .filter(order_number=order_number)
+        .first()
+    )
     if order is not None:
         link = _document_link_from_response(order.peak_response)
         if link:
             return HttpResponseRedirect(link)
-    return render(request, "backoffice/create_tax_invoice.html", {
+
+    signed_in = request.user.is_authenticated
+    context = {
+        "base_template": "backoffice/base.html" if signed_in else "backoffice/base_plain.html",
+        # Nothing on this page is scoped to a branch or a date window, and the
+        # rail should still show where you came from.
+        "active": "transactions",
+        "hide_branch": True,
+        "hide_dates": True,
         "order_number": order_number,
-    })
+        "prefill": _tax_invoice_prefill(order) if signed_in else {},
+    }
+    if signed_in and order is not None:
+        tax_percent, tax_mode, service_charge_pct = _tax_settings()
+        context["order"] = order
+        context["tax_percent"] = tax_percent
+        context["row"] = _build_transaction_row(
+            order, tax_percent, tax_mode, service_charge_pct
+        )
+    context.update(_public_chrome(request))
+
+    return render(request, "backoffice/create_tax_invoice.html", context)
 
 
 # ─── Peak full-tax-invoice flow ─────────────────────────────────────────────
@@ -304,6 +383,7 @@ def tax_invoice_progress(request, order_number: str):
     return render(request, "backoffice/tax_invoice_progress.html", {
         "order_number": order_number,
         "process_url": process_url,
+        **_public_chrome(request),
     })
 
 

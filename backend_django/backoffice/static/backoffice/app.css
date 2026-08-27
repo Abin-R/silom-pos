@@ -903,6 +903,11 @@ body {
   box-shadow: 0 0 0 3px var(--blue-soft);
 }
 .field input[type="number"], .field input[type="date"] { font-family: var(--mono); }
+/* A reference the buyer reads back digit by digit — a tax ID, a postcode —
+   wants the same tabular figures the money columns use. */
+.field input.money { font-family: var(--mono); }
+/* A label's second language, on the same line in a lower voice. */
+.field > label .sm, .flabel .sm { font-weight: 500; color: var(--mut); }
 .check { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--txt2); }
 .check input { width: 17px; height: 17px; accent-color: var(--blue); }
 
@@ -911,6 +916,10 @@ body {
   padding: 16px 20px;
   border-top: 1px solid var(--line2);
   background: var(--sunk);
+  /* Below 720px every .btn goes full-width, so a row of two of them no longer
+     fits on one line. Without this they overflow a panel that clips its
+     overflow, and Cancel is simply not on the page. */
+  flex-wrap: wrap;
 }
 
 .msg { display: flex; flex-direction: column; gap: 10px; }
