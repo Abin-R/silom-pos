@@ -347,7 +347,6 @@ export default function Admin() {
             isWide={isWide}
             reprint={reprintReceipt}
             staff={staff || "Admin"}
-            branchId={activeBranchId}
           />
         )}
         {section === "inventory" && <Inventory isWide={isWide} />}
@@ -919,8 +918,8 @@ function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
 // but a busy day is still a handful of pages rather than dozens.
 const PAGE_SIZE = 50;
 
-function Transactions({ isWide, reprint, staff, branchId }: {
-  isWide: boolean; reprint: ReprintFn; staff: string; branchId: string;
+function Transactions({ isWide, reprint, staff }: {
+  isWide: boolean; reprint: ReprintFn; staff: string;
 }) {
   useT(); // re-render this screen when the language changes
   const [orders, setOrders] = useState<Order[]>([]);
@@ -947,30 +946,6 @@ function Transactions({ isWide, reprint, staff, branchId }: {
   // each receipt line — matching the reference Sale Transactions screen.
   const [productMap, setProductMap] = useState<Record<string, ProductRef>>({});
   const [taxPercent, setTaxPercent] = useState(7);
-  // A full tax invoice must carry the Revenue Department's approved machine
-  // number for the till that issues it, and that number is per branch.  A
-  // branch with no POS ID cannot issue one at all, so the document is left off
-  // the Reprint menu there rather than printing an invalid invoice.
-  const [branchPosId, setBranchPosId] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    if (!branchId) { setBranchPosId(null); return; }
-    apiFetch(`${API}/branches`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list) => {
-        if (cancelled) return;
-        const b = (Array.isArray(list) ? list : []).find(
-          (x: any) => String(x?.id) === String(branchId),
-        );
-        setBranchPosId(((b?.pos_id ?? "") as string).trim());
-      })
-      // Unreachable server: leave it null so the menu keeps the option rather
-      // than hiding a document the branch may well be entitled to print.
-      .catch(() => { if (!cancelled) setBranchPosId(null); });
-    return () => { cancelled = true; };
-  }, [branchId]);
-  const canIssueTaxInvoice = branchPosId === null || branchPosId.length > 0;
-
   // Merge a server-updated order (after a void, or after a full tax invoice is
   // issued) back into the list and the open detail pane so the new state shows
   // without a reload.
@@ -1137,7 +1112,6 @@ function Transactions({ isWide, reprint, staff, branchId }: {
           onOrderUpdated={handleOrderUpdated}
           productMap={productMap}
           taxPercent={taxPercent}
-          canIssueTaxInvoice={canIssueTaxInvoice}
         />
       </View>
     );
@@ -1365,7 +1339,6 @@ function Transactions({ isWide, reprint, staff, branchId }: {
                 onOrderUpdated={handleOrderUpdated}
                 productMap={productMap}
                 taxPercent={taxPercent}
-                canIssueTaxInvoice={canIssueTaxInvoice}
               />
             )}
           </View>
@@ -1416,7 +1389,6 @@ function TransactionDetail({
   onOrderUpdated,
   productMap,
   taxPercent,
-  canIssueTaxInvoice,
 }: {
   order: Order;
   reprint: ReprintFn;
@@ -1424,8 +1396,6 @@ function TransactionDetail({
   onOrderUpdated: (updated: Order) => void;
   productMap: Record<string, ProductRef>;
   taxPercent: number;
-  // False when this branch has no POS ID — see Transactions.
-  canIssueTaxInvoice: boolean;
 }) {
   useT(); // re-render this screen when the language changes
   const [reprintBusy, setReprintBusy] = useState(false);
@@ -1662,7 +1632,6 @@ function TransactionDetail({
         onClose={() => setMenuOpen(false)}
         onAbbreviated={() => { setMenuOpen(false); printAbbreviated(); }}
         onFullTaxInvoice={() => { setMenuOpen(false); setTaxFlowOpen(true); }}
-        showFullTaxInvoice={canIssueTaxInvoice}
       />
 
       {taxFlowOpen && (
@@ -1692,16 +1661,11 @@ function ReprintMenu({
   onClose,
   onAbbreviated,
   onFullTaxInvoice,
-  showFullTaxInvoice,
 }: {
   visible: boolean;
   onClose: () => void;
   onAbbreviated: () => void;
   onFullTaxInvoice: () => void;
-  // A branch with no POS ID has no approved machine number to put on a full
-  // tax invoice, so the row is left out entirely there — offering a document
-  // the branch may not legally issue is worse than a shorter menu.
-  showFullTaxInvoice: boolean;
 }) {
   useT(); // re-render this screen when the language changes
   return (
@@ -1716,15 +1680,16 @@ function ReprintMenu({
           >
             <Text style={styles.rpItemText}>{tr("admin.abbreviated_tax_invoice")}</Text>
           </TouchableOpacity>
-          {showFullTaxInvoice && (
-            <TouchableOpacity
-              style={styles.rpItem}
-              onPress={onFullTaxInvoice}
-              testID="reprint-full-tax-invoice"
-            >
-              <Text style={styles.rpItemText}>{tr("admin.receipt_tax_invoice")}</Text>
-            </TouchableOpacity>
-          )}
+          {/* Always offered. A branch still waiting on its Revenue Department
+              machine number prints the invoice with the POS ID line left
+              blank, rather than being unable to issue the document at all. */}
+          <TouchableOpacity
+            style={styles.rpItem}
+            onPress={onFullTaxInvoice}
+            testID="reprint-full-tax-invoice"
+          >
+            <Text style={styles.rpItemText}>{tr("admin.receipt_tax_invoice")}</Text>
+          </TouchableOpacity>
           {REPRINT_UNBUILT.map((opt) => (
             <View key={opt.key} style={[styles.rpItem, styles.rpItemDisabled]}>
               <Text style={[styles.rpItemText, styles.rpItemTextDisabled]}>{tr(opt.labelKey)}</Text>

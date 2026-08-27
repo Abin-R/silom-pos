@@ -219,12 +219,11 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       ))}
       <Text style={s.companyCenter}>{sh.phone}</Text>
       <Text style={s.companyCenter}>{lbl("เลขประจำตัวผู้เสียภาษี", "Tax ID")}: {sh.tax_id}</Text>
-      {/* Only rendered when this branch actually has an RD-issued machine
-          number. A receipt asserting an empty — or worse, another branch's —
-          POS ID is worse than one that omits the line. */}
-      {!!sh.pos_id && (
-        <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text>
-      )}
+      {/* The label always prints, so the document keeps the shape the Revenue
+          Department expects. The value is this branch's own machine number, or
+          blank while the branch is still waiting for one to be issued — never
+          another branch's number standing in for it. */}
+      <Text style={s.companyCenter}>POS ID: {sh.pos_id}</Text>
 
       {isFull ? (
         <>
