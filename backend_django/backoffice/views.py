@@ -27,6 +27,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bravepos.models import (
+    AppRelease,
     AuditLog,
     Branch,
     Category,
@@ -42,7 +43,7 @@ from bravepos.models import (
     StockMovement,
     Unit,
 )
-from bravepos import catalog, images
+from bravepos import appdist, catalog, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
@@ -4690,3 +4691,188 @@ def audit_log_export(request):
         actor=request.user if request.user.is_authenticated else None,
     )
     return response
+
+
+# ─── App releases (the APK staff install on a till) ─────────────────────────
+# Listing is visible to any signed-in account — knowing which build is live is
+# ordinary operational information. Publishing one is `admin_required`: the
+# page it feeds is public, and what lands there is what a shop installs.
+def _app_release_form_errors(post) -> dict:
+    errors = {}
+
+    if not appdist.parse_drive_file_id(post.get("drive_link", "")):
+        errors["drive_link"] = (
+            "Paste the Google Drive share link for the APK (or just its file ID)."
+        )
+
+    if not (post.get("version") or "").strip():
+        errors["version"] = "Version is required — the number in app.json, e.g. 1.4.1."
+
+    code = (post.get("version_code") or "").strip()
+    if code and not code.isdigit():
+        errors["version_code"] = "Build number must be a whole number (Android's versionCode)."
+
+    size = (post.get("size_mb") or "").strip()
+    if size:
+        try:
+            if float(size) < 0:
+                raise ValueError
+        except ValueError:
+            errors["size_mb"] = "Size must be a number of megabytes, e.g. 162.8."
+
+    return errors
+
+
+def _app_release_form_values(release=None, post=None) -> dict:
+    """What the form fields should contain.
+
+    Two sources: a saved row (opening the form) or the raw POST (re-rendering
+    a rejected one). The rejected case has to come back as typed — the values
+    that failed are exactly the ones that will not coerce, so there is nothing
+    to read them back off a model instance.
+    """
+    if post is not None:
+        return {
+            "drive_link": (post.get("drive_link") or "").strip(),
+            "version": (post.get("version") or "").strip(),
+            "version_code": (post.get("version_code") or "").strip(),
+            "build_id": (post.get("build_id") or "").strip(),
+            "size_mb": (post.get("size_mb") or "").strip(),
+            "notes": (post.get("notes") or "").strip(),
+            "published": post.get("published") == "on",
+            "published_on": (post.get("published_on") or "").strip(),
+        }
+
+    if release is None or release.pk is None:
+        return {
+            "drive_link": "", "version": "", "version_code": "", "build_id": "",
+            "size_mb": "", "notes": "", "published": True,
+            "published_on": timezone.localdate().isoformat(),
+        }
+
+    return {
+        "drive_link": appdist.preview_url(release),
+        "version": release.version,
+        "version_code": release.version_code or "",
+        "build_id": release.build_id,
+        "size_mb": release.size_mb or "",
+        "notes": release.notes,
+        "published": release.published,
+        "published_on": timezone.localtime(release.published_at).date().isoformat(),
+    }
+
+
+def _apply_app_release_form(release, post):
+    release.drive_file_id = appdist.parse_drive_file_id(post.get("drive_link", ""))
+    release.version = (post.get("version") or "").strip()
+    release.version_code = int((post.get("version_code") or "0").strip() or 0)
+    release.build_id = appdist.parse_build_id(post.get("build_id", ""))
+    release.notes = (post.get("notes") or "").strip()
+    release.published = post.get("published") == "on"
+
+    size = (post.get("size_mb") or "").strip()
+    release.size_bytes = int(round(float(size) * 1024 * 1024)) if size else 0
+
+    published_on = (post.get("published_on") or "").strip()
+    if published_on:
+        try:
+            day = date.fromisoformat(published_on)
+        except ValueError:
+            pass
+        else:
+            # Keep the time already on the row (or now, for a new one) so two
+            # builds dated the same day still sort in the order they landed.
+            existing = release.published_at or timezone.now()
+            release.published_at = timezone.make_aware(
+                datetime.combine(day, timezone.localtime(existing).time()),
+                timezone.get_current_timezone(),
+            )
+    return release
+
+
+def _app_release_context(request, release, mode, form, errors=None):
+    return {
+        "active": "app_releases",
+        "release": release,
+        "form": form,
+        "mode": mode,
+        "errors": errors or {},
+        "hide_dates": True,
+        "install_url": appdist.install_page_url(),
+        **_branch_topbar_context(request),
+    }
+
+
+@login_required
+def app_release_list(request):
+    """Every build ever listed, newest first. The topmost published one is what
+    /app/ offers — see ``AppRelease.current()``."""
+    releases = list(AppRelease.objects.all())
+    current = AppRelease.current()
+    context = {
+        "active": "app_releases",
+        "releases": releases,
+        "current_id": current.id if current else None,
+        "install_url": appdist.install_page_url(),
+        "hide_dates": True,
+        **_branch_topbar_context(request),
+    }
+    return render(request, "backoffice/app_release_list.html", context)
+
+
+@admin_required
+def app_release_new(request):
+    if request.method == "POST":
+        errors = _app_release_form_errors(request.POST)
+        if errors:
+            return render(request, "backoffice/app_release_form.html",
+                          _app_release_context(
+                              request, None, "new",
+                              _app_release_form_values(post=request.POST), errors))
+
+        release = _apply_app_release_form(AppRelease(), request.POST)
+        release.save()
+        messages.success(request, f"Version {release.version} is on the install page.")
+        return redirect(reverse("backoffice:app_release_list"))
+
+    return render(request, "backoffice/app_release_form.html",
+                  _app_release_context(request, None, "new",
+                                       _app_release_form_values()))
+
+
+@admin_required
+def app_release_detail(request, release_id):
+    release = get_object_or_404(AppRelease, id=release_id)
+
+    if request.method == "POST":
+        errors = _app_release_form_errors(request.POST)
+        if errors:
+            return render(request, "backoffice/app_release_form.html",
+                          _app_release_context(
+                              request, release, "edit",
+                              _app_release_form_values(post=request.POST), errors))
+
+        _apply_app_release_form(release, request.POST)
+        release.save()
+        messages.success(request, f"Version {release.version} updated.")
+        return redirect(reverse("backoffice:app_release_list"))
+
+    return render(request, "backoffice/app_release_form.html",
+                  _app_release_context(request, release, "edit",
+                                       _app_release_form_values(release)))
+
+
+@admin_required
+def app_release_delete(request, release_id):
+    """Remove a build from the list entirely.
+
+    Un-ticking *Listed* is the usual way to withdraw one — it keeps the row, so
+    the audit log still explains what was live and when. Deleting is for a row
+    that should never have existed, e.g. one pointed at the wrong Drive file.
+    """
+    release = get_object_or_404(AppRelease, id=release_id)
+    if request.method == "POST":
+        version = release.version
+        release.delete()
+        messages.success(request, f"Version {version} removed from the list.")
+    return redirect(reverse("backoffice:app_release_list"))

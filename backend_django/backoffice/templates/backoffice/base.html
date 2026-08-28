@@ -73,6 +73,8 @@
         <svg><use href="#i-users"/></svg>Staff &amp; shifts</a>
       <a class="nv {% if active == 'customers' %}on{% endif %}" href="{% url 'backoffice:customer_list' %}">
         <svg><use href="#i-heart"/></svg>Customers</a>
+      <a class="nv {% if active == 'app_releases' %}on{% endif %}" href="{% url 'backoffice:app_release_list' %}">
+        <svg><use href="#i-dl"/></svg>App releases</a>
 
       {% comment %}
         Admin-only. The views enforce this too — hiding the links is just so

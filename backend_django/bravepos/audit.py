@@ -41,7 +41,7 @@ AUDITED = {
     "Product", "Category", "Unit", "DrawerCategory", "StockOutReason",
     "StockMovement", "StockDocument", "StockDocumentItem",
     "Shift", "ShiftMovement",
-    "Customer", "PeakProductMap",
+    "Customer", "PeakProductMap", "AppRelease",
     "Order", "OrderItem", "SelfOrder",
 }
 

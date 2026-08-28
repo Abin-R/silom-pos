@@ -1109,3 +1109,111 @@ class AuditLog(models.Model):
     @property
     def change_count(self) -> int:
         return len(self.changes or {})
+
+
+# ─── App distribution (the APK staff install on a till) ─────────────────────
+class AppRelease(models.Model):
+    """One published Android build, listed on the public ``/app/`` page.
+
+    The APK itself is NOT stored here.  A build is ~160 MB, and this box is
+    the same one serving the tills: keeping the binaries would mean a growing
+    disk and a pruning job, and streaming one out through gunicorn would hold
+    one of three sync workers for the whole download — long enough on a weak
+    connection to trip the 120 s worker timeout and kill the transfer
+    half-finished.  So Google Drive keeps the bytes and this table keeps the
+    pointer.  ``/app/dl/<token>`` is a redirect; the file travels Google →
+    tablet and never touches us.
+
+    That trade has one requirement: the Drive file must be shared *anyone with
+    the link*.  The device doing the installing is normally a brand-new tablet
+    with no Google account signed in, so a private file cannot be fetched at
+    all — not by the tablet, and not by us either without a service account.
+
+    There is no ``is_current`` flag.  "Current" is derived — the most recently
+    published row (see ``current()``) — because a flag on every row is a thing
+    that can end up set on two of them, or on none.  Rolling back is un-ticking
+    ``published`` on the bad build.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # ``version`` is what a human reads (expo's ``version``, e.g. "1.4.1").
+    version = models.CharField(max_length=32)
+
+    # ``version_code`` is what Android enforces — it refuses to install over a
+    # build with a higher one — so it is shown rather than left to be
+    # discovered as a failed install.  Optional, and deliberately NOT unique:
+    # `preview` in eas.json has no `autoIncrement`, so every build to date is
+    # code 1.  Turning that on is what would make this field meaningful; until
+    # then it repeats, and 0 means "not recorded".
+    version_code = models.PositiveIntegerField(default=0, db_index=True)
+
+    # The EAS build this came from.  With four builds all calling themselves
+    # 1.4.1 at code 1, this is currently the only thing that tells two of them
+    # apart — and it is already in the artifact's filename
+    # (``application-<build_id>.apk``), so it costs nothing to carry.
+    build_id = models.CharField(max_length=64, blank=True, default="")
+
+    drive_file_id = models.CharField(max_length=128)
+    size_bytes = models.BigIntegerField(default=0)
+    notes = models.TextField(blank=True, default="")
+
+    # Unlisting a build hides it from /app/ and, if it was the newest, promotes
+    # the one below it back to current.
+    published = models.BooleanField(default=True)
+    published_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    # The only secret in the download URL.  Not the row's UUID: that appears in
+    # backoffice URLs, and a link handed to a device should stay revocable by
+    # re-rolling this alone.
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Publish order, not version order: it is what the operator actually
+        # controls, and it stays correct whether or not version codes ever
+        # start incrementing.
+        ordering = ["-published_at", "-version_code"]
+
+    def __str__(self) -> str:
+        return f"Brave POS {self.version} ({self.label})"
+
+    @staticmethod
+    def new_token() -> str:
+        return secrets.token_urlsafe(24)
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = self.new_token()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def current(cls):
+        """The build /app/ offers by default — the most recently published."""
+        return cls.objects.filter(published=True).first()
+
+    @property
+    def label(self) -> str:
+        """Short tag distinguishing this build from another of the same version."""
+        if self.version_code:
+            return f"build {self.version_code}"
+        if self.build_id:
+            return self.build_id[:8]
+        return ""
+
+    @property
+    def filename(self) -> str:
+        """What the file should be called once it lands on the tablet.
+
+        Drive serves whatever the file is named there, so this is what the
+        upload should be named too — the name carries the version, which is
+        the whole reason there is no rename-the-latest-one ritual.
+        """
+        suffix = self.version_code or (self.build_id[:8] if self.build_id else "")
+        return f"bravepos-{self.version}-{suffix}.apk" if suffix else f"bravepos-{self.version}.apk"
+
+    @property
+    def size_mb(self) -> float:
+        return round(self.size_bytes / (1024 * 1024), 1) if self.size_bytes else 0.0

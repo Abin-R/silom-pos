@@ -10,7 +10,7 @@ Django's auth login."""
 from django.urls import include, path
 
 from backoffice import views as backoffice_views
-from bravepos import public_views
+from bravepos import appdist, public_views
 
 urlpatterns = [
     path('api/', include('bravepos.urls')),
@@ -29,6 +29,13 @@ urlpatterns = [
     path('order/s/<str:token>/', public_views.order_pay_page, name='selforder_pay_page'),
     path('order/s/<str:token>/pay/', public_views.order_pay, name='selforder_pay'),
     path('order/s/<str:token>/status/', public_views.order_status, name='selforder_status'),
+
+    # Android app distribution.  Root-level and unauthenticated for the same
+    # reason as /order/ above: it is opened on a tablet being set up, which
+    # has no backoffice login.  See bravepos/appdist.py for the trust model.
+    path('app/', appdist.app_install, name='app_install'),
+    path('app/qrcode.js', appdist.app_qr_js, name='app_qr_js'),
+    path('app/dl/<str:token>/', appdist.app_download, name='app_download'),
 
     path('receipt/<str:order_number>/', backoffice_views.customer_receipt, name='customer_receipt'),
     path('receipt/<str:order_number>/tax-invoice/', backoffice_views.create_tax_invoice, name='create_tax_invoice'),

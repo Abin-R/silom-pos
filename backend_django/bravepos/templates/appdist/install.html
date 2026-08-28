@@ -1,0 +1,253 @@
+{% comment %}
+  PUBLIC install page for the Android till app.  Opened on the tablet being
+  set up, so: mobile-first, English (staff-facing, unlike the customer
+  self-order pages), and no shop data on it — see bravepos/appdist.py for the
+  trust model.
+
+  Standalone rather than extending selforder/base.html: it shares that page's
+  palette but none of its chrome, and it must not inherit a cart shell.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#d61222">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Install Brave POS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --brand-red: #d61222;
+      --brand-red-dark: #a40d1a;
+      --ink: #1c1c1e;
+      --ink-2: #6b6b70;
+      --ink-3: #9a9aa0;
+      --line: #ececef;
+      --bg: #f4f4f6;
+      --card: #ffffff;
+      --shadow: 0 2px 10px rgba(0,0,0,.05);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--ink);
+      font-family: "Sarabun", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px; line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+    }
+    .app { max-width: 520px; margin: 0 auto; min-height: 100vh; }
+    button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
+    a { color: inherit; text-decoration: none; }
+
+    .appbar {
+      background: var(--brand-red); color: #fff;
+      padding: calc(env(safe-area-inset-top, 0px) + 18px) 18px 18px;
+    }
+    .appbar .title { font-weight: 800; font-size: 19px; letter-spacing: -.01em; }
+    .appbar .sub { font-size: 12.5px; opacity: .85; font-weight: 500; margin-top: 2px; }
+
+    .wrap { padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 32px); }
+    .card {
+      background: var(--card); border-radius: 16px; box-shadow: var(--shadow);
+      padding: 18px; margin-bottom: 14px;
+    }
+
+    .ver { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+    .meta { color: var(--ink-2); font-size: 13.5px; margin-top: 4px; }
+    .notes {
+      margin: 14px 0 0; padding: 12px 14px; background: var(--bg);
+      border-radius: 11px; font-size: 14px; color: var(--ink-2);
+      white-space: pre-wrap;
+    }
+
+    .btn-primary {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; background: var(--brand-red); color: #fff;
+      font-weight: 700; font-size: 16px; padding: 15px; border-radius: 14px;
+      margin-top: 16px;
+      transition: transform .06s ease, background .15s ease;
+    }
+    .btn-primary:active { transform: scale(.985); background: var(--brand-red-dark); }
+    .btn-ghost {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; font-weight: 600; font-size: 15px; padding: 13px;
+      border-radius: 13px; margin-top: 9px;
+      border: 1.5px solid var(--line); color: var(--ink);
+    }
+    .btn-ghost:active { background: var(--bg); }
+
+    .qr-panel { margin-top: 14px; padding-top: 16px; border-top: 1px solid var(--line); text-align: center; }
+    .qr-panel[hidden] { display: none; }
+    .qr-box {
+      width: 232px; height: 232px; margin: 0 auto; padding: 12px;
+      background: #fff; border: 1px solid var(--line); border-radius: 14px;
+    }
+    .qr-box svg { display: block; width: 100%; height: 100%; }
+    .qr-url {
+      margin-top: 11px; font-size: 12.5px; color: var(--ink-2);
+      word-break: break-all; font-weight: 500;
+    }
+    .qr-hint { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-3); }
+
+    .steps { margin: 0; padding: 0 0 0 20px; color: var(--ink-2); font-size: 14px; }
+    .steps li { margin-bottom: 7px; }
+    .steps li:last-child { margin-bottom: 0; }
+
+    .h { font-size: 12px; font-weight: 700; letter-spacing: .06em;
+         text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px 2px; }
+
+    /* Older builds, collapsed. The current one is what almost every visit is
+       for, so the rest stay one tap away rather than padding the page out. */
+    .vers { margin-top: 9px; border: 1.5px solid var(--line); border-radius: 13px; }
+    .vers > summary {
+      display: flex; align-items: center; gap: 8px;
+      padding: 13px 15px; font-weight: 600; font-size: 15px;
+      cursor: pointer; list-style: none; border-radius: 11px;
+    }
+    .vers > summary::-webkit-details-marker { display: none; }
+    .vers > summary:active { background: var(--bg); }
+    .vers .count {
+      background: var(--bg); color: var(--ink-2); font-size: 12.5px;
+      font-weight: 700; padding: 1px 8px; border-radius: 999px;
+    }
+    .vers .caret {
+      margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--ink-3);
+      border-bottom: 2px solid var(--ink-3); transform: rotate(45deg) translate(-2px, -2px);
+      transition: transform .15s ease;
+    }
+    .vers[open] .caret { transform: rotate(-135deg) translate(-3px, -3px); }
+    .vers-list { padding: 0 15px 4px; }
+
+    .vrow {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 13px 0; border-top: 1px solid var(--line);
+    }
+    .vrow .v { font-weight: 650; }
+    .vrow .m { color: var(--ink-3); font-size: 12.5px; margin-top: 1px; }
+    .vrow .get { color: var(--brand-red); font-weight: 700; font-size: 14px; white-space: nowrap; }
+
+    .fallback { margin-top: 12px; font-size: 12.5px; color: var(--ink-3); text-align: center; }
+    .fallback a { color: var(--ink-2); text-decoration: underline; }
+    .empty { text-align: center; color: var(--ink-2); padding: 26px 8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="appbar">
+      <div class="title">Brave POS</div>
+      <div class="sub">Android app · install on a till</div>
+    </div>
+
+    <div class="wrap">
+      {% if current %}
+        <div class="card">
+          <div class="ver">{{ current.version }}</div>
+          <div class="meta">
+            {% if current.label %}{{ current.label|capfirst }} · {% endif %}
+            {% if current.size_mb %}{{ current.size_mb }} MB · {% endif %}
+            {{ current.published_at|date:"j M Y" }}
+          </div>
+
+          {% if current.notes %}<div class="notes">{{ current.notes }}</div>{% endif %}
+
+          <a class="btn-primary" href="{% url 'app_download' token=current.token %}">
+            Download APK</a>
+          <button class="btn-ghost" type="button" id="qr-toggle"
+                  aria-expanded="false" aria-controls="qr-panel">Show QR code</button>
+
+          <div class="qr-panel" id="qr-panel" hidden>
+            <div class="qr-box" id="qr-box"></div>
+            <div class="qr-url">{{ page_url }}</div>
+            <p class="qr-hint">Scan this on the tablet you want to install on.</p>
+          </div>
+
+          {% if older %}
+            <details class="vers">
+              <summary>
+                <span>Previous versions</span>
+                <span class="count">{{ older|length }}</span>
+                <span class="caret"></span>
+              </summary>
+              <div class="vers-list">
+                {% for release in older %}
+                  <a class="vrow" href="{% url 'app_download' token=release.token %}">
+                    <span>
+                      <span class="v">{{ release.version }}</span>
+                      <div class="m">
+                        {% if release.label %}{{ release.label|capfirst }} · {% endif %}
+                        {% if release.size_mb %}{{ release.size_mb }} MB · {% endif %}
+                        {{ release.published_at|date:"j M Y" }}
+                      </div>
+                    </span>
+                    <span class="get">Download</span>
+                  </a>
+                {% endfor %}
+              </div>
+            </details>
+          {% endif %}
+
+          <div class="fallback">
+            Download not starting?
+            <a href="{{ preview_url }}" rel="noreferrer noopener" target="_blank">Open in Google Drive</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="h">Installing</p>
+          <ol class="steps">
+            <li>Tap <b>Download APK</b> and wait for it to finish — it is
+              {% if current.size_mb %}about {{ current.size_mb }} MB{% else %}a large file{% endif %},
+              so use Wi-Fi.</li>
+            <li>Open the downloaded file. Android will ask to allow installs
+              from this app — allow it, then come back and open the file again.</li>
+            <li>Tap <b>Install</b>, then <b>Open</b>. Signing in is the same as before.</li>
+          </ol>
+        </div>
+
+      {% else %}
+        <div class="card">
+          <div class="empty">
+            <b>No build published yet.</b><br>
+            Add one from the backoffice under App&nbsp;releases.
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if current %}
+    <script src="{% url 'app_qr_js' %}?v={{ qr_js_version }}"></script>
+    <script>
+      (function () {
+        var toggle = document.getElementById('qr-toggle');
+        var panel  = document.getElementById('qr-panel');
+        var box    = document.getElementById('qr-box');
+        var drawn  = false;
+
+        toggle.addEventListener('click', function () {
+          var showing = !panel.hidden;
+          panel.hidden = showing;
+          toggle.setAttribute('aria-expanded', String(!showing));
+          toggle.textContent = showing ? 'Show QR code' : 'Hide QR code';
+
+          // Drawn on first reveal rather than at load: the page is opened far
+          // more often to tap Download than to show a code to another device.
+          if (!showing && !drawn) {
+            // Error correction 'M' and an auto-chosen type — the same settings
+            // the app uses for receipt QRs.
+            var qr = qrcode(0, 'M');
+            qr.addData("{{ page_url|escapejs }}");
+            qr.make();
+            box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+            drawn = true;
+          }
+        });
+      })();
+    </script>
+  {% endif %}
+</body>
+</html>

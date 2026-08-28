@@ -1,0 +1,105 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  The builds offered at /app/. The APK itself lives in Google Drive — a row
+  here is a pointer plus the metadata a person needs to decide whether to
+  install it. See bravepos/models.py:AppRelease for why the bytes aren't here.
+{% endcomment %}
+
+{% block title %}App releases{% endblock %}
+{% block page_title %}App releases{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ releases|length }} build{{ releases|length|pluralize }} · what the tills install from</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{{ install_url }}" target="_blank" rel="noreferrer noopener">
+    <svg><use href="#i-qr"/></svg> Install page</a>
+  {% if user.role == 'admin' %}
+    <a class="btn btn-blue" href="{% url 'backoffice:app_release_new' %}">
+      <svg><use href="#i-plus"/></svg> Add release</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Version</th>
+        <th style="width:130px">Build</th>
+        <th style="width:110px">Size</th>
+        <th style="width:150px">Published</th>
+        <th style="width:130px">Status</th>
+        <th class="r" style="width:110px">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for release in releases %}
+      <tr>
+        <td>
+          {% if user.role == 'admin' %}
+            <a href="{% url 'backoffice:app_release_detail' release_id=release.id %}">
+              <b style="font-weight:620;color:var(--txt)">{{ release.version }}</b></a>
+          {% else %}
+            <b style="font-weight:620;color:var(--txt)">{{ release.version }}</b>
+          {% endif %}
+          {% if release.notes %}
+            <div style="color:var(--mut);font-size:12.5px;margin-top:2px">
+              {{ release.notes|truncatechars:90 }}</div>
+          {% endif %}
+        </td>
+        <td class="money" style="color:var(--mut)">{{ release.label|default:"—" }}</td>
+        <td class="money" style="color:var(--mut)">
+          {% if release.size_mb %}{{ release.size_mb }} MB{% else %}—{% endif %}</td>
+        <td class="money" style="color:var(--mut)">{{ release.published_at|date:"j M Y" }}</td>
+        <td>
+          {% if release.id == current_id %}<span class="tag t-ok">Current</span>
+          {% elif release.published %}<span class="tag t-info">Listed</span>
+          {% else %}<span class="tag t-out">Unlisted</span>{% endif %}
+        </td>
+        <td class="r">
+          {% if user.role == 'admin' %}
+          <span style="display:inline-flex;gap:6px">
+            <a class="ico-btn" title="Edit"
+               href="{% url 'backoffice:app_release_detail' release_id=release.id %}">
+              <svg><use href="#i-pencil"/></svg></a>
+            <form method="post" style="display:inline"
+                  action="{% url 'backoffice:app_release_delete' release_id=release.id %}"
+                  onsubmit="return confirm('Remove version {{ release.version|escapejs }} from the list? Un-tick “Listed” instead if you only want to withdraw it.');">
+              {% csrf_token %}
+              <button type="submit" class="ico-btn danger" title="Remove">
+                <svg><use href="#i-trash"/></svg></button>
+            </form>
+          </span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="empty">
+        <svg><use href="#i-dl"/></svg>
+        No builds listed yet. Upload the APK to the Bravepos APK folder in
+        Drive, share it “anyone with the link”, then add it here.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel" style="margin-top:14px">
+  <div class="panel-h">How this works</div>
+  <div style="padding:14px 16px;color:var(--mut);font-size:13.5px;line-height:1.7">
+    Staff install from <b style="color:var(--txt)">{{ install_url }}</b> — a public page
+    with a download button and a QR code, so a tablet with no login can reach it.
+    <br>
+    The APK stays in Google Drive; that page redirects to it, and the file never
+    passes through this server. Each build must be shared
+    <b style="color:var(--txt)">anyone with the link</b>, or a new tablet can’t fetch it.
+    <br>
+    The newest <b style="color:var(--txt)">Listed</b> build is the one offered by default.
+    To withdraw one, un-tick Listed — the build below it becomes current again.
+    <br>
+    Only native changes need a new APK: JS-only changes already reach the tills
+    over <code>eas update</code> on the preview channel.
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,143 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Add / edit one published build. The only unusual field is the Drive link:
+  paste whatever Drive puts in the address bar and the view pulls the file ID
+  out of it (backoffice/views.py → appdist.parse_drive_file_id).
+{% endcomment %}
+
+{% block title %}{% if mode == 'new' %}Add release{% else %}Version {{ release.version }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add release{% else %}Version {{ release.version }}{% endif %}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Listed at {{ install_url }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:app_release_list' %}">
+    <svg><use href="#i-back"/></svg> Back to releases</a>
+{% endblock %}
+
+{% block content %}
+
+{% if errors %}
+<div class="banner b-red">
+  <svg><use href="#i-alert"/></svg>
+  <span>{% for message in errors.values %}{{ message }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+</div>
+{% endif %}
+
+<form method="post" style="max-width:820px">
+  {% csrf_token %}
+
+  <div class="panel">
+    <div class="panel-h">The file</div>
+    <div class="form-grid">
+      <div class="field wide">
+        <label for="f-drive">Google Drive link</label>
+        <input id="f-drive" type="text" name="drive_link" required
+               value="{{ form.drive_link }}"
+               placeholder="https://drive.google.com/file/d/…/view">
+        {% if errors.drive_link %}
+          <span class="hint" style="color:var(--red)">{{ errors.drive_link }}</span>
+        {% else %}
+          <span class="hint">
+            Paste the share link from Drive. The file must be shared
+            <b>anyone with the link</b> — the tablet installing it has no Google
+            account signed in, so a private file can’t be downloaded at all.
+          </span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-h">Build</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-version">Version</label>
+        <input id="f-version" type="text" name="version" required
+               value="{{ form.version }}" placeholder="1.4.1">
+        {% if errors.version %}
+          <span class="hint" style="color:var(--red)">{{ errors.version }}</span>
+        {% else %}
+          <span class="hint">The <code>version</code> in frontend/app.json.</span>
+        {% endif %}
+      </div>
+      <div class="field">
+        <label for="f-build">EAS build</label>
+        <input id="f-build" type="text" name="build_id" value="{{ form.build_id }}"
+               placeholder="application-9da26a2a-….apk">
+        <span class="hint">
+          Paste the APK’s filename, or the expo.dev build link — the build ID is
+          read out of either. It’s what tells two builds of the same version
+          apart, so it’s worth filling in.
+        </span>
+      </div>
+      <div class="field">
+        <label for="f-code">Build number</label>
+        <input id="f-code" type="number" name="version_code" min="0"
+               value="{{ form.version_code }}" placeholder="leave blank">
+        {% if errors.version_code %}
+          <span class="hint" style="color:var(--red)">{{ errors.version_code }}</span>
+        {% else %}
+          <span class="hint">
+            Android’s versionCode. Optional — every build so far is 1, because
+            the <code>preview</code> profile in eas.json has no
+            <code>autoIncrement</code>. Turn that on and this becomes the number
+            that decides what can upgrade what.
+          </span>
+        {% endif %}
+      </div>
+      <div class="field">
+        <label for="f-size">Size (MB)</label>
+        <input id="f-size" type="text" name="size_mb" value="{{ form.size_mb }}"
+               placeholder="162.8">
+        {% if errors.size_mb %}
+          <span class="hint" style="color:var(--red)">{{ errors.size_mb }}</span>
+        {% else %}
+          <span class="hint">Optional. Shown so staff know what they’re about to pull over Wi-Fi.</span>
+        {% endif %}
+      </div>
+      <div class="field">
+        <label for="f-date">Published</label>
+        <input id="f-date" type="date" name="published_on" value="{{ form.published_on }}">
+        <span class="hint">The date shown on the install page.</span>
+      </div>
+      <div class="field wide">
+        <label for="f-notes">What changed</label>
+        <textarea id="f-notes" name="notes" rows="4"
+                  placeholder="Shown on the install page — one or two lines is plenty.">{{ form.notes }}</textarea>
+      </div>
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="published" {% if form.published %}checked{% endif %}>
+          Listed on the install page
+        </label>
+        <span class="hint">
+          The newest listed build is the one offered by default. Un-tick to
+          withdraw this one — the build below it becomes current again.
+        </span>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue">
+        <svg><use href="#i-check"/></svg>
+        {% if mode == 'new' %}Add release{% else %}Save changes{% endif %}</button>
+      <a class="btn" href="{% url 'backoffice:app_release_list' %}">Cancel</a>
+    </div>
+  </div>
+</form>
+
+{% if mode == 'edit' and release.pk %}
+<div class="panel" style="margin-top:14px;max-width:820px">
+  <div class="panel-h">Direct link</div>
+  <div style="padding:14px 16px;color:var(--mut);font-size:13.5px;line-height:1.7">
+    <code style="color:var(--txt)">{{ install_url }}dl/{{ release.token }}/</code>
+    <br>
+    Downloads this build specifically, and keeps working after a newer one is
+    published. It’s public — the token is the only thing guarding it — so treat
+    it as a link anyone you send it to can use.
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -106,6 +106,14 @@ urlpatterns = [
     path("branches/new", views.branch_new, name="branch_new"),
     path("branches/<uuid:branch_id>", views.branch_detail, name="branch_detail"),
 
+    # App releases — the Android APK the tills install, listed at /app/
+    path("app-releases", views.app_release_list, name="app_release_list"),
+    path("app-releases/new", views.app_release_new, name="app_release_new"),
+    path("app-releases/<uuid:release_id>", views.app_release_detail,
+         name="app_release_detail"),
+    path("app-releases/<uuid:release_id>/delete", views.app_release_delete,
+         name="app_release_delete"),
+
     # Shop-level settings (singleton)
     path("setting/shop", views.shop_settings, name="shop_settings"),
 ]
