@@ -270,3 +270,89 @@ def preview(source, target, catalogue=None, removed=None):
         ],
         "product_total": target.products.count(),
     }
+
+
+# ── One product, every branch ───────────────────────────────────────────────
+# What an *edit* carries to the other branches' copies.  Three fields, not
+# `PRODUCT_FIELDS`, and the difference is the point: cost, photo, par level and
+# stock are things each shop settles for itself, so a toggle that flattened
+# them would be unusable at any branch that had ever tuned its own — which is
+# every branch that has traded for a week.  These three are facts about the
+# product rather than about the shop.  The name because one cake under two
+# names is two lines in every report; the price because a price list that
+# disagrees between tills is the thing customers notice; the Shopster id
+# because it is what ties our per-branch row back to the single master row in
+# Shopster's catalogue, and a copy without it drops out of any count that
+# joins the two.
+FANOUT_FIELDS = ("name", "barcode", "price")
+
+
+def _fanout_match(target, product, previous_name):
+    """``target``'s copy of ``product``, or None.
+
+    The name the product *had* when the form was opened is tried first, so a
+    rename lands on the copies that already exist instead of walking past them
+    — matching on the new name alone would leave every branch holding the old
+    name and add a second row beside it.  The new name is tried second, for the
+    branch somebody had already renamed by hand; updating that is better than
+    duplicating it.
+    """
+    for name in (previous_name, product.name):
+        dest = _find(target.products, name)
+        if dest is not None:
+            return dest
+    return None
+
+
+def fanout_product(product, *, previous_name=None, branches=None):
+    """Push one product out to every other active branch.  Returns a report.
+
+    This is the product form's "Sync to all branches" toggle, and it is the
+    single-product counterpart of `copy_catalogue`: same matching, same
+    per-branch category and unit resolution, same refusal to move stock.  The
+    difference is which way it leans.  `copy_catalogue` runs over a whole
+    catalogue at an admin's request and therefore only ever *adds*; this runs
+    on one product the admin is looking at and has just typed, so for that one
+    row an overwrite is what they asked for — but only of `FANOUT_FIELDS`.
+
+    A branch that does not have the product gets it, which is what makes the
+    toggle mean what it says on a product created before the toggle existed.
+    The exception is a product that is off sale here: that one is never born
+    dead somewhere else.  `retire_removed` draws the same line — a branch that
+    never had the product has no business gaining a row it cannot sell.
+
+    ``previous_name`` is the name in the database before this save; without it
+    a rename cannot find its own copies.  The caller wraps this and the
+    product's own save in one transaction, because a fan-out that half ran is
+    worse than none: nothing on screen would say where it stopped.
+    """
+    report = {"created": [], "updated": [], "unchanged": []}
+    targets = other_branches(product.branch) if branches is None else branches
+
+    for target in targets:
+        dest = _fanout_match(target, product, previous_name)
+
+        if dest is None:
+            if not product.active:
+                continue
+            category = None
+            if product.category_id:
+                category, _, _ = upsert_category(
+                    target, product.category, update_existing=False,
+                )
+            upsert_product(target, product, category, update_existing=False)
+            report["created"].append(target.name)
+            continue
+
+        changed = _diff(dest, product, FANOUT_FIELDS)
+        if not changed:
+            report["unchanged"].append(target.name)
+            continue
+        for field in changed:
+            setattr(dest, field, getattr(product, field))
+        # update_fields, so this cannot clobber a column it was not asked to
+        # touch — stock above all, which a cashier may be moving right now.
+        dest.save(update_fields=changed)
+        report["updated"].append(target.name)
+
+    return report

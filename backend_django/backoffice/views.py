@@ -2710,6 +2710,34 @@ def _product_save_blocked(request, form_errors, duplicate) -> bool:
     return bool(duplicate) and not request.POST.get("confirm_duplicate")
 
 
+def _fanout_branch_names(branch):
+    """The branches "Sync to all branches" would write to, for the form."""
+    return [b.name for b in catalog.other_branches(branch)]
+
+
+def _fanout_message(report) -> str:
+    """The trailing sentence about what the other branches got.
+
+    Names them rather than counting them, for the reason the sync page's
+    preview lists products rather than totalling them: this writes to branches
+    nobody is looking at, and "3 branches updated" is not something an admin
+    can check.  A run that changed nothing still says so — after ticking a box
+    labelled *Sync to all branches*, silence is indistinguishable from a
+    toggle that quietly does nothing.
+    """
+    if report is None:
+        return ""
+    parts = []
+    if report["created"]:
+        parts.append("added to " + ", ".join(report["created"]))
+    if report["updated"]:
+        parts.append("name, Shopster ID and price updated at "
+                     + ", ".join(report["updated"]))
+    if not parts:
+        return " Every other branch already matched it."
+    return " Also " + "; ".join(parts) + "."
+
+
 @login_required
 def product_detail(request, product_id):
     """View + edit a single product. POST saves and stays on the page.
@@ -2718,10 +2746,21 @@ def product_detail(request, product_id):
     successful save and a save that never happened look identical: the same
     form, the same values, no banner.  That ambiguity is what produced the
     duplicate rows `product_duplicate` warns about — see its docstring.
+
+    "Sync to all branches" carries three fields to the other branches' copies:
+    the name, the Shopster product ID and the price.  Not the rest, because
+    cost, photo and stock are each shop's own and flattening them would make
+    the toggle unusable anywhere that had ever set one.  ``previous_name`` is
+    captured before the form is applied, so a rename reaches the copies that
+    still answer to the old name instead of adding a second row beside them.
     """
     branches, branch, _, _ = _common_filters(request)
     product = get_object_or_404(Product, id=product_id)
     form_errors, duplicate = [], None
+    sync_all = bool(request.POST.get("sync_all"))
+    # Read before the form overwrites it: a rename can only find the other
+    # branches' copies under the name they still hold.
+    previous_name = product.name
 
     if request.method == "POST":
         _apply_product_form(product, request.POST, product.branch or branch,
@@ -2729,8 +2768,15 @@ def product_detail(request, product_id):
         form_errors += product_errors(product)
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
-            product.save()
-            messages.success(request, f"{product.name} was saved.")
+            with transaction.atomic():
+                product.save()
+                fanout = (
+                    catalog.fanout_product(product, previous_name=previous_name)
+                    if sync_all else None
+                )
+            messages.success(
+                request,
+                f"{product.name} was saved." + _fanout_message(fanout))
             return redirect("backoffice:product_detail", product_id=product.id)
         # Nothing was saved; `product` still carries what was typed, so the
         # form below comes back filled in rather than reverting to the row in
@@ -2746,6 +2792,8 @@ def product_detail(request, product_id):
         "mode": "edit",
         "form_errors": form_errors,
         "duplicate": duplicate,
+        "sync_all": sync_all,
+        "sync_branches": _fanout_branch_names(product.branch or branch),
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -2801,18 +2849,32 @@ def product_restore(request, product_id):
 
 @login_required
 def product_new(request):
-    """Add a single product. POST creates and redirects to its detail page."""
+    """Add a single product. POST creates and redirects to its detail page.
+
+    "Sync to all branches" creates the same product at every other active
+    branch in the same transaction — the common case, since a new cake is a new
+    cake everywhere and the alternative is retyping it eight times.  It is off
+    by default: this form is the only place in the backoffice that can write to
+    a branch the admin is not looking at, so it is asked for per save rather
+    than remembered.  `catalog.fanout_product` is what it does.
+    """
     branches, branch, _, _ = _common_filters(request)
     product = Product(branch=branch)
     form_errors, duplicate = [], None
+    sync_all = bool(request.POST.get("sync_all"))
 
     if request.method == "POST":
         _apply_product_form(product, request.POST, branch, form_errors)
         form_errors += product_errors(product)
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
-            product.save()
-            messages.success(request, f"{product.name} was added to the catalogue.")
+            with transaction.atomic():
+                product.save()
+                fanout = catalog.fanout_product(product) if sync_all else None
+            messages.success(
+                request,
+                f"{product.name} was added to the catalogue."
+                + _fanout_message(fanout))
             return redirect("backoffice:product_detail", product_id=product.id)
 
     context = {
@@ -2825,6 +2887,8 @@ def product_new(request):
         "mode": "new",
         "form_errors": form_errors,
         "duplicate": duplicate,
+        "sync_all": sync_all,
+        "sync_branches": _fanout_branch_names(branch),
         "hide_dates": True,
         "qs": _filter_qs(request),
     }

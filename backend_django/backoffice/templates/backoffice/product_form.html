@@ -187,6 +187,40 @@
               </label>
             </div>
           </div>
+
+          {% comment %}
+            Sync to all branches — hidden entirely when there is no other
+            branch, because a switch that cannot do anything still reads as a
+            promise that something happened.
+
+            Off by default and never remembered between saves: this is the one
+            control on the page that writes to branches nobody is looking at,
+            and the sync page makes the same bargain by previewing before it
+            copies. Ticking it is the whole confirmation, so the hint says
+            which branches and which fields rather than leaving it to be
+            discovered afterwards in the banner.
+          {% endcomment %}
+          {% if sync_branches %}
+          <div class="field wide">
+            <label>Other branches</label>
+            <label class="check">
+              <input type="checkbox" name="sync_all" value="1" {% if sync_all %}checked{% endif %}>
+              Sync to all branches
+            </label>
+            <span class="hint">
+              {% if mode == 'new' %}
+                Creates it at {{ sync_branches|join:", " }} too, with everything
+                above copied across. Stock starts at 0 there — what is on one
+                shop's shelves is not a fact about another's.
+              {% else %}
+                Copies the name, Shopster product ID and price to
+                {{ sync_branches|join:", " }}. Their own cost, photo, stock and
+                category are left alone; a branch that does not have this
+                product yet gets it.
+              {% endif %}
+            </span>
+          </div>
+          {% endif %}
         </div>
 
         <div class="form-actions">
