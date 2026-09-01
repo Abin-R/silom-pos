@@ -181,6 +181,19 @@ class Branch(models.Model):
     # obscurity — is what keeps self-ordering closed on a branch.
     self_order_enabled = models.BooleanField(default=False)
 
+    # ── CRM link ───────────────────────────────────────────────────────
+    # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
+    # its own branch list for the customer-facing loyalty app.  Set from the
+    # branch form: an admin either picks the matching CRM branch or has one
+    # created there on the spot (see ``bravepos.crm``).
+    #
+    # Nullable and unique-where-set, on purpose.  Null is "not linked", which
+    # is where every branch that predates this starts and is a perfectly
+    # workable state — nothing on the POS reads this yet.  Unique because two
+    # tills claiming to be the same CRM shop would file their trade under one
+    # another, which is the same failure the pos_id constraint exists to stop.
+    crm_branch_id = models.PositiveIntegerField(null=True, blank=True)
+
     # ── Per-branch payment credentials ─────────────────────────────────
     # Every branch holds its own Beam/Omise credentials and its own test/live
     # lane; ``gateways.resolve_payment_config`` reads them straight off the
@@ -219,6 +232,14 @@ class Branch(models.Model):
                 fields=["pos_id"],
                 condition=~models.Q(pos_id=""),
                 name="branch_pos_id_unique_when_set",
+            ),
+            # One CRM shop is one POS branch.  Null is exempt and is where a
+            # branch starts: not every branch has to be linked, and the ones
+            # that predate the link are all in that state.
+            models.UniqueConstraint(
+                fields=["crm_branch_id"],
+                condition=models.Q(crm_branch_id__isnull=False),
+                name="branch_crm_id_unique_when_set",
             ),
         ]
 

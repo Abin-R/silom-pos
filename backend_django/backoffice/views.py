@@ -43,7 +43,7 @@ from bravepos.models import (
     StockMovement,
     Unit,
 )
-from bravepos import appdist, catalog, images
+from bravepos import appdist, catalog, crm, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
@@ -4065,6 +4065,134 @@ def _taken_branch_names(b: Branch) -> str:
     })
 
 
+# The dropdown entry that stands for "none of the above" — the shop being added
+# has no row in the CRM yet, so make one.  A sentinel rather than a blank value
+# because blank already means something else here: not linked at all.
+CRM_CREATE_CHOICE = "__create__"
+
+
+def _crm_context(b: Branch, post=None) -> dict:
+    """State for the branch form's CRM dropdown, for one render.
+
+    ``crm_enabled`` False keeps the whole panel out of the page, which is what
+    a deployment with no ``CRM_API_KEY`` gets — the form is then exactly the
+    form it was before any of this existed.
+
+    A CRM that *is* configured but unreachable still renders the panel, with a
+    warning where the list would be.  The branch stays editable and savable and
+    its existing link survives the save untouched (``_apply_crm_choice``), so
+    the CRM being down can never quietly unlink a branch.
+    """
+    if not crm.is_configured():
+        return {"crm_enabled": False}
+
+    # What to show selected: the choice just submitted, when this render is a
+    # refused save being handed back, so the admin doesn't have to find their
+    # pick again.  Otherwise whatever the branch is actually linked to.
+    if post is not None and "crm_branch" in post:
+        selected = (post.get("crm_branch") or "").strip()
+        neighborhood = (post.get("crm_neighborhood") or "").strip()
+    else:
+        selected = str(b.crm_branch_id) if b.crm_branch_id else ""
+        neighborhood = ""
+
+    try:
+        rows, crm_error = crm.list_branches(), ""
+    except crm.CrmError as exc:
+        rows, crm_error = [], str(exc)
+
+    # A CRM branch another POS branch already claims is shown but not
+    # selectable, named so it is obvious why.  `_apply_crm_choice` refuses it
+    # too — this is only the half that says so before the round trip.
+    taken = {
+        row.crm_branch_id: row.name
+        for row in Branch.objects.filter(crm_branch_id__isnull=False)
+        .exclude(pk=b.pk).only("crm_branch_id", "name")
+    }
+
+    choices = []
+    for row in rows:
+        try:
+            crm_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        choices.append({
+            "id": crm_id,
+            "name": (row.get("name") or f"Branch {crm_id}").strip(),
+            "neighborhood": (row.get("neighborhood") or "").strip(),
+            "hours": (row.get("hours_display") or "").strip(),
+            "inactive": row.get("active") is False,
+            "taken_by": taken.get(crm_id, ""),
+            "selected": str(crm_id) == selected,
+        })
+
+    return {
+        "crm_enabled": True,
+        "crm_branches": choices,
+        "crm_error": crm_error,
+        "crm_selected": selected,
+        "crm_create_choice": CRM_CREATE_CHOICE,
+        "crm_neighborhood": neighborhood,
+        "crm_linked_id": b.crm_branch_id,
+        # A branch linked to an id the CRM's list doesn't contain: either the
+        # list didn't load, or that CRM branch is gone.  Saying so beats a
+        # dropdown that silently sits on "Not linked" over a branch that is.
+        "crm_linked_missing": bool(
+            b.crm_branch_id and not any(c["id"] == b.crm_branch_id for c in choices)),
+    }
+
+
+def _apply_crm_choice(b: Branch, post) -> list[str]:
+    """Apply the CRM dropdown to ``b``.  Returns blocking errors, like
+    ``branch_errors``.
+
+    Call this *last*, after the rest of the form has already validated.  It is
+    the one part of a branch save that reaches outside our database: creating
+    the CRM branch for a POS save that is then refused would leave a stray row
+    over there, and every retry would leave another.
+    """
+    if not crm.is_configured() or "crm_branch" not in post:
+        # No dropdown was rendered, so this POST says nothing about the link —
+        # leave whatever the branch already has rather than clearing it.
+        return []
+
+    choice = (post.get("crm_branch") or "").strip()
+    if not choice:
+        b.crm_branch_id = None
+        return []
+
+    if choice == CRM_CREATE_CHOICE:
+        try:
+            b.crm_branch_id = crm.create_branch(
+                b.name,
+                neighborhood=(post.get("crm_neighborhood") or "").strip(),
+                hours_display=f"{b.open_time}-{b.close_time}",
+                active=b.active,
+            )
+        except crm.CrmError as exc:
+            return [
+                f"The CRM branch couldn't be created, so nothing was saved on "
+                f"either side. {exc} Try again, or save this branch as not "
+                f"linked and link it once the CRM is back."
+            ]
+        return []
+
+    try:
+        crm_id = int(choice)
+    except ValueError:
+        return ["Pick a CRM branch from the list, or choose to create a new one."]
+
+    clash = Branch.objects.filter(crm_branch_id=crm_id).exclude(pk=b.pk).first()
+    if clash:
+        return [
+            f'That CRM branch is already linked to "{clash.name}". One CRM shop '
+            f"is one POS branch — unlink it there first, or create a new CRM "
+            f"branch for this one."
+        ]
+    b.crm_branch_id = crm_id
+    return []
+
+
 def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.name = (post.get("name") or "").strip()
     b.code = (post.get("code") or "").strip()
@@ -4183,6 +4311,10 @@ def branch_detail(request, branch_id):
         _apply_branch_form(b, request.POST, request.user)
         errors = payment_errors(b)
         form_errors = branch_errors(b)
+        # Only once everything local is good: creating a CRM branch is not
+        # something we can take back if the save is then refused.
+        if not errors and not form_errors:
+            form_errors = _apply_crm_choice(b, request.POST)
         if not errors and not form_errors:
             b.save()
             return redirect("backoffice:branch_list")
@@ -4197,6 +4329,7 @@ def branch_detail(request, branch_id):
         "taken_pos_ids": _taken_pos_ids(b),
         "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
+        **_crm_context(b, request.POST if request.method == "POST" else None),
         **_branch_topbar_context(request),
     }
     return render(request, "backoffice/branch_form.html", context)
@@ -4214,6 +4347,11 @@ def branch_new(request):
         seed_branch_payment(b)
         errors = payment_errors(b)
         form_errors = branch_errors(b)
+        # Last, and only if the branch is otherwise good — see
+        # `_apply_crm_choice`. A CRM branch minted for a save that then bounces
+        # off a duplicate name is a row nobody can see from here to clean up.
+        if not errors and not form_errors:
+            form_errors = _apply_crm_choice(b, request.POST)
         if not errors and not form_errors:
             b.save()
             return redirect("backoffice:branch_list")
@@ -4226,6 +4364,7 @@ def branch_new(request):
             "taken_pos_ids": _taken_pos_ids(b),
             "taken_names": _taken_branch_names(b),
             **_payment_context(b, request.user),
+            **_crm_context(b, request.POST),
             **_branch_topbar_context(request),
         }
         return render(request, "backoffice/branch_form.html", context)
@@ -4243,6 +4382,7 @@ def branch_new(request):
         "taken_pos_ids": _taken_pos_ids(blank),
         "taken_names": _taken_branch_names(blank),
         **_payment_context(blank, request.user),
+        **_crm_context(blank),
         **_branch_topbar_context(request),
     }
     return render(request, "backoffice/branch_form.html", context)

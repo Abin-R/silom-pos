@@ -121,6 +121,88 @@
     </div>
   </div>
 
+  {% comment %}
+    CRM link. The CRM (crm.rollingpinn.com) keeps its own branch list for the
+    customer-facing loyalty app; this says which of those shops this till is.
+    The whole panel is absent when no CRM key is configured, so a deployment
+    without one gets the form exactly as it was.
+  {% endcomment %}
+  {% if crm_enabled %}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-h">
+      CRM
+      <div class="spacer"></div>
+      {% if crm_linked_id %}
+        <span class="tag t-ok">Linked · #{{ crm_linked_id }}</span>
+      {% else %}
+        <span class="tag t-low">Not linked</span>
+      {% endif %}
+    </div>
+
+    {% if crm_error %}
+      <div style="padding:16px 20px 0">
+        <div class="banner b-amber">
+          <svg><use href="#i-alert"/></svg>
+          <span><b>The CRM branch list didn't load.</b> {{ crm_error }}
+            {% if crm_linked_id %}
+              This branch stays linked to CRM branch #{{ crm_linked_id }} — saving now
+              leaves that link exactly as it is.
+            {% else %}
+              You can still save this branch and link it once the CRM answers.
+            {% endif %}</span>
+        </div>
+      </div>
+      {% comment %}
+        Nothing to choose from, so nothing is submitted — and a POST with no
+        `crm_branch` leaves the stored link alone rather than clearing it.
+      {% endcomment %}
+    {% else %}
+      <div class="form-grid">
+        <div class="field wide">
+          <label for="f-crm">CRM branch</label>
+          <select id="f-crm" name="crm_branch">
+            <option value="" {% if not crm_selected %}selected{% endif %}>
+              Not linked to the CRM</option>
+            {% for row in crm_branches %}
+              <option value="{{ row.id }}"
+                      {% if row.selected %}selected{% endif %}
+                      {% if row.taken_by %}disabled{% endif %}>
+                #{{ row.id }} — {{ row.name }}{% if row.neighborhood %} · {{ row.neighborhood }}{% endif %}{% if row.inactive %} · inactive{% endif %}{% if row.taken_by %} — already linked to {{ row.taken_by }}{% endif %}
+              </option>
+            {% endfor %}
+            <option value="{{ crm_create_choice }}"
+                    {% if crm_selected == crm_create_choice %}selected{% endif %}>
+              None of the above — create a new branch in the CRM</option>
+          </select>
+          <span class="hint">
+            {% if crm_linked_missing %}
+              This branch is linked to CRM branch #{{ crm_linked_id }}, which is not in
+              the list above — it may have been removed there. Pick again, or leave the
+              form without saving to keep the link.
+            {% else %}
+              Which shop in the CRM this branch is. One CRM shop belongs to one branch,
+              so the ones already spoken for can't be picked.
+            {% endif %}
+          </span>
+        </div>
+
+        {# Only reached by the "create a new one" choice; JS shows it then. #}
+        <div class="field wide" id="crmNewFields"
+             style="{% if crm_selected != crm_create_choice %}display:none{% endif %}">
+          <label for="f-crm-hood">Neighbourhood <span class="sm">for the new CRM branch</span></label>
+          <input id="f-crm-hood" type="text" name="crm_neighborhood"
+                 value="{{ crm_neighborhood }}" placeholder="e.g. Pathum Wan">
+          <span class="hint">
+            The new CRM branch is created on save, from the branch name and opening
+            hours above — <b id="crmNewPreview" class="money"></b>. Its id is then
+            stored here. Nothing is created in the CRM until this form saves cleanly.
+          </span>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% include "backoffice/_payment_fields.html" with payment_scope='branch' %}
 
   <div class="panel" style="margin-top:16px">
@@ -183,6 +265,39 @@
       input.addEventListener('input', check);
       check();  // a rejected save comes back with the clashing value still typed
     }
+  })();
+</script>
+<script>
+  // The CRM dropdown's "create a new one" branch of the form.
+  //
+  // Picking an existing CRM branch needs nothing else typed; creating one
+  // sends the branch name and hours from this same form, so the extra field
+  // and a plain reading of what is about to be created only appear for that
+  // choice. Everything here is a convenience — the server reads `crm_branch`
+  // and `crm_neighborhood` the same way whether or not this script ran.
+  (function () {
+    const select  = document.getElementById('f-crm');
+    const extra   = document.getElementById('crmNewFields');
+    const preview = document.getElementById('crmNewPreview');
+    if (!select || !extra) return;
+
+    const CREATE = '{{ crm_create_choice|default:"__create__" }}';
+    const name  = document.getElementById('f-name');
+    const open  = document.getElementById('f-open');
+    const close = document.getElementById('f-close');
+
+    const render = () => {
+      const creating = select.value === CREATE;
+      extra.style.display = creating ? '' : 'none';
+      if (creating && preview) {
+        const branch = (name?.value || '').trim() || 'this branch';
+        preview.textContent = `"${branch}", ${open?.value || '09:00'}-${close?.value || '22:00'}`;
+      }
+    };
+
+    select.addEventListener('change', render);
+    for (const input of [name, open, close]) input?.addEventListener('input', render);
+    render();  // a refused save comes back with the choice still made
   })();
 </script>
 <script>
