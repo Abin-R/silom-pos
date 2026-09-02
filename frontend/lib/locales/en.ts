@@ -554,6 +554,16 @@ const en = {
     kbank: "KBank",
     last_visit: "Last visit",
     line_total: "Line Total",
+    // Loyalty (CRM points + rewards). "Ready" counts the vouchers the customer
+    // already redeemed on their phone and is standing there to collect.
+    loyalty_checking: "Checking rewards…",
+    loyalty_held: "The customer redeems this on their phone",
+    loyalty_no_rewards: "No rewards yet",
+    loyalty_points: "%{pts} pts",
+    loyalty_ready: "%{n} ready",
+    loyalty_retry: "Retry",
+    loyalty_rewards: "Rewards (%{n})",
+    loyalty_unavailable: "Rewards unavailable",
     new_customer: "New Customer",
     new_order: "New Order",
     new_sale: "New sale",

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from django.conf import settings as django_settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -20,7 +21,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, gateways
+from . import audit, crm, gateways, loyalty
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
@@ -684,6 +685,68 @@ def settings_view(request):
     return Response(_strip_payment_fields(dict(SettingsSerializer(obj).data)))
 
 
+# ─── CRM loyalty ─────────────────────────────────────────────────────────────
+# The till never talks to the CRM directly.  ``CRM_API_KEY`` grants read and
+# write on every member and every branch, and this repo — and the APK built
+# from it — are public, so the key stays on the server and the app asks us.
+
+
+def _reward_ids(raw) -> list[int]:
+    """The voucher ids a cashier ticked, from an untrusted request body.
+
+    Anything that is not a list of whole numbers is thrown away rather than
+    passed on: the CRM refuses a bare ``"12"`` outright, and a bad id inside a
+    good list is dropped there *silently*, so a mangled value would look to the
+    cashier exactly like a reward that quietly failed to apply.  The CRM
+    re-filters what it is given against the member and the voucher state
+    anyway, so this list is a request, never an authorisation.
+    """
+    if not isinstance(raw, list):
+        return []
+    ids: list[int] = []
+    for item in raw:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+@api_view(['POST'])
+@require_session
+def crm_member(request):
+    """The loyalty panel for a customer the cashier has just picked.
+
+    POST, not GET, because it can *create*: a customer the CRM has never seen
+    is signed up here, which is what makes the till's own customer list the
+    front door to the programme.
+
+    ``{"enabled": false}`` is the ordinary answer for a branch outside the
+    rollout or a customer with no phone number, and the till draws nothing for
+    it.  A CRM that is down is a 502 instead — the cashier can retry that,
+    whereas a silent empty panel would read as "this customer has no rewards"
+    and the customer would be sent away without them.
+    """
+    branch = request.session_obj.branch
+    if not loyalty.enabled_for(branch):
+        return Response({'enabled': False, 'reason': 'branch'})
+
+    # Branch-scoped like every other customer read: a till may only look up the
+    # people on its own branch's list.  A malformed id is a 404 rather than the
+    # ValidationError-turned-500 that a bare filter on a bad UUID would raise.
+    try:
+        customer = Customer.objects.get(
+            id=(request.data or {}).get('customer_id'), branch=branch)
+    except (Customer.DoesNotExist, DjangoValidationError, ValueError, TypeError):
+        return Response({'detail': 'No such customer.'},
+                        status=status.HTTP_404_NOT_FOUND)
+    try:
+        return Response(loyalty.member_for_customer(branch, customer))
+    except crm.CrmError as exc:
+        return Response({'enabled': True, 'error': str(exc)},
+                        status=status.HTTP_502_BAD_GATEWAY)
+
+
 # ─── Orders ──────────────────────────────────────────────────────────────────
 ORDERS_MAX_LIMIT = 500
 
@@ -832,6 +895,12 @@ def orders_list_create(request):
     # totals now so any reader — the Cash Drawer screen, the backoffice
     # unreconciled-cash tile — sees the sale without waiting for the round to close.
     refresh_shift_cash(order.shift)
+    # File it with the CRM for loyalty points, and confirm any rewards the
+    # cashier ticked.  Deliberately last, and deliberately unable to raise: the
+    # sale is committed and the customer has paid, so nothing about a marketing
+    # system may change what this endpoint returns.  Off at every branch until
+    # `crm_loyalty_enabled` is ticked — see bravepos.loyalty.
+    loyalty.record_sale(order, _reward_ids(payload.get('crm_reward_ids')))
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
@@ -936,6 +1005,16 @@ def order_update_status(request, order_id):
     # its number when the sweep replaces it, so a re-cancel must not raise one.
     if void_state_changed:
         flag_branch_day_for_reissue(order)
+        # Keep the customer's loyalty standing in step with the bill.  A void
+        # claws back the points, spend and tier the sale earned and releases
+        # the vouchers it consumed; an un-void files the sale afresh, which is
+        # the CRM's own prescribed correction.  Neither can raise: a CRM that
+        # is unreachable costs the cashier the call's timeout and nothing else,
+        # and the bill is voided either way.
+        if new_status == 'cancel':
+            loyalty.reverse_sale(order, note=f'Voided at the till by {order.voided_by}.')
+        else:
+            loyalty.refile_sale(order)
     return Response(OrderSerializer(order).data)
 
 

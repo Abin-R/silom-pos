@@ -4083,7 +4083,11 @@ def _crm_context(b: Branch, post=None) -> dict:
     its existing link survives the save untouched (``_apply_crm_choice``), so
     the CRM being down can never quietly unlink a branch.
     """
-    if not crm.is_configured():
+    # Two gates, and both are absences rather than settings: no key configured,
+    # or a branch outside `CRM_BRANCHES`. Either way the whole panel — dropdown
+    # and loyalty switch alike — is absent from the page, and the branch form is
+    # exactly the form it was before any of this existed.
+    if not (crm.is_configured() and crm.branch_allowed(b)):
         return {"crm_enabled": False}
 
     # What to show selected: the choice just submitted, when this render is a
@@ -4134,6 +4138,11 @@ def _crm_context(b: Branch, post=None) -> dict:
         "crm_create_choice": CRM_CREATE_CHOICE,
         "crm_neighborhood": neighborhood,
         "crm_linked_id": b.crm_branch_id,
+        # Whether this branch's till does loyalty.  Rendered from the POST on a
+        # bounced save so a rejected form comes back with the box as the admin
+        # left it, not as the database still has it.
+        "crm_loyalty": (post.get("crm_loyalty") == "on" if post is not None
+                        and "crm_panel" in post else b.crm_loyalty_enabled),
         # A branch linked to an id the CRM's list doesn't contain: either the
         # list didn't load, or that CRM branch is gone.  Saying so beats a
         # dropdown that silently sits on "Not linked" over a branch that is.
@@ -4143,7 +4152,7 @@ def _crm_context(b: Branch, post=None) -> dict:
 
 
 def _apply_crm_choice(b: Branch, post) -> list[str]:
-    """Apply the CRM dropdown to ``b``.  Returns blocking errors, like
+    """Apply the CRM panel to ``b``.  Returns blocking errors, like
     ``branch_errors``.
 
     Call this *last*, after the rest of the form has already validated.  It is
@@ -4151,7 +4160,21 @@ def _apply_crm_choice(b: Branch, post) -> list[str]:
     the CRM branch for a POS save that is then refused would leave a stray row
     over there, and every retry would leave another.
     """
-    if not crm.is_configured() or "crm_branch" not in post:
+    # The loyalty switch, read first because it is the panel's one field that
+    # is still rendered when the branch list fails to load.  An unticked box
+    # posts nothing at all, so `crm_panel` — a hidden marker the panel always
+    # carries — is what tells "the admin unticked it" from "this form never
+    # showed the panel", the second of which must leave the setting alone.
+    # The same two gates `_crm_context` renders behind, applied again on the
+    # way in: hiding the panel stops honest mistakes, but a hand-made POST
+    # would otherwise still link — or start doing loyalty at — a branch the
+    # rollout deliberately excludes.
+    panel_live = crm.is_configured() and crm.branch_allowed(b)
+
+    if panel_live and "crm_panel" in post:
+        b.crm_loyalty_enabled = post.get("crm_loyalty") == "on"
+
+    if not panel_live or "crm_branch" not in post:
         # No dropdown was rendered, so this POST says nothing about the link —
         # leave whatever the branch already has rather than clearing it.
         return []

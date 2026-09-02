@@ -31,10 +31,17 @@ class BranchSerializer(serializers.ModelSerializer):
         # feature off per branch (no print poller, no QR screen), so a branch
         # that doesn't use it runs exactly as it did before.  Not a secret — the
         # payment credentials on Branch are deliberately NOT exposed here.
+        #
+        # ``crm_loyalty_enabled`` is the same idea for the CRM loyalty panel:
+        # the till reads it once and, when it is off, never asks the backend
+        # about a customer's points at all.  The server refuses those calls
+        # anyway, but a branch outside the rollout should make *no request*
+        # rather than a request that is politely declined.
         fields = ['id', 'name', 'code', 'address', 'phone', 'tax_id', 'pos_id',
                   'peak_account_code', 'active', 'created_at', 'cashier_email',
-                  'self_order_enabled']
-        read_only_fields = ['created_at', 'cashier_email', 'self_order_enabled']
+                  'self_order_enabled', 'crm_loyalty_enabled']
+        read_only_fields = ['created_at', 'cashier_email', 'self_order_enabled',
+                            'crm_loyalty_enabled']
         # The other half of that: from the same constraint DRF also builds a
         # serializer-level UniqueTogetherValidator, and that one forces every
         # field it covers to be *required* on create — a new branch normally has

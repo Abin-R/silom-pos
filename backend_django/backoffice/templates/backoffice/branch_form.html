@@ -129,6 +129,12 @@
   {% endcomment %}
   {% if crm_enabled %}
   <div class="panel" style="margin-top:16px">
+    {% comment %}
+      An unticked checkbox submits nothing, so this marker is what lets the
+      server tell "loyalty was switched off" from "this form never rendered
+      the CRM panel" — the second must leave the branch's setting alone.
+    {% endcomment %}
+    <input type="hidden" name="crm_panel" value="1">
     <div class="panel-h">
       CRM
       <div class="spacer"></div>
@@ -200,6 +206,28 @@
         </div>
       </div>
     {% endif %}
+
+    <div class="form-grid">
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="crm_loyalty"
+                 {% if crm_loyalty %}checked{% endif %}>
+          Look customers up and award points at this branch
+        </label>
+        <span class="hint">
+          {% if crm_linked_id %}
+            Picking a customer at the till fetches their points and rewards, signs
+            them up if the CRM has never seen them, and files the finished bill for
+            points. Voiding a bill reverses it. Leave this off while a branch is
+            still being tested — and untick it to stop the till waiting on a CRM
+            that has gone slow.
+          {% else %}
+            Has no effect until this branch is linked to a CRM shop above: an order
+            filed with no branch is attributed to no shop at all.
+          {% endif %}
+        </span>
+      </div>
+    </div>
   </div>
   {% endif %}
 

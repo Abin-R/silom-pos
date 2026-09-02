@@ -32,6 +32,7 @@ import { C, MONO, R } from "../lib/theme";
 import { showAlert } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
 import { methodLabel } from "../lib/payments";
+import { useLoyalty, type Loyalty, type LoyaltyReward } from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -212,6 +213,10 @@ export default function POS() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
   const [customer, setCustomer] = useState<Customer | null>(null);
+  // The chosen customer's points and rewards. Fetched here, while the basket
+  // is still being built, so the CRM round trip is over long before anyone
+  // taps Pay. A branch outside the rollout sends no lookup at all.
+  const loyalty = useLoyalty(activeBranchId, customer?.id);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -479,6 +484,15 @@ export default function POS() {
           staff: staff || "",
           customer_id: customer?.id,
           customer_name: customer?.name,
+          // Vouchers the customer had already redeemed on their own phone and
+          // handed over at the counter. The CRM *confirms* these when it files
+          // the sale — it never spends one on the customer's behalf — so they
+          // change no price here and none of the totals above.
+          //
+          // Omitted entirely when empty (JSON.stringify drops undefined), so a
+          // branch outside the rollout posts the exact body it always did —
+          // not the old body plus an empty list.
+          crm_reward_ids: loyalty.selected.length ? loyalty.selected : undefined,
           beam_charge_id: meta?.beamChargeId || null,
           beam_link_id: meta?.beamLinkId || null,
           omise_link_id: meta?.omiseLinkId || null,
@@ -990,6 +1004,7 @@ export default function POS() {
               width={L.cart}
               cart={cart}
               customer={customer}
+              loyalty={loyalty}
               subtotal={subtotal}
               discountAmount={discountAmount}
               roundingAdj={roundingAdj}
@@ -1108,6 +1123,7 @@ export default function POS() {
             <CartSidebar
               cart={cart}
               customer={customer}
+              loyalty={loyalty}
               subtotal={subtotal}
               discountAmount={discountAmount}
               roundingAdj={roundingAdj}
@@ -1378,11 +1394,163 @@ function ProductCard({
   );
 }
 
+// ---------- Loyalty (CRM points + rewards) ----------
+/**
+ * The chosen customer's loyalty standing, under their chip in the cart.
+ *
+ * Renders nothing at all unless the branch is in the rollout and the customer
+ * has a phone number on file — so on every other till this is invisible and
+ * the cart is exactly what it was.
+ *
+ * Ticking a reward does not touch the bill. It records that this sale consumed
+ * a voucher the customer had already redeemed on their own phone; the CRM
+ * confirms it when the order is filed. Rewards the customer is merely *holding*
+ * can only be redeemed by them, so they are shown without a control — the CRM
+ * ignores those ids silently, and a toggle that did nothing would read as a
+ * broken till.
+ */
+function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
+  useT(); // re-render this screen when the language changes
+  const { state, selected, toggle, retry } = loyalty;
+  // Null until the cashier opens or closes the list themselves; until then the
+  // rewards open on their own when there is something to act on. The customer
+  // redeemed that voucher on their phone and is standing at the counter
+  // expecting it — a collapsed row is exactly how it gets missed. Once they
+  // have made a choice it sticks, which is why this is an override and not a
+  // state synced from the rewards.
+  const [openChoice, setOpenChoice] = useState<boolean | null>(null);
+
+  const rewards = state.status === "ready" ? state.rewards : [];
+  const redeemable = rewards.filter((r) => r.redeemable).length;
+  const open = openChoice ?? redeemable > 0;
+
+  if (state.status === "off") return null;
+
+  if (state.status === "loading") {
+    return (
+      <View style={styles.loyaltyBox} testID="loyalty-loading">
+        <ActivityIndicator size="small" color={C.ink3} />
+        <Text style={styles.loyaltyMuted}>{tr("pos.loyalty_checking")}</Text>
+      </View>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <View style={styles.loyaltyBox} testID="loyalty-error">
+        <Ionicons name="cloud-offline-outline" size={16} color={C.warn} />
+        <Text style={[styles.loyaltyMuted, { flex: 1 }]}>{tr("pos.loyalty_unavailable")}</Text>
+        <TouchableOpacity onPress={retry} hitSlop={8} testID="loyalty-retry">
+          <Text style={styles.loyaltyRetry}>{tr("pos.loyalty_retry")}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const { member } = state;
+
+  return (
+    <View style={styles.loyaltyBox} testID="loyalty-panel">
+      <View style={styles.loyaltyHead}>
+        <MaterialCommunityIcons name="star-four-points-outline" size={15} color={C.accent} />
+        <Text style={styles.loyaltyPoints}>
+          {tr("pos.loyalty_points", { pts: member ? member.points_balance : "0" })}
+        </Text>
+        {!!member?.tier && <Text style={styles.loyaltyTier} numberOfLines={1}>{member.tier}</Text>}
+      </View>
+
+      {rewards.length === 0 ? (
+        <Text style={styles.loyaltyMuted}>{tr("pos.loyalty_no_rewards")}</Text>
+      ) : (
+        <>
+          <TouchableOpacity
+            style={styles.loyaltyToggleRow}
+            onPress={() => setOpenChoice(!open)}
+            testID="loyalty-rewards-toggle"
+          >
+            <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={15} color={C.ink2} />
+            <Text style={styles.loyaltyRewardsLabel}>
+              {tr("pos.loyalty_rewards", { n: rewards.length })}
+            </Text>
+            {redeemable > 0 && (
+              <View style={styles.loyaltyReadyPill}>
+                <Text style={styles.loyaltyReadyText}>
+                  {tr("pos.loyalty_ready", { n: redeemable })}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {open &&
+            rewards.map((r) => (
+              <RewardRow
+                key={r.id}
+                reward={r}
+                checked={selected.includes(r.id)}
+                onToggle={() => toggle(r.id)}
+              />
+            ))}
+        </>
+      )}
+    </View>
+  );
+}
+
+/**
+ * One voucher. A redeemable one is a checkbox; a held one is a dimmed line
+ * with a note saying whose move it is, because it is genuinely not the
+ * cashier's.
+ */
+function RewardRow({
+  reward,
+  checked,
+  onToggle,
+}: {
+  reward: LoyaltyReward;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  if (!reward.redeemable) {
+    return (
+      <View style={[styles.rewardRow, styles.rewardRowHeld]} testID={`reward-held-${reward.id}`}>
+        <Ionicons name="lock-closed-outline" size={14} color={C.ink3} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rewardTitleHeld} numberOfLines={1}>{reward.title}</Text>
+          <Text style={styles.rewardNote} numberOfLines={2}>{tr("pos.loyalty_held")}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity
+      style={styles.rewardRow}
+      onPress={onToggle}
+      testID={`reward-${reward.id}`}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+    >
+      <Ionicons
+        name={checked ? "checkbox" : "square-outline"}
+        size={18}
+        color={checked ? C.brand : C.ink3}
+      />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rewardTitle} numberOfLines={1}>{reward.title}</Text>
+        {!!reward.detail && (
+          <Text style={styles.rewardNote} numberOfLines={2}>{reward.detail}</Text>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 // ---------- Cart Sidebar (shared between the tablet column + phone sheet) ----------
 function CartSidebar({
   width,
   cart,
   customer,
+  loyalty,
   subtotal,
   discountAmount,
   roundingAdj,
@@ -1401,6 +1569,7 @@ function CartSidebar({
   width?: number;
   cart: CartItem[];
   customer: Customer | null;
+  loyalty: Loyalty;
   subtotal: number;
   discountAmount: number;
   /** Whole-baht adjustment applied to the bill, kept off the discount. */
@@ -1464,6 +1633,8 @@ function CartSidebar({
           </TouchableOpacity>
         </View>
       )}
+
+      {!!customer && <LoyaltyPanel key={customer.id} loyalty={loyalty} />}
 
       <FlatList
         data={cart}
@@ -4368,6 +4539,56 @@ const styles = StyleSheet.create({
   },
   custInitial: { color: C.surface, fontWeight: "700", fontSize: 12 },
   custName: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink },
+
+  // Loyalty sits directly under the customer chip and reads as part of it —
+  // same margins, no border of its own, so the two are one block about this
+  // customer rather than a chip and an unrelated card below it.
+  loyaltyBox: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 24,
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 11,
+    backgroundColor: C.sunk,
+  },
+  loyaltyHead: { flexDirection: "row", alignItems: "center", gap: 6, width: "100%" },
+  loyaltyPoints: { ...MONO, fontSize: 13, fontWeight: "700", color: C.ink },
+  loyaltyTier: { flex: 1, fontSize: 12, color: C.ink2Soft },
+  loyaltyMuted: { fontSize: 12, color: C.ink2Soft },
+  loyaltyRetry: { fontSize: 12, fontWeight: "700", color: C.brand },
+  loyaltyToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    width: "100%",
+    paddingVertical: 2,
+  },
+  loyaltyRewardsLabel: { fontSize: 12, fontWeight: "600", color: C.ink2 },
+  loyaltyReadyPill: {
+    backgroundColor: C.okTint,
+    borderRadius: R.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  loyaltyReadyText: { fontSize: 10, fontWeight: "700", color: C.okDark },
+  rewardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    paddingVertical: 6,
+    paddingLeft: 4,
+  },
+  // Held vouchers are the customer's to spend, not the cashier's, and the
+  // dimming is what says so before anyone reaches for a control that isn't there.
+  rewardRowHeld: { opacity: 0.6 },
+  rewardTitle: { fontSize: 13, fontWeight: "600", color: C.ink },
+  rewardTitleHeld: { fontSize: 13, fontWeight: "500", color: C.ink2 },
+  rewardNote: { fontSize: 11, color: C.ink2Soft, marginTop: 1 },
 
   totalBox: {
     backgroundColor: C.surface,

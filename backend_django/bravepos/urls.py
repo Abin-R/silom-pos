@@ -42,6 +42,10 @@ urlpatterns = [
     # Settings — single document, GET + PUT.
     path('settings', views.settings_view),
 
+    # CRM loyalty — the till's only door to crm.rollingpinn.com.  The API key
+    # never leaves the server, so the app asks here and we make the call.
+    path('crm/member', views.crm_member),
+
     # Orders
     path('orders', views.orders_list_create),
     path('orders/<uuid:order_id>/status', views.order_update_status),

@@ -194,6 +194,21 @@ class Branch(models.Model):
     # another, which is the same failure the pos_id constraint exists to stop.
     crm_branch_id = models.PositiveIntegerField(null=True, blank=True)
 
+    # Loyalty at the till is a *separate* switch from the link above.
+    # ``crm_branch_id`` states a fact — which CRM shop this is — and is true
+    # whether or not a till ever calls the loyalty API.  This one says whether
+    # the till should look a chosen customer up, show their rewards, and file
+    # the finished sale for points.
+    #
+    # Default False, so deploying the code changes nothing anywhere until a
+    # branch is ticked, and unticking is the kill switch for a CRM that has
+    # started timing out — the loyalty call sits inside the checkout POST, so
+    # this is the one control that gets a slow CRM out of the cashier's way.
+    #
+    # Only has effect where ``crm_branch_id`` is set: an order filed without a
+    # branch would land in the CRM attributed to no shop at all.
+    crm_loyalty_enabled = models.BooleanField(default=False)
+
     # ── Per-branch payment credentials ─────────────────────────────────
     # Every branch holds its own Beam/Omise credentials and its own test/live
     # lane; ``gateways.resolve_payment_config`` reads them straight off the
@@ -559,6 +574,18 @@ class Order(models.Model):
     # receipt detail can show "Voided by: <name>".
     voided_by = models.CharField(max_length=120, blank=True, default="")
     voided_at = models.DateTimeField(null=True, blank=True)
+
+    # ── CRM loyalty ────────────────────────────────────────────────────
+    # The id the CRM gave this sale when it was filed for points (see
+    # ``bravepos.loyalty``).  Stored because it is the *only* handle for a
+    # void: one receipt number can name several CRM orders over its life —
+    # keyed, voided, re-keyed — so the receipt cannot identify the one we mean.
+    #
+    # Null is the ordinary state, not a fault: no customer on the bill, the
+    # customer has no phone, loyalty is off at this branch, or the CRM was
+    # unreachable when the sale was rung up.  Anything that reads this must
+    # treat null as "this bill was never filed" and do nothing.
+    crm_order_id = models.PositiveIntegerField(null=True, blank=True)
 
     # ── Peak full-tax-invoice integration ──────────────────────────────
     # Populated when a customer scans the receipt QR and submits the
