@@ -4,6 +4,18 @@
     "appVersionSource": "remote"
   },
   "build": {
+    "test": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "channel": "test",
+      "environment": "preview",
+      "env": {
+        "APP_VARIANT": "test",
+        "EXPO_PUBLIC_SENTRY_ENV": "test"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "android": {
