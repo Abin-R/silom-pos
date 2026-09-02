@@ -151,7 +151,14 @@ export function Btn({
         <>
           {!!icon && <Ionicons name={icon} size={18} color={v.fg} />}
           {!!label && (
-            <Text style={[s.btnText, { color: v.fg }, textStyle]}>{label}</Text>
+            // Never wrap: a two-line "Payment Confirm" pushed the footer out
+            // of the modal on a phone.
+            <Text
+              style={[s.btnText, { color: v.fg }, textStyle]}
+              numberOfLines={1}
+            >
+              {label}
+            </Text>
           )}
           {!!iconRight && <Ionicons name={iconRight} size={18} color={v.fg} />}
         </>

@@ -1651,7 +1651,10 @@ function CartSidebar({
           />
         }
         renderItem={({ item }) => (
-          <View style={styles.crow} testID={`cart-item-${item.product_id}`}>
+          <View
+            style={[styles.crow, embedded && styles.crowStacked]}
+            testID={`cart-item-${item.product_id}`}
+          >
             <TouchableOpacity
               style={styles.crowInfo}
               onPress={() => onEdit(item)}
@@ -1674,6 +1677,7 @@ function CartSidebar({
               )}
             </TouchableOpacity>
 
+            <View style={embedded ? styles.crowControls : styles.crowControlsInline}>
             <View style={styles.qty}>
               <TouchableOpacity
                 style={styles.qtyBtn}
@@ -1692,7 +1696,9 @@ function CartSidebar({
               </TouchableOpacity>
             </View>
 
-            <Money style={styles.crowLine}>
+            {embedded && <View style={{ flex: 1 }} />}
+
+            <Money style={[styles.crowLine, embedded && { width: "auto" }]}>
               {THB(item.price * item.qty - (item.discount || 0))}
             </Money>
 
@@ -1704,6 +1710,7 @@ function CartSidebar({
             >
               <Ionicons name="close" size={17} color={C.ink3} />
             </TouchableOpacity>
+            </View>
           </View>
         )}
       />
@@ -2220,7 +2227,7 @@ function PaymentModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, isNarrow && { padding: 0 }]}>
         <View
           style={[styles.payModal, isNarrow && styles.payModalNarrow]}
           testID="payment-modal"
@@ -2905,7 +2912,7 @@ function PaymentModal({
                   icon="arrow-back"
                   height={dense ? 52 : 60}
                   onPress={onClose}
-                  style={{ flexGrow: 0, flexShrink: 0, width: isNarrow ? 120 : 170 }}
+                  style={{ flexGrow: 0, flexShrink: 0, width: isNarrow ? 122 : 170 }}
                 />
                 <Btn
                   label={confirmLabel}
@@ -2914,7 +2921,7 @@ function PaymentModal({
                   disabled={!canConfirm}
                   onPress={handleConfirmPayment}
                   style={{ flex: 1 }}
-                  textStyle={{ fontSize: 17 }}
+                  textStyle={{ fontSize: isNarrow ? 15 : 17 }}
                   testID="confirm-payment-right"
                 />
               </View>
@@ -3844,7 +3851,19 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderLeftColor: C.line2,
   },
-  cartEmbedded: { width: "100%", flex: 1, borderLeftWidth: 0 },
+  // `flex: 1` alone is not enough here: styles.cart sets flexGrow/flexShrink to
+  // 0 so the tablet column keeps its fixed width, and those longhands survive
+  // the merge. The embedded sheet was therefore sized to its content, which
+  // collapsed the item list to zero height — the cart looked empty even with
+  // items in it. Reset the longhands explicitly.
+  cartEmbedded: {
+    width: "100%",
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minHeight: 0,
+    borderLeftWidth: 0,
+  },
   cartHead: {
     height: 80,
     flexDirection: "row",
@@ -3872,6 +3891,11 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   crowSep: { height: 1, marginHorizontal: 24, backgroundColor: C.line2 },
+  // Phone sheet: name on its own line, controls beneath. Inline, the stepper
+  // and the line total left the name about 86px on a 390px screen.
+  crowStacked: { flexDirection: "column", alignItems: "stretch", gap: 10 },
+  crowControls: { flexDirection: "row", alignItems: "center", gap: 12 },
+  crowControlsInline: { flexDirection: "row", alignItems: "center", gap: 14 },
   crowInfo: { flex: 1, minWidth: 0 },
   crowName: {
     fontSize: 15.5,
