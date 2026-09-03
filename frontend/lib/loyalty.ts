@@ -79,8 +79,20 @@ export type Loyalty = {
   /** Ids of the rewards the cashier ticked; sent with the order as `crm_reward_ids`. */
   selected: number[];
   toggle: (rewardId: number) => void;
-  /** Re-ask the CRM after a failure. */
-  retry: () => void;
+  /**
+   * Ask the CRM again for the same customer.
+   *
+   * The reason this exists is a real counter situation: the cashier picks the
+   * customer, and only *then* does the customer open their phone and redeem
+   * something. That voucher did not exist when we looked, so nothing on the
+   * screen will ever show it — the panel is not a live feed. This is how the
+   * cashier says "look again" without dropping the customer and re-picking
+   * them, which would lose every tick already made.
+   */
+  refresh: () => void;
+  /** True while `refresh` is in flight, so the list can stay put and the
+   *  control can spin rather than the whole panel collapsing to a spinner. */
+  refreshing: boolean;
 };
 
 /**
@@ -103,6 +115,7 @@ export function useLoyalty(
   const [state, setState] = useState<LoyaltyState>({ status: "off" });
   const [selected, setSelected] = useState<number[]>([]);
   const [attempt, setAttempt] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Is THIS branch in the loyalty rollout? Read once per branch from the same
   // feed the login screen uses, exactly as self-ordering does it. Undefined
@@ -139,14 +152,34 @@ export function useLoyalty(
   // somebody else's rewards on the bill.
   const liveRef = useRef(0);
 
+  // Ticks belong to one customer, so a change of customer drops them. A
+  // *refresh* must not: the cashier may already have ticked two rewards before
+  // the third was redeemed, and clearing those would be a worse bug than the
+  // stale list this button exists to fix.
+  useEffect(() => {
+    setSelected([]);
+  }, [customerId]);
+
+  // Whether the next run is a manual refresh rather than a first look. A ref,
+  // not state: it is set by the button and read by the effect it triggers, and
+  // a second render in between would be pointless.
+  const manualRef = useRef(false);
+
   useEffect(() => {
     const ticket = ++liveRef.current;
-    setSelected([]);
+    const manual = manualRef.current;
+    manualRef.current = false;
     if (!allowed || !customerId) {
       setState({ status: "off" });
       return;
     }
-    setState({ status: "loading" });
+    // A first look at a customer replaces the panel with a spinner — there is
+    // nothing on screen worth keeping. A refresh keeps the list exactly where
+    // it is and spins the button instead, because the cashier is mid-sale and
+    // the rewards jumping about under their finger is how the wrong one gets
+    // ticked.
+    if (manual) setRefreshing(true);
+    else setState({ status: "loading" });
     (async () => {
       try {
         const res = await apiFetch("/crm/member", {
@@ -162,19 +195,28 @@ export function useLoyalty(
         }
         const body = await safeJson<ApiReply>(res, {});
         if (ticket !== liveRef.current) return;
+        const rewards = Array.isArray(body.rewards) ? body.rewards : [];
         setState(
           body.enabled
-            ? {
-                status: "ready",
-                member: body.member ?? null,
-                rewards: Array.isArray(body.rewards) ? body.rewards : [],
-              }
+            ? { status: "ready", member: body.member ?? null, rewards }
             : { status: "off" },
+        );
+        // Drop ticks for anything the CRM no longer offers. Between the first
+        // look and this one a voucher may have been confirmed on another till,
+        // or expired; sending its id would be a silent no-op, and the cashier
+        // would have handed something over believing it was recorded.
+        setSelected((ids) =>
+          ids.filter((id) => rewards.some((r) => r.id === id && r.redeemable)),
         );
       } catch {
         // apiFetch already reported it to Sentry; the tablet is offline or the
         // backend is unreachable, and the cart carries on without a panel.
         if (ticket === liveRef.current) setState({ status: "error" });
+      } finally {
+        // Whatever happened, the button stops spinning. Ticks are deliberately
+        // left alone on failure: the list comes back on a successful retry and
+        // the cashier finds their work where they left it.
+        if (ticket === liveRef.current) setRefreshing(false);
       }
     })();
   }, [allowed, customerId, attempt]);
@@ -185,7 +227,10 @@ export function useLoyalty(
     );
   }, []);
 
-  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const refresh = useCallback(() => {
+    manualRef.current = true;
+    setAttempt((n) => n + 1);
+  }, []);
 
-  return { state, selected, toggle, retry };
+  return { state, selected, toggle, refresh, refreshing };
 }

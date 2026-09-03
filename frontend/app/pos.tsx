@@ -1411,7 +1411,13 @@ function ProductCard({
  */
 function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
   useT(); // re-render this screen when the language changes
-  const { state, selected, toggle, retry } = loyalty;
+  const { state, selected, toggle, refresh, refreshing } = loyalty;
+  // A phone in landscape gives the sheet barely 300pt to work with, so a flat
+  // cap that is comfortable in portrait still buries the Checkout button there.
+  // Take whichever is smaller.
+  const { height: winH } = useWindowDimensions();
+  const rewardListMax = Math.min(176, Math.round(winH * 0.22));
+
   // Null until the cashier opens or closes the list themselves; until then the
   // rewards open on their own when there is something to act on. The customer
   // redeemed that voucher on their phone and is standing at the counter
@@ -1422,7 +1428,13 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
 
   const rewards = state.status === "ready" ? state.rewards : [];
   const redeemable = rewards.filter((r) => r.redeemable).length;
-  const open = openChoice ?? redeemable > 0;
+  // Auto-opening is right on a phone, where the sheet has room for the list and
+  // the items both. The tablet cart column does not: its header, totals and pay
+  // button leave about 190pt to split, so an open list would leave a single
+  // clipped cart row. There the "n ready" pill carries the message instead and
+  // one tap opens the list — the cashier still cannot miss that a voucher is
+  // waiting, which is the whole point of opening it unasked.
+  const open = openChoice ?? (redeemable > 0 && winH >= 780);
 
   if (state.status === "off") return null;
 
@@ -1440,7 +1452,7 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
       <View style={styles.loyaltyBox} testID="loyalty-error">
         <Ionicons name="cloud-offline-outline" size={16} color={C.warn} />
         <Text style={[styles.loyaltyMuted, { flex: 1 }]}>{tr("pos.loyalty_unavailable")}</Text>
-        <TouchableOpacity onPress={retry} hitSlop={8} testID="loyalty-retry">
+        <TouchableOpacity onPress={refresh} hitSlop={8} testID="loyalty-retry">
           <Text style={styles.loyaltyRetry}>{tr("pos.loyalty_retry")}</Text>
         </TouchableOpacity>
       </View>
@@ -1450,13 +1462,33 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
   const { member } = state;
 
   return (
-    <View style={styles.loyaltyBox} testID="loyalty-panel">
+    <View style={[styles.loyaltyBox, styles.loyaltyBoxCol]} testID="loyalty-panel">
       <View style={styles.loyaltyHead}>
         <MaterialCommunityIcons name="star-four-points-outline" size={15} color={C.accent} />
         <Text style={styles.loyaltyPoints}>
           {tr("pos.loyalty_points", { pts: member ? member.points_balance : "0" })}
         </Text>
-        {!!member?.tier && <Text style={styles.loyaltyTier} numberOfLines={1}>{member.tier}</Text>}
+        {/* Always rendered, even empty: it carries the flex that pushes the
+            refresh control to the right-hand edge. */}
+        <Text style={styles.loyaltyTier} numberOfLines={1}>{member?.tier || ""}</Text>
+        {/* The customer often redeems on their phone *after* the cashier has
+            already picked them, and this panel is a snapshot rather than a live
+            feed — so without this the new voucher could never appear on the
+            bill being rung up. Re-picking the customer would work but would
+            throw away every tick already made. */}
+        <TouchableOpacity
+          onPress={refresh}
+          disabled={refreshing}
+          hitSlop={10}
+          accessibilityLabel={tr("pos.loyalty_refresh")}
+          testID="loyalty-refresh"
+        >
+          {refreshing ? (
+            <ActivityIndicator size="small" color={C.ink3} />
+          ) : (
+            <Ionicons name="refresh" size={16} color={C.brand} />
+          )}
+        </TouchableOpacity>
       </View>
 
       {rewards.length === 0 ? (
@@ -1481,15 +1513,28 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
             )}
           </TouchableOpacity>
 
-          {open &&
-            rewards.map((r) => (
-              <RewardRow
-                key={r.id}
-                reward={r}
-                checked={selected.includes(r.id)}
-                onToggle={() => toggle(r.id)}
-              />
-            ))}
+          {open && (
+            // A customer with a dozen vouchers used to push the totals and the
+            // Checkout button clean off the bottom of the phone sheet, and
+            // nothing here scrolled, so the sale could not be finished at all.
+            // The list gets its own bounded scroller: the cut-off row is what
+            // tells the cashier there is more below.
+            <ScrollView
+              style={[styles.loyaltyRewardList, { maxHeight: rewardListMax }]}
+              contentContainerStyle={styles.loyaltyRewardListInner}
+              nestedScrollEnabled
+              testID="loyalty-reward-list"
+            >
+              {rewards.map((r) => (
+                <RewardRow
+                  key={r.id}
+                  reward={r}
+                  checked={selected.includes(r.id)}
+                  onToggle={() => toggle(r.id)}
+                />
+              ))}
+            </ScrollView>
+          )}
         </>
       )}
     </View>
@@ -1639,7 +1684,7 @@ function CartSidebar({
       <FlatList
         data={cart}
         keyExtractor={(i) => i.product_id}
-        style={{ flex: 1 }}
+        style={styles.cartList}
         contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.crowSep} />}
@@ -3864,6 +3909,9 @@ const styles = StyleSheet.create({
     minHeight: 0,
     borderLeftWidth: 0,
   },
+  // A floor of about two rows. Whatever else is competing for the sheet, the
+  // cashier can still see what they are selling.
+  cartList: { flex: 1, minHeight: 64 },
   cartHead: {
     height: 80,
     flexDirection: "row",
@@ -4578,6 +4626,27 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 11,
     backgroundColor: C.sunk,
+    // The cart is a fixed-height column on the phone sheet. Without these the
+    // box holds its full content size and the item list underneath is the only
+    // thing that gives, so the sale you are ringing up disappears behind a list
+    // of vouchers. Let the box shrink; the reward list inside it scrolls.
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  // The loading and error states are a single icon-and-text line, which is what
+  // the wrapping row above is for. The list state is genuinely a column, and it
+  // has to say so: on a row, flexShrink governs width, so the reward list could
+  // not give height back no matter what it was allowed to do, and it painted
+  // straight over the cart underneath.
+  loyaltyBoxCol: {
+    flexDirection: "column",
+    // Inherited `wrap` is not harmless here: once this is a bounded column,
+    // wrapping moves the overflow into a second column off the side of the
+    // screen instead of down, and the reward list simply disappears.
+    flexWrap: "nowrap",
+    alignItems: "stretch",
+    gap: 6,
+    overflow: "hidden",
   },
   loyaltyHead: { flexDirection: "row", alignItems: "center", gap: 6, width: "100%" },
   loyaltyPoints: { ...MONO, fontSize: 13, fontWeight: "700", color: C.ink },
@@ -4592,6 +4661,10 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   loyaltyRewardsLabel: { fontSize: 12, fontWeight: "600", color: C.ink2 },
+  // Roughly four rows. Enough that a short list never scrolls, low enough that
+  // the item list and the Checkout button always keep their share of the sheet.
+  loyaltyRewardList: { width: "100%", maxHeight: 176, flexShrink: 1, minHeight: 0 },
+  loyaltyRewardListInner: { paddingBottom: 2 },
   loyaltyReadyPill: {
     backgroundColor: C.okTint,
     borderRadius: R.pill,

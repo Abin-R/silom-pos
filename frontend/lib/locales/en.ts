@@ -561,6 +561,7 @@ const en = {
     loyalty_no_rewards: "No rewards yet",
     loyalty_points: "%{pts} pts",
     loyalty_ready: "%{n} ready",
+    loyalty_refresh: "Check for new rewards",
     loyalty_retry: "Retry",
     loyalty_rewards: "Rewards (%{n})",
     loyalty_unavailable: "Rewards unavailable",

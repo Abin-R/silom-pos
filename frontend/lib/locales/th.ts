@@ -553,6 +553,7 @@ const th = {
     loyalty_no_rewards: "ยังไม่มีรางวัล",
     loyalty_points: "%{pts} แต้ม",
     loyalty_ready: "พร้อมใช้ %{n} รายการ",
+    loyalty_refresh: "ตรวจสอบรางวัลใหม่",
     loyalty_retry: "ลองใหม่",
     loyalty_rewards: "รางวัล (%{n})",
     loyalty_unavailable: "ดูรางวัลไม่ได้",
