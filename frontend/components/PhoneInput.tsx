@@ -33,7 +33,13 @@ import { t as tr, useT } from "../lib/i18n";
 
 type Props = {
   value: string;
-  onChange: (e164: string, valid: boolean) => void;
+  /**
+   * `reason` is why the number is not usable ("Too long (max 9 digits)"), and
+   * is undefined when it is. The field already shows it inline, but a parent
+   * that gates a button on `valid` needs it too — otherwise the button can
+   * only sit there refusing to work without saying why.
+   */
+  onChange: (e164: string, valid: boolean, reason?: string) => void;
   placeholder?: string;
   /** ISO code (e.g. "TH") to default to when value is empty */
   defaultCountryCode?: string;
@@ -63,7 +69,11 @@ export default function PhoneInput({
 
   // Propagate every change upward so the parent always sees the latest E.164.
   useEffect(() => {
-    onChange(validation.valid ? validation.e164 : '', validation.valid);
+    onChange(
+      validation.valid ? validation.e164 : '',
+      validation.valid,
+      validation.valid ? undefined : (validation as { reason: string }).reason,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [country.code, local]);
 

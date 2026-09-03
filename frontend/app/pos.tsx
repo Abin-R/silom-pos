@@ -29,7 +29,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
 import { C, MONO, R } from "../lib/theme";
-import { showAlert } from "../lib/dialog";
+import { showAlert, confirmDialog } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
 import { methodLabel } from "../lib/payments";
 import { useLoyalty, type Loyalty, type LoyaltyReward } from "../lib/loyalty";
@@ -3136,6 +3136,9 @@ function CustomerModal({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [phoneValid, setPhoneValid] = useState(true);  // true when empty or well-formed
+  // Why the number was rejected, straight from PhoneInput. Kept so the save
+  // button can answer "why won't this work?" instead of just refusing.
+  const [phoneReason, setPhoneReason] = useState<string | undefined>();
 
   useEffect(() => {
     if (visible) {
@@ -3158,9 +3161,52 @@ function CustomerModal({
     [customers, q]
   );
 
+  const canSaveCustomer = !!name.trim() && phoneValid;
+  // Nothing stopped a second tap from firing a second POST, and each one makes
+  // its own customer row. Two rows on one phone number is now two customers
+  // fighting over one loyalty account, so the repeated press this exists to
+  // absorb is exactly the one that used to cause the damage. A ref, not state:
+  // two taps in a frame would both read the same stale state value.
+  const savingRef = useRef(false);
+
   const addCustomer = async () => {
-    if (!name.trim() || !phoneValid) return;
+    if (savingRef.current) return;
+    if (!name.trim()) {
+      showAlert(tr("pos.cant_save_customer"), tr("pos.customer_needs_a_name"));
+      return;
+    }
+    if (!phoneValid) {
+      // `phoneReason` is PhoneInput's own wording — "Too long (max 9 digits)",
+      // "Invalid Thailand mobile number". Nearly always the country picker
+      // still sitting on Thailand under a foreign number, so say that too.
+      showAlert(
+        tr("pos.cant_save_customer"),
+        `${phoneReason ?? tr("pos.check_the_phone_number")}\n\n${tr("pos.check_country_code")}`,
+      );
+      return;
+    }
+
+    // The same number on two customer rows used to be harmless — the phone was
+    // a note on a card. It decides who earns the points now: the CRM keys a
+    // membership on the number and never renames an existing one, so a second
+    // row quietly rings up against the first row's member, under the first
+    // row's name. Not blocked, because a household really can share a phone;
+    // it just must not happen silently.
+    const clash = phone.trim()
+      ? customers.find((x) => x.phone && x.phone === phone.trim())
+      : undefined;
+    if (clash) {
+      const go = await confirmDialog(
+        tr("pos.number_already_used"),
+        tr("pos.number_already_used_body", { name: clash.name }),
+        tr("pos.save_anyway"),
+        false,
+      );
+      if (!go) return;
+    }
+
     let c: Customer | null = null;
+    savingRef.current = true;
     try {
       const res = await apiFetch(`${API}/customers`, {
         method: "POST",
@@ -3175,6 +3221,8 @@ function CustomerModal({
     } catch (e: any) {
       showAlert(tr("common.couldnt_save_customer"), e?.message || tr("pos.please_try_again"));
       return;
+    } finally {
+      savingRef.current = false;
     }
     // Guard against a success response missing the required field — never select
     // an object the cart can't render (it reads customer.name[0]).
@@ -3185,6 +3233,7 @@ function CustomerModal({
     setCustomers((list) => [c!, ...list]);
     setName("");
     setPhone("");
+    setPhoneReason(undefined);
     setShowAdd(false);
     onSelect(c);
   };
@@ -3221,15 +3270,24 @@ function CustomerModal({
               />
               <PhoneInput
                 value={phone}
-                onChange={(e164, valid) => { setPhone(e164); setPhoneValid(valid); }}
+                onChange={(e164, valid, reason) => {
+                  setPhone(e164);
+                  setPhoneValid(valid);
+                  setPhoneReason(reason);
+                }}
                 placeholder={tr("common.phone_optional")}
                 defaultCountryCode="TH"
                 testID="new-cust-phone"
               />
               <TouchableOpacity
-                style={[styles.saveCustBtn, (!name.trim() || !phoneValid) && { opacity: 0.4 }]}
+                // Deliberately NOT `disabled`. A dimmed button that swallows
+                // taps is how a cashier ends up pressing Save half a dozen
+                // times at a counter and concluding the till is broken — the
+                // reason it won't save is on screen, but never where they are
+                // looking. It stays dimmed to signal it won't go through, and
+                // says why when pressed.
+                style={[styles.saveCustBtn, !canSaveCustomer && { opacity: 0.4 }]}
                 onPress={addCustomer}
-                disabled={!name.trim() || !phoneValid}
                 testID="save-customer"
               >
                 <Text style={styles.saveCustText}>{tr("pos.save_and_select")}</Text>
