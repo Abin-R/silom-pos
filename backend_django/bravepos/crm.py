@@ -25,7 +25,7 @@ about when any of them should be called:
 * :func:`register_member` — ``POST /members/``.  Signs a customer up.  Safe to
   repeat: a number that already has a membership comes back unchanged.
 * :func:`record_order` — ``POST /orders/``.  Files a finished sale so it earns
-  points and confirms the vouchers it consumed.
+  points and confirms the vouchers it consumed, under source ``retail``.
 * :func:`void_order` — ``POST /orders/<id>/void/``.  Reverses one, taking the
   CRM's own order id — never our receipt number.
 
@@ -71,6 +71,19 @@ CREATE_TIMEOUT = 20.0
 # is there to stop it costing anything at all.
 MEMBER_TIMEOUT = 6.0
 ORDER_TIMEOUT = 8.0
+
+# What the CRM files a till's sales under.  These are sales rung up by a
+# cashier at a counter, so they are "retail" — not "api", which is the CRM's
+# default for anything arriving over this interface and lumps our shop floor in
+# with every other machine caller.
+#
+# It is not only a label.  The CRM scopes its replay check to receipt + source
+# + member, so this value is part of the idempotency key: a receipt already
+# filed under one source will not match a retry under another, and would file a
+# second order.  That only reaches orders filed before this changed — a handful
+# on the test branch — but it is the reason this is a single constant rather
+# than something a caller passes in and can vary.
+POS_SOURCE = "retail"
 
 
 class CrmError(RuntimeError):
@@ -342,12 +355,13 @@ def record_order(*, phone: str, amount: Decimal | str, receipt_id: str,
         "staff_name": (staff_name or "")[:200],
         "reward_ids": [int(r) for r in (reward_ids or [])],
         "notify": bool(notify),
+        # Sent explicitly rather than left to the CRM's "api" default: a sale
+        # rung up at a counter is retail trade, whatever pipe it reached the
+        # CRM through.  See POS_SOURCE.
+        "source": POS_SOURCE,
     }
     if branch_id is not None:
         body["branch_id"] = int(branch_id)
-    # ``source`` is left at the CRM's default of "api" on purpose — it is the
-    # value every machine-filed order has ever carried, and splitting it would
-    # split the shop's own history in two.
     return _request("POST", "/orders/", timeout=ORDER_TIMEOUT, json_body=body)
 
 

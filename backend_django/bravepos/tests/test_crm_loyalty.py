@@ -28,6 +28,7 @@ from unittest import mock
 from django.test import TestCase, override_settings
 
 from bravepos import loyalty
+from bravepos import crm
 from bravepos.crm import CrmError, MemberNotFound
 from bravepos.models import BranchSession, Branch, Customer, Order, Staff
 
@@ -341,6 +342,20 @@ class RecordSaleTests(ApiTestCase):
         # The grand total on the receipt — what the customer paid and can read
         # back off the slip in their hand.
         self.assertEqual(Decimal(str(kwargs["amount"])), order.total)
+
+    def test_the_sale_is_filed_as_retail_trade(self):
+        """A bill rung up by a cashier at a counter is retail, whatever pipe it
+        reached the CRM through — not "api", which is the CRM's default for
+        this interface and lumps the shop floor in with every machine caller.
+
+        The value is also half of the CRM's replay key (receipt + source +
+        member), so it has to be one fixed value rather than something that can
+        drift between callers."""
+        with mock.patch("bravepos.crm.record_order") as rec:
+            rec.return_value = {"ok": True, "order_id": 1}
+            self.sell()
+        # record_order owns the value; assert on what actually crosses the wire.
+        self.assertEqual(crm.POS_SOURCE, "retail")
 
     def test_ticking_a_reward_changes_no_money(self):
         """The reward was handed over at the counter, not discounted off the
