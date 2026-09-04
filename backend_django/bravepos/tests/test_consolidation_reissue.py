@@ -59,8 +59,16 @@ class FakePeak:
     the case that must never end with two live receipts for one day.
     """
 
-    def __init__(self, void_res_code: str = "200"):
+    def __init__(self, void_res_code: str = "200", refuse: bool = False):
         self.void_res_code = void_res_code
+        # Peak out of credit: the queue answers 200 with an entry that carries
+        # a reason and no ``code``.  Nothing about the envelope says it failed.
+        # A queue id refused once is refused for good — it never becomes a
+        # document later, which is what separates it from one still
+        # materialising.  Seed ``refused_ids`` to model a row left behind by an
+        # earlier run that was refused.
+        self.refuse = refuse
+        self.refused_ids: set[str] = set()
         self.enqueued: list[dict] = []
         self.voided: list[str] = []
         self.queue_checks: list[str] = []
@@ -88,12 +96,21 @@ class FakePeak:
 
         if path == "/receipts/queue" and method == "POST":
             self._seq += 1
+            queue_id = f"q{self._seq}"
             self.enqueued.append(body["PeakReceipts"]["receipts"][0])
-            return {"queueId": f"q{self._seq}"}
+            if self.refuse:
+                self.refused_ids.add(queue_id)
+            return {"queueId": queue_id}
 
         if path == "/receipts/queue" and method == "GET":
             queue_id = body["queueId"]
             self.queue_checks.append(queue_id)
+            if queue_id in self.refused_ids:
+                return {"PeakReceipts": {"resCode": "200", "receipts": [{
+                    "resCode": "399",
+                    "resDesc": "Cannot insert transaction because it "
+                               "exceeds the available Peak credit",
+                }]}}
             return {"PeakReceipts": {"receipts": [{
                 "code": f"RT-{queue_id}",
                 "documentLink": f"https://peak.test/{queue_id}",
@@ -390,3 +407,97 @@ class ReissueSweepTests(ConsolidationTestCase):
         self.assertEqual(fake.enqueued, [])
         cr.refresh_from_db()
         self.assertTrue(cr.needs_reissue)
+
+
+class RefusedReceiptTests(ConsolidationTestCase):
+    """Peak refusing a receipt must not read like Peak filing one.
+
+    On 2026-09-01 the account ran out of credit and Peak refused all seven
+    branch-days with resCode 399 — inside an otherwise ordinary 200 response.
+    The queue entry was stored as though it were the document, so the row
+    ended up with an empty ``peak_code``, ``needs_reissue`` false and a log
+    line reading "issued -> queued <uuid>".  Nothing retried those days and no
+    report called them unbilled; they were found by hand three days later.
+    """
+
+    def run_issue(self, fake: FakePeak, *extra):
+        self.out, self.err = StringIO(), StringIO()
+        with fake.patch(), mock.patch.dict(
+            os.environ, {"PEAK_BRAVEPOS_CONTACT_ID": CONTACT_ID}
+        ):
+            call_command(
+                "consolidate_daily", "--issue", *extra,
+                stdout=self.out, stderr=self.err,
+            )
+
+    def test_a_refusal_is_not_stored_as_a_document(self):
+        yesterday = self.today - timedelta(days=1)
+        self.make_order(yesterday, "PS000000280", total="1760.00")
+
+        fake = FakePeak(refuse=True)
+        self.run_issue(fake)
+
+        cr = ConsolidatedReceipt.objects.get(branch=self.branch, date=yesterday)
+        self.assertEqual(cr.peak_code, "")
+        self.assertIsNone(cr.response)
+        self.assertTrue(cr.needs_reissue)
+
+    def test_a_refusal_is_reported_as_a_failure_not_as_a_queued_receipt(self):
+        yesterday = self.today - timedelta(days=1)
+        self.make_order(yesterday, "PS000000281", total="1760.00")
+
+        self.run_issue(FakePeak(refuse=True))
+
+        self.assertIn("REFUSED", self.err.getvalue())
+        self.assertNotIn("issued \u2192 queued", self.out.getvalue())
+
+    def test_the_refused_day_is_filed_on_the_next_run(self):
+        """The flag is the whole point: once credit is back, the ordinary
+        nightly run picks the day up in its sweep — nobody has to notice."""
+        day = self.today - timedelta(days=3)
+        self.make_order(day, "PS000000282", total="1760.00")
+        cr = ConsolidatedReceipt.objects.create(
+            branch=self.branch, date=day, peak_queue_id="q9",
+        )
+        cr.needs_reissue = True
+        cr.save(update_fields=["needs_reissue"])
+
+        fake = FakePeak()
+        fake.refused_ids.add("q9")  # what the earlier, credit-less run left
+        self.run_issue(fake)
+
+        cr.refresh_from_db()
+        self.assertEqual(len(fake.enqueued), 1)
+        # Nothing was voided: the refused attempt never became a document.
+        self.assertEqual(fake.voided, [])
+        self.assertTrue(cr.peak_code)
+        self.assertFalse(cr.needs_reissue)
+
+    def test_a_day_still_refused_stays_flagged_for_the_next_run(self):
+        day = self.today - timedelta(days=3)
+        self.make_order(day, "PS000000283", total="1760.00")
+        cr = ConsolidatedReceipt.objects.create(
+            branch=self.branch, date=day, peak_queue_id="q9",
+        )
+        cr.needs_reissue = True
+        cr.save(update_fields=["needs_reissue"])
+
+        fake = FakePeak(refuse=True)
+        fake.refused_ids.add("q9")
+        self.run_issue(fake)
+
+        cr.refresh_from_db()
+        self.assertEqual(cr.peak_code, "")
+        self.assertTrue(cr.needs_reissue)
+
+    def test_an_accepted_receipt_still_stores_its_document(self):
+        """The guard must not cost the ordinary path anything."""
+        yesterday = self.today - timedelta(days=1)
+        self.make_order(yesterday, "PS000000284", total="1760.00")
+
+        self.run_issue(FakePeak())
+
+        cr = ConsolidatedReceipt.objects.get(branch=self.branch, date=yesterday)
+        self.assertTrue(cr.peak_code.startswith("RT-"))
+        self.assertIsNotNone(cr.response)
+        self.assertFalse(cr.needs_reissue)

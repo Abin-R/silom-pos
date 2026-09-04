@@ -538,10 +538,29 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"  {label}: {e}"))
                 continue
 
-            code = cr.peak_code or f"queued {cr.peak_queue_id}"
+            self._report_issued(label, cr, action, bp)
+
+    def _report_issued(self, label: str, cr, action: str, bp: dict) -> None:
+        """Say plainly whether the branch-day ended up filed.
+
+        A receipt Peak refuses comes back with no code and the row flagged,
+        which used to print as "queued <uuid>" — indistinguishable from one
+        still materialising, and so read as fine. The 2026-09-01 credit
+        refusals scrolled past a nightly log looking exactly like a normal
+        night. A day that is not filed now says so on stderr.
+        """
+        money = f"({bp['grand_total']:,.2f} THB, {bp['order_count']} bills)"
+        if cr.peak_code:
+            self.stdout.write(f"  {label}: {action} → {cr.peak_code} {money}")
+        elif cr.needs_reissue:
+            self.stderr.write(self.style.ERROR(
+                f"  {label}: REFUSED by Peak — not filed {money}. "
+                f"Flagged; the next --issue run retries it."
+            ))
+        else:
             self.stdout.write(
-                f"  {label}: {action} → {code} "
-                f"({bp['grand_total']:,.2f} THB, {bp['order_count']} bills)"
+                f"  {label}: {action} → queued {cr.peak_queue_id} "
+                f"(not yet materialised) {money}"
             )
 
     # ── reissue sweep ────────────────────────────────────────────────────
@@ -640,11 +659,7 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"  {label}: {e}"))
                 continue
 
-            code = cr.peak_code or f"queued {cr.peak_queue_id}"
-            self.stdout.write(
-                f"  {label}: {action} → {code} "
-                f"({bp['grand_total']:,.2f} THB, {bp['order_count']} bills)"
-            )
+            self._report_issued(label, cr, action, bp)
 
     # ── human output ─────────────────────────────────────────────────────
     def _print_summary(self, payload: dict) -> None:

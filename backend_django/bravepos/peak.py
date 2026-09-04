@@ -701,12 +701,27 @@ def build_consolidated_receipt(
 def poll_consolidated_receipt(cr: ConsolidatedReceipt, attempts: int = 5,
                               interval: float = 2.0) -> Optional[str]:
     """Poll the queue until Peak materialises the document, then store the
-    payload and return its receipt code.  ``None`` while still processing.
+    payload and return its receipt code.  ``None`` while still processing, and
+    ``None`` with the branch-day flagged for reissue when Peak refused it.
 
     The response is only written once Peak has actually produced a receipt.
     Storing the enqueue acknowledgement instead would overwrite the code of
     the document this one replaces — leaving a branch-day whose live Peak
     receipt is recorded nowhere.
+
+    A queue entry carrying no ``code`` is a refusal, not a document.  Peak
+    answers a rejected receipt with the same HTTP 200 and ``resCode`` 200 the
+    accepted ones get, and puts the reason inside the entry — on 2026-09-01 it
+    was ``resCode`` 399, "Cannot insert transaction because it exceeds the
+    available Peak credit", for all seven branches that traded that day.
+    Storing that entry as ``response`` made a refusal read like a filed
+    receipt: ``peak_code`` came back empty, ``needs_reissue`` stayed false, and
+    since ``--issue`` only ever looks at yesterday, nothing came back for those
+    days.  80,740 THB sat unbilled and no report said so.
+
+    So a refusal is now recorded as what it is: ``response`` is left holding
+    whatever document it already held, and the row is flagged, which is the
+    one thing the sweep in ``consolidate_daily --issue`` acts on.
     """
     if not cr.peak_queue_id:
         return None
@@ -718,10 +733,24 @@ def poll_consolidated_receipt(cr: ConsolidatedReceipt, attempts: int = 5,
             "/receipts/queue", "GET", {"queueId": cr.peak_queue_id},
         )
         receipts = (resp.get("PeakReceipts") or {}).get("receipts") or []
-        if receipts:
+        if not receipts:
+            continue  # still in the queue — keep waiting
+
+        code = receipts[0].get("code") or ""
+        if code:
             cr.response = resp
             cr.save(update_fields=["response", "updated_at"])
-            return receipts[0].get("code") or ""
+            return code
+
+        # Refused, and Peak will not change its mind about this queue id.
+        # Flagging rather than retrying here: the sweep rebuilds the day from
+        # the orders as they stand and enqueues afresh, which is what a
+        # refused receipt needs and what a caller mid-void must not do inline.
+        if not cr.needs_reissue:
+            cr.needs_reissue = True
+            cr.save(update_fields=["needs_reissue", "updated_at"])
+        return None
+
     return None
 
 
