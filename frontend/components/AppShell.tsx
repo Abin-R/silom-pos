@@ -30,9 +30,32 @@ import { NavRail, NavDrawer, RAIL_WIDTH, RAIL_COLLAPSED_WIDTH } from "./NavRail"
  */
 export const WIDE = 820;
 
+/**
+ * Minimum height for that same layout.
+ *
+ * Width alone stopped being enough once phones grew. A Pixel 7 on its side is
+ * 883pt wide and sails over WIDE, but it is only 412pt tall — and the cart
+ * column's header, totals and Checkout button do not fit in 412pt, so the one
+ * button the cashier has to press ended up below the bottom of the screen
+ * with nothing to scroll. Every tablet we ship to clears this in landscape
+ * (a Galaxy Tab A9 is the shortest, at 533pt); no phone comes close, the
+ * tallest being about 430pt on its side.
+ */
+export const WIDE_MIN_HEIGHT = 480;
+
+/**
+ * Does a viewport this size get the four-zone layout? Four screens ask, and
+ * every one of them used to spell the test out again — which is how login
+ * once ended up on the phone layout while the rest of the app was on the
+ * tablet one. One answer, so they cannot drift apart.
+ */
+export function isWideSize(width: number, height: number) {
+  return width >= WIDE && height >= WIDE_MIN_HEIGHT;
+}
+
 export function useIsWide() {
-  const { width } = useWindowDimensions();
-  return width >= WIDE;
+  const { width, height } = useWindowDimensions();
+  return isWideSize(width, height);
 }
 
 /**

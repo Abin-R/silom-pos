@@ -510,6 +510,7 @@ const th = {
     sale: "ขายสินค้า",
   },
   pos: {
+    add_customer: "เพิ่มลูกค้า",
     all_orders: "ออเดอร์ทั้งหมด",
     amount_due: "ยอดที่ต้องชำระ",
     apply_for_service: "สมัครใช้บริการ",

@@ -34,7 +34,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { C, MONO, R } from "../lib/theme";
 import { Btn, Tag } from "../lib/ui";
-import { WIDE } from "../components/AppShell";
+import { isWideSize } from "../components/AppShell";
 import { t as tr, useT, formatLongDate, formatClock } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -73,7 +73,7 @@ export default function Login() {
   const { width, height } = useWindowDimensions();
   // Same threshold as every other screen — a second copy is how login ended
   // up on the phone layout while the rest of the app was on the tablet one.
-  const isWide = width >= WIDE;
+  const isWide = isWideSize(width, height);
   const insets = useSafeAreaInsets();
   // Pack things tighter on shorter phones so the keypad never hits the
   // gesture-nav strip. Tested visually against ~640px-tall androids.

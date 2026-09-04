@@ -516,6 +516,7 @@ const en = {
     sale: "Sale",
   },
   pos: {
+    add_customer: "Add customer",
     all_orders: "All Orders",
     amount_due: "AMOUNT DUE",
     apply_for_service: "Apply for service",

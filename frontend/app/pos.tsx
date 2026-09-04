@@ -23,7 +23,7 @@ import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
-import { AppShell, TopBar, WIDE, railWidth, useDense } from "../components/AppShell";
+import { AppShell, TopBar, isWideSize, railWidth, useDense } from "../components/AppShell";
 import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
@@ -169,7 +169,7 @@ export default function POS() {
   // `isWide` is the four-zone layout: navy rail, categories, grid, cart. It
   // must match the shell's own threshold or the rail and the columns disagree
   // about which layout is on screen.
-  const isWide = width >= WIDE;
+  const isWide = isWideSize(width, height);
   const isMid = width >= 600;
   // Real tablets are not the 1536px the design was drawn at — a Galaxy Tab is
   // 1138. Holding the mockup's fixed 262 + 466 there leaves ~170px for the
@@ -1012,6 +1012,7 @@ export default function POS() {
               cartCount={cartCount}
               onClear={clearCart}
               onRemoveCustomer={() => setCustomer(null)}
+              onPickCustomer={() => setShowCustomer(true)}
               onPay={() => setShowPayment(true)}
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
@@ -1035,7 +1036,21 @@ export default function POS() {
               </View>
             </View>
             <View style={styles.fabMid}>
-              <Text style={styles.fabTotalLabel}>{tr("common.total")}</Text>
+              {/* Who the sale is for, on the one control the cashier is
+                  already looking at. The customer chip lives inside the cart
+                  sheet, so on a phone-width layout nothing on the sale screen
+                  said a customer had been picked — the caption this replaces
+                  only labelled a figure that is unmistakable anyway. */}
+              {customer ? (
+                <View style={styles.fabCust}>
+                  <Ionicons name="person" size={11} color="rgba(255,255,255,0.85)" />
+                  <Text style={styles.fabCustName} numberOfLines={1}>
+                    {customer.name}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.fabTotalLabel}>{tr("common.total")}</Text>
+              )}
               <Text style={styles.fabTotal}>{THB(total)}</Text>
             </View>
             <View style={styles.fabRight}>
@@ -1134,6 +1149,15 @@ export default function POS() {
                 setShowCart(false);
               }}
               onRemoveCustomer={() => setCustomer(null)}
+              // The sheet closes first. Two native modals stacked on Android
+              // is a coin toss over which one is actually on top, and a picker
+              // that opens behind the sheet reads as a dead button. The cart
+              // button now names the customer, so the choice is confirmed on
+              // the screen this drops back to.
+              onPickCustomer={() => {
+                setShowCart(false);
+                setShowCustomer(true);
+              }}
               onPay={() => {
                 setShowCart(false);
                 setShowPayment(true);
@@ -1409,7 +1433,16 @@ function ProductCard({
  * ignores those ids silently, and a toggle that did nothing would read as a
  * broken till.
  */
-function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
+function LoyaltyPanel({
+  loyalty,
+  inScroller,
+}: {
+  loyalty: Loyalty;
+  /** The panel already sits in a list that scrolls. Its own bounded scroller
+   *  then buys nothing and costs a nested gesture surface, so the rewards
+   *  render at full height and the list underneath does the scrolling. */
+  inScroller?: boolean;
+}) {
   useT(); // re-render this screen when the language changes
   const { state, selected, toggle, refresh, refreshing } = loyalty;
   // A phone in landscape gives the sheet barely 300pt to work with, so a flat
@@ -1515,16 +1548,11 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
 
           {open && (
             // A customer with a dozen vouchers used to push the totals and the
-            // Checkout button clean off the bottom of the phone sheet, and
-            // nothing here scrolled, so the sale could not be finished at all.
-            // The list gets its own bounded scroller: the cut-off row is what
-            // tells the cashier there is more below.
-            <ScrollView
-              style={[styles.loyaltyRewardList, { maxHeight: rewardListMax }]}
-              contentContainerStyle={styles.loyaltyRewardListInner}
-              nestedScrollEnabled
-              testID="loyalty-reward-list"
-            >
+            // Checkout button clean off the bottom, and nothing scrolled, so
+            // the sale could not be finished at all. Where this panel rides
+            // inside the cart's own list that is solved for it; standalone it
+            // still needs a bounded scroller of its own.
+            <RewardList inScroller={inScroller} maxHeight={rewardListMax}>
               {rewards.map((r) => (
                 <RewardRow
                   key={r.id}
@@ -1533,11 +1561,43 @@ function LoyaltyPanel({ loyalty }: { loyalty: Loyalty }) {
                   onToggle={() => toggle(r.id)}
                 />
               ))}
-            </ScrollView>
+            </RewardList>
           )}
         </>
       )}
     </View>
+  );
+}
+
+/**
+ * The rewards' scroll container — or no container at all, when the list this
+ * panel sits in is already the thing that scrolls.
+ */
+function RewardList({
+  inScroller,
+  maxHeight,
+  children,
+}: {
+  inScroller?: boolean;
+  maxHeight: number;
+  children: React.ReactNode;
+}) {
+  if (inScroller) {
+    return (
+      <View style={styles.loyaltyRewardListFlat} testID="loyalty-reward-list">
+        {children}
+      </View>
+    );
+  }
+  return (
+    <ScrollView
+      style={[styles.loyaltyRewardList, { maxHeight }]}
+      contentContainerStyle={styles.loyaltyRewardListInner}
+      nestedScrollEnabled
+      testID="loyalty-reward-list"
+    >
+      {children}
+    </ScrollView>
   );
 }
 
@@ -1603,6 +1663,7 @@ function CartSidebar({
   cartCount,
   onClear,
   onRemoveCustomer,
+  onPickCustomer,
   onPay,
   onInc,
   onDec,
@@ -1623,6 +1684,11 @@ function CartSidebar({
   cartCount: number;
   onClear: () => void;
   onRemoveCustomer: () => void;
+  /** Opens the customer picker. The cart is where a cashier is standing when
+   *  they realise the bill needs a member on it, and on a phone-width layout
+   *  — which is what a tablet held upright gets — it is the only place the
+   *  control can be: there is no action bar under the grid to carry it. */
+  onPickCustomer: () => void;
   onPay: () => void;
   onInc: (pid: string) => void;
   onDec: (pid: string) => void;
@@ -1634,6 +1700,17 @@ function CartSidebar({
   // Prices already include VAT (see the shop's tax setup), so the tax line is
   // the portion carved out of the total, not something added on top of it.
   const vat = total > 0 ? (total * 7) / 107 : 0;
+  // Real tills are short. A Galaxy Tab A9 in landscape leaves this column
+  // about 435pt, and the design's header, totals and Checkout button alone
+  // want 318 of it — so on the full spacing there is nothing left for the
+  // sale itself. Tighten the fixed furniture rather than let it win.
+  const dense = useDense();
+  // An inline row spends ~306pt on padding, the stepper, the line total and
+  // the remove control. This column bottoms out at 320pt, which leaves the
+  // product name 16pt — one letter and an ellipsis, which is what a cashier
+  // was actually being shown. Under ~416pt the row stacks instead, exactly as
+  // the phone sheet has always done.
+  const stacked = embedded || (width ?? 0) < 416;
 
   return (
     <View
@@ -1645,7 +1722,7 @@ function CartSidebar({
       testID="cart-sidebar"
     >
       {!embedded && (
-        <View style={styles.cartHead}>
+        <View style={[styles.cartHead, dense && styles.cartHeadDense]}>
           <Text style={styles.cartTitle}>
             {tr("pos.cart")} <Text style={styles.cartCountText}>({cartCount})</Text>
           </Text>
@@ -1663,31 +1740,53 @@ function CartSidebar({
         </View>
       )}
 
-      {!!customer && (
-        <View style={styles.custChip}>
-          <View style={[styles.custDot, { backgroundColor: customer.color }]}>
-            <Text style={styles.custInitial}>
-              {customer.name?.[0]?.toUpperCase()}
-            </Text>
-          </View>
-          <Text style={styles.custName} numberOfLines={1}>
-            {customer.name}
-          </Text>
-          <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer" hitSlop={8}>
-            <Ionicons name="close" size={16} color={C.ink3} />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {!!customer && <LoyaltyPanel key={customer.id} loyalty={loyalty} />}
-
       <FlatList
         data={cart}
         keyExtractor={(i) => i.product_id}
         style={styles.cartList}
-        contentContainerStyle={cart.length === 0 ? { flex: 1 } : undefined}
+        contentContainerStyle={cart.length === 0 ? { flexGrow: 1 } : undefined}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.crowSep} />}
+        // The customer chip and the loyalty panel ride *inside* the list, not
+        // above it. As siblings they were unscrollable blocks in a column of
+        // fixed height, so a member holding five vouchers pushed the items,
+        // the totals and the Checkout button off the bottom of a short tablet
+        // and the sale could not be rung up at all. In the header they scroll
+        // with the items, and the only things pinned are the two that have to
+        // be reachable at every moment.
+        ListHeaderComponent={
+          customer ? (
+            <>
+              <View style={styles.custChip}>
+                <View style={[styles.custDot, { backgroundColor: customer.color }]}>
+                  <Text style={styles.custInitial}>
+                    {customer.name?.[0]?.toUpperCase()}
+                  </Text>
+                </View>
+                <Text style={styles.custName} numberOfLines={1}>
+                  {customer.name}
+                </Text>
+                <TouchableOpacity onPress={onRemoveCustomer} testID="remove-customer" hitSlop={8}>
+                  <Ionicons name="close" size={16} color={C.ink3} />
+                </TouchableOpacity>
+              </View>
+              <LoyaltyPanel key={customer.id} loyalty={loyalty} inScroller />
+            </>
+          ) : (
+            // The only other way onto the customer picker is a tile under the
+            // product grid, and a phone-width layout — a tablet held upright —
+            // does not draw that bar at all. Without this there was no route
+            // from the checkout to a customer on those screens.
+            <TouchableOpacity
+              style={styles.custAdd}
+              onPress={onPickCustomer}
+              testID="cart-add-customer"
+            >
+              <Ionicons name="person-add-outline" size={16} color={C.brand} />
+              <Text style={styles.custAddText}>{tr("pos.add_customer")}</Text>
+            </TouchableOpacity>
+          )
+        }
         ListEmptyComponent={
           <Empty
             icon="cart-outline"
@@ -1697,7 +1796,7 @@ function CartSidebar({
         }
         renderItem={({ item }) => (
           <View
-            style={[styles.crow, embedded && styles.crowStacked]}
+            style={[styles.crow, stacked && styles.crowStacked]}
             testID={`cart-item-${item.product_id}`}
           >
             <TouchableOpacity
@@ -1722,7 +1821,7 @@ function CartSidebar({
               )}
             </TouchableOpacity>
 
-            <View style={embedded ? styles.crowControls : styles.crowControlsInline}>
+            <View style={stacked ? styles.crowControls : styles.crowControlsInline}>
             <View style={styles.qty}>
               <TouchableOpacity
                 style={styles.qtyBtn}
@@ -1741,9 +1840,9 @@ function CartSidebar({
               </TouchableOpacity>
             </View>
 
-            {embedded && <View style={{ flex: 1 }} />}
+            {stacked && <View style={{ flex: 1 }} />}
 
-            <Money style={[styles.crowLine, embedded && { width: "auto" }]}>
+            <Money style={[styles.crowLine, stacked && { width: "auto" }]}>
               {THB(item.price * item.qty - (item.discount || 0))}
             </Money>
 
@@ -1760,25 +1859,25 @@ function CartSidebar({
         )}
       />
 
-      <View style={styles.totals}>
-        <View style={styles.tr}>
+      <View style={[styles.totals, dense && styles.totalsDense]}>
+        <View style={[styles.tr, dense && styles.trDense]}>
           <Text style={styles.trLabel}>{tr("common.subtotal")}</Text>
           <Money style={styles.trValue}>{THB(subtotal)}</Money>
         </View>
         {discountAmount > 0 && (
-          <View style={styles.tr}>
+          <View style={[styles.tr, dense && styles.trDense]}>
             <Text style={styles.trLabel}>{tr("common.discount")}</Text>
             <Money style={[styles.trValue, { color: C.ok }]}>
               {`−${THB(discountAmount)}`}
             </Money>
           </View>
         )}
-        <View style={styles.tr}>
+        <View style={[styles.tr, dense && styles.trDense]}>
           <Text style={styles.trLabel}>{tr("pos.vat_7_pct_included")}</Text>
           <Money style={styles.trValue}>{THB(vat)}</Money>
         </View>
         {Math.abs(roundingAdj) > 0.001 && (
-          <View style={styles.tr}>
+          <View style={[styles.tr, dense && styles.trDense]}>
             <Text style={styles.trLabel}>{tr("pos.rounding")}</Text>
             <Money style={styles.trValue}>
               {`${roundingAdj > 0 ? "+" : "−"}${THB(Math.abs(roundingAdj))}`}
@@ -1795,7 +1894,11 @@ function CartSidebar({
       </View>
 
       <TouchableOpacity
-        style={[styles.checkout, cart.length === 0 && styles.checkoutOff]}
+        style={[
+          styles.checkout,
+          dense && styles.checkoutDense,
+          cart.length === 0 && styles.checkoutOff,
+        ]}
         disabled={cart.length === 0}
         onPress={onPay}
         activeOpacity={0.85}
@@ -3979,6 +4082,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.line2,
   },
+  // A 601pt-tall tablet cannot spare 80pt to say "Cart" and nothing else.
+  cartHeadDense: { height: 56 },
   cartTitle: {
     fontSize: 22,
     fontWeight: "800",
@@ -4058,6 +4163,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 6,
   },
+  totalsDense: { paddingTop: 10 },
+  trDense: { paddingVertical: 2 },
   trLabel: { fontSize: 15, color: C.ink2Soft },
   trValue: { fontSize: 15, fontWeight: "600", color: C.ink2 },
   dash: {
@@ -4096,6 +4203,8 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   checkoutOff: { backgroundColor: C.lineStrong },
+  // The one control that must never be the thing pushed off the bottom.
+  checkoutDense: { height: 56, margin: 12, marginTop: 10, paddingHorizontal: 18 },
   checkoutText: {
     fontSize: 19,
     fontWeight: "700",
@@ -4535,7 +4644,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   fabBadgeText: { color: C.brand, fontSize: 11, fontWeight: "700" },
-  fabMid: { flex: 1 },
+  fabMid: { flex: 1, minWidth: 0 },
+  fabCust: { flexDirection: "row", alignItems: "center", gap: 4 },
+  fabCustName: {
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 11,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
   fabTotalLabel: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontWeight: "600" },
   fabTotal: { ...MONO, color: C.surface, fontSize: 19, fontWeight: "800" },
   fabRight: { flexDirection: "row", alignItems: "center", gap: 4 },
@@ -4660,6 +4776,22 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 11,
   },
+  // Shown in place of the chip while the bill has no member on it.
+  custAdd: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginHorizontal: 24,
+    marginTop: 14,
+    paddingVertical: 11,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: C.brand,
+    backgroundColor: C.brandTintSoft,
+  },
+  custAddText: { fontSize: 13.5, fontWeight: "700", color: C.brand },
   custDot: {
     width: 28,
     height: 28,
@@ -4723,6 +4855,8 @@ const styles = StyleSheet.create({
   // the item list and the Checkout button always keep their share of the sheet.
   loyaltyRewardList: { width: "100%", maxHeight: 176, flexShrink: 1, minHeight: 0 },
   loyaltyRewardListInner: { paddingBottom: 2 },
+  // Unbounded: the cart's own list is the scroller in this arrangement.
+  loyaltyRewardListFlat: { width: "100%" },
   loyaltyReadyPill: {
     backgroundColor: C.okTint,
     borderRadius: R.pill,

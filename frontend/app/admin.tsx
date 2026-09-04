@@ -34,7 +34,7 @@ import {
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useShiftSummaryPrint } from "../lib/useShiftSummaryPrint";
 import { usePrinterStatus } from "../lib/usePrinterStatus";
-import { AppShell, TopBar, Body, WIDE } from "../components/AppShell";
+import { AppShell, TopBar, Body, isWideSize } from "../components/AppShell";
 import { SIDEBAR_ITEMS } from "../components/NavRail";
 import {
   loadLocalPrinterConfig,
@@ -220,10 +220,10 @@ export default function Admin() {
     })();
   }, [router]);
 
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   // Must match the shell's threshold, or the rail and the page columns
   // disagree about which layout is on screen.
-  const isWide = width >= WIDE;
+  const isWide = isWideSize(width, height);
   // Shares the Sale screen's preference key, so the rail doesn't expand again
   // the moment you cross into the back office.
   const [railPref, setRailPref] = useState<boolean | null>(null);
