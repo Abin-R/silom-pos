@@ -84,7 +84,7 @@
   reversible alternative, because "stop them signing in" is what is usually
   wanted and the Status switch above already does it without losing anything.
 {% endcomment %}
-{% if mode != 'new' and user.role == 'admin' %}
+{% if mode != 'new' %}
 <div class="panel" style="max-width:760px;margin-top:16px;border-color:var(--red-line)">
   <div class="panel-h">Delete this staff member</div>
   <div class="srow">
@@ -94,10 +94,10 @@
       <u>
         {% comment %}
           Last-admin leads, even on your own record: it is the reason with
-          something you can do about it. (In practice it is only ever your own
-          record — an admin looking at another admin means two exist, so
-          neither is the last. The view guard still matters for the race where
-          two admins both have the page open.)
+          something you can do about it. (An *admin* only ever sees it on
+          their own record — one admin looking at another means two exist, so
+          neither is the last. A cashier sees it on somebody else's, which is
+          why the sentence names them rather than saying "you".)
         {% endcomment %}
         {% if member.role == 'admin' and is_last_admin %}
           {{ member.name }} is the last admin — deleting {% if member.id == user.id %}this account{% else %}them{% endif %}

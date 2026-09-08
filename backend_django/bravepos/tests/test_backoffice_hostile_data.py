@@ -921,9 +921,10 @@ class StaffDeletionTests(HostileDataMixin, TestCase):
     def test_the_form_names_the_last_admin_reason_over_the_self_one(self):
         """Both refusals can apply at once; the actionable one should lead.
 
-        Being the last admin is only ever reachable on your own record — an
-        admin viewing another admin means two exist — so if the self-reason
-        won, the message would never tell anyone to promote a colleague.
+        An admin only ever reaches this on their own record — one admin
+        viewing another means two exist — so if the self-reason won, the
+        message would never tell anyone to promote a colleague. (A cashier
+        reaches it on somebody else's record, where only this reason applies.)
         """
         Staff.objects.filter(role="admin").exclude(id=self.admin.id).update(
             role="cashier")
@@ -932,14 +933,37 @@ class StaffDeletionTests(HostileDataMixin, TestCase):
         self.assertContains(page, "last admin")
         self.assertContains(page, "Make someone else an admin first")
 
-    def test_a_cashier_cannot_delete_staff(self):
+    def test_a_cashier_can_delete_staff(self):
+        """Deleting a till login is not an admin-only job.
+
+        The same form already lets a cashier rename a colleague, change their
+        role and reset their PIN, so withholding Delete only left a panel
+        nobody could act on.
+        """
         member = Staff.objects.create(name="Target", email="target@x.local",
                                       role="cashier")
         response = self._cashier_client().post(
             reverse("backoffice:staff_delete", args=[member.id]))
-        self.assertNotEqual(response.status_code, 302)
-        self.assertTrue(Staff.objects.filter(id=member.id).exists(),
-                        "a cashier deleted a colleague")
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Staff.objects.filter(id=member.id).exists(),
+                         "a cashier was refused a delete they are allowed")
+
+    def test_the_cashier_form_offers_the_delete_button(self):
+        member = Staff.objects.create(name="Visible", email="vis@x.local",
+                                      role="cashier")
+        page = self._cashier_client().get(
+            reverse("backoffice:staff_detail", args=[member.id]))
+        self.assertContains(
+            page, reverse("backoffice:staff_delete", args=[member.id]))
+
+    def test_a_cashier_cannot_delete_the_last_admin(self):
+        """The two refusals are the real guard, and they are not role-based."""
+        Staff.objects.filter(role="admin").exclude(id=self.admin.id).update(
+            role="cashier")
+        self._cashier_client().post(
+            reverse("backoffice:staff_delete", args=[self.admin.id]))
+        self.assertTrue(Staff.objects.filter(id=self.admin.id).exists(),
+                        "a cashier deleted the last admin")
 
     def test_a_get_never_deletes(self):
         """A crawler or a prefetch must not be able to remove someone."""

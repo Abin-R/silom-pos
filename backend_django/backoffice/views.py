@@ -3503,14 +3503,19 @@ def _last_admin(member) -> bool:
     )
 
 
-@admin_required
+@login_required
 def staff_delete(request, staff_id):
     """Delete a till login for good.
 
-    Admin-only, matching `user_delete`: removing a colleague's access is not
-    a cashier's job. Two refusals, because both are unrecoverable from inside
-    the product — you cannot delete the account you are signed in as, and you
-    cannot delete the last admin.
+    Open to any signed-in backoffice account, matching the rest of this page:
+    the same form already lets a cashier rename a colleague, change their role
+    and reset their PIN, so gating only Delete bought nothing but a panel that
+    was invisible to the people doing the tidying up. `user_delete` stays
+    admin-only — revoking someone's *web* access is a different question.
+
+    The two refusals are what actually protects anything here, because both
+    are unrecoverable from inside the product — you cannot delete the account
+    you are signed in as, and you cannot delete the last admin.
 
     History survives. Bills and shifts store the cashier's name as text, not
     a foreign key, and audit rows keep `actor_label`; what is lost is the
