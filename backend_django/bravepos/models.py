@@ -426,6 +426,34 @@ class Customer(models.Model):
         indexes = [models.Index(fields=["branch"])]
 
 
+class CustomerMergeBackup(models.Model):
+    """The undo tape for the shop-wide customer merge.
+
+    Folding customers who share a phone number into one row is not reversible
+    from the schema alone: the absorbed rows are deleted, and the bills that
+    pointed at them now point somewhere else.  A backup of the customer table
+    by itself would not be enough either — restoring the rows without the bill
+    links would leave every moved sale attached to the survivor.
+
+    So this holds all three: every customer row as it stood, and the previous
+    owner of every order and held cart the merge moves.  Written inside the
+    same transaction as the merge, immediately before the first delete, so it
+    cannot be forgotten or go stale.
+
+    One row of JSON, a few thousand customers at most.  It costs nothing to
+    keep and everything to not have, so it is kept until somebody is satisfied
+    the merge was right and runs
+    ``manage.py customer_merge_backup --delete``.
+    """
+    id = models.AutoField(primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    note = models.CharField(max_length=200, blank=True, default="")
+    payload = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 # ─── Settings (single-row config) ────────────────────────────────────────────
 class Settings(models.Model):
     """One row per deployment.  ``id`` is hardcoded to ``"shop"`` so there is

@@ -22,6 +22,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import audit, crm, gateways, loyalty
+from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
@@ -109,11 +110,15 @@ class _Unauthenticated(Exception):
     Mapped to a 401 by the ViewSet's ``handle_exception`` override below."""
 
 
-class BranchScopedMixin:
-    """ViewSet mixin: scopes the queryset to the caller's branch and stamps
-    ``branch`` on every create/update.  Returns 401 if there is no valid session.
+class SessionRequiredMixin:
+    """ViewSet mixin: 401s unless the caller holds a valid BranchSession, and
+    hands the view ``request.session_obj``.
+
+    Says nothing about *what* that session may see.  Most resources are the
+    one branch's own (its products, its shifts) and want
+    :class:`BranchScopedMixin` below; the customer book is shop-wide and wants
+    only this.
     """
-    branch_field = 'branch'
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -129,6 +134,13 @@ class BranchScopedMixin:
                 status=401,
             )
         return super().handle_exception(exc)
+
+
+class BranchScopedMixin(SessionRequiredMixin):
+    """ViewSet mixin: scopes the queryset to the caller's branch and stamps
+    ``branch`` on every create/update.  Returns 401 if there is no valid session.
+    """
+    branch_field = 'branch'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -461,9 +473,73 @@ class ProductViewSet(BranchScopedMixin, viewsets.ModelViewSet):
         return qs
 
 
-class CustomerViewSet(BranchScopedMixin, viewsets.ModelViewSet):
+class CustomerViewSet(SessionRequiredMixin, viewsets.ModelViewSet):
+    """The customer book is shop-wide.
+
+    Deliberately *not* ``BranchScopedMixin``.  A regular who registered at
+    EmQuartier and walks into Silom is one person with one history and one
+    loyalty membership, so every till reads and writes one list; scoping the
+    book per branch made them two strangers who each knew half the story.
+
+    ``Customer.branch`` survives as provenance only — the branch that first
+    registered them, shown as "Home branch" in the back office — and filters
+    nothing.
+    """
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
+
+    # A caller that asks for a page without saying how big gets this many, and
+    # cannot ask for more than MAX in one go.  Going shop-wide multiplied the
+    # unpaged response by the number of branches, and it was already the whole
+    # book: the picker only ever shows a screenful, so it should only ever
+    # fetch a screenful and let ``?q=`` reach the rest.
+    DEFAULT_LIMIT = 200
+    MAX_LIMIT = 1000
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != 'list':
+            # retrieve/update/destroy resolve any row by id.  Filtering — let
+            # alone slicing — would break them.
+            return qs
+
+        q = (self.request.query_params.get('q') or '').strip()
+        if q:
+            # Searched server-side because the client can no longer be assumed
+            # to hold the whole book.  Matches the same fields the app used to
+            # filter on in memory, plus last_name.
+            match = Q(name__icontains=q) | Q(last_name__icontains=q)
+            digits = phone_search_digits(q)
+            if digits:
+                # ``phone__contains=digits`` is the one that spans formats: it
+                # finds a number stored as +66644184887 when the cashier typed
+                # 0644184887.  The raw form stays in the OR for rows typed by
+                # hand with separators, which the digit key would miss.
+                match |= Q(phone__contains=digits) | Q(phone__icontains=q)
+            qs = qs.filter(match)
+
+        limit = self.request.query_params.get('limit')
+        if limit is None:
+            # No page asked for, no page imposed.  Tills already installed
+            # predate paging and read the response as a plain array of the
+            # whole book; capping the default would silently hide customers
+            # from every build that will not be updated for a while.
+            return qs
+        try:
+            limit = min(max(int(limit), 1), self.MAX_LIMIT)
+        except (TypeError, ValueError):
+            limit = self.DEFAULT_LIMIT
+        try:
+            offset = max(int(self.request.query_params.get('offset') or 0), 0)
+        except (TypeError, ValueError):
+            offset = 0
+        # Name is not unique, so without a tiebreak two pages of the same book
+        # could repeat a customer and skip another.
+        return qs.order_by('name', 'id')[offset:offset + limit]
+
+    def perform_create(self, serializer):
+        # Stamp the home branch on the way in; never scope reads by it.
+        serializer.save(branch=self.request.session_obj.branch)
 
 
 class DrawerCategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
@@ -731,12 +807,13 @@ def crm_member(request):
     if not loyalty.enabled_for(branch):
         return Response({'enabled': False, 'reason': 'branch'})
 
-    # Branch-scoped like every other customer read: a till may only look up the
-    # people on its own branch's list.  A malformed id is a 404 rather than the
-    # ValidationError-turned-500 that a bare filter on a bad UUID would raise.
+    # Shop-wide, like the book itself: any till may look up any customer, so a
+    # member signed up at one branch can redeem at another.  A malformed id is
+    # a 404 rather than the ValidationError-turned-500 that a bare filter on a
+    # bad UUID would raise.
     try:
         customer = Customer.objects.get(
-            id=(request.data or {}).get('customer_id'), branch=branch)
+            id=(request.data or {}).get('customer_id'))
     except (Customer.DoesNotExist, DjangoValidationError, ValueError, TypeError):
         return Response({'detail': 'No such customer.'},
                         status=status.HTTP_404_NOT_FOUND)
@@ -957,9 +1034,7 @@ def order_tax_invoice(request, order_id):
     # history.
     customer_id = data.pop('customer_id', '')
     if customer_id and not order.customer_id:
-        customer = Customer.objects.filter(
-            id=customer_id, branch=request.session_obj.branch,
-        ).first()
+        customer = Customer.objects.filter(id=customer_id).first()
         if customer:
             order.customer = customer
             order.customer_name = customer.name
@@ -1323,15 +1398,17 @@ def shifts_list(request):
 @api_view(['GET'])
 @require_session
 def customer_stats(request, customer_id):
-    branch = request.session_obj.branch
+    # Lifetime and shop-wide.  A regular's spend is their spend, not the slice
+    # of it that happened to be rung up at whichever till is asking — a
+    # cashier deciding how to treat someone needs the whole picture.
     try:
-        Customer.objects.get(id=customer_id, branch=branch)
+        Customer.objects.get(id=customer_id)
     except Customer.DoesNotExist:
         return Response({'detail': 'Customer not found'}, status=404)
 
     orders = list(
         Order.objects
-        .filter(branch=branch, customer_id=customer_id)
+        .filter(customer_id=customer_id)
         .prefetch_related('items')
     )
     completed = [o for o in orders if o.status == 'completed']

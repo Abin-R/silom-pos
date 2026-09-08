@@ -268,11 +268,24 @@ class MemberLookupTests(ApiTestCase):
         self.assertEqual(res.status_code, 404)
         look.assert_not_called()
 
-    def test_a_till_can_only_look_up_its_own_branchs_customers(self):
+    def test_a_till_can_look_up_a_customer_registered_at_another_branch(self):
+        """The whole point of one loyalty programme: someone who signed up at
+        EmQuartier redeems at Silom without registering again, which would
+        strand their points on a second membership."""
         other = Customer.objects.create(
             branch=make_branch(name="Elsewhere"), name="Someone", phone="0899999999")
-        with mock.patch("bravepos.crm.lookup_member") as look:
+        with mock.patch("bravepos.crm.lookup_member",
+                        return_value={"ok": True, **member_body()}) as look:
             res = self.lookup(other)
+        self.assertEqual(res.status_code, 200)
+        look.assert_called_once_with("0899999999")
+
+    def test_a_customer_that_does_not_exist_is_still_a_404(self):
+        import uuid
+        with mock.patch("bravepos.crm.lookup_member") as look:
+            res = self.client.post(
+                "/api/crm/member", {"customer_id": str(uuid.uuid4())},
+                content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 404)
         look.assert_not_called()
 

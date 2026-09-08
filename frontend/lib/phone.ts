@@ -69,6 +69,28 @@ export function normalizeLocal(country: Country, raw: string): string {
   return d;
 }
 
+/**
+ * The comparable form of a number, for answering "is this the same person?".
+ *
+ * Numbers reach the customer book two ways: E.164 from the picker
+ * (`+66644184887`), and, on rows predating it, however the cashier typed it
+ * (`0644184887`, `064-418-4887`).  A string compare calls those three
+ * different customers when they are one person with one loyalty account.
+ *
+ * Mirrors `normalise_phone` in backend_django/bravepos/customers.py, which is
+ * what the duplicate merge keys on.  The two must agree: if they drift, the
+ * till warns about clashes the server will not merge, or stays silent about
+ * the ones it will.  Only the unambiguous Thai international form is folded —
+ * an 11-digit string opening `66` — so a foreign number is left as it is
+ * rather than guessed at.
+ */
+export function phoneMatchKey(raw: string): string {
+  let d = digitsOnly(raw);
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('66')) d = `0${d.slice(2)}`;
+  return d;
+}
+
 export type Validation =
   | { valid: true;  e164: string;  display: string }
   | { valid: false; reason: string };

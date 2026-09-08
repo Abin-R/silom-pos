@@ -3647,8 +3647,14 @@ LAPSED_DAYS = 30
 REGULAR_VISITS = 5
 
 
-def _customer_rows(branch, tier: str, query: str):
+def _customer_rows(tier: str, query: str):
     """Every customer with their order history rolled up.
+
+    Shop-wide, and deliberately not filtered by the branch picker: a customer
+    is one person across the whole business, so their spend is the sum of what
+    they spent everywhere. Slicing this page by branch answered "what did this
+    customer spend here", which read as their lifetime value and was not.
+    Where they first registered is still shown, as the Home branch column.
 
     Aggregated in one query rather than per row — a shop with a thousand
     customers would otherwise issue a thousand COUNT/SUM pairs to paint one
@@ -3656,13 +3662,8 @@ def _customer_rows(branch, tier: str, query: str):
     counts as registered.
     """
     paid = Q(orders__status__in=["completed", "new", "preparing"])
-    if branch:
-        paid &= Q(orders__branch=branch)
 
     qs = Customer.objects.all()
-    if branch:
-        # The customer's home branch — where they were first registered.
-        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
     if query:
         qs = qs.filter(Q(name__icontains=query) | Q(phone__icontains=query)
                        | Q(last_name__icontains=query))
@@ -3710,7 +3711,7 @@ def customer_list(request):
     query = (request.GET.get("q") or "").strip()
     selected_id = request.GET.get("c") or ""
 
-    rows = list(_customer_rows(branch, tier, query)[:400])
+    rows = list(_customer_rows(tier, query)[:400])
     cutoff = timezone.now() - timedelta(days=LAPSED_DAYS)
     month_ago = timezone.now() - timedelta(days=30)
 
@@ -3720,7 +3721,7 @@ def customer_list(request):
 
     # Headline figures come from the whole customer base, not the filtered
     # page — "1,284 registered" must not change because you typed a search.
-    everyone = list(_customer_rows(branch, "all", ""))
+    everyone = list(_customer_rows("all", ""))
     total = len(everyone)
     repeat = sum(1 for c in everyone if c.visits >= 2)
     lapsed = [c for c in everyone if c.last_seen is not None and c.last_seen < cutoff]
@@ -3734,8 +3735,6 @@ def customer_list(request):
     start, end = _date_window(timezone.localdate() - timedelta(days=29),
                               timezone.localdate())
     recent = Order.objects.filter(created_at__range=(start, end)).exclude(status="cancel")
-    if branch:
-        recent = recent.filter(branch=branch)
     recent_total = recent.count()
     recent_matched = recent.filter(customer__isnull=False).count()
 
@@ -3754,6 +3753,9 @@ def customer_list(request):
         "page_title": "Customers",
         "branches": branches,
         "branch": branch,
+        # The book is shop-wide, so a branch picker on this page would be a
+        # control that silently does nothing.
+        "hide_branch": True,
         "customers": rows,
         "selected": selected,
         "tier": tier,
@@ -3821,6 +3823,7 @@ def customer_detail(request, customer_id):
         "page_title": customer.name,
         "branches": branches,
         "branch": branch,
+        "hide_branch": True,
         "customer": customer,
         "hide_dates": True,
         "qs": _filter_qs(request),

@@ -19,6 +19,7 @@ import { StatusBar } from "expo-status-bar";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
+import { phoneMatchKey } from "../lib/phone";
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
@@ -3223,6 +3224,11 @@ function CartItemModal({
 }
 
 // ---------- Customer Modal ----------
+// How many customers the picker pulls at a time. The book is shop-wide, so
+// "all of them" is no longer a sane request: the list shows a screenful and
+// the search box reaches the rest through the server.
+const CUSTOMER_PAGE = 200;
+
 function CustomerModal({
   visible,
   onClose,
@@ -3234,6 +3240,9 @@ function CustomerModal({
 }) {
   useT(); // re-render this screen when the language changes
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // The query the page on screen was fetched for, so the local filter below
+  // knows when the server has already done the filtering.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
@@ -3247,22 +3256,55 @@ function CustomerModal({
     if (visible) {
       setShowAdd(false);
       setQ("");
-      apiFetch(`${API}/customers`)
-        .then((r) => safeJson<Customer[]>(r, []))
-        .then(setCustomers);
     }
   }, [visible]);
 
-  const filtered = useMemo(
-    () =>
-      customers.filter(
-        (c) =>
-          !q ||
-          c.name.toLowerCase().includes(q.toLowerCase()) ||
-          c.phone?.includes(q)
-      ),
-    [customers, q]
-  );
+  useEffect(() => {
+    if (!visible) return;
+    let live = true;
+    const needle = q.trim();
+    // Debounced: a cashier types a phone number a digit at a time, and every
+    // keystroke would otherwise be its own round trip. Opening the picker is
+    // not debounced — the first list should be there when the modal is.
+    const timer = setTimeout(async () => {
+      const search = needle ? `&q=${encodeURIComponent(needle)}` : "";
+      const res = await apiFetch(`${API}/customers?limit=${CUSTOMER_PAGE}${search}`);
+      // `null` means the body was missing or unparseable. Keep what is on
+      // screen: a picker that empties itself on one bad response mid-sale is
+      // worse than one showing a slightly stale list.
+      const page = await safeJson<Customer[] | null>(res, null);
+      if (live && page) {
+        setCustomers(page);
+        setLoadedFor(needle);
+      }
+    }, needle ? 250 : 0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [visible, q]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim();
+    // The page on screen was fetched for exactly this query, so the server has
+    // already filtered it — on more than this side can see, since the till's
+    // Customer type carries no last_name. Filtering again would drop rows the
+    // server just went and found.
+    if (!needle || loadedFor === needle) return customers;
+    // Otherwise a request is still in flight, and this keeps the list moving
+    // under the cashier's fingers. Phones are compared on `phoneMatchKey` so a
+    // number typed as 0644184887 still finds one stored as +66644184887.
+    const lower = needle.toLowerCase();
+    const digits = phoneMatchKey(needle);
+    return customers.filter((c) => {
+      if (c.name.toLowerCase().includes(lower)) return true;
+      if (!c.phone) return false;
+      return (
+        c.phone.toLowerCase().includes(lower) ||
+        (!!digits && phoneMatchKey(c.phone).includes(digits))
+      );
+    });
+  }, [customers, q, loadedFor]);
 
   const canSaveCustomer = !!name.trim() && phoneValid;
   // Nothing stopped a second tap from firing a second POST, and each one makes
@@ -3274,6 +3316,19 @@ function CustomerModal({
 
   const addCustomer = async () => {
     if (savingRef.current) return;
+    // Claimed here rather than just before the POST: the duplicate check below
+    // is a round trip now, and a second tap landing inside it would run its own
+    // check, see no clash yet, and post a second row on the same number — the
+    // exact thing this guard exists to stop.
+    savingRef.current = true;
+    try {
+      await saveCustomer();
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const saveCustomer = async () => {
     if (!name.trim()) {
       showAlert(tr("pos.cant_save_customer"), tr("pos.customer_needs_a_name"));
       return;
@@ -3295,9 +3350,19 @@ function CustomerModal({
     // row quietly rings up against the first row's member, under the first
     // row's name. Not blocked, because a household really can share a phone;
     // it just must not happen silently.
-    const clash = phone.trim()
-      ? customers.find((x) => x.phone && x.phone === phone.trim())
-      : undefined;
+    //
+    // Asked of the server, not of the list on screen: that list is one page of
+    // a shop-wide book, so the row already holding this number usually is not
+    // in it. Compared on `phoneMatchKey` rather than as a string, because the
+    // same number is stored both as E.164 and in the local form.
+    const key = phoneMatchKey(phone.trim());
+    let clash: Customer | undefined;
+    if (key) {
+      const hits = await apiFetch(
+        `${API}/customers?limit=20&q=${encodeURIComponent(phone.trim())}`,
+      ).then((r) => safeJson<Customer[]>(r, []));
+      clash = hits.find((x) => x.phone && phoneMatchKey(x.phone) === key);
+    }
     if (clash) {
       const go = await confirmDialog(
         tr("pos.number_already_used"),
@@ -3309,7 +3374,6 @@ function CustomerModal({
     }
 
     let c: Customer | null = null;
-    savingRef.current = true;
     try {
       const res = await apiFetch(`${API}/customers`, {
         method: "POST",
@@ -3324,8 +3388,6 @@ function CustomerModal({
     } catch (e: any) {
       showAlert(tr("common.couldnt_save_customer"), e?.message || tr("pos.please_try_again"));
       return;
-    } finally {
-      savingRef.current = false;
     }
     // Guard against a success response missing the required field — never select
     // an object the cart can't render (it reads customer.name[0]).

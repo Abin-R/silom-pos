@@ -143,15 +143,17 @@ class TaxInvoiceTests(TestCase):
         self.assertEqual(self.order.customer_id, original.id)
         self.assertEqual(self.order.customer_name, 'Walk-in')
 
-    def test_customer_from_another_branch_is_ignored(self):
+    def test_customer_registered_at_another_branch_is_linked(self):
+        # The customer book is shop-wide, so there is no branch boundary to
+        # cross: a company that first bought at Bangkhae and is now buying here
+        # is the same buyer, and the invoice belongs in the same history.
         outsider = Customer.objects.create(branch=make_branch(name='Bangkhae'), name='Elsewhere')
         res = self._post({**GOOD, 'customer_id': str(outsider.id)})
 
-        # The invoice still issues — the buyer particulars are what matter — but
-        # the sale is not linked across a branch boundary.
         self.assertEqual(res.status_code, 200)
         self.order.refresh_from_db()
-        self.assertIsNone(self.order.customer_id)
+        self.assertEqual(self.order.customer_id, outsider.id)
+        self.assertEqual(self.order.customer_name, 'Elsewhere')
 
     # ── Isolation from the customer-facing Peak flow ─────────────────────
     def test_issuing_in_app_does_not_arm_the_peak_web_flow(self):

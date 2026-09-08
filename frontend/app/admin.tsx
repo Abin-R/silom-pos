@@ -44,7 +44,8 @@ import * as printerQueue from "../lib/printerQueue";
 import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
-import { showAlert } from "../lib/dialog";
+import { showAlert, confirmDialog } from "../lib/dialog";
+import { phoneMatchKey } from "../lib/phone";
 import { methodLabel } from "../lib/payments";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
@@ -3354,6 +3355,11 @@ function StockMovementModal({
 }
 
 // =================== CUSTOMERS ===================
+// The customer book is shop-wide, so "load them all" is no longer a sane
+// request. A page at a time, with the search box reaching the rest through
+// the server.
+const CUSTOMER_PAGE = 200;
+
 function Customers({ isWide }: { isWide: boolean }) {
   useT(); // re-render this screen when the language changes
   const [list, setList] = useState<Customer[]>([]);
@@ -3367,13 +3373,35 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [phone, setPhone] = useState("");
   const [phoneValid, setPhoneValid] = useState(true);
 
-  const load = async () => {
-    const r = await apiFetch(`${API}/customers`);
-    const d: Customer[] = await r.json();
+  // The query the loaded page belongs to, so the local filter knows when the
+  // server has already filtered for it.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  const load = async (query = "") => {
+    const search = query ? `&q=${encodeURIComponent(query)}` : "";
+    const r = await apiFetch(`${API}/customers?limit=${CUSTOMER_PAGE}${search}`);
+    // `null` means a missing or unparseable body; keep the list on screen
+    // rather than blanking the page over one bad response.
+    const d = await safeJson<Customer[] | null>(r, null);
+    if (!d) return;
     setList(d);
+    setLoadedFor(query);
     if (d[0] && !sel) setSel(d[0]);
   };
-  useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    let live = true;
+    // Debounced so typing a phone number is one request, not ten.
+    const needle = q.trim();
+    const timer = setTimeout(() => {
+      if (live) load(needle);
+    }, needle ? 250 : 0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
 
   const loadStats = async (customerId: string) => {
     // Track which customer this request is for so stale responses are discarded.
@@ -3395,12 +3423,71 @@ function Customers({ isWide }: { isWide: boolean }) {
     else { statsRequestId.current = null; setStats(null); }
   }, [sel?.id]);
 
-  const filtered = list.filter(
-    (c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || c.phone?.includes(q)
-  );
+  const filtered = (() => {
+    const needle = q.trim();
+    // The page came back for exactly this query, so the server has already
+    // filtered it — including on last_name, which the rule below cannot see.
+    // Filtering again would drop rows it just went and found.
+    if (!needle || loadedFor === needle) return list;
+    // A request is still in flight; keep the list moving meanwhile. Phones
+    // compare on `phoneMatchKey` so 0644184887 finds a row holding
+    // +66644184887 — a raw substring test never did.
+    const lower = needle.toLowerCase();
+    const digits = phoneMatchKey(needle);
+    return list.filter((c) => {
+      if (c.name.toLowerCase().includes(lower)) return true;
+      if ((c.last_name || "").toLowerCase().includes(lower)) return true;
+      if (!c.phone) return false;
+      return (
+        c.phone.toLowerCase().includes(lower) ||
+        (!!digits && phoneMatchKey(c.phone).includes(digits))
+      );
+    });
+  })();
+
+  // Same reason the till has one: the duplicate check below is a round trip,
+  // and a second tap landing inside it would see no clash yet and post a
+  // second row on the same number. A ref, not state — two taps in one frame
+  // would both read the same stale state value.
+  const savingRef = useRef(false);
 
   const save = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      await saveCustomer();
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const saveCustomer = async () => {
     if (!name.trim()) return;
+
+    // The same warning the till gives, which this screen never had. Points are
+    // earned against the phone number: a second row on a number the CRM
+    // already knows rings up against the first row's membership, under the
+    // first row's name. Asked of the server because the list on screen is one
+    // page of a shop-wide book, and compared on `phoneMatchKey` because the
+    // same number is stored both as E.164 and in the local form. Not blocked —
+    // a household really can share a phone — it just must not happen silently.
+    const key = phoneMatchKey(phone.trim());
+    if (key) {
+      const hits = await apiFetch(
+        `${API}/customers?limit=20&q=${encodeURIComponent(phone.trim())}`,
+      ).then((r) => safeJson<Customer[]>(r, []));
+      const clash = hits.find((x) => x.phone && phoneMatchKey(x.phone) === key);
+      if (clash) {
+        const go = await confirmDialog(
+          tr("pos.number_already_used"),
+          tr("pos.number_already_used_body", { name: clash.name }),
+          tr("pos.save_anyway"),
+          false,
+        );
+        if (!go) return;
+      }
+    }
+
     let c: any = null;
     try {
       const r = await apiFetch(`${API}/customers`, {
