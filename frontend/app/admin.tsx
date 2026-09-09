@@ -1907,6 +1907,20 @@ function TaxInvoiceFlow({
       // Remember the details on the customer so the next invoice for this buyer
       // prefills.  Best-effort: this is a convenience, and failing it must not
       // stop the invoice the cashier is standing there waiting for.
+      //
+      // `phone` is deliberately NOT among them. The number on an invoice is
+      // the buyer's billing contact for that document — often a company
+      // switchboard — and writing it here overwrote the customer's own number
+      // with it. It happened twice in production: two personal mobiles were
+      // replaced by one company landline, and the customers were then merged
+      // into each other because they appeared to share a number.
+      //
+      // Nothing is lost by leaving it out. The number still prints, and still
+      // reprints, because it is stored per invoice on Order.pos_tax_invoice by
+      // the POST below — which is where a document's own details belong. All
+      // this line ever added was prefilling the box on a *later* invoice to
+      // the same buyer, and that now prefills from the customer's real number
+      // instead, which is the better answer anyway.
       if (selected) {
         try {
           await apiFetch(`${API}/customers/${selected.id}`, {
@@ -1917,7 +1931,6 @@ function TaxInvoiceFlow({
               tax_branch: payload.tax_branch,
               address: payload.address,
               email: payload.email,
-              ...(payload.phone ? { phone: payload.phone } : {}),
             }),
           });
         } catch {/* non-fatal — the invoice itself is what matters */}

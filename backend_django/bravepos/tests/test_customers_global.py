@@ -13,13 +13,28 @@ from django.test import TestCase
 
 from bravepos.customers import (
     merge_duplicates_by_phone, normalise_phone, phone_search_digits,
-    restore_snapshot,
+    restore_snapshot, to_e164, undo_tax_invoice_phone_writes,
 )
 from bravepos.models import (
-    BranchSession, Customer, CustomerMergeBackup, Order, ParkedOrder, Staff,
+    AuditLog, BranchSession, Customer, CustomerMergeBackup, Order, ParkedOrder,
+    Staff,
 )
 
 from .factories import make_branch, make_shop
+
+
+def store_as_typed(customer, phone):
+    """Put a number in the column exactly as given, going round ``save()``.
+
+    ``Customer.save()`` normalises to E.164 (0048), so two spellings of one
+    number can no longer be *created* through the ORM — which is the whole
+    point of the storage rule.  Rows written before it are still in the book,
+    and folding them is what the merge is for, so reproducing one means writing
+    the column directly.  ``.update()`` is the only write that skips ``save()``.
+    """
+    Customer.objects.filter(pk=customer.pk).update(phone=phone)
+    customer.phone = phone
+    return customer
 
 
 class GlobalCustomerBookTests(TestCase):
@@ -55,7 +70,8 @@ class GlobalCustomerBookTests(TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.outsider.refresh_from_db()
-        self.assertEqual(self.outsider.phone, "0811111111")
+        # Stored in the one format the column keeps (0048), whatever was typed.
+        self.assertEqual(self.outsider.phone, "+66811111111")
 
     def test_a_new_customer_is_stamped_with_the_till_s_branch(self):
         """Home branch is still recorded — it is just no longer a fence."""
@@ -235,7 +251,9 @@ class MergeDuplicatesTests(TestCase):
 
     def test_the_row_with_the_most_history_survives(self):
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
-        small = Customer.objects.create(branch=self.thonglor, name="Ploy S", phone="081-234-5678")
+        small = store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999"),
+            "081-234-5678")
         self._order(big, "M-1")
         self._order(big, "M-2")
         self._order(small, "M-3", branch=self.thonglor)
@@ -249,8 +267,9 @@ class MergeDuplicatesTests(TestCase):
     def test_what_the_receipt_said_is_not_rewritten(self):
         """A bill is a record of what was printed, not a pointer to be tidied."""
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
-        small = Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="+66812345678")
+        small = store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999"),
+            "0812345678")
         self._order(big, "M-1")
         self._order(big, "M-2")
         moved = self._order(small, "M-3", branch=self.thonglor)
@@ -264,10 +283,10 @@ class MergeDuplicatesTests(TestCase):
         """Merging only ever adds to what the shop knows about someone."""
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
-        Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="+66812345678",
+        store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999",
             email="ploy@example.com", tax_id="0105563083534", last_name="Sri",
-        )
+        ), "0812345678")
 
         self.merge()
         survivor = Customer.objects.get()
@@ -283,8 +302,9 @@ class MergeDuplicatesTests(TestCase):
         its attribute, so it is the one a careless `update_fields` drops."""
         big = Customer.objects.create(branch=None, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
-        Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="+66812345678")
+        store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999"),
+            "0812345678")
 
         self.merge()
         survivor = Customer.objects.get()
@@ -297,8 +317,9 @@ class MergeDuplicatesTests(TestCase):
         customer that no longer exists."""
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
-        small = Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="+66812345678")
+        small = store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999"),
+            "0812345678")
         parked = ParkedOrder.objects.create(
             branch=self.thonglor, name="Table 4", items=[],
             customer_id=small.id, customer_name="Ploy S",
@@ -326,7 +347,9 @@ class MergeDuplicatesTests(TestCase):
     def test_running_it_twice_changes_nothing_the_second_time(self):
         """The migration may be replayed on a database that has already had it."""
         Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
-        Customer.objects.create(branch=self.thonglor, name="Ploy S", phone="+66812345678")
+        store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="0899999999"),
+            "0812345678")
 
         self.assertEqual(self.merge(), {"groups": 1, "removed": 1})
         self.assertEqual(self.merge(), {"groups": 0, "removed": 0})
@@ -336,11 +359,12 @@ class MergeDuplicatesTests(TestCase):
         # One number, three spellings — the country picker's, the local form,
         # and a row typed by hand with separators. The column holds one
         # customer per stored number, so this is the shape a duplicate takes.
-        spellings = ("0812345678", "+66812345678", "081-234-5678")
+        spellings = ("+66812345678", "0812345678", "081-234-5678")
         for i, (branch, phone) in enumerate(
                 zip((self.silom, self.thonglor, self.silom), spellings)):
-            Customer.objects.create(
-                branch=branch, name=f"Ploy {i}", phone=phone)
+            store_as_typed(Customer.objects.create(
+                branch=branch, name=f"Ploy {i}", phone=f"08199999{i:02d}"),
+                phone)
 
         self.assertEqual(self.merge(), {"groups": 1, "removed": 2})
         self.assertEqual(Customer.objects.count(), 1)
@@ -361,9 +385,12 @@ class MergeUndoTapeTests(TestCase):
         self.big = Customer.objects.create(
             branch=self.silom, name="Ploy", phone="0812345678",
             email="ploy@old.com")
-        self.small = Customer.objects.create(
-            branch=self.thonglor, name="Ploy Sri", phone="+66812345678",
-            last_name="Sri")
+        # The legacy spelling, written straight to the column: this pair is
+        # what the book held before 0048 settled the storage format, and
+        # folding it is what the tape records.
+        self.small = store_as_typed(Customer.objects.create(
+            branch=self.thonglor, name="Ploy Sri", phone="0899999999",
+            last_name="Sri"), "0812345678")
         for i in range(2):
             self._order(self.big, f"U-{i}")
         self.moved = self._order(self.small, "U-9", branch=self.thonglor)
@@ -519,18 +546,20 @@ class NoPhoneOnFileTests(TestCase):
         c.refresh_from_db()
         self.assertIsNone(c.phone)
 
-    def test_a_real_number_is_stored_exactly_as_it_was_typed(self):
-        """Only emptiness is normalised.
+    def test_a_real_number_is_kept(self):
+        """Emptiness becomes nothing; a number never does.
 
-        The CRM is handed ``customer.phone`` verbatim and keys a membership on
-        it, so a number tidied on the way in reads there as a different member.
+        What the number is *stored as* is 0048's business — see
+        ``StoredInOneFormatTests``.  What matters here is the line between the
+        two: a customer who gave a number has one on file afterwards.
         """
         for typed in ("+66812345678", "081-234-5678", "0812345678"):
             with self.subTest(phone=typed):
                 c = Customer.objects.create(
                     branch=self.branch, name=f"C {typed}", phone=typed)
                 c.refresh_from_db()
-                self.assertEqual(c.phone, typed)
+                self.assertIsNotNone(c.phone)
+                c.delete()
 
     def test_nobody_is_left_holding_an_empty_string(self):
         """The one thing that must stay true for every reader downstream."""
@@ -615,7 +644,7 @@ class OneNumberOneCustomerTests(TestCase):
 
         self.assertEqual(res.status_code, 400)
         other.refresh_from_db()
-        self.assertEqual(other.phone, "0898887777")
+        self.assertEqual(other.phone, "+66898887777")
 
     def test_a_customer_keeps_its_own_number_through_an_edit(self):
         """The row must not be found to clash with itself."""
@@ -636,21 +665,252 @@ class OneNumberOneCustomerTests(TestCase):
             self.assertEqual(self.post(name=name, phone=None).status_code, 201)
         self.assertEqual(Customer.objects.filter(phone__isnull=True).count(), 3)
 
-    def test_one_number_spelled_two_ways_is_still_let_through(self):
-        """What ``unique`` does not catch, stated so nobody assumes otherwise.
+    def test_one_number_spelled_two_ways_is_one_customer(self):
+        """The gap 0047 left on its own, closed by 0048.
 
-        The index compares stored characters, and the country picker writes
-        ``+66…`` where a row typed before it holds ``0…``.  The stored number
-        is deliberately left as it was keyed — ``loyalty.member_for_customer``
-        hands it to the CRM verbatim, and a tidied one reads there as a new
-        member — so closing this means comparing on the normalised key, which
-        is what the till's own check and ``merge_customers`` already do.
+        The index compares stored characters, so it only holds a number to one
+        customer while that number has one spelling.  It did not: the picker
+        writes ``+66…`` and the back-office web form stored whatever was typed.
+        Both spellings now normalise on the way in, so the second one is the
+        same string as the first and the index refuses it.
         """
         Customer.objects.create(branch=self.branch, name="Ploy", phone="0812345678")
-        Customer.objects.create(
-            branch=self.branch, name="Ploy again", phone="+66812345678")
 
-        self.assertEqual(Customer.objects.count(), 2)
-        # And the merge is what folds them back together.
-        merge_duplicates_by_phone(Customer, Order, ParkedOrder)
+        for spelling in ("+66812345678", "081-234-5678", "66812345678"):
+            with self.subTest(spelling=spelling):
+                with self.assertRaises(IntegrityError), transaction.atomic():
+                    Customer.objects.create(
+                        branch=self.branch, name="Ploy again", phone=spelling)
         self.assertEqual(Customer.objects.count(), 1)
+
+
+class StoredInOneFormatTests(TestCase):
+    """One number has one spelling in the column.
+
+    0047 holds a number to one customer by comparing stored characters, which
+    only works while a number is written the same way each time.  It was not:
+    four company landlines sat in the book as ``026625644`` beside eleven
+    numbers written ``+66…``.  They are landlines because that is the shape of
+    the hole — every screen in the app posts E.164 through ``PhoneInput``,
+    which takes Thai mobiles only, while the back-office web form is a bare
+    text box that stores what it is given.
+    """
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch(name="Silom")
+
+    def test_the_thai_national_form_is_stored_as_e164(self):
+        """The four shapes actually found in the book."""
+        for typed, stored in (
+            ("026625644", "+6626625644"),      # Bangkok landline
+            ("028865544", "+6628865544"),      # Bangkok landline
+            ("074611069", "+6674611069"),      # Krabi landline
+            ("0812345678", "+66812345678"),    # mobile
+        ):
+            with self.subTest(typed=typed):
+                c = Customer.objects.create(
+                    branch=self.branch, name=f"C {typed}", phone=typed)
+                c.refresh_from_db()
+                self.assertEqual(c.phone, stored)
+
+    def test_punctuation_and_spacing_do_not_survive(self):
+        for typed in ("081-234-5678", "+66 81 234 5678", "(081) 234 5678"):
+            with self.subTest(typed=typed):
+                c = Customer.objects.create(
+                    branch=self.branch, name=f"C {typed}", phone=typed)
+                c.refresh_from_db()
+                self.assertEqual(c.phone, "+66812345678")
+                c.delete()
+
+    def test_an_odd_length_number_is_stored_not_judged(self):
+        """``02556171014`` is two digits too long for a Thai landline.
+
+        Stored in the one format anyway, digits untouched: a number of an odd
+        length is a typo for a human to correct, not a reason to keep a second
+        format alive in the column.
+        """
+        c = Customer.objects.create(
+            branch=self.branch, name="Masu Co", phone="02556171014")
+        c.refresh_from_db()
+        self.assertEqual(c.phone, "+662556171014")
+
+    def test_an_international_prefix_becomes_a_plus(self):
+        c = Customer.objects.create(
+            branch=self.branch, name="Abin", phone="00919342817381")
+        c.refresh_from_db()
+        self.assertEqual(c.phone, "+919342817381")
+
+    def test_a_number_already_in_e164_is_left_exactly_alone(self):
+        """The rows loyalty has seen must not move."""
+        for typed in ("+66812345678", "+919342817381", "+447700900123"):
+            with self.subTest(typed=typed):
+                c = Customer.objects.create(
+                    branch=self.branch, name=f"C {typed}", phone=typed)
+                c.refresh_from_db()
+                self.assertEqual(c.phone, typed)
+
+    def test_a_number_with_no_country_to_infer_is_not_guessed_at(self):
+        """Guessing a country onto it would invent a fact, not tidy one."""
+        self.assertEqual(to_e164("12345"), "12345")
+
+    def test_the_two_spellings_can_no_longer_both_exist(self):
+        """What the whole exercise is for."""
+        Customer.objects.create(
+            branch=self.branch, name="Termcha", phone="+6626625644")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Customer.objects.create(
+                branch=self.branch, name="Termcha again", phone="026625644")
+
+    def test_the_till_is_told_who_holds_it_whichever_way_it_is_typed(self):
+        """A 400 naming them, not an IntegrityError 500."""
+        staff = Staff.objects.create(
+            name="Ploy", email="ploy@e164.local", password_hash="x", role="cashier")
+        staff.branches.add(self.branch)
+        session = BranchSession.objects.create(
+            token="e16" * 12, branch=self.branch, staff=staff)
+        Customer.objects.create(branch=self.branch, name="Termcha", phone="+6626625644")
+
+        res = self.client.post(
+            "/api/customers", {"name": "Termcha again", "phone": "026625644"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {session.token}",
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Termcha", str(res.json()["phone"]))
+
+    def test_the_comparison_key_folds_a_landline_too(self):
+        """Client and server both key on this; a landline used to slip past.
+
+        ``normalise_phone`` folded only 11-digit (mobile) 66-numbers, so a
+        landline stored as +66 and one typed locally produced different keys —
+        the till's duplicate warning stayed silent on exactly the customers
+        that had the problem.
+        """
+        self.assertEqual(normalise_phone("+6626625644"), "026625644")
+        self.assertEqual(normalise_phone("026625644"), "026625644")
+        self.assertEqual(normalise_phone("+66812345678"), "0812345678")
+        # A foreign number is still left alone rather than guessed at.
+        self.assertEqual(normalise_phone("+919342817381"), "919342817381")
+
+
+class TaxInvoicePhoneRepairTests(TestCase):
+    """The tax-invoice form wrote its phone box onto the customer.
+
+    Issuing a full tax invoice PATCHed the buyer's details onto the customer so
+    the next one would prefill, and the phone rode along with them.  The number
+    on an invoice is that document's billing contact — usually a company
+    switchboard — so what it wrote over was the customer's own number.  Twice in
+    production a personal mobile was replaced by one company landline, after
+    which the two customers looked like one person and were merged.
+    """
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch(name="Silom")
+
+    def _edit(self, customer, was, now):
+        """The audit row the form's PATCH left behind."""
+        return AuditLog.objects.create(
+            action="update", model="Customer", object_id=str(customer.pk),
+            source="api", changes={"phone": {"from": was, "to": now},
+                                   "tax_id": {"from": "", "to": "0105563083534"}},
+        )
+
+    def repair(self):
+        return undo_tax_invoice_phone_writes(Customer, AuditLog)
+
+    def test_a_mobile_written_over_is_given_back(self):
+        """เบส: +66624101030 replaced by a company landline."""
+        c = Customer.objects.create(
+            branch=self.branch, name="เบส", phone="+66624101030")
+        store_as_typed(c, "026625644")
+        self._edit(c, "+66624101030", "026625644")
+
+        self.repair()
+
+        c.refresh_from_db()
+        self.assertEqual(c.phone, "+66624101030")
+
+    def test_a_landline_with_nothing_behind_it_is_removed(self):
+        """The three companies: no number before, so none after.
+
+        A number that was never the customer's is worse than no number — the
+        CRM keys a membership on it and the till offers it as their contact.
+        """
+        c = Customer.objects.create(branch=self.branch, name="ธนาคารไทยพาณิชย์")
+        store_as_typed(c, "074611069")
+        self._edit(c, "", "074611069")
+
+        self.repair()
+
+        c.refresh_from_db()
+        self.assertIsNone(c.phone)
+
+    def test_a_landline_with_no_audit_trail_at_all_is_removed(self):
+        """Nothing recorded means nothing to give back."""
+        c = Customer.objects.create(branch=self.branch, name="บริษัท มาสุ")
+        store_as_typed(c, "02556171014")
+
+        self.repair()
+
+        c.refresh_from_db()
+        self.assertIsNone(c.phone)
+
+    def test_a_number_since_taken_by_somebody_else_is_not_stolen_back(self):
+        """Restoring it would collide with the customer who now holds it.
+
+        The audit log keeps the number either way, so clearing loses nothing
+        that a person cannot look up.
+        """
+        Customer.objects.create(
+            branch=self.branch, name="Jane", phone="+66812345678")
+        c = Customer.objects.create(branch=self.branch, name="Jane Doe")
+        store_as_typed(c, "026625644")
+        self._edit(c, "+66812345678", "026625644")
+
+        self.repair()
+
+        c.refresh_from_db()
+        self.assertIsNone(c.phone)
+        self.assertEqual(
+            Customer.objects.get(name="Jane").phone, "+66812345678")
+
+    def test_numbers_the_form_never_touched_are_left_alone(self):
+        """Only the ones that do not look like the picker's output."""
+        keep = Customer.objects.create(
+            branch=self.branch, name="วริษฐา", phone="+66634217823")
+        none = Customer.objects.create(branch=self.branch, name="Walk-in")
+
+        out = self.repair()
+
+        keep.refresh_from_db()
+        none.refresh_from_db()
+        self.assertEqual(keep.phone, "+66634217823")
+        self.assertIsNone(none.phone)
+        self.assertEqual(out, {"restored": [], "cleared": []})
+
+    def test_it_says_what_it_did(self):
+        c = Customer.objects.create(
+            branch=self.branch, name="เบส", phone="+66624101030")
+        store_as_typed(c, "026625644")
+        self._edit(c, "+66624101030", "026625644")
+        gone = Customer.objects.create(branch=self.branch, name="SCB")
+        store_as_typed(gone, "074611069")
+
+        out = self.repair()
+
+        self.assertEqual(out["restored"], [("เบส", "026625644", "+66624101030")])
+        self.assertEqual(out["cleared"], [("SCB", "074611069")])
+
+    def test_running_it_twice_changes_nothing_the_second_time(self):
+        c = Customer.objects.create(
+            branch=self.branch, name="เบส", phone="+66624101030")
+        store_as_typed(c, "026625644")
+        self._edit(c, "+66624101030", "026625644")
+
+        self.repair()
+        self.assertEqual(self.repair(), {"restored": [], "cleared": []})
+        c.refresh_from_db()
+        self.assertEqual(c.phone, "+66624101030")

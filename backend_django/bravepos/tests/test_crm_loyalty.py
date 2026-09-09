@@ -119,6 +119,11 @@ class ApiTestCase(TestCase):
         )
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.session.token}"}
         self.customer = Customer.objects.create(
+            # Typed in the Thai national form; stored — and therefore sent to
+            # the CRM — as E.164, because Customer.save() settles the format
+            # (0048). Pinned in the local form on purpose: this is the fixture
+            # that would catch the storage rule silently changing the identity
+            # the CRM keys a membership on.
             branch=self.branch, name="Ploy", phone="0812345678",
         )
         # Every test runs as if a key is configured; the ones about *not*
@@ -164,7 +169,7 @@ class MemberLookupTests(ApiTestCase):
         # The number is passed on exactly as the shop holds it — the CRM
         # normalises, and half-normalising here is how one person ends up with
         # two memberships.
-        look.assert_called_once_with("0812345678")
+        look.assert_called_once_with("+66812345678")
         # ...and the CRM's normalised form comes back for display.
         self.assertEqual(data["phone"], "+66812345678")
 
@@ -198,7 +203,7 @@ class MemberLookupTests(ApiTestCase):
         self.assertEqual(res.status_code, 200)
         self.assertTrue(res.json()["created"])
         reg.assert_called_once()
-        self.assertEqual(reg.call_args.args, ("0812345678", "Ploy"))
+        self.assertEqual(reg.call_args.args, ("+66812345678", "Ploy"))
 
     def test_customer_profile_is_carried_into_the_registration(self):
         """A birthday only reaches the CRM if the shop actually holds one — it
@@ -278,7 +283,7 @@ class MemberLookupTests(ApiTestCase):
                         return_value={"ok": True, **member_body()}) as look:
             res = self.lookup(other)
         self.assertEqual(res.status_code, 200)
-        look.assert_called_once_with("0899999999")
+        look.assert_called_once_with("+66899999999")
 
     def test_a_customer_that_does_not_exist_is_still_a_404(self):
         import uuid
@@ -345,7 +350,7 @@ class RecordSaleTests(ApiTestCase):
         self.assertEqual(order.crm_order_id, 50412)
 
         kwargs = rec.call_args.kwargs
-        self.assertEqual(kwargs["phone"], "0812345678")
+        self.assertEqual(kwargs["phone"], "+66812345678")
         self.assertEqual(kwargs["branch_id"], 6)
         self.assertEqual(kwargs["reward_ids"], [8812])
         # The receipt id is our order number: it is the CRM's idempotency key,
@@ -411,7 +416,7 @@ class RecordSaleTests(ApiTestCase):
                                {"ok": True, "order_id": 777}]
             res = self.sell()
 
-        reg.assert_called_once_with("0812345678", "Ploy")
+        reg.assert_called_once_with("+66812345678", "Ploy")
         self.assertEqual(rec.call_count, 2)
         self.assertEqual(
             Order.objects.get(order_number=res.json()["order_number"]).crm_order_id, 777)

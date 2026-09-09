@@ -80,14 +80,18 @@ export function normalizeLocal(country: Country, raw: string): string {
  * Mirrors `normalise_phone` in backend_django/bravepos/customers.py, which is
  * what the duplicate merge keys on.  The two must agree: if they drift, the
  * till warns about clashes the server will not merge, or stays silent about
- * the ones it will.  Only the unambiguous Thai international form is folded —
- * an 11-digit string opening `66` — so a foreign number is left as it is
- * rather than guessed at.
+ * the ones it will.  Only the unambiguous Thai international forms are folded
+ * — a `66` string of mobile (11-digit) or landline (10-digit) length — so a
+ * foreign number is left as it is rather than guessed at.
  */
 export function phoneMatchKey(raw: string): string {
   let d = digitsOnly(raw);
   if (d.startsWith('00')) d = d.slice(2);
-  if (d.length === 11 && d.startsWith('66')) d = `0${d.slice(2)}`;
+  // 11 digits is a Thai mobile (+66 8xx xxx xxx), 10 a landline
+  // (+66 2 xxx xxxx). Both fold to the trunk-prefixed local form, so a number
+  // typed 026625644 matches one stored as +6626625644. Landlines were missed
+  // while only mobiles folded, which let a company be registered twice.
+  if (d.startsWith('66') && (d.length === 10 || d.length === 11)) d = `0${d.slice(2)}`;
   return d;
 }
 

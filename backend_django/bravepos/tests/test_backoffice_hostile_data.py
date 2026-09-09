@@ -381,7 +381,9 @@ class HostileFormTests(HostileDataMixin, TestCase):
              "email": ""},
         )
         self.customer.refresh_from_db()
-        self.assertEqual(self.customer.phone, "0899999999")
+        # The web form is a bare text box with no country picker, so what it
+        # posts is settled by Customer.save() (0048) rather than by the form.
+        self.assertEqual(self.customer.phone, "+66899999999")
 
     def test_edit_a_branch(self):
         self._post(reverse("backoffice:branch_detail", args=[self.branch.id]), {

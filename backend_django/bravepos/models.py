@@ -16,6 +16,10 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 from django.utils import timezone
 
+# The one definition of how a phone number is written down.  customers.py takes
+# its models as arguments and imports nothing from here, so this cannot cycle.
+from .customers import to_e164
+
 
 # ─── Staff (email/password auth) ────────────────────────────────────────────
 class Staff(models.Model):
@@ -446,16 +450,26 @@ class Customer(models.Model):
     email = models.EmailField(max_length=254, blank=True, default="")
 
     def save(self, *args, **kwargs):
-        """Store "no phone" as NULL, however the caller spelled it.
+        """Settle what the phone column holds, however the caller spelled it.
 
-        Every screen that writes a customer sends emptiness its own way — the
-        till posts ``null``, the back-office form posts "" — and a column
-        holding both has two kinds of empty that every query, template and
-        comparison has to handle separately.  Folded in one place rather than
-        in each caller, because a caller added later would not know to.
+        Two foldings, both here rather than in each caller, because the callers
+        disagree and a caller added later would not know to:
+
+        * emptiness becomes NULL.  The till posts ``null`` and the back-office
+          form posts "", and a column holding both has two kinds of empty for
+          every query, template and comparison to handle separately.
+        * a real number becomes E.164.  ``PhoneInput`` already posts that, but
+          the back-office web form is a bare text box, and a number stored as
+          ``026625644`` beside the same number stored as ``+6626625644`` is two
+          customers as far as the unique constraint is concerned.
+
+        Normalising what is *stored* is safe here in a way it would not have
+        been for an arbitrary column: ``loyalty.member_for_customer`` hands
+        this string to the CRM verbatim, and loyalty is enabled per branch —
+        every customer at a branch that has it on was registered through the
+        picker and is already E.164, so this rewrites none of them.
         """
-        if not (self.phone or "").strip():
-            self.phone = None
+        self.phone = to_e164(self.phone)
         return super().save(*args, **kwargs)
 
     class Meta:

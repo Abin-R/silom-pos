@@ -3,6 +3,7 @@ existing frontend already sends and expects."""
 from rest_framework import serializers
 
 from . import images
+from .customers import to_e164
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
@@ -155,7 +156,10 @@ class CustomerSerializer(serializers.ModelSerializer):
         400 that names the customer already holding the number, which is what
         lets the till offer them instead of failing at the counter.
         """
-        value = (value or '').strip()
+        # Normalised *before* the lookup, not after: the column holds E.164,
+        # so a number typed 026625644 has to be compared as +6626625644 or the
+        # clash is missed here and surfaces as an IntegrityError 500 instead.
+        value = to_e164(value)
         if not value:
             return None
         clash = Customer.objects.filter(phone=value)

@@ -12,6 +12,12 @@ scripts, and collide constantly ("Nok" is not an identity); a phone number is
 what the till already asks for and what the CRM keys a membership on.  A
 customer with no phone on file is never merged with anyone, because there is
 nothing to be confident about.
+
+Two different jobs live here and must not be confused.  ``to_e164`` decides how
+a number is *stored*, so that one number has one spelling in the column.
+``normalise_phone`` produces a key for *comparing* two numbers and is never
+written back — it still has to exist, because the book holds numbers that
+predate the storage rule.
 """
 
 import re
@@ -41,9 +47,60 @@ def normalise_phone(raw: str) -> str:
     digits = re.sub(r"\D", "", raw or "")
     if digits.startswith("00"):
         digits = digits[2:]
-    if len(digits) == 11 and digits.startswith("66"):
+    # 11 digits is a Thai mobile (+66 8xx xxx xxx), 10 a landline
+    # (+66 2 xxx xxxx).  Both fold back to the trunk-prefixed local form, so
+    # a number typed as 026625644 matches one stored as +6626625644 — which it
+    # did not while only mobiles were folded, and which is how a company
+    # landline could be registered twice without either screen noticing.
+    if digits.startswith("66") and len(digits) in (10, 11):
         digits = "0" + digits[2:]
     return digits
+
+
+def to_e164(raw):
+    """The *stored* form of a phone number — E.164 — or ``None`` for no number.
+
+    Distinct from :func:`normalise_phone`, which produces a key for comparing
+    two numbers and is never written back.  This one decides what actually goes
+    in the column, so that a number is stored the same way whichever screen it
+    came from.
+
+    It has to exist because not every screen has the country picker.  The till
+    and the back-office app all post E.164 through ``PhoneInput``; the
+    back-office *web* form is a bare ``<input type="tel">`` that stores whatever
+    is typed, which is how four company landlines came to sit in the book as
+    ``026625644`` while every mobile beside them was ``+66…``.  With uniqueness
+    resting on the stored characters, those two spellings are two customers.
+
+    The rules, in order:
+
+    * a number already written ``+…`` keeps its digits, punctuation dropped;
+    * ``00`` is the international access prefix, so ``0066…`` becomes ``+66…``;
+    * a leading ``0`` is Thailand's trunk prefix — this is a Thai shop and the
+      pickers all default to Thailand — so ``026625644`` becomes
+      ``+6626625644``.  Landlines are 8 digits after it and mobiles 9; the
+      length is not checked, because a number of an odd length is a typo for a
+      human to fix and not a reason to store it in a second format;
+    * a bare ``66…`` is the same number with the ``+`` lost somewhere;
+    * anything else is returned unchanged.  A number with no leading ``0``, no
+      ``+`` and no country code could be from anywhere, and guessing a country
+      onto it would invent a fact rather than tidy one.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return None
+    if text.startswith("+"):
+        return "+" + digits
+    if digits.startswith("00"):
+        return "+" + digits[2:]
+    if digits.startswith("0"):
+        return "+66" + digits[1:]
+    if digits.startswith("66") and len(digits) >= 10:
+        return "+" + digits
+    return text
 
 
 def phone_search_digits(raw: str) -> str:
@@ -217,6 +274,62 @@ def merge_duplicates_by_phone(Customer, Order, ParkedOrder,
     }
 
 
+def _phone_change(entry):
+    """The from/to of a phone edit in an audit entry, or ``None``."""
+    change = (entry.changes or {}).get("phone")
+    if isinstance(change, dict):
+        return change.get("from") or "", change.get("to") or ""
+    return None
+
+
+def undo_tax_invoice_phone_writes(Customer, AuditLog) -> dict:
+    """Give back the phone numbers the tax-invoice form wrote over.
+
+    Issuing a full tax invoice PATCHed the buyer's details onto the customer so
+    the next invoice would prefill, and the phone box rode along.  The number on
+    an invoice is that document's billing contact — usually a company
+    switchboard — so what it wrote over was the customer's own number.
+
+    Each one is put back where the audit log still holds it, and cleared where
+    it does not.  A number that was never the customer's is worse than none:
+    the CRM keys a loyalty membership on it, and the till offers it as that
+    person's contact.
+
+    The numbers to repair are the ones not in E.164.  Every screen that
+    legitimately sets a phone posts through the country picker, which emits
+    ``+…``; the tax-invoice box was a bare text field, so its writes are the
+    ones that do not look like the others.
+
+    Where the old number has since been taken by someone else the row is
+    cleared rather than restored — putting it back would collide with the live
+    customer holding it, and the audit log keeps it either way.
+    """
+    restored, cleared = [], []
+    written_by_the_form = Customer.objects.exclude(phone__isnull=True).exclude(
+        phone__startswith="+")
+
+    for customer in written_by_the_form:
+        previous = ""
+        for entry in (AuditLog.objects
+                      .filter(object_id=str(customer.pk), action="update")
+                      .order_by("at")):
+            change = _phone_change(entry)
+            if change and change[1] == customer.phone and change[0]:
+                previous = change[0]
+                break
+
+        taken = (previous and Customer.objects.filter(phone=previous)
+                 .exclude(pk=customer.pk).exists())
+        if previous and not taken:
+            Customer.objects.filter(pk=customer.pk).update(phone=previous)
+            restored.append((customer.name, customer.phone, previous))
+        else:
+            Customer.objects.filter(pk=customer.pk).update(phone=None)
+            cleared.append((customer.name, customer.phone))
+
+    return {"restored": restored, "cleared": cleared}
+
+
 def restore_snapshot(Customer, Order, ParkedOrder, backup) -> dict:
     """Put the customer book back the way the snapshot found it.
 
@@ -233,9 +346,16 @@ def restore_snapshot(Customer, Order, ParkedOrder, backup) -> dict:
     restored = 0
     for row in rows:
         fields = {k: v for k, v in row.items() if k != "id"}
-        _, created = Customer.objects.update_or_create(
-            id=row["id"], defaults=fields)
-        restored += 1 if created else 0
+        # Written straight to the columns rather than through ``save()``.  A
+        # restore reproduces what was there, and ``save()`` would normalise the
+        # numbers on the way past — so a row snapshotted as ``0812345678``
+        # would come back as ``+66812345678``, land on the survivor's number,
+        # and be refused by the unique constraint.  The tape is history, not
+        # input: it is not the place to apply today's storage rule.
+        updated = Customer.objects.filter(id=row["id"]).update(**fields)
+        if not updated:
+            Customer.objects.bulk_create([Customer(id=row["id"], **fields)])
+            restored += 1
 
     for order_id, customer_id in (payload.get("moved_orders") or {}).items():
         Order.objects.filter(id=order_id).update(customer_id=customer_id)
