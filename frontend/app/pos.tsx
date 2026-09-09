@@ -25,7 +25,7 @@ import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
 import { AppShell, TopBar, isWideSize, railWidth, useDense } from "../components/AppShell";
-import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
+import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
@@ -80,7 +80,10 @@ type Product = {
   is_favorite: boolean;
 };
 type CartItem = { product_id: string; name: string; price: number; qty: number; discount?: number };
-type Customer = { id: string; name: string; phone?: string; last_visit?: string; color: string };
+// `phone` is null, not "", for a customer with no number on file — that is what
+// the column stores, so it is what the API sends. Every read here goes through
+// `c.phone || ""` or a `!c.phone` guard, which treat null and undefined alike.
+type Customer = { id: string; name: string; phone?: string | null; last_visit?: string; color: string };
 type Order = {
   id: string;
   order_number: string;
@@ -3348,8 +3351,10 @@ function CustomerModal({
     // a note on a card. It decides who earns the points now: the CRM keys a
     // membership on the number and never renames an existing one, so a second
     // row quietly rings up against the first row's member, under the first
-    // row's name. Not blocked, because a household really can share a phone;
-    // it just must not happen silently.
+    // row's name. The database holds one customer to a number now, so this is
+    // the courteous half of a refusal rather than a warning: it names who has
+    // the number and offers them, which is nearly always the customer the
+    // cashier was about to register a second time.
     //
     // Asked of the server, not of the list on screen: that list is one page of
     // a shop-wide book, so the row already holding this number usually is not
@@ -3364,13 +3369,22 @@ function CustomerModal({
       clash = hits.find((x) => x.phone && phoneMatchKey(x.phone) === key);
     }
     if (clash) {
-      const go = await confirmDialog(
+      const use = await confirmDialog(
         tr("pos.number_already_used"),
         tr("pos.number_already_used_body", { name: clash.name }),
-        tr("pos.save_anyway"),
+        tr("pos.use_this_customer", { name: clash.name }),
         false,
       );
-      if (!go) return;
+      // No second row either way. Cancel leaves the form as it was, so a
+      // mistyped digit — the other reason to land here — can be corrected.
+      if (use) {
+        setName("");
+        setPhone("");
+        setPhoneReason(undefined);
+        setShowAdd(false);
+        onSelect(clash);
+      }
+      return;
     }
 
     let c: Customer | null = null;
@@ -3380,10 +3394,10 @@ function CustomerModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim(), phone: phone.trim() || null }),
       });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(detail || `Server error (${res.status})`);
-      }
+      // The sentence, not the JSON around it: the refusal that lands here
+      // ("Somchai already uses this number") is one the cashier can act on,
+      // but only if they can read it.
+      if (!res.ok) throw new Error(await apiErrorMessage(res));
       c = await res.json();
     } catch (e: any) {
       showAlert(tr("common.couldnt_save_customer"), e?.message || tr("pos.please_try_again"));

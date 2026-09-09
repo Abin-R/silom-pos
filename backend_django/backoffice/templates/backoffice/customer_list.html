@@ -173,7 +173,7 @@
 
       <div style="padding:14px 20px;display:flex;gap:9px;border-top:1px solid var(--line2)">
         <a class="btn" style="flex:1" href="{% url 'backoffice:customer_detail' selected.id %}?{{ qs }}">Edit</a>
-        <a class="btn" style="flex:1" href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;q={{ selected.phone|urlencode }}">All bills</a>
+        <a class="btn" style="flex:1" href="{% url 'backoffice:transactions' %}?{{ qs }}&amp;q={{ selected.phone|default:""|urlencode }}">All bills</a>
       </div>
     </div>
   </div>

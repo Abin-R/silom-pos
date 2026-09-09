@@ -41,7 +41,7 @@ import {
   saveLocalPrinterConfig,
 } from "../lib/localPrinterConfig";
 import * as printerQueue from "../lib/printerQueue";
-import { apiFetch, clearAuthToken, safeJson } from "../lib/api";
+import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert, confirmDialog } from "../lib/dialog";
@@ -107,7 +107,9 @@ type ChannelRow = {
   before_gp: number; gp: number; after_gp: number; has_gp: boolean;
 };
 type Customer = {
-  id: string; name: string; phone?: string; last_visit?: string; color: string;
+  // `phone` is null for a customer with no number on file — the column's own
+  // way of saying "nothing here", passed through as it is.
+  id: string; name: string; phone?: string | null; last_visit?: string; color: string;
   // Profile + full-tax-invoice identity.  All optional: rows created before
   // these fields existed, and every customer added from the POS cart, have
   // only name/phone.
@@ -1839,10 +1841,12 @@ function TaxInvoiceFlow({
           group: add.group.trim(),
         }),
       });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(detail || `Server error (${res.status})`);
-      }
+      // A buyer whose number is already in the book is refused by the server,
+      // and this is the one customer form with no check of its own — so the
+      // sentence in the body ("Somchai already uses this number") is the whole
+      // explanation the person retyping a tax invoice gets. Shown, not dumped
+      // as JSON.
+      if (!res.ok) throw new Error(await apiErrorMessage(res));
       const created: Customer = await res.json();
       setCustomers((list) => [created, ...list]);
       pick(created);
@@ -3469,8 +3473,8 @@ function Customers({ isWide }: { isWide: boolean }) {
     // already knows rings up against the first row's membership, under the
     // first row's name. Asked of the server because the list on screen is one
     // page of a shop-wide book, and compared on `phoneMatchKey` because the
-    // same number is stored both as E.164 and in the local form. Not blocked —
-    // a household really can share a phone — it just must not happen silently.
+    // same number is stored both as E.164 and in the local form — a wider net
+    // than the column's own, which compares the stored characters.
     const key = phoneMatchKey(phone.trim());
     if (key) {
       const hits = await apiFetch(
@@ -3478,13 +3482,21 @@ function Customers({ isWide }: { isWide: boolean }) {
       ).then((r) => safeJson<Customer[]>(r, []));
       const clash = hits.find((x) => x.phone && phoneMatchKey(x.phone) === key);
       if (clash) {
-        const go = await confirmDialog(
+        const use = await confirmDialog(
           tr("pos.number_already_used"),
           tr("pos.number_already_used_body", { name: clash.name }),
-          tr("pos.save_anyway"),
+          tr("pos.use_this_customer", { name: clash.name }),
           false,
         );
-        if (!go) return;
+        // No second row either way; cancel leaves the form alone so a
+        // mistyped digit can be corrected.
+        if (use) {
+          setSel(clash);
+          setName("");
+          setPhone("");
+          setAddOpen(false);
+        }
+        return;
       }
     }
 
@@ -3494,10 +3506,7 @@ function Customers({ isWide }: { isWide: boolean }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, phone: phone || null }),
       });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => "");
-        throw new Error(detail || `Server error (${r.status})`);
-      }
+      if (!r.ok) throw new Error(await apiErrorMessage(r));
       c = await r.json();
     } catch (e: any) {
       showAlert(tr("common.couldnt_save_customer"), e?.message || "Please try again.");

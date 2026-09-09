@@ -32,7 +32,8 @@
       </div>
       <div class="field">
         <label for="f-phone">Phone</label>
-        <input id="f-phone" type="tel" name="phone" value="{{ customer.phone }}">
+        {# default:"" — no number on file is NULL, and a bare None renders as the word "None" in the box. #}
+        <input id="f-phone" type="tel" name="phone" value="{{ customer.phone|default:"" }}">
         <span class="hint">The till looks a customer up by this number. Changing it breaks that lookup for anyone who knows the old one.</span>
       </div>
       <div class="field">

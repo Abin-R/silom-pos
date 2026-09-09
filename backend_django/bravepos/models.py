@@ -391,7 +391,31 @@ class Customer(models.Model):
         ("unspecified", "Unspecified"),
     ]
     name = models.CharField(max_length=200)
-    phone = models.CharField(max_length=32, blank=True, default="")
+    # A customer with no number on file stores NULL, not "".  Plenty of them
+    # have none — a walk-in who just wants a name on the bill — and "no phone"
+    # therefore has to be the SQL kind of empty: "" is an ordinary value, and
+    # two of them are equal, while two NULLs are not.  That is what lets any
+    # number of customers share "no number" while a real number can still be
+    # held to one customer.
+    #
+    # ``save()`` folds "" to None, so the two kinds of empty cannot both end up
+    # in the column and no reader has to remember which one they got.
+    #
+    # ``unique`` is what stops one number reaching two customers.  The CRM keys
+    # a loyalty membership on the phone number and never renames an existing
+    # one, so a second row on a number it already knows rings up against the
+    # first row's member, under the first row's name, and the points land on a
+    # customer nobody is looking at.  A screen check could not hold that on its
+    # own — the till's could be tapped through, the tax-invoice buyer form has
+    # none, and two branches saving the same number in the same second both
+    # pass their own check.
+    #
+    # It compares the stored characters, so it catches a number typed the same
+    # way twice.  ``+66812345678`` and ``0812345678`` are one person to a
+    # reader and two values to the index; ``bravepos/customers.py`` holds the
+    # normalising the till and ``merge_customers`` compare on.
+    phone = models.CharField(
+        max_length=32, blank=True, null=True, default=None, unique=True)
     last_visit = models.CharField(max_length=32, blank=True, default="")
     color = models.CharField(max_length=16, default="#94A3B8")
 
@@ -420,6 +444,19 @@ class Customer(models.Model):
     tax_branch = models.CharField(max_length=120, blank=True, default="")
     address = models.TextField(blank=True, default="")
     email = models.EmailField(max_length=254, blank=True, default="")
+
+    def save(self, *args, **kwargs):
+        """Store "no phone" as NULL, however the caller spelled it.
+
+        Every screen that writes a customer sends emptiness its own way — the
+        till posts ``null``, the back-office form posts "" — and a column
+        holding both has two kinds of empty that every query, template and
+        comparison has to handle separately.  Folded in one place rather than
+        in each caller, because a caller added later would not know to.
+        """
+        if not (self.phone or "").strip():
+            self.phone = None
+        return super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["name"]

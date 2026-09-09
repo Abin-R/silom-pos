@@ -3812,7 +3812,10 @@ def customer_detail(request, customer_id):
     if request.method == "POST":
         customer.name = (request.POST.get("name") or "").strip() or customer.name
         customer.last_name = (request.POST.get("last_name") or "").strip()
-        customer.phone = (request.POST.get("phone") or "").strip()
+        # An empty box means no number on file, which the column stores as
+        # NULL.  Customer.save() would fold "" anyway; spelled out here so the
+        # form reads the way the column works.
+        customer.phone = (request.POST.get("phone") or "").strip() or None
         customer.email = (request.POST.get("email") or "").strip()
         customer.save()
         return redirect(reverse("backoffice:customer_list")

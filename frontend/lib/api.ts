@@ -66,6 +66,36 @@ export async function safeJson<T>(res: Response, fallback: T): Promise<T> {
   }
 }
 
+/**
+ * The sentence inside a DRF error response, ready to put in an alert.
+ *
+ * A refused save comes back as `{"phone": ["Somchai already uses this
+ * number."]}` — a shape the person reading the alert should never see.  Call
+ * sites used to show `await res.text()` raw, which put the braces and quotes on
+ * screen and buried the sentence in the middle of them.
+ *
+ * Field names are dropped rather than printed: these forms are small enough
+ * that the message says which field it means, and "phone: ..." reads like a
+ * stack trace.  Falls back to the raw body, then to the status, so an
+ * unexpected shape still says something.
+ */
+export async function apiErrorMessage(res: Response, fallback?: string): Promise<string> {
+  const text = await res.text().catch(() => "");
+  const flatten = (v: unknown): string[] => {
+    if (typeof v === "string") return [v];
+    if (Array.isArray(v)) return v.flatMap(flatten);
+    if (v && typeof v === "object") return Object.values(v).flatMap(flatten);
+    return [];
+  };
+  try {
+    const lines = flatten(JSON.parse(text)).filter(Boolean);
+    if (lines.length) return lines.join("\n");
+  } catch {
+    // Not JSON — an HTML error page, or an empty body.
+  }
+  return text || fallback || `Server error (${res.status})`;
+}
+
 let cachedToken: string | null | undefined = undefined;
 
 async function getToken(): Promise<string | null> {

@@ -16,6 +16,11 @@ registered *since* the merge are left alone — a new customer is not a mistake
 to undo.  It does not re-run the merge afterwards, so the duplicates come back
 exactly as they were.
 
+Which is what migration 0047 forbids: one phone number, one customer.  A book
+with that applied refuses the duplicates a restore brings back, so
+``manage.py migrate bravepos 0046`` comes first — --restore says so itself
+rather than failing with an IntegrityError.
+
 Deleting is the last step, not the first.  Once the tape is gone the merge is
 permanent, so leave it until the shop has been trading on the merged book long
 enough that anything wrong would have surfaced.
@@ -23,7 +28,7 @@ enough that anything wrong would have surfaced.
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from bravepos.customers import restore_snapshot
 from bravepos.models import Customer, CustomerMergeBackup, Order, ParkedOrder
@@ -88,8 +93,28 @@ class Command(BaseCommand):
                     f"  {row.get('name')!r} {row.get('phone')!r}{gone}")
 
         if options['restore']:
-            with transaction.atomic():
-                result = restore_snapshot(Customer, Order, ParkedOrder, backup)
+            try:
+                with transaction.atomic():
+                    result = restore_snapshot(
+                        Customer, Order, ParkedOrder, backup)
+            except IntegrityError as exc:
+                if 'phone' not in str(exc):
+                    raise
+                # Bringing back rows that share a number is the whole point of
+                # the restore, and exactly what 0047 refuses.  Nothing was
+                # written — the atomic block rolled back — so say what to do
+                # instead of leaving a half-restored book.
+                raise CommandError(
+                    "The book holds one phone number to one customer "
+                    "(migration 0047), and this backup contains rows that "
+                    "share a number — which is what the merge it undoes was "
+                    "for.\n\n"
+                    "Drop the constraint first, then restore:\n"
+                    "    manage.py migrate bravepos 0046\n"
+                    "    manage.py customer_merge_backup --restore\n\n"
+                    "Nothing was changed. Re-applying 0047 later re-runs the "
+                    "merge, so the duplicates would fold again."
+                ) from exc
             self.stdout.write(self.style.SUCCESS(
                 f"\nRestored from backup #{backup.id}: "
                 f"{result['customers']} customer rows written "

@@ -8,6 +8,7 @@ already split are folded back together.
 """
 from decimal import Decimal
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from bravepos.customers import (
@@ -204,7 +205,15 @@ class NormalisePhoneTests(TestCase):
 
 
 class MergeDuplicatesTests(TestCase):
-    """Folding the rows the branch boundary created."""
+    """Folding the rows the branch boundary created.
+
+    The duplicates here are one number spelled two ways — ``0812345678`` and
+    ``+66812345678`` — because that is what a duplicate looks like now.  A
+    stored number belongs to one customer (0047), so two rows carrying the
+    identical string cannot coexist in the book; what does survive is the same
+    person written the way each screen writes it, which is precisely what the
+    merge's normalised key is for.
+    """
 
     def setUp(self):
         make_shop()
@@ -240,7 +249,8 @@ class MergeDuplicatesTests(TestCase):
     def test_what_the_receipt_said_is_not_rewritten(self):
         """A bill is a record of what was printed, not a pointer to be tidied."""
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
-        small = Customer.objects.create(branch=self.thonglor, name="Ploy S", phone="0812345678")
+        small = Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="+66812345678")
         self._order(big, "M-1")
         self._order(big, "M-2")
         moved = self._order(small, "M-3", branch=self.thonglor)
@@ -255,7 +265,7 @@ class MergeDuplicatesTests(TestCase):
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
         Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="0812345678",
+            branch=self.thonglor, name="Ploy S", phone="+66812345678",
             email="ploy@example.com", tax_id="0105563083534", last_name="Sri",
         )
 
@@ -274,7 +284,7 @@ class MergeDuplicatesTests(TestCase):
         big = Customer.objects.create(branch=None, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
         Customer.objects.create(
-            branch=self.thonglor, name="Ploy S", phone="0812345678")
+            branch=self.thonglor, name="Ploy S", phone="+66812345678")
 
         self.merge()
         survivor = Customer.objects.get()
@@ -287,7 +297,8 @@ class MergeDuplicatesTests(TestCase):
         customer that no longer exists."""
         big = Customer.objects.create(branch=self.silom, name="Ploy", phone="0812345678")
         self._order(big, "M-1")
-        small = Customer.objects.create(branch=self.thonglor, name="Ploy S", phone="0812345678")
+        small = Customer.objects.create(
+            branch=self.thonglor, name="Ploy S", phone="+66812345678")
         parked = ParkedOrder.objects.create(
             branch=self.thonglor, name="Table 4", items=[],
             customer_id=small.id, customer_name="Ploy S",
@@ -322,9 +333,14 @@ class MergeDuplicatesTests(TestCase):
         self.assertEqual(Customer.objects.count(), 1)
 
     def test_three_rows_for_one_person_collapse_to_one(self):
-        for i, branch in enumerate((self.silom, self.thonglor, self.silom)):
+        # One number, three spellings — the country picker's, the local form,
+        # and a row typed by hand with separators. The column holds one
+        # customer per stored number, so this is the shape a duplicate takes.
+        spellings = ("0812345678", "+66812345678", "081-234-5678")
+        for i, (branch, phone) in enumerate(
+                zip((self.silom, self.thonglor, self.silom), spellings)):
             Customer.objects.create(
-                branch=branch, name=f"Ploy {i}", phone="0812345678")
+                branch=branch, name=f"Ploy {i}", phone=phone)
 
         self.assertEqual(self.merge(), {"groups": 1, "removed": 2})
         self.assertEqual(Customer.objects.count(), 1)
@@ -437,3 +453,204 @@ class MergeUndoTapeTests(TestCase):
         restore_snapshot(Customer, Order, ParkedOrder,
                          CustomerMergeBackup.objects.first())
         self.assertEqual(CustomerMergeBackup.objects.count(), 1)
+
+
+class NoPhoneOnFileTests(TestCase):
+    """"No phone number" is stored as NULL, and is saveable more than once.
+
+    The till's Add Customer form treats an empty phone box as valid and posts
+    ``phone: null`` for it, which the column used to refuse — so a cashier
+    adding a customer who only gave a name got a 400 and an alert full of JSON.
+    The back-office form had the opposite half of the same fault: it posts ""
+    and the column took it, which is how both spellings ended up in the book.
+    """
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch(name="Silom")
+        self.staff = Staff.objects.create(
+            name="Ploy", email="ploy@nophone.local", password_hash="x",
+            role="cashier",
+        )
+        self.staff.branches.add(self.branch)
+        self.session = BranchSession.objects.create(
+            token="nop" * 12, branch=self.branch, staff=self.staff,
+        )
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.session.token}"}
+
+    def post(self, **body):
+        return self.client.post("/api/customers", body,
+                                content_type="application/json", **self.auth)
+
+    def test_the_till_can_save_a_customer_who_gave_only_a_name(self):
+        """What pos.tsx sends when the phone box is left empty."""
+        res = self.post(name="Walk-in", phone=None)
+
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(Customer.objects.get(name="Walk-in").phone)
+
+    def test_more_than_one_customer_can_have_no_number(self):
+        """The reason it is NULL and not "": two NULLs are never equal."""
+        for name in ("Walk-in A", "Walk-in B", "Walk-in C"):
+            self.assertEqual(self.post(name=name, phone=None).status_code, 201)
+        self.assertEqual(Customer.objects.filter(phone__isnull=True).count(), 3)
+
+    def test_an_empty_string_is_stored_as_nothing(self):
+        """The back office posts "" for the same fact; one column, one form."""
+        res = self.post(name="Walk-in", phone="")
+
+        self.assertEqual(res.status_code, 201)
+        self.assertIsNone(Customer.objects.get(name="Walk-in").phone)
+
+    def test_a_field_of_spaces_is_no_number_either(self):
+        c = Customer.objects.create(branch=self.branch, name="Walk-in", phone="   ")
+        self.assertIsNone(c.phone)
+
+    def test_clearing_a_number_clears_it_to_nothing(self):
+        c = Customer.objects.create(
+            branch=self.branch, name="Ploy", phone="0812345678")
+
+        res = self.client.patch(
+            f"/api/customers/{c.id}", {"phone": ""},
+            content_type="application/json", **self.auth,
+        )
+
+        self.assertEqual(res.status_code, 200)
+        c.refresh_from_db()
+        self.assertIsNone(c.phone)
+
+    def test_a_real_number_is_stored_exactly_as_it_was_typed(self):
+        """Only emptiness is normalised.
+
+        The CRM is handed ``customer.phone`` verbatim and keys a membership on
+        it, so a number tidied on the way in reads there as a different member.
+        """
+        for typed in ("+66812345678", "081-234-5678", "0812345678"):
+            with self.subTest(phone=typed):
+                c = Customer.objects.create(
+                    branch=self.branch, name=f"C {typed}", phone=typed)
+                c.refresh_from_db()
+                self.assertEqual(c.phone, typed)
+
+    def test_nobody_is_left_holding_an_empty_string(self):
+        """The one thing that must stay true for every reader downstream."""
+        self.post(name="Via the till", phone=None)
+        self.post(name="Via the back office", phone="")
+        Customer.objects.create(branch=self.branch, name="Direct", phone="")
+
+        self.assertFalse(Customer.objects.filter(phone="").exists())
+
+    def test_a_customer_with_no_number_still_lists_and_reads(self):
+        c = Customer.objects.create(branch=self.branch, name="Walk-in")
+
+        listed = self.client.get("/api/customers", **self.auth).json()
+        self.assertIn("Walk-in", [row["name"] for row in listed])
+        one = self.client.get(f"/api/customers/{c.id}", **self.auth).json()
+        self.assertIsNone(one["phone"])
+
+    def test_searching_by_number_skips_the_ones_that_have_none(self):
+        Customer.objects.create(branch=self.branch, name="Walk-in")
+        Customer.objects.create(
+            branch=self.branch, name="Ploy", phone="0812345678")
+
+        res = self.client.get("/api/customers?q=0812345678", **self.auth)
+
+        self.assertEqual([row["name"] for row in res.json()], ["Ploy"])
+
+
+class OneNumberOneCustomerTests(TestCase):
+    """A stored phone number belongs to one customer, and the database says so.
+
+    0045 folded the duplicates the branch-scoped book had made, but nothing
+    stopped new ones: the till warned and then offered "Save anyway", the
+    tax-invoice buyer form never checked at all, and two tills saving the same
+    number in the same second both passed their own check — a check that runs a
+    moment before the save cannot hold that gap, and only the database can.
+
+    It matters because the number is what the CRM calls someone.  A membership
+    is keyed on it and never renamed, so a second row on a number it already
+    knows rings up against the first row's member, under the first row's name.
+    """
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch(name="Silom")
+        self.staff = Staff.objects.create(
+            name="Ploy", email="ploy@uniq.local", password_hash="x", role="cashier",
+        )
+        self.staff.branches.add(self.branch)
+        self.session = BranchSession.objects.create(
+            token="uni" * 12, branch=self.branch, staff=self.staff,
+        )
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {self.session.token}"}
+
+    def post(self, **body):
+        return self.client.post("/api/customers", body,
+                                content_type="application/json", **self.auth)
+
+    def test_two_customers_cannot_hold_the_same_number(self):
+        Customer.objects.create(branch=self.branch, name="Ploy", phone="0812345678")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Customer.objects.create(
+                branch=self.branch, name="Ploy again", phone="0812345678")
+
+    def test_the_till_is_told_who_already_has_the_number(self):
+        """A 400 naming them, not a 500 — the cashier's next move depends on it."""
+        Customer.objects.create(branch=self.branch, name="Somchai", phone="0812345678")
+
+        res = self.post(name="Somchai again", phone="0812345678")
+
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Somchai", str(res.json()["phone"]))
+
+    def test_editing_a_customer_onto_a_taken_number_is_refused(self):
+        Customer.objects.create(branch=self.branch, name="Somchai", phone="0812345678")
+        other = Customer.objects.create(
+            branch=self.branch, name="Nok", phone="0898887777")
+
+        res = self.client.patch(
+            f"/api/customers/{other.id}", {"phone": "0812345678"},
+            content_type="application/json", **self.auth,
+        )
+
+        self.assertEqual(res.status_code, 400)
+        other.refresh_from_db()
+        self.assertEqual(other.phone, "0898887777")
+
+    def test_a_customer_keeps_its_own_number_through_an_edit(self):
+        """The row must not be found to clash with itself."""
+        c = Customer.objects.create(branch=self.branch, name="Nok", phone="0898887777")
+
+        res = self.client.patch(
+            f"/api/customers/{c.id}", {"name": "Nok S", "phone": "0898887777"},
+            content_type="application/json", **self.auth,
+        )
+
+        self.assertEqual(res.status_code, 200)
+        c.refresh_from_db()
+        self.assertEqual(c.name, "Nok S")
+
+    def test_customers_with_no_number_are_exempt(self):
+        """The reason the column is NULL and not "": two NULLs are never equal."""
+        for name in ("Walk-in A", "Walk-in B", "Walk-in C"):
+            self.assertEqual(self.post(name=name, phone=None).status_code, 201)
+        self.assertEqual(Customer.objects.filter(phone__isnull=True).count(), 3)
+
+    def test_one_number_spelled_two_ways_is_still_let_through(self):
+        """What ``unique`` does not catch, stated so nobody assumes otherwise.
+
+        The index compares stored characters, and the country picker writes
+        ``+66…`` where a row typed before it holds ``0…``.  The stored number
+        is deliberately left as it was keyed — ``loyalty.member_for_customer``
+        hands it to the CRM verbatim, and a tidied one reads there as a new
+        member — so closing this means comparing on the normalised key, which
+        is what the till's own check and ``merge_customers`` already do.
+        """
+        Customer.objects.create(branch=self.branch, name="Ploy", phone="0812345678")
+        Customer.objects.create(
+            branch=self.branch, name="Ploy again", phone="+66812345678")
+
+        self.assertEqual(Customer.objects.count(), 2)
+        # And the merge is what folds them back together.
+        merge_duplicates_by_phone(Customer, Order, ParkedOrder)
+        self.assertEqual(Customer.objects.count(), 1)

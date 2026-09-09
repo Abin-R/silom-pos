@@ -117,6 +117,20 @@ class CustomerSerializer(serializers.ModelSerializer):
     # sends "" for it.  DRF's DateField rejects "" outright, so accept it and
     # store NULL instead of failing the whole save over an optional field.
     birth_date = serializers.DateField(required=False, allow_null=True)
+    # The till posts `null` for an empty phone box and the back office posts
+    # "".  Both mean "no number on file", so both are accepted here and
+    # `validate_phone` settles them on the one the column stores.  Without
+    # `allow_null` the till's version came back as a 400 the cashier could do
+    # nothing about ("This field may not be null"), which is how a customer
+    # with only a name became unsaveable.
+    # Declared with no validators, which also keeps DRF's own uniqueness
+    # machinery off the field: from ``unique=True`` it would otherwise build a
+    # UniqueValidator whose message ("customer with this phone already exists")
+    # names nobody — and who already has the number is the one thing the
+    # cashier needs to know.  ``validate_phone`` below does the check instead.
+    phone = serializers.CharField(
+        max_length=32, required=False, allow_blank=True, allow_null=True,
+        validators=[])
 
     class Meta:
         model = Customer
@@ -128,6 +142,31 @@ class CustomerSerializer(serializers.ModelSerializer):
 
     def validate_birth_date(self, value):
         return value or None
+
+    def validate_phone(self, value):
+        """No number on file, or a number no other customer holds.
+
+        An empty string and null are one fact — nobody has to have a phone —
+        and any number of customers may share it, which is why the column
+        stores it as NULL rather than "".
+
+        A real number belongs to one customer.  The database enforces that too,
+        but an IntegrityError reaches the caller as a 500; this turns it into a
+        400 that names the customer already holding the number, which is what
+        lets the till offer them instead of failing at the counter.
+        """
+        value = (value or '').strip()
+        if not value:
+            return None
+        clash = Customer.objects.filter(phone=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        other = clash.first()
+        if other:
+            raise serializers.ValidationError(
+                f'{other.name} already uses this number.'
+            )
+        return value
 
     def to_internal_value(self, data):
         if isinstance(data, dict) and data.get('birth_date') == '':
