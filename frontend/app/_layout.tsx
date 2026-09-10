@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
@@ -6,8 +6,9 @@ import { useEffect, useState } from "react";
 import { Text, TextInput } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { C } from "../lib/theme";
-import { DialogHost } from "../lib/dialog";
-import { initLanguage } from "../lib/i18n";
+import { setUnauthorizedHandler } from "../lib/api";
+import { DialogHost, showAlert } from "../lib/dialog";
+import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
@@ -47,6 +48,23 @@ function RootLayout() {
   const [langReady, setLangReady] = useState(false);
   useEffect(() => {
     initLanguage().finally(() => setLangReady(true));
+  }, []);
+
+  // Resetting a till PIN in the backoffice ends that staff member's session,
+  // so a cashier stranded by a dead tablet can sign in on a working one.  The
+  // tablet finds out when its next call comes back 401 — api.ts has dropped
+  // the token by then, so what is left is to take whoever is holding it back
+  // to the PIN pad, and say why.  Without this they carry on at a screen
+  // where nothing saves and discover it with a customer at the counter.
+  //
+  // Registered here because the root layout outlives every screen: a handler
+  // owned by /pos would go with it the moment it unmounted.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      router.replace("/");
+      showAlert(tr("login.signed_out_title"), tr("login.signed_out_body"));
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   const [fontsLoaded] = useFonts({

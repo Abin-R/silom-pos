@@ -506,6 +506,8 @@ const en = {
     network_error: "Network error.",
     network_error_retry: "Network error. Please retry.",
     invalid_pin: "Invalid PIN.",
+    signed_out_title: "You were signed out",
+    signed_out_body: "Your PIN was reset in the back office. Enter your new PIN to sign back in.",
     choose_user_first: "Please choose a user first.",
   },
   nav: {

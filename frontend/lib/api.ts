@@ -2,10 +2,11 @@
 //   1. Prepends EXPO_PUBLIC_BACKEND_URL + /api (callers pass `/path`)
 //   2. Injects the bearer token from AsyncStorage so the backend can
 //      look up the BranchSession and scope reads/writes to one branch.
-//   3. On 401, clears the cached auth so the next call to / re-mounts the
-//      login screen.  The active screen still needs to handle the failed
-//      response (return null / show retry), but at least the session is
-//      gone instead of looping with a dead token.
+//   3. On 401, clears the cached auth and calls the handler the root layout
+//      registered, which takes the tablet back to the PIN pad.  The active
+//      screen still needs to handle the failed response (return null / show
+//      retry), but at least the session is gone instead of looping with a
+//      dead token.
 //   4. Reports every failed call to Sentry.  Callers each handle failure
 //      their own way (empty list, retry banner, silent catch), so this is
 //      the only place that sees ALL of them — without it a 500 or a dropped
@@ -98,6 +99,27 @@ export async function apiErrorMessage(res: Response, fallback?: string): Promise
 
 let cachedToken: string | null | undefined = undefined;
 
+/**
+ * What to do when the backend says this tablet's session is gone.
+ *
+ * It used to be enough to drop the token: a 401 only ever meant a stale or
+ * forged one, because a valid session was never taken away from an active
+ * user.  That is no longer true — resetting somebody's till PIN in the
+ * backoffice now ends their session, so that a cashier locked out by a dead
+ * tablet can sign in on a working one.
+ *
+ * Nothing can be pushed to a tablet, so the 401 IS the notification, and
+ * without this the cashier carries on at a screen where nothing saves and
+ * only finds out when they try to take payment.  `app/_layout.tsx` registers
+ * the handler once, at the root.
+ */
+let onUnauthorized: (() => void) | null = null;
+let unauthorizedFired = false;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
 async function getToken(): Promise<string | null> {
   if (cachedToken !== undefined) return cachedToken;
   try {
@@ -111,6 +133,8 @@ async function getToken(): Promise<string | null> {
 
 export function setAuthToken(token: string | null): void {
   cachedToken = token;
+  // A fresh login re-arms the bounce for the session that just started.
+  if (token) unauthorizedFired = false;
 }
 
 export function clearAuthToken(): void {
@@ -150,15 +174,25 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   }
 
   if (res.status === 401) {
-    // Token rejected (only happens with a stale/forged token — the "block on
-    // second login" flow means valid sessions don't get yanked out from under
-    // an active user).  Drop the cached copy so the next mount of / starts
-    // fresh; screens that handle a 401 response will fall back to empty data.
+    // Token rejected: a stale/forged one, or a session the backoffice ended
+    // by resetting this staff member's PIN.  Drop the cached copy so the next
+    // mount of / starts fresh; screens that handle a 401 response will fall
+    // back to empty data.
     // Expected control flow, not an error — deliberately not reported.
     cachedToken = null;
     try {
       await AsyncStorage.removeItem(AUTH_KEY);
     } catch {}
+    // Then send whoever is holding the tablet back to the PIN pad.  A screen
+    // usually has several calls in flight at once and every one of them comes
+    // back 401, so fire once per session rather than asking the router to
+    // leave the same screen five times.
+    if (!unauthorizedFired) {
+      unauthorizedFired = true;
+      try {
+        onUnauthorized?.();
+      } catch {}
+    }
     return res;
   }
 
