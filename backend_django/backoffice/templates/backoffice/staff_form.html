@@ -87,52 +87,6 @@
 </form>
 
 {% comment %}
-  Which till is holding this account, and the way out of it.
-
-  A staff account may hold one session at a time — the PIN pad answers a
-  second login with "already signed in at X" — and until this panel existed
-  the only thing that cleared the row was pressing Log out *on the device
-  that opened it*. That is fine until the device is the problem: flat,
-  crashed, off the network, or away being repaired. Then the account was
-  stuck on a tablet nobody could reach and the fix was a shell on the server.
-
-  It sits above Delete and below Save because that is the order of nerve:
-  ending a session costs an unpaid screen, deleting costs the account.
-{% endcomment %}
-{% if mode != 'new' %}
-<div class="panel" style="max-width:760px;margin-top:16px">
-  <div class="panel-h">Till session</div>
-  <div class="srow">
-    <span class="si" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-logout"/></svg></span>
-    <span class="sm">
-      {% if session %}
-        <b>Signed in at {{ session.branch.name }}</b>
-        <u>Since {{ session.opened_at|date:"j M, H:i" }} · last seen
-          {{ session.last_seen_at|timesince }} ago. {{ member.name }} cannot sign in on
-          another device until this ends. Force it if that till is broken, flat, off the
-          network or simply somewhere else.</u>
-      {% else %}
-        <b>Not signed in on any till</b>
-        <u>Nothing to end — {{ member.name }} can sign in on any device at this branch
-          right now.</u>
-      {% endif %}
-    </span>
-    {% if session %}
-      <form method="post" action="{% url 'backoffice:staff_force_logout' member.id %}?{{ qs }}"
-            style="margin:0"
-            onsubmit="return confirm('Sign {{ member.name|escapejs }} out of the till at {{ session.branch.name|escapejs }}?\n\nIf someone is on that till, whatever is on screen and unpaid is lost. They can sign straight back in with their PIN.');">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-sm">
-          <svg><use href="#i-logout"/></svg> Force logout</button>
-      </form>
-    {% else %}
-      <span class="btn btn-sm dis">Force logout</span>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
-{% comment %}
   Deleting is separated from the edit form on purpose — its own panel, its own
   POST, below the Save button rather than beside it. It also names the
   reversible alternative, because "stop them signing in" is what is usually
