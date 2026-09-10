@@ -30,6 +30,7 @@ from bravepos.models import (
     AppRelease,
     AuditLog,
     Branch,
+    BranchSession,
     Category,
     Customer,
     Order,
@@ -3361,6 +3362,60 @@ def _clean_pin(raw: str):
     return pin, None
 
 
+def _live_session(member):
+    """The till this account is signed in on right now, or None.
+
+    At most one row: `bravepos.views.auth_pin_login` refuses a second login
+    while the first is alive, which is the whole reason the form needs to
+    show this and be able to end it.
+    """
+    return (
+        BranchSession.objects
+        .select_related("branch")
+        .filter(staff=member)
+        .first()
+    )
+
+
+def _end_till_sessions(member, *, reason: str, actor=None) -> list[str]:
+    """Sign `member` out of every till holding them. Returns where from.
+
+    Deleting the row *is* the logout — it is the only thing the POS API
+    checks (`bravepos.views.get_session`). The tablet that held it finds out
+    on its next call, which comes back 401 and sends it to the PIN pad.
+
+    The branch names come back so the caller can say where it happened.
+    "Signed out" means nothing to someone who cannot see which till was
+    holding the account; "signed out of the till at Siam Paragon" does.
+
+    Audited by hand: `BranchSession` is in `audit.NEVER`, because its
+    `last_seen_at` is touched on every POS request and would bury the log in
+    noise. That exclusion is about the automatic signal, not about this — an
+    admin ending somebody's session is exactly the kind of thing the log is
+    for, so it is recorded explicitly.
+    """
+    sessions = list(
+        BranchSession.objects.select_related("branch").filter(staff=member)
+    )
+    if not sessions:
+        return []
+
+    BranchSession.objects.filter(id__in=[s.id for s in sessions]).delete()
+
+    from bravepos import audit as _audit
+    for session in sessions:
+        _audit.record(
+            "logout",
+            model="BranchSession",
+            object_id=str(session.id),
+            object_label=f"{member.name} at {session.branch.name}",
+            branch_id=session.branch_id,
+            note=reason,
+            actor=actor,
+        )
+    return [session.branch.name for session in sessions]
+
+
 def _unique_staff_email(role: str, branch) -> str:
     """Generate a unique, non-colliding email for a new staff row. The app
     never uses it (PIN-only login) but the column is required + unique."""
@@ -3466,7 +3521,26 @@ def staff_detail(request, staff_id):
             member.set_pin(pin)
         if not form_errors:
             member.save()
-            messages.success(request, f"{member.name}'s till login was saved.")
+            # A PIN reset is nearly always someone who cannot get in — they
+            # forgot it, or the one tablet allowed to hold their session is
+            # flat, broken or somewhere else and the PIN pad keeps answering
+            # "already signed in at X". Handing them a new PIN while that row
+            # survives fixes nothing: the new PIN is refused on every other
+            # device for the same reason the old one was. So the reset ends
+            # the session too.
+            #
+            # Only this account's. A colleague signed in on another till at
+            # the same branch is mid-sale and has nothing to do with whose
+            # PIN was just changed.
+            signed_out = _end_till_sessions(
+                member, reason="till PIN reset", actor=request.user,
+            ) if pin else []
+            where = (
+                f" They were signed out of the till at {', '.join(signed_out)}, "
+                f"so the new PIN works on any device."
+                if signed_out else ""
+            )
+            messages.success(request, f"{member.name}'s till login was saved.{where}")
             return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
     context = {
@@ -3476,6 +3550,10 @@ def staff_detail(request, staff_id):
         "member": member,
         "mode": "edit",
         "form_errors": form_errors,
+        # Which till is holding this account, so the page can offer the way
+        # out of it rather than leaving "already signed in at X" as something
+        # only a shell on the server could clear.
+        "session": _live_session(member),
         # The delete panel explains *why* it is disabled rather than just
         # greying out, so it needs the same answer the view will give.
         "is_last_admin": _last_admin(member),
@@ -3527,6 +3605,51 @@ def staff_new(request):
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/staff_form.html", context)
+
+
+@login_required
+def staff_force_logout(request, staff_id):
+    """End this staff member's till session from here.
+
+    One session per account is the right rule while the tablet is in
+    somebody's hands, and the wrong one the moment it is not. A till that
+    went flat, crashed, dropped off the network or went away for repair still
+    holds the row, and `auth_pin_login` keeps refusing every other device
+    with "already signed in at X". Nothing in the product could clear it: the
+    only thing that deleted the row was pressing Log out *on the device that
+    was no longer working*, so the fix was a shell on the server.
+
+    Open to any signed-in backoffice account, matching the rest of this page
+    — the same form already resets the PIN, which is the more powerful of the
+    two. There is no self-lockout to guard against either: this ends a *till*
+    session, and the backoffice runs on its own Django session, so an admin
+    doing it to their own record stays signed in here.
+    """
+    member = get_object_or_404(Staff, id=staff_id)
+    back = redirect(
+        reverse("backoffice:staff_detail", args=[member.id])
+        + f"?{_filter_qs(request)}"
+    )
+    if request.method != "POST":
+        return back
+
+    signed_out = _end_till_sessions(
+        member, reason="forced from the backoffice", actor=request.user,
+    )
+    if signed_out:
+        messages.success(
+            request,
+            f"{member.name} was signed out of the till at "
+            f"{', '.join(signed_out)}. They can sign in again with their PIN, "
+            f"on any device.",
+        )
+    else:
+        messages.info(
+            request,
+            f"{member.name} was not signed in on any till, so there was "
+            f"nothing to end — they can sign in now.",
+        )
+    return back
 
 
 def _last_admin(member) -> bool:
