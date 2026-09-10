@@ -3337,6 +3337,30 @@ def _default_pin_for(role: str) -> str:
     return DEFAULT_ADMIN_PIN if role == "admin" else DEFAULT_CASHIER_PIN
 
 
+# The till's PIN pad is exactly four digits (frontend/app/index.tsx:
+# PIN_LENGTH = 4 — it refuses a fifth digit and auto-submits at four). A PIN
+# saved here with any other length can never be typed on the till, so the
+# staff member is silently locked out. Enforce the till's shape at the source
+# rather than trusting the input's maxlength.
+PIN_DIGITS = 4
+
+
+def _clean_pin(raw: str):
+    """Return (pin, error). ``pin`` is the cleaned 4-digit string, or "" when
+    the field was left blank (caller decides what blank means). ``error`` is a
+    message when what was typed is not a 4-digit PIN the till can accept."""
+    pin = (raw or "").strip()
+    if not pin:
+        return "", None
+    if not (pin.isdigit() and len(pin) == PIN_DIGITS):
+        return pin, (
+            f"The PIN must be exactly {PIN_DIGITS} digits — the till's PIN pad "
+            f"accepts nothing else, so a longer or shorter PIN locks the "
+            f"staff member out."
+        )
+    return pin, None
+
+
 def _unique_staff_email(role: str, branch) -> str:
     """Generate a unique, non-colliding email for a new staff row. The app
     never uses it (PIN-only login) but the column is required + unique."""
@@ -3430,15 +3454,20 @@ def staff_detail(request, staff_id):
     branches, branch, _, _ = _common_filters(request)
     member = get_object_or_404(Staff, id=staff_id)
 
+    form_errors = []
     if request.method == "POST":
         member.name = (request.POST.get("name") or "").strip() or member.name
         member.role = request.POST.get("role") or member.role
         member.active = request.POST.get("active") == "on"
-        pin = (request.POST.get("pin") or "").strip()
-        if pin:
+        pin, pin_error = _clean_pin(request.POST.get("pin"))
+        if pin_error:
+            form_errors.append(pin_error)
+        elif pin:
             member.set_pin(pin)
-        member.save()
-        return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+        if not form_errors:
+            member.save()
+            messages.success(request, f"{member.name}'s till login was saved.")
+            return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
     context = {
         "active": "staff",
@@ -3446,6 +3475,7 @@ def staff_detail(request, staff_id):
         "branch": branch,
         "member": member,
         "mode": "edit",
+        "form_errors": form_errors,
         # The delete panel explains *why* it is disabled rather than just
         # greying out, so it needs the same answer the view will give.
         "is_last_admin": _last_admin(member),
@@ -3461,29 +3491,38 @@ def staff_new(request):
     role default (admin 1234 / cashier 0000) when left blank."""
     branches, branch, _, _ = _common_filters(request)
 
+    form_errors = []
+    member = Staff(role="cashier", active=True)
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
         role = request.POST.get("role") or "cashier"
-        pin = (request.POST.get("pin") or "").strip() or _default_pin_for(role)
+        typed_pin, pin_error = _clean_pin(request.POST.get("pin"))
+        pin = typed_pin or _default_pin_for(role)
+        # Keep what was typed on screen if we have to re-render with an error.
         member = Staff(
             name=name or ("Admin" if role == "admin" else "Cashier"),
             role=role,
-            email=_unique_staff_email(role, branch),
             active=request.POST.get("active") == "on",
         )
-        member.set_pin(pin)
-        member.set_password(_uuid.uuid4().hex)  # unused; PIN is the login
-        member.save()
-        if branch:
-            member.branches.add(branch)
-        return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
+        if pin_error:
+            form_errors.append(pin_error)
+        else:
+            member.email = _unique_staff_email(role, branch)
+            member.set_pin(pin)
+            member.set_password(_uuid.uuid4().hex)  # unused; PIN is the login
+            member.save()
+            if branch:
+                member.branches.add(branch)
+            messages.success(request, f"{member.name}'s till login was created.")
+            return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
     context = {
         "active": "staff",
         "branches": branches,
         "branch": branch,
-        "member": Staff(role="cashier", active=True),
+        "member": member,
         "mode": "new",
+        "form_errors": form_errors,
         "hide_dates": True,
         "qs": _filter_qs(request),
     }

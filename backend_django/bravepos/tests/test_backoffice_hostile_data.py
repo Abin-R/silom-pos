@@ -361,6 +361,39 @@ class HostileFormTests(HostileDataMixin, TestCase):
         member.refresh_from_db()
         self.assertEqual(member.name, "Renamed Cashier")
 
+    def test_a_non_four_digit_pin_is_refused(self):
+        """The till's PIN pad is exactly four digits; a longer or shorter PIN
+        can never be typed there, so the form must refuse it instead of
+        silently locking the staff member out."""
+        # New staff: a 6-digit PIN is rejected and nobody is created.
+        self._post(reverse("backoffice:staff_new") + self.scope,
+                   {"name": "Six Digits", "role": "cashier", "pin": "123456",
+                    "active": "on"})
+        self.assertFalse(Staff.objects.filter(name="Six Digits").exists())
+
+        # Editing: create a good login, then a bad PIN must keep the old one.
+        self._post(reverse("backoffice:staff_new") + self.scope,
+                   {"name": "Good PIN", "role": "cashier", "pin": "4321",
+                    "active": "on"})
+        member = Staff.objects.get(name="Good PIN")
+        self.assertTrue(member.check_pin("4321"))
+        self._post(
+            reverse("backoffice:staff_detail", args=[member.id]) + self.scope,
+            {"name": "Good PIN", "role": "cashier", "pin": "12345",
+             "active": "on"},
+        )
+        member.refresh_from_db()
+        self.assertTrue(member.check_pin("4321"), "bad PIN overwrote the good one")
+
+        # A non-numeric PIN of the right length is refused too.
+        self._post(
+            reverse("backoffice:staff_detail", args=[member.id]) + self.scope,
+            {"name": "Good PIN", "role": "cashier", "pin": "12ab",
+             "active": "on"},
+        )
+        member.refresh_from_db()
+        self.assertTrue(member.check_pin("4321"))
+
     def test_create_a_backoffice_user(self):
         response = self._post(reverse("backoffice:user_new"), {
             "name": "Accounting", "role": "cashier", "username": "accounting",

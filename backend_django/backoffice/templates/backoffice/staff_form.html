@@ -20,6 +20,13 @@
 {% block content %}
 <form method="post" style="max-width:760px">
   {% csrf_token %}
+  {% if form_errors %}
+  <div class="banner b-red" style="margin-bottom:16px">
+    <svg><use href="#i-alert"/></svg>
+    <span><b>Not saved.</b>
+      {% for e in form_errors %}{{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+  </div>
+  {% endif %}
   <div class="panel">
     <div class="panel-h">Staff member</div>
     <div class="form-grid">
@@ -38,10 +45,10 @@
       </div>
       <div class="field">
         <label for="f-pin">{% if mode == 'new' %}PIN{% else %}Reset PIN{% endif %}</label>
-        <input id="f-pin" type="text" name="pin" inputmode="numeric" pattern="[0-9]*"
-               maxlength="6" autocomplete="off"
+        <input id="f-pin" type="text" name="pin" inputmode="numeric" pattern="[0-9]{4}"
+               maxlength="4" autocomplete="off"
                placeholder="{% if mode == 'new' %}Blank = default (1234 / 0000){% else %}Blank = keep current{% endif %}">
-        <span class="hint">4–6 digits, entered on the till's PIN pad.
+        <span class="hint">Exactly 4 digits — that is all the till's PIN pad accepts.
           {% if mode != 'new' %}Leaving this blank keeps the current PIN.{% endif %}</span>
       </div>
       <div class="field">
