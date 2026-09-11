@@ -7,7 +7,7 @@ so a POS branch records which CRM branch it is (``Branch.crm_branch_id``) and
 the two lists stop drifting apart: an order rung up on a till can be attributed
 to the right shop on the customer's side without matching on a typed name.
 
-Six calls, all authenticated with ``X-API-Key``.  Two link the shops:
+Seven calls, all authenticated with ``X-API-Key``.  Two link the shops:
 
 * :func:`list_branches` — ``GET /branches/``.  The choices the branch form's
   CRM dropdown is built from.
@@ -28,6 +28,9 @@ about when any of them should be called:
   points and confirms the vouchers it consumed, under source ``retail``.
 * :func:`void_order` — ``POST /orders/<id>/void/``.  Reverses one, taking the
   CRM's own order id — never our receipt number.
+* :func:`viewer_link` — ``POST /viewer-link/``.  Mints a short-lived URL onto
+  the CRM's own page for one member, so a cashier can show a customer their
+  points and history without the till having to re-draw any of it.
 
 Money crosses the wire as decimal *strings* in both directions.  Amounts are
 sent as strings for the same reason they are parsed as :class:`~decimal.Decimal`
@@ -71,6 +74,9 @@ CREATE_TIMEOUT = 20.0
 # is there to stop it costing anything at all.
 MEMBER_TIMEOUT = 6.0
 ORDER_TIMEOUT = 8.0
+# Minting a viewer link happens with a customer waiting to be shown something,
+# so it is held to the same short fuse as the lookup.
+VIEWER_LINK_TIMEOUT = 6.0
 
 # What the CRM files a till's sales under.  These are sales rung up by a
 # cashier at a counter, so they are "retail" — not "api", which is the CRM's
@@ -379,3 +385,34 @@ def void_order(order_id: int, *, note: str = "") -> dict[str, Any]:
     """
     return _request("POST", f"/orders/{int(order_id)}/void/",
                     timeout=ORDER_TIMEOUT, json_body={"note": (note or "")})
+
+
+def viewer_link(phone: str, *, target: str = "member") -> dict[str, Any]:
+    """A short-lived URL onto the CRM's own page for the holder of ``phone``.
+
+    The CRM already draws a customer's points, tier, voucher wallet and order
+    history far better than a cart panel ever will, so a cashier who is asked
+    "how many points do I have?" is sent there rather than answered from a
+    re-implementation of it here.  The reply carries ``url``, the link's ``id``
+    and ``expires_in`` seconds — fifteen minutes at the time of writing.
+
+    That URL is a **bearer credential**: its ``k`` parameter is what stands in
+    for a login, so anyone holding the link can read that member until it
+    lapses.  It is minted per tap, never stored, and never logged.  A link that
+    did not arrive over HTTPS, or did not arrive at all, is refused here rather
+    than handed to a browser — this is the one CRM reply that ends up being
+    *followed* rather than rendered, and a plain-http one would put the
+    credential on the wire in clear.
+
+    ``target`` is the CRM's own switch for which page to mint; ``member`` is
+    the customer-facing one and the only one the till has any use for.
+    """
+    phone = (phone or "").strip()
+    if not phone:
+        raise CrmError("A viewer link needs a phone number.")
+    body = _request("POST", "/viewer-link/", timeout=VIEWER_LINK_TIMEOUT,
+                    json_body={"target": target, "phone": phone})
+    url = body.get("url")
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        raise CrmError("The CRM didn't send back a usable link for this member.")
+    return body

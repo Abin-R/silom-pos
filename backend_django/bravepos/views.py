@@ -824,6 +824,44 @@ def crm_member(request):
                         status=status.HTTP_502_BAD_GATEWAY)
 
 
+@api_view(['POST'])
+@require_session
+def crm_viewer_link(request):
+    """A link onto the CRM's own page for this customer, to open in a browser.
+
+    The cart's loyalty panel is a summary; the CRM draws the whole thing —
+    history, tier, the voucher wallet — and this is how a cashier gets a
+    customer in front of it without the till re-implementing any of it.
+
+    POST because it *mints*: each tap makes a fresh short-lived link, and the
+    URL it returns is a bearer credential for that member's page until it
+    lapses.  That is also why it is not cached, not stored and not logged, and
+    why it is issued per customer rather than handed out as one shop-wide URL.
+
+    ``{"enabled": false}`` for a branch outside the rollout or a customer with
+    no phone number — the till simply draws no button.  A CRM that is down is a
+    502 the cashier can retry, as with the lookup next door.
+    """
+    branch = request.session_obj.branch
+    if not loyalty.enabled_for(branch):
+        return Response({'enabled': False, 'reason': 'branch'})
+
+    # Shop-wide like the customer book itself, and a malformed id is a 404
+    # rather than the ValidationError-turned-500 a bare filter on a bad UUID
+    # would raise.  Same shape as crm_member above.
+    try:
+        customer = Customer.objects.get(
+            id=(request.data or {}).get('customer_id'))
+    except (Customer.DoesNotExist, DjangoValidationError, ValueError, TypeError):
+        return Response({'detail': 'No such customer.'},
+                        status=status.HTTP_404_NOT_FOUND)
+    try:
+        return Response(loyalty.viewer_link_for_customer(branch, customer))
+    except crm.CrmError as exc:
+        return Response({'enabled': True, 'error': str(exc)},
+                        status=status.HTTP_502_BAD_GATEWAY)
+
+
 # ─── Orders ──────────────────────────────────────────────────────────────────
 ORDERS_MAX_LIMIT = 500
 

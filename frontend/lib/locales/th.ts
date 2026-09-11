@@ -565,6 +565,8 @@ const th = {
     loyalty_retry: "ลองใหม่",
     loyalty_rewards: "รางวัล (%{n})",
     loyalty_unavailable: "ดูรางวัลไม่ได้",
+    loyalty_view_points: "ดูหน้าคะแนนสะสม",
+    loyalty_viewer_failed: "เปิดหน้าคะแนนไม่สำเร็จ",
     new_customer: "ลูกค้าใหม่",
     new_order: "ออเดอร์ใหม่",
     new_sale: "ขายรายการใหม่",

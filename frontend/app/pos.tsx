@@ -1448,7 +1448,8 @@ function LoyaltyPanel({
   inScroller?: boolean;
 }) {
   useT(); // re-render this screen when the language changes
-  const { state, selected, toggle, refresh, refreshing } = loyalty;
+  const { state, selected, toggle, refresh, refreshing, openViewer, viewerOpening } =
+    loyalty;
   // A phone in landscape gives the sheet barely 300pt to work with, so a flat
   // cap that is comfortable in portrait still buries the Checkout button there.
   // Take whichever is smaller.
@@ -1527,6 +1528,32 @@ function LoyaltyPanel({
           )}
         </TouchableOpacity>
       </View>
+
+      {/* This panel is a summary and stays one. The customer's history, tier
+          ladder and voucher wallet are already drawn by the CRM, and a
+          customer asking "how many points do I have?" is better answered by
+          being shown that page than by a second copy of it growing in the
+          cart. The link is minted per tap and lives about fifteen minutes, so
+          there is nothing here to go stale. */}
+      <TouchableOpacity
+        style={styles.loyaltyViewerRow}
+        onPress={async () => {
+          if (!(await openViewer())) {
+            showAlert(tr("pos.loyalty_viewer_failed"), tr("pos.please_try_again"));
+          }
+        }}
+        disabled={viewerOpening}
+        testID="loyalty-viewer"
+      >
+        <View style={styles.loyaltyViewerIcon}>
+          {viewerOpening ? (
+            <ActivityIndicator size="small" color={C.brand} />
+          ) : (
+            <Ionicons name="open-outline" size={14} color={C.brand} />
+          )}
+        </View>
+        <Text style={styles.loyaltyViewerText}>{tr("pos.loyalty_view_points")}</Text>
+      </TouchableOpacity>
 
       {rewards.length === 0 ? (
         <Text style={styles.loyaltyMuted}>{tr("pos.loyalty_no_rewards")}</Text>
@@ -4915,6 +4942,22 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   loyaltyHead: { flexDirection: "row", alignItems: "center", gap: 6, width: "100%" },
+  // Reads as a link under the points line rather than as a button competing
+  // with Checkout. alignSelf keeps the tap target to the words themselves —
+  // full width here would sit directly above the rewards and get hit by a
+  // thumb aiming for the first one.
+  loyaltyViewerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingVertical: 3,
+    minHeight: 24,
+  },
+  // A fixed box for the icon so the spinner that replaces it — taller and
+  // wider than a 14pt glyph — does not shunt the label sideways mid-tap.
+  loyaltyViewerIcon: { width: 16, alignItems: "center", justifyContent: "center" },
+  loyaltyViewerText: { fontSize: 12, fontWeight: "700", color: C.brand },
   loyaltyPoints: { ...MONO, fontSize: 13, fontWeight: "700", color: C.ink },
   loyaltyTier: { flex: 1, fontSize: 12, color: C.ink2Soft },
   loyaltyMuted: { fontSize: 12, color: C.ink2Soft },

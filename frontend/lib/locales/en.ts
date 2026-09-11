@@ -573,6 +573,8 @@ const en = {
     loyalty_retry: "Retry",
     loyalty_rewards: "Rewards (%{n})",
     loyalty_unavailable: "Rewards unavailable",
+    loyalty_view_points: "View points page",
+    loyalty_viewer_failed: "Couldn't open the points page",
     new_customer: "New Customer",
     new_order: "New Order",
     new_sale: "New sale",

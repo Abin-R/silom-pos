@@ -12,7 +12,10 @@ till must *not* do:
   has already paid;
 * never offer a cashier a control over a voucher only the customer can spend.
   The CRM drops those ids silently, so a toggle would look broken;
-* never lose the CRM's order id, which is the only handle a void has.
+* never lose the CRM's order id, which is the only handle a void has;
+* never follow a viewer link that did not arrive over HTTPS — that URL stands
+  in for a login to one member's page, and a plain-http one would put it on the
+  wire in clear.
 
 The CRM client is mocked throughout — these tests make no network calls.
 
@@ -293,6 +296,120 @@ class MemberLookupTests(ApiTestCase):
                 content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 404)
         look.assert_not_called()
+
+
+class ViewerLinkTests(ApiTestCase):
+    """`POST /api/crm/viewer-link` — the button that shows a customer their own
+    CRM page.
+
+    The cart panel is a summary and stays one; the history, the tier ladder and
+    the voucher wallet are the CRM's to draw.  What the till mints is a
+    short-lived URL onto that page, which is a bearer credential for the
+    quarter-hour it lives — so most of what is pinned here is what must *not*
+    reach a browser.
+    """
+
+    def link(self, customer=None):
+        return self.client.post(
+            "/api/crm/viewer-link",
+            {"customer_id": str((customer or self.customer).id)},
+            content_type="application/json", **self.auth,
+        )
+
+    def test_a_tap_mints_a_link_for_this_customer(self):
+        reply = {"ok": True, "url": "https://crm.rollingpinn.com/view/?k=abc",
+                 "id": 33782, "expires_in": 900}
+        with mock.patch("bravepos.crm._request", return_value=reply) as req:
+            res = self.link()
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["enabled"])
+        self.assertEqual(data["url"], "https://crm.rollingpinn.com/view/?k=abc")
+        self.assertEqual(data["expires_in"], 900)
+        # The number goes over exactly as the shop holds it, for the same
+        # reason as the lookup: the CRM normalises, and half-normalising here
+        # is how one person ends up with two memberships.
+        self.assertEqual(req.call_args.args, ("POST", "/viewer-link/"))
+        self.assertEqual(req.call_args.kwargs["json_body"],
+                         {"target": "member", "phone": "+66812345678"})
+
+    def test_the_link_id_is_not_passed_on(self):
+        """The CRM's own id for the link is of no use to a till that opens it
+        once and forgets it.  Nothing stores this, so nothing needs it."""
+        reply = {"ok": True, "url": "https://crm.rollingpinn.com/view/?k=abc",
+                 "id": 33782, "expires_in": 900}
+        with mock.patch("bravepos.crm._request", return_value=reply):
+            data = self.link().json()
+        self.assertEqual(set(data), {"enabled", "url", "expires_in"})
+
+    def test_a_missing_expiry_is_null_rather_than_guessed(self):
+        """Fifteen minutes is the CRM's number today, not a promise.  The till
+        opens the page immediately either way, so an absent field must not
+        become a made-up deadline — or a reason for the button to fail."""
+        reply = {"ok": True, "url": "https://crm.rollingpinn.com/view/?k=abc"}
+        with mock.patch("bravepos.crm._request", return_value=reply):
+            data = self.link().json()
+        self.assertIsNone(data["expires_in"])
+        self.assertEqual(data["url"], "https://crm.rollingpinn.com/view/?k=abc")
+
+    def test_a_plain_http_link_is_refused(self):
+        """The URL carries what amounts to a login for that member's page.
+        Following one over plain http would hand it to anyone on the wifi."""
+        reply = {"ok": True, "url": "http://crm.rollingpinn.com/view/?k=abc"}
+        with mock.patch("bravepos.crm._request", return_value=reply):
+            res = self.link()
+        self.assertEqual(res.status_code, 502)
+
+    def test_a_reply_with_no_link_is_refused(self):
+        """A 200 with nothing to open is still nothing to open — and the app
+        must be told so, or the cashier taps a button that does nothing."""
+        for junk in ({"ok": True}, {"ok": True, "url": ""},
+                     {"ok": True, "url": None}, {"ok": True, "url": 7}):
+            with mock.patch("bravepos.crm._request", return_value=junk):
+                self.assertEqual(self.link().status_code, 502, f"for {junk!r}")
+
+    def test_branch_outside_the_rollout_never_calls_the_crm(self):
+        """Same gate as every other loyalty call: not declined, not sent."""
+        self.branch.crm_loyalty_enabled = False
+        self.branch.save()
+        with mock.patch("bravepos.crm._request") as req:
+            res = self.link()
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["enabled"])
+        req.assert_not_called()
+
+    def test_customer_with_no_phone_has_nothing_to_open(self):
+        """Phone number is the identity in the CRM, so there is no page."""
+        nameless = Customer.objects.create(branch=self.branch, name="Walk-in")
+        with mock.patch("bravepos.crm._request") as req:
+            res = self.link(nameless)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"enabled": False, "reason": "no_phone"})
+        req.assert_not_called()
+
+    def test_a_crm_outage_is_a_502_the_cashier_can_retry(self):
+        with mock.patch("bravepos.crm.viewer_link",
+                        side_effect=CrmError("Couldn't reach the CRM.")):
+            res = self.link()
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("error", res.json())
+
+    def test_a_malformed_customer_id_is_a_404_not_a_500(self):
+        res = self.client.post("/api/crm/viewer-link", {"customer_id": "nope"},
+                               content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 404)
+
+    def test_a_till_can_open_the_page_of_a_customer_from_another_branch(self):
+        """The customer book is shop-wide, and so is this."""
+        other = Customer.objects.create(
+            branch=make_branch(name="Sathorn"), name="Nok", phone="0899999999",
+        )
+        reply = {"ok": True, "url": "https://crm.rollingpinn.com/view/?k=xyz"}
+        with mock.patch("bravepos.crm._request", return_value=reply) as req:
+            res = self.link(other)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(req.call_args.kwargs["json_body"]["phone"], "+66899999999")
 
 
 class BranchFeedTests(ApiTestCase):

@@ -180,6 +180,48 @@ def member_for_customer(branch, customer) -> dict[str, Any]:
     }
 
 
+def viewer_link_for_customer(branch, customer) -> dict[str, Any]:
+    """A link to the CRM's own page for this customer, for the till to open.
+
+    The cart panel shows a points balance and the vouchers a cashier can act
+    on, and that is all it will ever show — the history, the tier ladder and
+    the wallet belong to the CRM, which already draws them.  So "show me my
+    points" is answered by opening the CRM's page in a browser rather than by
+    growing a second copy of it inside the till.
+
+    Same two gates as :func:`member_for_customer`, and for the same reasons: a
+    branch outside the rollout never touches the CRM, and a customer with no
+    phone number has no membership to link to.  Both come back as
+    ``enabled`` False, which the till reads as "there is nothing to open".
+
+    Raises :class:`crm.CrmError` upward, like the lookup — no money has moved,
+    the caller can turn it into a 502, and a cashier who is told the link
+    failed can simply tap again.
+
+    The URL it returns stands in for a login to that member's page for the
+    quarter of an hour it lives.  Nothing keeps it: it is minted for one tap,
+    passed straight out to the browser, and never written to a row or a log.
+    """
+    if not enabled_for(branch):
+        return {"enabled": False, "reason": "branch"}
+
+    phone = (getattr(customer, "phone", "") or "").strip()
+    if not phone:
+        # Phone number is the identity in the CRM, so there is no page to open
+        # — the same answer the reward panel gives, for the same reason.
+        return {"enabled": False, "reason": "no_phone"}
+
+    body = crm.viewer_link(phone)
+    try:
+        # Passed on so the app can say how long the link is good for.  Not
+        # relied on: the till opens the page immediately, and a CRM that stops
+        # sending this must not stop the button working.
+        expires_in = int(body.get("expires_in"))
+    except (TypeError, ValueError):
+        expires_in = None
+    return {"enabled": True, "url": body["url"], "expires_in": expires_in}
+
+
 # ─── Filing and reversing a sale ────────────────────────────────────────────
 
 def _phone_for(order) -> str:

@@ -29,9 +29,16 @@
  * voucher the customer had already redeemed themselves, which the CRM
  * confirms when the sale is filed. Whatever the reward is worth was handed
  * over at the counter, not discounted off the total.
+ *
+ * The panel is a summary and stays one. "How many points do I have?" is
+ * answered by `openViewer`, which asks the backend for a short-lived link and
+ * hands the customer the CRM's own page in the device's browser — rather than
+ * by growing a second copy of that page inside the cart.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as WebBrowser from "expo-web-browser";
 import { apiFetch, safeJson } from "./api";
+import { C } from "./theme";
 
 export type LoyaltyReward = {
   id: number;
@@ -93,6 +100,18 @@ export type Loyalty = {
   /** True while `refresh` is in flight, so the list can stay put and the
    *  control can spin rather than the whole panel collapsing to a spinner. */
   refreshing: boolean;
+  /**
+   * Show this customer their own CRM page — points, tier, history, wallet —
+   * in the device's in-app browser.
+   *
+   * Resolves false when there was nothing to open: no customer, a branch
+   * outside the rollout, a CRM that would not mint a link, or a tablet with
+   * no browser to hand it to. The caller says so; this does not, because the
+   * wording belongs on the screen that raised it.
+   */
+  openViewer: () => Promise<boolean>;
+  /** True while the link is being minted, so the control can spin. */
+  viewerOpening: boolean;
 };
 
 /**
@@ -151,6 +170,16 @@ export function useLoyalty(
   // answers. Without this the first (slower) reply would land last and put
   // somebody else's rewards on the bill.
   const liveRef = useRef(0);
+
+  // Who is on the bill *now*, for a viewer link to check itself against when
+  // it lands. Same hazard as above and a worse outcome: a mis-tap corrected
+  // while the link was being minted would otherwise open a stranger's page,
+  // with their name, spend and order history on it. Deliberately not `liveRef`
+  // — that also moves on a manual refresh, which is no reason to refuse.
+  const customerRef = useRef(customerId);
+  useEffect(() => {
+    customerRef.current = customerId;
+  }, [customerId]);
 
   // Ticks belong to one customer, so a change of customer drops them. A
   // *refresh* must not: the cashier may already have ticked two rewards before
@@ -232,5 +261,72 @@ export function useLoyalty(
     setAttempt((n) => n + 1);
   }, []);
 
-  return { state, selected, toggle, refresh, refreshing };
+  const [viewerOpening, setViewerOpening] = useState(false);
+
+  const openViewer = useCallback(async (): Promise<boolean> => {
+    if (!customerId) return false;
+
+    let url = "";
+    setViewerOpening(true);
+    try {
+      const res = await apiFetch("/crm/viewer-link", {
+        method: "POST",
+        body: JSON.stringify({ customer_id: customerId }),
+      });
+      if (!res.ok) return false;
+      const body = await safeJson<{ enabled?: boolean; url?: string }>(res, {});
+      // `enabled: false` is the ordinary answer for a branch outside the
+      // rollout or a customer with no phone — there is genuinely nothing to
+      // open, and the button should not have been on screen for it.
+      if (!body.enabled) return false;
+      // The cashier corrected the customer while this was in flight. Opening
+      // now would put the wrong person's points, spend and history on a
+      // screen the customer at the counter is looking at.
+      if (customerRef.current !== customerId) return false;
+      url = (body.url || "").trim();
+      // The backend already refuses anything that is not https, so this is the
+      // second lock on the same door — but this is the one line in the app
+      // that hands a CRM value straight to a browser, and it carries what
+      // amounts to a login for that member.
+      if (!url.toLowerCase().startsWith("https://")) return false;
+    } catch {
+      // apiFetch has already reported it; the tablet is offline or the backend
+      // is unreachable, and the cart carries on exactly as it was.
+      return false;
+    } finally {
+      // The spinner covers the round trip and stops there. It deliberately
+      // does not stay up for the browser: `openBrowserAsync` only resolves
+      // when the cashier closes the tab again, which can be minutes.
+      setViewerOpening(false);
+    }
+
+    try {
+      // An in-app browser, not a WebView embedded in the cart: the page is the
+      // CRM's, it sets its own cookies, and a customer being shown their own
+      // account should be able to see whose address bar it is.
+      await WebBrowser.openBrowserAsync(url, {
+        showTitle: true,
+        toolbarColor: C.surface,
+        controlsColor: C.brand,
+        enableBarCollapsing: false,
+        dismissButtonStyle: "close",
+      });
+      return true;
+    } catch {
+      // No browser on the tablet to hand it to. Rare, and nothing the cashier
+      // can do about it at the counter, but silence would read as a dead
+      // button they keep pressing.
+      return false;
+    }
+  }, [customerId]);
+
+  return {
+    state,
+    selected,
+    toggle,
+    refresh,
+    refreshing,
+    openViewer,
+    viewerOpening,
+  };
 }

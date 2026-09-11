@@ -45,6 +45,9 @@ urlpatterns = [
     # CRM loyalty — the till's only door to crm.rollingpinn.com.  The API key
     # never leaves the server, so the app asks here and we make the call.
     path('crm/member', views.crm_member),
+    # A fresh, short-lived link onto the CRM's own page for one member, so
+    # the till can show a customer their points without redrawing them.
+    path('crm/viewer-link', views.crm_viewer_link),
 
     # Orders
     path('orders', views.orders_list_create),
