@@ -3656,8 +3656,13 @@ function Customers({ isWide }: { isWide: boolean }) {
         </Panel>
         )}
 
+        {/* The width style is swapped, never layered: `detailCol` pins
+            flexGrow/flexShrink to 0, and a `flex: 1` merged on top of that
+            keeps the zeros while contributing a 0 basis — which in the
+            stacked column is a height of nothing, and a bordered Panel
+            collapsed to a hairline. */}
         {showDetail && (
-          <View style={[styles.detailCol, !isWide && styles.detailColFull]}>
+          <View style={isWide ? styles.detailCol : styles.detailColFull}>
             <Panel style={{ flex: 1 }}>
               {!isWide && (
                 <TouchableOpacity
@@ -6389,8 +6394,9 @@ const styles = StyleSheet.create({
   stackedCol: { flexDirection: "column" },
   detailCol: { width: 400, flexGrow: 0, flexShrink: 0 },
   // Drilled into on a phone, where it is the whole screen rather than a
-  // column standing next to one.
-  detailColFull: { width: "100%", flex: 1 },
+  // column standing next to one. Stands alone rather than overriding
+  // `detailCol` — see the note at its only use.
+  detailColFull: { width: "100%", flex: 1, minHeight: 0 },
   takings: { fontSize: 15, fontWeight: "700", color: C.ink },
   takingsNote: { fontSize: 12, color: C.ink3 },
 
