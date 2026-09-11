@@ -3390,6 +3390,19 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [phone, setPhone] = useState("");
   const [phoneValid, setPhoneValid] = useState(true);
 
+  // A phone shows the book or one customer, never both: the detail column is
+  // a fixed 400pt standing beside a list that wants the rest, and no screen
+  // this narrow fits the pair — so on a phone the column was simply dropped,
+  // and tapping a row selected a customer nobody could then read. Drill in
+  // instead, the way Transactions and Settings already do.
+  //
+  // Its own flag rather than `sel != null`, because selecting is not asking:
+  // the list picks its first row on load, and that must not throw a cashier
+  // who has just opened the section into somebody's profile.
+  const [drilled, setDrilled] = useState(false);
+  const showList = isWide || !drilled;
+  const showDetail = isWide || drilled;
+
   // The query the loaded page belongs to, so the local filter knows when the
   // server has already filtered for it.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -3538,27 +3551,32 @@ function Customers({ isWide }: { isWide: boolean }) {
       style={!isWide && { paddingHorizontal: 14 }}
       testID="customers-section"
     >
-      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
-        <SearchField
-          value={q}
-          onChangeText={setQ}
-          placeholder={tr("admin.phone_number_or_name")}
-          height={40}
-          style={{ flex: 1, maxWidth: isWide ? 340 : undefined, minWidth: 200 }}
-          testID="cust-admin-search"
-        />
-        <Spacer />
-        <Btn
-          label={tr("admin.add_customer")}
-          icon="add"
-          variant="blue"
-          height={40}
-          onPress={() => setAddOpen(true)}
-          testID="add-customer-admin"
-        />
-      </View>
+      {/* Searching and adding are things you do to the book, so they ride
+          with it rather than sitting above an open profile. */}
+      {showList && (
+        <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+          <SearchField
+            value={q}
+            onChangeText={setQ}
+            placeholder={tr("admin.phone_number_or_name")}
+            height={40}
+            style={{ flex: 1, maxWidth: isWide ? 340 : undefined, minWidth: 200 }}
+            testID="cust-admin-search"
+          />
+          <Spacer />
+          <Btn
+            label={tr("admin.add_customer")}
+            icon="add"
+            variant="blue"
+            height={40}
+            onPress={() => setAddOpen(true)}
+            testID="add-customer-admin"
+          />
+        </View>
+      )}
 
       <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
+        {showList && (
         <Panel style={{ flex: 1, minWidth: 0 }}>
           {isWide && <THead cols={CUST_COLS} />}
           {filtered.length === 0 ? (
@@ -3578,7 +3596,10 @@ function Customers({ isWide }: { isWide: boolean }) {
                   return (
                     <TouchableOpacity
                       style={[styles.custAdminRow, on && styles.custAdminActive]}
-                      onPress={() => setSel(item)}
+                      onPress={() => {
+                        setSel(item);
+                        setDrilled(true);
+                      }}
                       testID={`cust-admin-${item.id}`}
                     >
                       <View style={[styles.custAv, { backgroundColor: item.color }]}>
@@ -3592,6 +3613,7 @@ function Customers({ isWide }: { isWide: boolean }) {
                           <Money style={styles.custAdminPhone}>{item.phone}</Money>
                         )}
                       </View>
+                      <Ionicons name="chevron-forward" size={18} color={C.ink3} />
                     </TouchableOpacity>
                   );
                 }
@@ -3632,10 +3654,21 @@ function Customers({ isWide }: { isWide: boolean }) {
             />
           )}
         </Panel>
+        )}
 
-        {isWide && (
-          <View style={styles.detailCol}>
+        {showDetail && (
+          <View style={[styles.detailCol, !isWide && styles.detailColFull]}>
             <Panel style={{ flex: 1 }}>
+              {!isWide && (
+                <TouchableOpacity
+                  style={styles.backRow}
+                  onPress={() => setDrilled(false)}
+                  testID="cust-admin-back"
+                >
+                  <Ionicons name="chevron-back" size={18} color={C.brand} />
+                  <Text style={styles.backText}>{tr("admin.back_to_customers")}</Text>
+                </TouchableOpacity>
+              )}
               {!sel ? (
                 <Empty
                   icon="person-outline"
@@ -6355,6 +6388,9 @@ const styles = StyleSheet.create({
   twoCol: { flex: 1, minHeight: 0, flexDirection: "row", gap: 16 },
   stackedCol: { flexDirection: "column" },
   detailCol: { width: 400, flexGrow: 0, flexShrink: 0 },
+  // Drilled into on a phone, where it is the whole screen rather than a
+  // column standing next to one.
+  detailColFull: { width: "100%", flex: 1 },
   takings: { fontSize: 15, fontWeight: "700", color: C.ink },
   takingsNote: { fontSize: 12, color: C.ink3 },
 

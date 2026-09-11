@@ -38,6 +38,7 @@ const en = {
     avg_bill: "Avg bill",
     avg_cost_calculate: "AVG Cost Calculate",
     back_office: "Back office",
+    back_to_customers: "Back to customers",
     back_to_orders: "Back to orders",
     backup_and_restore: "Backup & Restore",
     barcode: "Barcode",

@@ -37,6 +37,7 @@ const th = {
     avg_bill: "ยอดเฉลี่ยต่อบิล",
     avg_cost_calculate: "คำนวณต้นทุนเฉลี่ย",
     back_office: "หลังร้าน",
+    back_to_customers: "กลับไปที่ลูกค้า",
     back_to_orders: "กลับไปที่ออเดอร์",
     backup_and_restore: "สำรองและกู้คืนข้อมูล",
     barcode: "บาร์โค้ด",
