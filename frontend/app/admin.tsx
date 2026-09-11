@@ -34,6 +34,7 @@ import {
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useShiftSummaryPrint } from "../lib/useShiftSummaryPrint";
 import { usePrinterStatus } from "../lib/usePrinterStatus";
+import { useCrmEnabled, useCrmViewer } from "../lib/loyalty";
 import { AppShell, TopBar, Body, isWideSize } from "../components/AppShell";
 import { SIDEBAR_ITEMS } from "../components/NavRail";
 import {
@@ -356,7 +357,9 @@ export default function Admin() {
           />
         )}
         {section === "inventory" && <Inventory isWide={isWide} />}
-        {section === "customers" && <Customers isWide={isWide} />}
+        {section === "customers" && (
+          <Customers isWide={isWide} branchId={activeBranchId} />
+        )}
         {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
         {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
         {section === "settings" && (
@@ -3377,7 +3380,7 @@ function StockMovementModal({
 // the server.
 const CUSTOMER_PAGE = 200;
 
-function Customers({ isWide }: { isWide: boolean }) {
+function Customers({ isWide, branchId }: { isWide: boolean; branchId: string }) {
   useT(); // re-render this screen when the language changes
   const [list, setList] = useState<Customer[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
@@ -3402,6 +3405,16 @@ function Customers({ isWide }: { isWide: boolean }) {
   const [drilled, setDrilled] = useState(false);
   const showList = isWide || !drilled;
   const showDetail = isWide || drilled;
+
+  // The same CRM page the till offers from the cart, reached from the profile
+  // instead — this is where someone looks a customer up when they are not
+  // mid-sale. Gated on exactly what the backend would answer `enabled: false`
+  // for, so the button is absent rather than present and failing: a branch
+  // outside the rollout, or a customer with no phone number (which is the only
+  // thing the CRM identifies a member by).
+  const crmEnabled = useCrmEnabled(branchId);
+  const crmViewer = useCrmViewer(sel?.id);
+  const canViewPoints = crmEnabled && !!sel?.phone;
 
   // The query the loaded page belongs to, so the local filter knows when the
   // server has already filtered for it.
@@ -3691,6 +3704,42 @@ function Customers({ isWide }: { isWide: boolean }) {
                     <Text style={styles.custProfileName}>{customerFullName(sel)}</Text>
                     {!!sel.phone && (
                       <Money style={styles.custProfileSub}>{sel.phone}</Money>
+                    )}
+                    {canViewPoints && (
+                      <TouchableOpacity
+                        style={styles.custPointsBtn}
+                        onPress={async () => {
+                          const result = await crmViewer.open();
+                          // The customer book is the shop's, not the loyalty
+                          // programme's, so plenty of people in it never
+                          // joined. That is not a fault and no amount of
+                          // retrying will open a page they do not have.
+                          if (result === "not_a_member") {
+                            showAlert(
+                              tr("common.not_a_loyalty_member"),
+                              tr("common.not_a_loyalty_member_note"),
+                            );
+                          } else if (result === "failed") {
+                            showAlert(
+                              tr("common.couldnt_open_points_page"),
+                              tr("pos.please_try_again"),
+                            );
+                          }
+                        }}
+                        disabled={crmViewer.opening}
+                        testID="cust-admin-view-points"
+                      >
+                        <View style={styles.custPointsBtnIcon}>
+                          {crmViewer.opening ? (
+                            <ActivityIndicator size="small" color={C.brand} />
+                          ) : (
+                            <Ionicons name="open-outline" size={14} color={C.brand} />
+                          )}
+                        </View>
+                        <Text style={styles.custPointsBtnText}>
+                          {tr("common.view_points_page")}
+                        </Text>
+                      </TouchableOpacity>
                     )}
                   </View>
 
@@ -6852,6 +6901,23 @@ const styles = StyleSheet.create({
   },
   custProfileSub: { fontSize: 14, color: C.ink2Soft, marginTop: 6 },
   custPoints: { fontSize: 14, color: C.ink, marginTop: 6 },
+  // Sits with the name and phone because it is about who this customer is,
+  // not about what they have spent — the stats below answer that. Outlined
+  // rather than filled: the profile has no primary action to compete with.
+  custPointsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: R.pill,
+    borderWidth: 1,
+    borderColor: C.brand,
+  },
+  // Fixed so the spinner that replaces the glyph cannot shunt the label.
+  custPointsBtnIcon: { width: 16, alignItems: "center", justifyContent: "center" },
+  custPointsBtnText: { fontSize: 13, fontWeight: "700", color: C.brand },
   statsRow: {
     flexDirection: "row", gap: 12, padding: 20,
     backgroundColor: C.surface, borderRadius: 12,

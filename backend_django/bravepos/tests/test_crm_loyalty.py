@@ -388,6 +388,29 @@ class ViewerLinkTests(ApiTestCase):
         self.assertEqual(res.json(), {"enabled": False, "reason": "no_phone"})
         req.assert_not_called()
 
+    def test_a_customer_who_never_joined_is_not_an_error(self):
+        """The customer book is the shop's, not the loyalty programme's.
+
+        Plenty of people in it never enrolled, so there is no page to open for
+        them — and saying "couldn't open it, try again" would send an admin
+        into retrying something that can never work.  Answered like the other
+        ordinary "nothing to open" cases, not as a 502."""
+        with mock.patch("bravepos.crm._request",
+                        side_effect=MemberNotFound("not a member")):
+            res = self.link()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"enabled": False, "reason": "not_a_member"})
+
+    def test_not_a_member_is_caught_before_the_generic_failure(self):
+        """MemberNotFound subclasses CrmError, so the order of the two excepts
+        in the view is the whole behaviour — flip them and this becomes a 502
+        again with nothing to say it regressed."""
+        with mock.patch("bravepos.crm.viewer_link",
+                        side_effect=MemberNotFound("That phone isn't a member yet.")):
+            res = self.link()
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["enabled"])
+
     def test_a_crm_outage_is_a_502_the_cashier_can_retry(self):
         with mock.patch("bravepos.crm.viewer_link",
                         side_effect=CrmError("Couldn't reach the CRM.")):

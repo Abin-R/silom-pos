@@ -395,6 +395,7 @@ const th = {
     cashier: "พนักงานขาย",
     change: "เงินทอน",
     choose_country: "เลือกประเทศ",
+    couldnt_open_points_page: "เปิดหน้าคะแนนไม่สำเร็จ",
     couldnt_save_customer: "บันทึกข้อมูลลูกค้าไม่สำเร็จ",
     customer: "ลูกค้า",
     discount: "ส่วนลด",
@@ -402,6 +403,8 @@ const th = {
     item: "รายการ",
     items: "รายการ",
     name: "ชื่อ",
+    not_a_loyalty_member: "ยังไม่ได้เป็นสมาชิกสะสมแต้ม",
+    not_a_loyalty_member_note: "ลูกค้ารายนี้ยังไม่ได้เข้าร่วมโปรแกรมสะสมแต้ม",
     no_customers: "ไม่มีลูกค้า",
     no_products_here: "ไม่มีสินค้าในหมวดนี้",
     open_shift: "เปิดรอบขาย",
@@ -419,6 +422,7 @@ const th = {
     subtotal: "ยอดรวมย่อย",
     total: "รวมทั้งสิ้น",
     unexpected_response_from_server: "การตอบกลับจากเซิร์ฟเวอร์ไม่ถูกต้อง",
+    view_points_page: "ดูหน้าคะแนนสะสม",
   },
   date: {
     days: [
@@ -565,8 +569,6 @@ const th = {
     loyalty_retry: "ลองใหม่",
     loyalty_rewards: "รางวัล (%{n})",
     loyalty_unavailable: "ดูรางวัลไม่ได้",
-    loyalty_view_points: "ดูหน้าคะแนนสะสม",
-    loyalty_viewer_failed: "เปิดหน้าคะแนนไม่สำเร็จ",
     new_customer: "ลูกค้าใหม่",
     new_order: "ออเดอร์ใหม่",
     new_sale: "ขายรายการใหม่",

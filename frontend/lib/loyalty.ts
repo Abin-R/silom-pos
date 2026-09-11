@@ -104,12 +104,11 @@ export type Loyalty = {
    * Show this customer their own CRM page — points, tier, history, wallet —
    * in the device's in-app browser.
    *
-   * Resolves false when there was nothing to open: no customer, a branch
-   * outside the rollout, a CRM that would not mint a link, or a tablet with
-   * no browser to hand it to. The caller says so; this does not, because the
-   * wording belongs on the screen that raised it.
+   * Anything but `opened` is for the caller to word — this does not, because
+   * the wording belongs on the screen that raised it. `not_a_member` is worth
+   * telling apart from `failed`: it is not a fault and retrying cannot fix it.
    */
-  openViewer: () => Promise<boolean>;
+  openViewer: () => Promise<CrmViewerResult>;
   /** True while the link is being minted, so the control can spin. */
   viewerOpening: boolean;
 };
@@ -127,20 +126,15 @@ export type Loyalty = {
  * At a branch that is not in the rollout this does nothing whatsoever. No
  * lookup is sent, so those tills are unchanged down to the requests they make.
  */
-export function useLoyalty(
-  branchId: string | null | undefined,
-  customerId: string | null | undefined,
-): Loyalty {
-  const [state, setState] = useState<LoyaltyState>({ status: "off" });
-  const [selected, setSelected] = useState<number[]>([]);
-  const [attempt, setAttempt] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // Is THIS branch in the loyalty rollout? Read once per branch from the same
-  // feed the login screen uses, exactly as self-ordering does it. Undefined
-  // means "not established yet", which is treated as off — so the very first
-  // customer picked after launch cannot slip a lookup out of a branch that
-  // should never make one.
+/**
+ * Is this branch in the CRM rollout?
+ *
+ * Read once per branch from the same `/branches` feed the login screen uses,
+ * exactly as self-ordering does it. Fails closed — a feed that will not answer
+ * means no CRM — and starts false, so nothing can slip a request out of a
+ * branch that should never make one before the answer lands.
+ */
+export function useCrmEnabled(branchId: string | null | undefined): boolean {
   const [allowed, setAllowed] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -166,20 +160,130 @@ export function useLoyalty(
     };
   }, [branchId]);
 
-  // A cashier can pick the wrong customer and correct it faster than the CRM
-  // answers. Without this the first (slower) reply would land last and put
-  // somebody else's rewards on the bill.
-  const liveRef = useRef(0);
+  return allowed;
+}
 
-  // Who is on the bill *now*, for a viewer link to check itself against when
-  // it lands. Same hazard as above and a worse outcome: a mis-tap corrected
-  // while the link was being minted would otherwise open a stranger's page,
-  // with their name, spend and order history on it. Deliberately not `liveRef`
-  // — that also moves on a manual refresh, which is no reason to refuse.
+/**
+ * Show one customer their own CRM page in the device's in-app browser.
+ *
+ * Split out from `useLoyalty` because the cart is not the only place that
+ * wants it: the admin customer profile offers the same thing, and it has no
+ * basket, no rewards and no reason to run a member lookup to reach one link.
+ *
+ * Resolves false when there was nothing to open — no customer, a branch
+ * outside the rollout, a CRM that would not mint a link, or a tablet with no
+ * browser to hand it to. The caller does the telling, because the wording
+ * belongs on the screen that raised it.
+ */
+/**
+ * What came of trying to open a customer's CRM page.
+ *
+ * `not_a_member` is deliberately not folded into `failed`. The shop's customer
+ * book is not the loyalty programme's membership list, so somebody in it who
+ * never joined is an ordinary thing to find — and "couldn't open it, try
+ * again" would send whoever tapped into retrying something that can never work.
+ */
+export type CrmViewerResult = "opened" | "not_a_member" | "failed";
+
+export function useCrmViewer(customerId: string | null | undefined): {
+  open: () => Promise<CrmViewerResult>;
+  opening: boolean;
+} {
+  // Who is selected *now*, for a minted link to check itself against when it
+  // lands. Someone can pick the wrong customer and correct it faster than the
+  // CRM answers, and opening the stale link would put a stranger's name, spend
+  // and order history on a screen the customer is looking at. Scoped to the
+  // customer alone: a reward refresh moves on without touching this, and is no
+  // reason to refuse a link that is still for the right person.
   const customerRef = useRef(customerId);
   useEffect(() => {
     customerRef.current = customerId;
   }, [customerId]);
+
+  const [opening, setOpening] = useState(false);
+
+  const open = useCallback(async (): Promise<CrmViewerResult> => {
+    if (!customerId) return "failed";
+
+    let url = "";
+    setOpening(true);
+    try {
+      const res = await apiFetch("/crm/viewer-link", {
+        method: "POST",
+        body: JSON.stringify({ customer_id: customerId }),
+      });
+      if (!res.ok) return "failed";
+      const body = await safeJson<{
+        enabled?: boolean;
+        reason?: string;
+        url?: string;
+      }>(res, {});
+      // `enabled: false` covers every ordinary reason there is nothing to
+      // open. A branch outside the rollout or a customer with no phone means
+      // the button should not have been drawn at all; `not_a_member` is the
+      // one the person who tapped actually needs telling about.
+      if (!body.enabled) {
+        return body.reason === "not_a_member" ? "not_a_member" : "failed";
+      }
+      // The customer was corrected while this was in flight. Opening now would
+      // put the wrong person's points, spend and history on a screen the
+      // customer themselves may be looking at.
+      if (customerRef.current !== customerId) return "failed";
+      url = (body.url || "").trim();
+      // The backend already refuses anything that is not https, so this is the
+      // second lock on the same door — but this is the one line in the app
+      // that hands a CRM value straight to a browser, and it carries what
+      // amounts to a login for that member.
+      if (!url.toLowerCase().startsWith("https://")) return "failed";
+    } catch {
+      // apiFetch has already reported it; the tablet is offline or the backend
+      // is unreachable, and the screen carries on exactly as it was.
+      return "failed";
+    } finally {
+      // The spinner covers the round trip and stops there. It deliberately
+      // does not stay up for the browser: `openBrowserAsync` only resolves
+      // when the tab is closed again, which can be minutes.
+      setOpening(false);
+    }
+
+    try {
+      // An in-app browser, not an embedded WebView: the page is the CRM's, it
+      // sets its own cookies, and a customer being shown their own account
+      // should be able to see whose address bar it is.
+      await WebBrowser.openBrowserAsync(url, {
+        showTitle: true,
+        toolbarColor: C.surface,
+        controlsColor: C.brand,
+        enableBarCollapsing: false,
+        dismissButtonStyle: "close",
+      });
+      return "opened";
+    } catch {
+      // No browser on the tablet to hand it to. Rare, and nothing anyone can
+      // do about it there and then, but silence would read as a dead button
+      // they keep pressing.
+      return "failed";
+    }
+  }, [customerId]);
+
+  return { open, opening };
+}
+
+export function useLoyalty(
+  branchId: string | null | undefined,
+  customerId: string | null | undefined,
+): Loyalty {
+  const [state, setState] = useState<LoyaltyState>({ status: "off" });
+  const [selected, setSelected] = useState<number[]>([]);
+  const [attempt, setAttempt] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const allowed = useCrmEnabled(branchId);
+
+  // A cashier can pick the wrong customer and correct it faster than the CRM
+  // answers. Without this the first (slower) reply would land last and put
+  // somebody else's rewards on the bill.
+  const liveRef = useRef(0);
 
   // Ticks belong to one customer, so a change of customer drops them. A
   // *refresh* must not: the cashier may already have ticked two rewards before
@@ -261,64 +365,7 @@ export function useLoyalty(
     setAttempt((n) => n + 1);
   }, []);
 
-  const [viewerOpening, setViewerOpening] = useState(false);
-
-  const openViewer = useCallback(async (): Promise<boolean> => {
-    if (!customerId) return false;
-
-    let url = "";
-    setViewerOpening(true);
-    try {
-      const res = await apiFetch("/crm/viewer-link", {
-        method: "POST",
-        body: JSON.stringify({ customer_id: customerId }),
-      });
-      if (!res.ok) return false;
-      const body = await safeJson<{ enabled?: boolean; url?: string }>(res, {});
-      // `enabled: false` is the ordinary answer for a branch outside the
-      // rollout or a customer with no phone — there is genuinely nothing to
-      // open, and the button should not have been on screen for it.
-      if (!body.enabled) return false;
-      // The cashier corrected the customer while this was in flight. Opening
-      // now would put the wrong person's points, spend and history on a
-      // screen the customer at the counter is looking at.
-      if (customerRef.current !== customerId) return false;
-      url = (body.url || "").trim();
-      // The backend already refuses anything that is not https, so this is the
-      // second lock on the same door — but this is the one line in the app
-      // that hands a CRM value straight to a browser, and it carries what
-      // amounts to a login for that member.
-      if (!url.toLowerCase().startsWith("https://")) return false;
-    } catch {
-      // apiFetch has already reported it; the tablet is offline or the backend
-      // is unreachable, and the cart carries on exactly as it was.
-      return false;
-    } finally {
-      // The spinner covers the round trip and stops there. It deliberately
-      // does not stay up for the browser: `openBrowserAsync` only resolves
-      // when the cashier closes the tab again, which can be minutes.
-      setViewerOpening(false);
-    }
-
-    try {
-      // An in-app browser, not a WebView embedded in the cart: the page is the
-      // CRM's, it sets its own cookies, and a customer being shown their own
-      // account should be able to see whose address bar it is.
-      await WebBrowser.openBrowserAsync(url, {
-        showTitle: true,
-        toolbarColor: C.surface,
-        controlsColor: C.brand,
-        enableBarCollapsing: false,
-        dismissButtonStyle: "close",
-      });
-      return true;
-    } catch {
-      // No browser on the tablet to hand it to. Rare, and nothing the cashier
-      // can do about it at the counter, but silence would read as a dead
-      // button they keep pressing.
-      return false;
-    }
-  }, [customerId]);
+  const { open: openViewer, opening: viewerOpening } = useCrmViewer(customerId);
 
   return {
     state,

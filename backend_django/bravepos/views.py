@@ -838,9 +838,11 @@ def crm_viewer_link(request):
     lapses.  That is also why it is not cached, not stored and not logged, and
     why it is issued per customer rather than handed out as one shop-wide URL.
 
-    ``{"enabled": false}`` for a branch outside the rollout or a customer with
-    no phone number — the till simply draws no button.  A CRM that is down is a
-    502 the cashier can retry, as with the lookup next door.
+    ``{"enabled": false}`` for a branch outside the rollout, a customer with no
+    phone number, or one the CRM has no membership for (``reason``
+    ``not_a_member``) — none of those are faults, and the caller says so rather
+    than offering a retry.  A CRM that is down is a 502 the cashier can retry,
+    as with the lookup next door.
     """
     branch = request.session_obj.branch
     if not loyalty.enabled_for(branch):
@@ -857,6 +859,16 @@ def crm_viewer_link(request):
                         status=status.HTTP_404_NOT_FOUND)
     try:
         return Response(loyalty.viewer_link_for_customer(branch, customer))
+    except crm.MemberNotFound:
+        # Ordinary, not a fault: the customer book is the shop's, and plenty of
+        # the people in it never joined the loyalty programme.  Caught *before*
+        # CrmError because it is one — a 502 here would tell an admin to retry
+        # something that will never work, and they would keep retrying it.
+        # Deliberately not registered on the spot the way the till's member
+        # lookup does: that happens mid-sale with the customer at the counter,
+        # whereas enrolling somebody because an admin opened their profile is a
+        # side effect nobody asked for.
+        return Response({'enabled': False, 'reason': 'not_a_member'})
     except crm.CrmError as exc:
         return Response({'enabled': True, 'error': str(exc)},
                         status=status.HTTP_502_BAD_GATEWAY)

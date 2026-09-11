@@ -1538,8 +1538,16 @@ function LoyaltyPanel({
       <TouchableOpacity
         style={styles.loyaltyViewerRow}
         onPress={async () => {
-          if (!(await openViewer())) {
-            showAlert(tr("pos.loyalty_viewer_failed"), tr("pos.please_try_again"));
+          const result = await openViewer();
+          // A customer who was never enrolled is not a fault and retrying
+          // cannot fix it, so it is not worded as one.
+          if (result === "not_a_member") {
+            showAlert(
+              tr("common.not_a_loyalty_member"),
+              tr("common.not_a_loyalty_member_note"),
+            );
+          } else if (result === "failed") {
+            showAlert(tr("common.couldnt_open_points_page"), tr("pos.please_try_again"));
           }
         }}
         disabled={viewerOpening}
@@ -1552,7 +1560,7 @@ function LoyaltyPanel({
             <Ionicons name="open-outline" size={14} color={C.brand} />
           )}
         </View>
-        <Text style={styles.loyaltyViewerText}>{tr("pos.loyalty_view_points")}</Text>
+        <Text style={styles.loyaltyViewerText}>{tr("common.view_points_page")}</Text>
       </TouchableOpacity>
 
       {rewards.length === 0 ? (

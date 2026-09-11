@@ -401,6 +401,7 @@ const en = {
     cashier: "Cashier",
     change: "Change",
     choose_country: "Choose Country",
+    couldnt_open_points_page: "Couldn't open the points page",
     couldnt_save_customer: "Couldn't save customer",
     customer: "Customer",
     discount: "Discount",
@@ -408,6 +409,8 @@ const en = {
     item: "item",
     items: "items",
     name: "Name",
+    not_a_loyalty_member: "Not a loyalty member yet",
+    not_a_loyalty_member_note: "This customer hasn't joined the points programme.",
     no_customers: "No customers",
     no_products_here: "No products here",
     open_shift: "Open Shift",
@@ -425,6 +428,7 @@ const en = {
     subtotal: "Subtotal",
     total: "Total",
     unexpected_response_from_server: "Unexpected response from server.",
+    view_points_page: "View points page",
   },
   date: {
     days: [
@@ -573,8 +577,6 @@ const en = {
     loyalty_retry: "Retry",
     loyalty_rewards: "Rewards (%{n})",
     loyalty_unavailable: "Rewards unavailable",
-    loyalty_view_points: "View points page",
-    loyalty_viewer_failed: "Couldn't open the points page",
     new_customer: "New Customer",
     new_order: "New Order",
     new_sale: "New sale",
