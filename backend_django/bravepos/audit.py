@@ -41,7 +41,7 @@ AUDITED = {
     "Product", "Category", "Unit", "DrawerCategory", "StockOutReason",
     "StockMovement", "StockDocument", "StockDocumentItem",
     "Shift", "ShiftMovement",
-    "Customer", "PeakProductMap", "AppRelease",
+    "Customer", "PeakProductMap", "SuggestionOverride", "AppRelease",
     "Order", "OrderItem", "SelfOrder",
 }
 
@@ -52,7 +52,15 @@ UPDATE_DELETE_ONLY = {"Order", "OrderItem", "SelfOrder", "StockMovement"}
 # Never audited: AuditLog itself (infinite recursion), BranchSession (its
 # `last_seen_at` is touched on every single POS request — pure noise),
 # ParkedOrder (scratch state), and the Peak request/token plumbing.
-NEVER = {"AuditLog", "BranchSession", "ParkedOrder", "PeakRequest", "PeakClientToken"}
+# SuggestionRule is machine-generated, rewritten in bulk by a weekly cron,
+# thousands of rows per run with no actor behind any of them — exactly the
+# "bury the entries a human actually needs" case this module warns about.
+# Its sibling SuggestionOverride *is* audited: low volume, real decisions,
+# a named admin.
+NEVER = {
+    "AuditLog", "BranchSession", "ParkedOrder", "PeakRequest", "PeakClientToken",
+    "SuggestionRule",
+}
 
 # Values replaced with "***" before storage.
 REDACTED_FIELDS = {

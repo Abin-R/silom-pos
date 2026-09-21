@@ -22,6 +22,7 @@ import PhoneInput from "../components/PhoneInput";
 import { phoneMatchKey } from "../lib/phone";
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
+import { useSuggestions, type Suggestion } from "../lib/useSuggestions";
 import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
 import { AppShell, TopBar, isWideSize, railWidth, useDense } from "../components/AppShell";
@@ -85,7 +86,18 @@ type Product = {
   image_base64?: string;
   is_favorite: boolean;
 };
-type CartItem = { product_id: string; name: string; price: number; qty: number; discount?: number };
+// ``suggested`` marks a line that entered the cart from the upsell strip
+// rather than the product grid.  It rides to the backend untouched — the
+// order POST sends `items: cart` verbatim — and is the only way to answer
+// whether the strip is earning its screen space.
+type CartItem = {
+  product_id: string;
+  name: string;
+  price: number;
+  qty: number;
+  discount?: number;
+  suggested?: boolean;
+};
 // `phone` is null, not "", for a customer with no number on file — that is what
 // the column stores, so it is what the API sends. Every read here goes through
 // `c.phone || ""` or a `!c.phone` guard, which treat null and undefined alike.
@@ -425,14 +437,53 @@ export default function POS() {
   const roundingAdj = total - netTotal;
   const cartCount = cart.reduce((s, i) => s + i.qty, 0);
 
+  // Upsell suggestions.  Keyed on *which* products are in the cart, so bumping
+  // a quantity doesn't refetch, and gated behind the shift so the strip never
+  // appears above the selling gate.  Everything about it fails open: a network
+  // problem here shows no chips and nothing else.  A branch with the feature
+  // switched off gets an empty list from the server, so nothing renders.
+  const cartProductIds = useMemo(() => cart.map((i) => i.product_id), [cart]);
+  const suggestions = useSuggestions(
+    cartProductIds,
+    products,
+    shiftOpen === true && !loading,
+  );
+
   // Cart ops
-  const addToCart = useCallback((p: Product) => {
+  // ``opts.suggested`` is set only by the suggestion strip.  Sticky on merge:
+  // a cashier who taps the chip and then bumps the qty on the cart line has
+  // still opened that line from a suggestion, and erasing the attribution there
+  // would quietly under-count the feature.
+  const addToCart = useCallback((p: Product, opts: { suggested?: boolean } = {}) => {
     setCart((c) => {
       const ex = c.find((i) => i.product_id === p.id);
-      if (ex) return c.map((i) => (i.product_id === p.id ? { ...i, qty: i.qty + 1 } : i));
-      return [...c, { product_id: p.id, name: p.name, price: p.price, qty: 1 }];
+      if (ex)
+        return c.map((i) =>
+          i.product_id === p.id
+            ? { ...i, qty: i.qty + 1, suggested: i.suggested || opts.suggested }
+            : i,
+        );
+      return [
+        ...c,
+        {
+          product_id: p.id,
+          name: p.name,
+          price: p.price,
+          qty: 1,
+          ...(opts.suggested ? { suggested: true } : {}),
+        },
+      ];
     });
   }, []);
+
+  const addSuggestion = useCallback(
+    (s: Suggestion) => {
+      // Reuse addToCart rather than pushing a line here, so merge-by-product_id
+      // stays in exactly one place — and stamp where the tap came from.
+      addToCart(s as unknown as Product, { suggested: true });
+    },
+    [addToCart],
+  );
 
   const updateQty = (pid: string, delta: number) => {
     setCart((c) =>
@@ -999,6 +1050,8 @@ export default function POS() {
                       ))}
                   </ScrollView>
                 )}
+
+                <SuggestionStrip items={suggestions} onAdd={addSuggestion} />
 
                 {productGrid}
               </View>
@@ -1751,6 +1804,84 @@ function RewardRow({
         )}
       </View>
     </TouchableOpacity>
+  );
+}
+
+// Upsell strip — "goes well with the Latte they just ordered".
+//
+// Lives above the product grid rather than inside the cart, deliberately.  The
+// cart column is the one part of the tablet layout that cannot scroll: a fixed
+// head, a flex:1 item list, then fixed totals.  A 96px strip in there comes
+// straight out of the visible cart lines, and on the phone the cart is a modal
+// that is only open at checkout — the wrong moment to prompt.  Here it sits in
+// the column the cashier is already looking at, and the grid just gets shorter.
+//
+// Renders nothing at all when there is nothing to suggest, so a cold branch or
+// a failed fetch leaves the layout byte-identical.
+function SuggestionStrip({
+  items,
+  onAdd,
+}: {
+  items: Suggestion[];
+  onAdd: (s: Suggestion) => void;
+}) {
+  useT(); // re-render this screen when the language changes
+  if (!items.length) return null;
+
+  // One label for the whole strip, taken from the first chip: mixing "often
+  // bought together" and "popular" per-chip is more words than a cashier
+  // glancing sideways mid-sale can read.
+  const lead = items[0];
+  const heading =
+    lead.reason === "often_together" && lead.because_name
+      ? tr("pos.goes_well_with", { name: lead.because_name })
+      : lead.reason === "popular"
+        ? tr("pos.popular_here")
+        : tr("pos.suggested");
+
+  return (
+    <View style={styles.sugWrap} testID="suggestion-strip">
+      <View style={styles.sugHead}>
+        <Ionicons name="sparkles-outline" size={14} color={C.ink2Soft} />
+        <Text style={styles.sugHeadText} numberOfLines={1}>
+          {heading}
+        </Text>
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.sugStrip}
+        contentContainerStyle={{ paddingHorizontal: 22, gap: 8, alignItems: "center" }}
+      >
+        {items.map((s) => {
+          const img = s.image_base64 || s.image_url;
+          return (
+            <TouchableOpacity
+              key={s.id}
+              style={styles.sugChip}
+              onPress={() => onAdd(s)}
+              activeOpacity={0.85}
+              testID={`suggestion-${s.id}`}
+            >
+              <View style={styles.sugThumb}>
+                {img ? (
+                  <Image source={{ uri: img }} style={styles.sugThumbPhoto} />
+                ) : (
+                  <Ionicons name="cafe-outline" size={18} color={C.ink3} />
+                )}
+              </View>
+              <View style={{ minWidth: 0, flexShrink: 1 }}>
+                <Text style={styles.sugName} numberOfLines={1}>
+                  {s.name}
+                </Text>
+                <Money style={styles.sugPrice}>{THB(s.price)}</Money>
+              </View>
+              <Ionicons name="add" size={17} color={C.brand} />
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -4773,6 +4904,50 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     flexGrow: 0,
   },
+  // Upsell strip. Same "horizontal rail in the product column" shape as
+  // catStrip above, one line taller to carry the reason.
+  sugWrap: { paddingTop: 10, paddingBottom: 2 },
+  sugHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 22,
+    marginBottom: 7,
+  },
+  sugHeadText: {
+    fontSize: 12.5,
+    fontWeight: "600",
+    color: C.ink2Soft,
+    letterSpacing: -0.1,
+    flexShrink: 1,
+  },
+  sugStrip: { maxHeight: 60, flexGrow: 0 },
+  sugChip: {
+    height: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingLeft: 8,
+    paddingRight: 12,
+    borderRadius: 12,
+    backgroundColor: C.brandTintSoft,
+    borderWidth: 1,
+    borderColor: C.brandTint,
+    maxWidth: 210,
+  },
+  sugThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: C.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  sugThumbPhoto: { width: "100%", height: "100%" },
+  sugName: { fontSize: 13.5, fontWeight: "600", color: C.ink, letterSpacing: -0.15 },
+  sugPrice: { fontSize: 12, color: C.ink2Soft, marginTop: 1 },
+
   catChip: {
     height: 38,
     paddingHorizontal: 16,

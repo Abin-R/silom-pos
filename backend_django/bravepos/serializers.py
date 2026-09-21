@@ -8,6 +8,7 @@ from .models import (
     Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
     DrawerCategory, StockDocument, StockDocumentItem, StockOutReason,
+    SuggestionOverride,
 )
 
 
@@ -190,7 +191,13 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['product_id', 'name', 'price', 'qty', 'discount', 'category_id', 'category_name']
+        # ``suggested`` marks a line the cashier added from the upsell strip.
+        # Optional on the way in — the self-order client never sends it, and
+        # an older till bundle won't either, so both default to False.
+        fields = [
+            'product_id', 'name', 'price', 'qty', 'discount',
+            'category_id', 'category_name', 'suggested',
+        ]
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -321,3 +328,33 @@ class StockDocumentSerializer(serializers.ModelSerializer):
             'created_by', 'created_at', 'items',
         ]
         read_only_fields = ['id', 'document_no', 'created_by', 'created_at']
+
+
+class SuggestionOverrideSerializer(serializers.ModelSerializer):
+    """Admin pins and blocks for the cashier upsell strip.
+
+    Product names are read-only passengers so the settings list can render a
+    row without a second fetch of the whole catalogue.
+    """
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    trigger_name = serializers.CharField(source='trigger.name', read_only=True, default='')
+
+    class Meta:
+        model = SuggestionOverride
+        fields = [
+            'id', 'mode', 'trigger', 'trigger_name', 'product', 'product_name',
+            'sort_order', 'note', 'active', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def validate(self, attrs):
+        """A pin that suggests the very thing that triggered it is a no-op —
+        the endpoint drops anything already in the cart, so this would silently
+        do nothing and read as a bug in the strip rather than in the rule."""
+        trigger = attrs.get('trigger', getattr(self.instance, 'trigger', None))
+        product = attrs.get('product', getattr(self.instance, 'product', None))
+        if trigger is not None and product is not None and trigger.pk == product.pk:
+            raise serializers.ValidationError(
+                {'product': 'Trigger and suggested product must differ.'}
+            )
+        return attrs

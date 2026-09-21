@@ -227,6 +227,10 @@ def create_order_from_items(
                         discount=Decimal(str(it.get('discount', 0) or 0)),
                         category_id=cat_id,
                         category_name=cat_name or '',
+                        # Did this line come from the cashier's upsell strip?
+                        # The self-order client and any older till bundle never
+                        # send the key, so both land as False without a guard.
+                        suggested=bool(it.get('suggested')),
                     )
 
                     if prod:

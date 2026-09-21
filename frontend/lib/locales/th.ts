@@ -386,6 +386,22 @@ const th = {
     products_no_cost: {
       other: "%{count} \u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e22\u0e31\u0e07\u0e44\u0e21\u0e48\u0e21\u0e35\u0e15\u0e49\u0e19\u0e17\u0e38\u0e19 \u0e08\u0e36\u0e07\u0e04\u0e33\u0e19\u0e27\u0e13\u0e01\u0e33\u0e44\u0e23\u0e02\u0e31\u0e49\u0e19\u0e15\u0e49\u0e19\u0e44\u0e21\u0e48\u0e44\u0e14\u0e49",
     },
+    add_block: "เพิ่มการบล็อก",
+    add_pin: "เพิ่มการปักหมุด",
+    always_suggest: "แนะนำเสมอ",
+    any_item: "รายการใดก็ได้",
+    block_beats_pin_note: "การบล็อกมีผลเหนือการปักหมุดเสมอ",
+    mined_rule_counts: "หลายรายการ %{rules} · คู่ %{pairs} · ยอดนิยม %{popular}",
+    never_suggest: "ไม่แนะนำ",
+    no_blocks_yet: "ยังไม่มีการบล็อก",
+    no_pins_yet: "ยังไม่มีการปักหมุด ระบบใช้กฎที่เรียนรู้เองทั้งหมด",
+    rules_last_rebuilt: "สร้างกฎล่าสุด %{when}",
+    rules_never_built: "ยังไม่ได้สร้างกฎ ระบบกำลังแสดงรายการโปรด",
+    suggest_this: "ให้แนะนำ",
+    suggestions: "รายการแนะนำ",
+    suggestions_intro: "ชิปที่แคชเชียร์เห็นเหนือตารางสินค้า เรียนรู้จากสิ่งที่ลูกค้าสั่งคู่กันจริง ปักหมุดสิ่งที่ต้องการเสนอเสมอ และบล็อกสิ่งที่ไม่ควรเสนอ",
+    suggestions_off_for_branch: "ปิดการแนะนำสำหรับสาขานี้",
+    when_cart_has: "เมื่อในตะกร้ามี",
   },
   common: {
     admin: "ผู้ดูแลระบบ",
@@ -668,6 +684,9 @@ const th = {
     items_pcs: {
       other: "%{count} \u0e23\u0e32\u0e22\u0e01\u0e32\u0e23 \u00b7 %{pcs} \u0e0a\u0e34\u0e49\u0e19",
     },
+    goes_well_with: "เข้ากันดีกับ %{name}",
+    popular_here: "ยอดนิยมที่ร้านนี้",
+    suggested: "แนะนำ",
   },
 };
 

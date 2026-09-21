@@ -6,10 +6,13 @@ object, precisely so they can be swapped for these.
 """
 from __future__ import annotations
 
+import itertools
 from decimal import Decimal
 from unittest import mock
 
-from bravepos.models import Branch, Category, Product, Settings, Shift
+from bravepos.models import (
+    Branch, Category, Order, OrderItem, Product, Settings, Shift,
+)
 
 
 def make_shop(tax_percent=7, beam_fee=Decimal('3.65')) -> Settings:
@@ -24,11 +27,15 @@ def make_shop(tax_percent=7, beam_fee=Decimal('3.65')) -> Settings:
     return s
 
 
-def make_branch(name='Silom', self_order_enabled=True) -> Branch:
+def make_branch(name='Silom', self_order_enabled=True,
+                suggestions_enabled=True) -> Branch:
     # Tests default to self-ordering ON so they exercise the live path; the
-    # gating test flips it off explicitly.
+    # gating test flips it off explicitly.  Upsell suggestions are the same:
+    # the *product* default is False (they roll out to one branch at a time),
+    # but a suite that inherited that would exercise only the disabled path.
     return Branch.objects.create(
         name=name, active=True, self_order_enabled=self_order_enabled,
+        suggestions_enabled=suggestions_enabled,
     )
 
 
@@ -44,6 +51,35 @@ def make_product(branch, name='Latte', price='100.00', stock=50) -> Product:
         branch=branch, category=cat, name=name,
         price=Decimal(price), stock=stock, active=True,
     )
+
+
+_order_seq = itertools.count(1)
+
+
+def make_order(branch, products, status='completed', created_at=None, qty=1):
+    """One sale over ``products`` (a list of Product, or (Product, qty) pairs).
+
+    Exists for the basket-mining tests, which need dozens of orders and cannot
+    hand-roll each one.  ``created_at`` is ``auto_now_add``, so backdating needs
+    an explicit UPDATE after the insert — the same trick ``test_orders_list``
+    uses, and the reason this helper exists rather than a bare
+    ``Order.objects.create``.
+    """
+    order = Order.objects.create(
+        branch=branch,
+        order_number=f'F-{next(_order_seq):06d}',
+        status=status,
+        total='0.00',
+    )
+    for entry in products:
+        product, line_qty = entry if isinstance(entry, tuple) else (entry, qty)
+        OrderItem.objects.create(
+            order=order, product=product, name=product.name,
+            price=product.price, qty=line_qty,
+        )
+    if created_at is not None:
+        Order.objects.filter(id=order.id).update(created_at=created_at)
+    return order
 
 
 class StubGateway:

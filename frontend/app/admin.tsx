@@ -52,7 +52,7 @@ import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
 } from "../lib/ui";
-import { t as tr, useT, LANGUAGES } from "../lib/i18n";
+import { t as tr, useT, LANGUAGES, formatShortDate } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
@@ -5171,6 +5171,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
     { key: "Backup & Restore", labelKey: "admin.backup_and_restore", icon: "cloud-upload", color: "#A855F7" },
     { key: "Sync", labelKey: "admin.sync", icon: "sync", color: "#06B6D4" },
     { key: "Loyalty", labelKey: "admin.loyalty", icon: "star", color: "#EAB308" },
+    { key: "Suggestions", labelKey: "admin.suggestions", icon: "sparkles", color: "#0EA5E9" },
     { key: "Add-ons", labelKey: "admin.add_ons", icon: "extension-puzzle", color: "#14B8A6" },
   ];
   // Must match a `sections` entry exactly — the panel below dispatches on this
@@ -5299,7 +5300,9 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
             <Text style={styles.backText}>{tr("common.settings")}</Text>
           </TouchableOpacity>
         )}
-        {active === "Self-Order QR" ? (
+        {active === "Suggestions" ? (
+          <SuggestionsSection />
+        ) : active === "Self-Order QR" ? (
           <SelfOrderQrView branchId={branchId} branchName={branchName} />
         ) : active === "Store profile" && s ? (
           <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
@@ -5581,6 +5584,284 @@ function DrawerCategoriesSection() {
 // Same shape as DrawerCategoriesSection: the two solve the same problem (a
 // free-text box producing six spellings of one reason) and should not drift
 // into two different interaction models.
+type SuggestionOverride = {
+  id: string;
+  mode: "pin" | "block";
+  trigger: string | null;
+  trigger_name?: string;
+  product: string;
+  product_name?: string;
+  sort_order?: number;
+  note?: string;
+  active?: boolean;
+};
+
+type SuggestionStatus = {
+  enabled: boolean;
+  rules: number;
+  pairs: number;
+  popular: number;
+  generated_at: string | null;
+};
+
+// Settings → Suggestions.  Two lists and a diagnostic line.
+//
+// The diagnostic line is not decoration: at coffee-shop volume the miner can
+// legitimately find nothing, and without it "the strip is empty" is
+// indistinguishable from "the strip is broken".  Showing the counts makes the
+// honest answer visible.
+function SuggestionsSection() {
+  useT(); // re-render this screen when the language changes
+  const [rows, setRows] = useState<SuggestionOverride[]>([]);
+  const [status, setStatus] = useState<SuggestionStatus | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState<"pin" | "block" | null>(null);
+  const [trigger, setTrigger] = useState<string>("");
+  const [product, setProduct] = useState<string>("");
+  const [search, setSearch] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [o, s, p] = await Promise.all([
+        apiFetch(`${API}/suggestion-overrides`).then((r) => safeJson<SuggestionOverride[]>(r, [])),
+        apiFetch(`${API}/suggestions/status`).then((r) => safeJson<SuggestionStatus | null>(r, null)),
+        apiFetch(`${API}/products?active=true`).then((r) => safeJson<Product[]>(r, [])),
+      ]);
+      setRows(Array.isArray(o) ? o : []);
+      setStatus(s);
+      setProducts(Array.isArray(p) ? p : []);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); }, []);
+
+  const openNew = (mode: "pin" | "block") => {
+    setDraft(mode);
+    // A block is nearly always unconditional — "never offer bottled water" —
+    // so it opens with no trigger.
+    setTrigger("");
+    setProduct("");
+    setSearch("");
+  };
+
+  const submit = async () => {
+    if (!draft || !product) return;
+    await apiFetch(`${API}/suggestion-overrides`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: draft,
+        trigger: trigger || null,
+        product,
+        sort_order: rows.length,
+      }),
+    });
+    setDraft(null);
+    load();
+  };
+
+  const toggleActive = async (r: SuggestionOverride) => {
+    await apiFetch(`${API}/suggestion-overrides/${r.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: !(r.active ?? true) }),
+    });
+    load();
+  };
+
+  const remove = async (r: SuggestionOverride) => {
+    await apiFetch(`${API}/suggestion-overrides/${r.id}`, { method: "DELETE" });
+    load();
+  };
+
+  const pins = rows.filter((r) => r.mode === "pin");
+  const blocks = rows.filter((r) => r.mode === "block");
+  const picker = products.filter((p) =>
+    !search.trim() || p.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+
+  const row = (r: SuggestionOverride) => {
+    const on = r.active ?? true;
+    return (
+      <View key={r.id} style={styles.moveRow} testID={`suggestion-override-row-${r.id}`}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.moveRowValue, !on && { color: C.ink3 }]}>
+            {r.product_name}{on ? "" : tr("admin.hidden")}
+          </Text>
+          <Text style={styles.catRowSub}>
+            {tr("admin.when_cart_has")}: {r.trigger_name || tr("admin.any_item")}
+          </Text>
+        </View>
+        <View style={{ flexDirection: "row", gap: 16 }}>
+          <TouchableOpacity onPress={() => toggleActive(r)} testID={`suggestion-override-toggle-${r.id}`}>
+            <Ionicons
+              name={on ? "eye-outline" : "eye-off-outline"}
+              size={20}
+              color={on ? C.ok : C.ink3}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => remove(r)} testID={`suggestion-override-del-${r.id}`}>
+            <Ionicons name="trash-outline" size={20} color={C.danger} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <View style={{ flex: 1 }} testID="suggestion-settings">
+      <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+        <Text style={styles.h2}>{tr("admin.suggestions")}</Text>
+        <Text style={{ color: C.ink3, fontSize: 13 }}>
+          {tr("admin.suggestions_intro")}
+        </Text>
+
+        {loading ? (
+          <ActivityIndicator color={C.brand} style={{ marginTop: 20 }} />
+        ) : (
+          <>
+            {status && !status.enabled && (
+              <Notice tone="warn">{tr("admin.suggestions_off_for_branch")}</Notice>
+            )}
+            {status && (
+              <Text style={{ color: C.ink3, fontSize: 12.5 }}>
+                {status.generated_at
+                  ? `${tr("admin.rules_last_rebuilt", {
+                      when: formatShortDate(new Date(status.generated_at)),
+                    })} — ${tr("admin.mined_rule_counts", {
+                      rules: status.rules,
+                      pairs: status.pairs,
+                      popular: status.popular,
+                    })}`
+                  : tr("admin.rules_never_built")}
+              </Text>
+            )}
+
+            <Text style={styles.h3}>{tr("admin.always_suggest")}</Text>
+            {pins.length ? pins.map(row) : (
+              <Text style={{ color: C.ink3, fontSize: 13 }}>{tr("admin.no_pins_yet")}</Text>
+            )}
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 6 }]}
+              onPress={() => openNew("pin")}
+              testID="suggestion-add-pin"
+            >
+              <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
+              <Text style={styles.primaryBtnText}>{tr("admin.add_pin")}</Text>
+            </TouchableOpacity>
+
+            <Text style={[styles.h3, { marginTop: 10 }]}>{tr("admin.never_suggest")}</Text>
+            <Text style={{ color: C.ink3, fontSize: 12.5 }}>
+              {tr("admin.block_beats_pin_note")}
+            </Text>
+            {blocks.length ? blocks.map(row) : (
+              <Text style={{ color: C.ink3, fontSize: 13 }}>{tr("admin.no_blocks_yet")}</Text>
+            )}
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 6 }]}
+              onPress={() => openNew("block")}
+              testID="suggestion-add-block"
+            >
+              <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
+              <Text style={styles.primaryBtnText}>{tr("admin.add_block")}</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </ScrollView>
+
+      <Modal visible={!!draft} transparent animationType="fade" onRequestClose={() => setDraft(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.smallModal}>
+            <View style={styles.modalHead}>
+              <TouchableOpacity onPress={() => setDraft(null)}>
+                <Ionicons name="close" size={24} color={C.ink2} />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>
+                {draft === "block" ? tr("admin.never_suggest") : tr("admin.always_suggest")}
+              </Text>
+              <View style={{ width: 24 }} />
+            </View>
+            <View style={{ padding: 20, gap: 12 }}>
+              {draft === "pin" && (
+                <>
+                  <Text style={styles.formLabel}>{tr("admin.when_cart_has")}</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <TouchableOpacity
+                        style={[styles.bizBtn, !trigger && styles.bizBtnActive]}
+                        onPress={() => setTrigger("")}
+                      >
+                        <Text style={[styles.bizBtnText, !trigger && { color: C.surface }]}>
+                          {tr("admin.any_item")}
+                        </Text>
+                      </TouchableOpacity>
+                      {products.slice(0, 40).map((p) => (
+                        <TouchableOpacity
+                          key={p.id}
+                          style={[styles.bizBtn, trigger === p.id && styles.bizBtnActive]}
+                          onPress={() => setTrigger(p.id)}
+                        >
+                          <Text style={[styles.bizBtnText, trigger === p.id && { color: C.surface }]}>
+                            {p.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </ScrollView>
+                </>
+              )}
+
+              <Text style={styles.formLabel}>{tr("admin.suggest_this")}</Text>
+              <TextInput
+                style={styles.formInput}
+                value={search}
+                onChangeText={setSearch}
+                placeholder={tr("common.search")}
+                testID="suggestion-product-search"
+              />
+              <ScrollView style={{ maxHeight: 220 }}>
+                {picker.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.moveRow}
+                    onPress={() => setProduct(p.id)}
+                    testID={`suggestion-pick-${p.id}`}
+                  >
+                    <Text
+                      style={[
+                        styles.moveRowValue,
+                        product === p.id && { color: C.brand, fontWeight: "700" },
+                      ]}
+                    >
+                      {p.name}
+                    </Text>
+                    {product === p.id && (
+                      <Ionicons name="checkmark" size={18} color={C.brand} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, !product && { opacity: 0.5 }]}
+                onPress={submit}
+                disabled={!product}
+                testID="suggestion-save"
+              >
+                <Text style={styles.primaryBtnText}>{tr("common.save")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+
 function StockOutReasonsSection() {
   useT(); // re-render this screen when the language changes
   const [rows, setRows] = useState<StockOutReason[]>([]);
@@ -6454,6 +6735,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.surface,
   },
   h2: { fontSize: 18, fontWeight: "700", color: C.ink, marginBottom: 4 },
+  h3: { fontSize: 14.5, fontWeight: "700", color: C.ink2, marginBottom: 2 },
   helperText: { color: C.ink3, fontSize: 13, marginBottom: 14 },
   rangeCard: {
     width: "92%", maxWidth: 420, backgroundColor: C.surface,

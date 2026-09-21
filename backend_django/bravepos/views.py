@@ -8,6 +8,7 @@ the migration.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -30,6 +31,7 @@ from .models import (
     Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
     StockMovement, StockDocument, StockDocumentItem, StockOutReason,
+    SuggestionOverride, SuggestionRule,
 )
 from .serializers import (
     BranchSerializer,
@@ -37,6 +39,7 @@ from .serializers import (
     OrderSerializer, ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
     StockDocumentSerializer, StockOutReasonSerializer,
+    SuggestionOverrideSerializer,
 )
 
 logger = logging.getLogger("bravepos")
@@ -2254,3 +2257,265 @@ def self_orders_pending(request):
         .prefetch_related('items')
     )
     return Response(OrderSerializer(orders, many=True).data)
+
+
+# ─── Upsell suggestions ──────────────────────────────────────────────────────
+# Serves the cashier's "goes well with…" strip.  Everything expensive happened
+# in the ``mine_suggestions`` cron; this endpoint is a lookup, not a
+# computation, and deliberately imports nothing from ``efficient_apriori`` —
+# ``deploy.sh`` imports the whole URLconf as its go/no-go gate, so a
+# module-scope import of a package missing from the box would abort a deploy.
+# Confined to the management command, a missing package can only ever break a
+# cron job, never the till.
+
+# How many cart lines feed the lookup.  Every subset of size 1 and 2 becomes a
+# key, so this bounds the ``__in`` list at 8 + 28 + 1 = 37 rather than letting a
+# 20-line catering order generate 210.  The most recently added items are the
+# strongest signal, so it is the *tail* that is kept.
+SUGGESTION_CART_CAP = 8
+SUGGESTION_MAX_LIMIT = 6
+SUGGESTION_DEFAULT_LIMIT = 4
+
+# Walked in this order, and only in this order: ``score`` is comparable within
+# a kind but not across them (a popularity score is a bare frequency, a pair
+# score is a lift).  A single global sort would let a popular muffin outrank a
+# genuine pairing.
+SUGGESTION_TIERS = ('rule', 'pair', 'popular')
+
+SUGGESTION_REASONS = {
+    'rule': 'often_together',
+    'pair': 'often_together',
+    'popular': 'popular',
+}
+
+
+def _suggestion_payload(product, reason, because_id='', because_name=''):
+    """Shape one chip.
+
+    Product-shaped on purpose — it matches the client's ``Product`` type field
+    for field, so the strip can hand it straight to the existing memoised
+    ``addToCart`` with no adapter.
+
+    ``image_base64`` is deliberately absent: it is an unbounded TextField
+    holding a data URI, and four of them would be a fat response on a till over
+    shop wifi.  The client already holds every product in memory and hydrates
+    the image from there.
+
+    ``because_name`` is likewise left empty for mined rules.  Resolving it here
+    would cost a whole extra query to fetch names the client already has —
+    every one of those products is in its own cart.
+    """
+    return {
+        'id': str(product.id),
+        'name': product.name,
+        'name_th': product.name_th,
+        'price': product.price,
+        'category_id': str(product.category_id) if product.category_id else None,
+        'image_url': product.image_url or '',
+        'is_favorite': product.is_favorite,
+        'reason': reason,
+        'because_id': because_id or None,
+        'because_name': because_name,
+    }
+
+
+def _antecedent_keys(cart_ids):
+    """Every size-1 and size-2 subset of the cart, as sorted "a|b" strings.
+
+    Mirrors exactly how ``mine_suggestions`` writes the key, which is the whole
+    reason the lookup can be one indexed ``__in`` instead of a scan.
+    """
+    keys = [str(pid) for pid in cart_ids]
+    for i, a in enumerate(cart_ids):
+        for b in cart_ids[i + 1:]:
+            keys.append('|'.join(sorted((str(a), str(b)))))
+    return keys
+
+
+@api_view(['POST'])
+@require_session
+def suggestions(request):
+    """Products to offer alongside what is already in the cart.
+
+    POST rather than GET because the input is a *set*, not a resource
+    identifier — eight UUIDs is a 300-character query string, and with no cache
+    layer anywhere in this project (there is no CACHES block at all) a GET buys
+    nothing back.  Non-mutating and idempotent regardless.
+
+    Two queries in the common case, three on a branch cold enough to fall
+    through to favourites.  Cheaper than ``/dashboard``, which materialises
+    every order in its period.
+    """
+    branch = request.session_obj.branch
+
+    if branch is not None and not branch.suggestions_enabled:
+        # The kill switch. Answered honestly rather than with an empty list so
+        # the admin screen can tell "switched off" from "nothing mined yet".
+        return Response({'suggestions': [], 'source': 'off'})
+
+    try:
+        limit = int(request.data.get('limit') or SUGGESTION_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = SUGGESTION_DEFAULT_LIMIT
+    limit = max(1, min(limit, SUGGESTION_MAX_LIMIT))
+
+    # Parse defensively: this runs on every cart change, and a malformed id
+    # must degrade to "no suggestions" rather than 500 behind the sale.
+    raw_ids = request.data.get('product_ids') or []
+    if not isinstance(raw_ids, list):
+        raw_ids = []
+    cart_ids, seen = [], set()
+    for raw in raw_ids:
+        try:
+            pid = uuid.UUID(str(raw))
+        except (TypeError, ValueError):
+            continue
+        if pid not in seen:
+            seen.add(pid)
+            cart_ids.append(pid)
+    cart_ids = cart_ids[-SUGGESTION_CART_CAP:]
+
+    cart_set = set(cart_ids)
+    keys = _antecedent_keys(cart_ids) + ['']   # '' is the popularity tier
+
+    # ── Query 1: the mined rules ────────────────────────────────────────
+    # Hits Index(branch, antecedent_key, -score) on its leading columns.
+    # select_related pulls the consequent Product in the same query — the
+    # difference between 3 queries and 3 + N.
+    rows = list(
+        SuggestionRule.objects
+        .filter(branch=branch, antecedent_key__in=keys)
+        .exclude(consequent_id__in=cart_set)
+        .select_related('consequent')
+        .order_by('-score')[:60]
+    )
+
+    # ── Query 2: the admin's own instructions ───────────────────────────
+    overrides = list(
+        SuggestionOverride.objects
+        .filter(branch=branch, active=True)
+        .filter(Q(trigger_id__isnull=True) | Q(trigger_id__in=cart_set))
+        .select_related('product', 'trigger')
+        .order_by('sort_order', 'created_at')
+    )
+    # Blocks are applied *before* anything is picked, so a blocked product can
+    # never consume a slot a usable suggestion would have taken.  A block also
+    # beats a pin when an admin has set both: they contradict each other, and
+    # "never do this" is the safer half to honour.
+    blocked = {o.product_id for o in overrides if o.mode == 'block'}
+
+    picked, chosen_ids, source = [], set(cart_set | blocked), ''
+
+    for o in overrides:
+        if o.mode != 'pin' or o.product_id in chosen_ids or not o.product.active:
+            continue
+        picked.append(_suggestion_payload(
+            o.product, 'pinned',
+            because_id=str(o.trigger_id) if o.trigger_id else '',
+            # Free here — select_related already loaded it.
+            because_name=o.trigger.name if o.trigger_id else '',
+        ))
+        chosen_ids.add(o.product_id)
+        source = source or 'pinned'
+        if len(picked) >= limit:
+            break
+
+    by_kind = {tier: [] for tier in SUGGESTION_TIERS}
+    for row in rows:
+        by_kind.setdefault(row.kind, []).append(row)
+
+    for tier in SUGGESTION_TIERS:
+        for row in by_kind.get(tier, []):
+            if len(picked) >= limit:
+                break
+            if row.consequent_id in chosen_ids or not row.consequent.active:
+                continue
+            picked.append(_suggestion_payload(
+                row.consequent,
+                SUGGESTION_REASONS.get(row.kind, 'popular'),
+                # Only a single-item antecedent names one thing the chip can
+                # point at; {Latte, Croissant} → Cookie has no single "because".
+                because_id=row.antecedent_key if row.antecedent_size == 1 else '',
+            ))
+            chosen_ids.add(row.consequent_id)
+            source = source or tier
+        if len(picked) >= limit:
+            break
+
+    # ── Query 3: cold start ─────────────────────────────────────────────
+    # Only when nothing above produced anything — a branch that opened this
+    # morning.  ``is_favorite`` is the shop's own hand-picked answer to "what
+    # do I show when I know nothing", already in the data model.
+    if not picked:
+        favourites = (
+            Product.objects
+            .filter(branch=branch, active=True, is_favorite=True)
+            .exclude(id__in=chosen_ids)
+            .order_by('sort_order', 'name')[:limit]
+        )
+        picked = [_suggestion_payload(p, 'popular') for p in favourites]
+        source = 'none'
+
+    return Response({'suggestions': picked, 'source': source or 'none'})
+
+
+@api_view(['GET'])
+@require_admin
+def suggestions_status(request):
+    """Is the miner actually producing anything?
+
+    The one question an admin asks of this feature, and without an answer the
+    empty-strip case is indistinguishable from a broken one.  Surfaced in
+    Settings → Suggestions.
+    """
+    branch = request.session_obj.branch
+    rows = SuggestionRule.objects.filter(branch=branch)
+    counts = {tier: 0 for tier in SUGGESTION_TIERS}
+    latest = None
+    for kind, generated_at in rows.values_list('kind', 'generated_at'):
+        counts[kind] = counts.get(kind, 0) + 1
+        if latest is None or generated_at > latest:
+            latest = generated_at
+    return Response({
+        'enabled': bool(branch is None or branch.suggestions_enabled),
+        'rules': counts.get('rule', 0),
+        'pairs': counts.get('pair', 0),
+        'popular': counts.get('popular', 0),
+        'generated_at': latest,
+    })
+
+
+class SuggestionOverrideViewSet(BranchScopedMixin, viewsets.ModelViewSet):
+    """Admin pins and blocks.
+
+    Readable by any session so the POS could show why a chip is there; writable
+    only by an admin, because a pin is a merchandising decision the whole shop
+    then sees.  Same gating shape as ``BranchViewSet``.
+    """
+    queryset = SuggestionOverride.objects.all().select_related('product', 'trigger')
+    serializer_class = SuggestionOverrideSerializer
+
+    def _require_admin(self):
+        sess = getattr(self.request, 'session_obj', None)
+        if sess is None:
+            from rest_framework.exceptions import NotAuthenticated
+            raise NotAuthenticated('Session required.')
+        if sess.staff is None or sess.staff.role != 'admin':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin role required to edit suggestions.')
+
+    def create(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        self._require_admin()
+        return super().destroy(request, *args, **kwargs)

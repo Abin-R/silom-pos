@@ -17,6 +17,7 @@ def _register(r):
     r.register(r'branches', views.BranchViewSet, basename='branch')
     r.register(r'shift-categories', views.DrawerCategoryViewSet, basename='shift-category')
     r.register(r'stock-out-reasons', views.StockOutReasonViewSet, basename='stock-out-reason')
+    r.register(r'suggestion-overrides', views.SuggestionOverrideViewSet, basename='suggestion-override')
 
 router = DefaultRouter()          # /api/categories/
 router_no_slash = DefaultRouter(trailing_slash='')  # /api/categories
@@ -80,6 +81,11 @@ urlpatterns = [
     # Dashboard
     path('dashboard', views.dashboard),
     path('dashboard/channels', views.dashboard_channels),
+
+    # Upsell suggestions for the cashier's cart.  POST because the input is
+    # a set of cart product ids, not a resource identifier.
+    path('suggestions', views.suggestions),
+    path('suggestions/status', views.suggestions_status),
 
     # Beam payment
     path('beam/charge', views.beam_charge_create),

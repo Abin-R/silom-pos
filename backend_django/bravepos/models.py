@@ -185,6 +185,13 @@ class Branch(models.Model):
     # obscurity — is what keeps self-ordering closed on a branch.
     self_order_enabled = models.BooleanField(default=False)
 
+    # Per-branch on/off switch for the cashier upsell strip.  Defaults False so
+    # deploying the code exposes NO branch until someone turns it on — the
+    # rollout is "test branch first", and a flag that defaults on would put
+    # suggestions in front of paying customers the moment this merges.
+    # Same shape, and same reasoning, as self_order_enabled above.
+    suggestions_enabled = models.BooleanField(default=False)
+
     # ── CRM link ───────────────────────────────────────────────────────
     # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
     # its own branch list for the customer-facing loyalty app.  Set from the
@@ -725,6 +732,21 @@ class OrderItem(models.Model):
     category_id = models.UUIDField(null=True, blank=True)
     category_name = models.CharField(max_length=120, blank=True, default="")
 
+    # True when this line entered the cart from the upsell suggestion strip
+    # rather than the product grid.  The only way to answer "is the strip
+    # earning its screen space?" — without it the feature can only be judged
+    # on a feeling about the average bill.
+    #
+    # Counts *lines opened by a suggestion*, not units: a cashier who taps
+    # the chip once and then bumps the qty to three still produced one
+    # suggested line.  Sticky on merge (see addToCart on the client) so
+    # that bump cannot erase the attribution.
+    #
+    # Measures acceptance, not incrementality — it cannot tell you whether
+    # the guest would have bought the croissant anyway.  A real answer needs
+    # a holdout, which Branch.suggestions_enabled makes possible later.
+    suggested = models.BooleanField(default=False)
+
 
 # ─── Parked orders ───────────────────────────────────────────────────────────
 class ParkedOrder(models.Model):
@@ -978,6 +1000,141 @@ class StockOutReason(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+# ─── Upsell suggestions ──────────────────────────────────────────────────────
+# "Customers who ordered this also ordered…", surfaced to the cashier in the
+# POS product column.  Two tables with deliberately opposite lifecycles:
+# ``SuggestionRule`` is machine-generated and rewritten wholesale by the
+# ``mine_suggestions`` cron; ``SuggestionOverride`` is hand-made by an admin and
+# never touched by the job.  Keeping them apart is what lets the job truncate
+# freely without ever destroying a human decision.
+
+class SuggestionRule(models.Model):
+    """One mined "if the cart holds X, suggest Y" rule.
+
+    Populated by ``manage.py mine_suggestions`` from real basket history, in
+    three tiers that form a fallback ladder at serve time:
+
+      * ``rule``    — an association rule from the Apriori algorithm
+                      (``efficient-apriori``).  Its unique contribution over
+                      the tier below is *multi-item* antecedents
+                      ({Latte, Croissant} → Cookie), which plain counting
+                      cannot cheaply give you.  Gated behind a basket-count
+                      threshold, so at low volume this tier is simply empty.
+      * ``pair``    — pairwise co-occurrence lift.  Produces useful output at
+                      volumes where Apriori can't clear its own thresholds, so
+                      in practice this is the tier that carries the feature.
+      * ``popular`` — branch top sellers.  The cold-start floor; works from the
+                      very first order ever rung up.
+
+    ``score`` is only comparable *within* a kind, which is why the endpoint
+    walks the tiers in order rather than sorting the whole table at once.
+    """
+    KIND_CHOICES = [
+        ("rule", "Association rule"),
+        ("pair", "Pairwise lift"),
+        ("popular", "Popularity"),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="suggestion_rules",
+        null=True, blank=True,
+    )
+    kind = models.CharField(max_length=8, choices=KIND_CHOICES, default="pair")
+
+    # Sorted product UUIDs joined by "|" — "" for the popularity tier, which
+    # has no antecedent.  A joined string rather than a Postgres ArrayField
+    # because the test settings run on SQLite, and because it turns the
+    # subset lookup into one plain ``__in`` against a btree index.
+    antecedent_key = models.CharField(max_length=80, blank=True, default="")
+    antecedent_size = models.IntegerField(default=0)
+
+    # CASCADE deliberately: a rule pointing at a deleted product is garbage,
+    # not history worth keeping.
+    consequent = models.ForeignKey(
+        "Product", on_delete=models.CASCADE, related_name="+",
+    )
+
+    support = models.FloatField(default=0)       # P(antecedent ∪ consequent)
+    confidence = models.FloatField(default=0)    # P(consequent | antecedent)
+    lift = models.FloatField(default=0)          # 1.0 == statistically independent
+    basket_count = models.IntegerField(default=0)  # the honest sample size
+    score = models.FloatField(default=0)         # what the endpoint sorts on
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-score"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "kind", "antecedent_key", "consequent"],
+                name="uniq_suggestion_rule",
+            ),
+        ]
+        # Exactly the serving access path: filter branch + antecedent_key__in,
+        # take the best scores.  ``kind`` is deliberately absent — the endpoint
+        # buckets by it in Python, and the job rewrites this table wholesale so
+        # every extra index is pure write cost.
+        indexes = [models.Index(fields=["branch", "antecedent_key", "-score"])]
+
+    def __str__(self) -> str:
+        return f"{self.kind}: {self.antecedent_key or '*'} → {self.consequent_id}"
+
+
+class SuggestionOverride(models.Model):
+    """An admin's manual "always suggest this" / "never suggest this".
+
+    Exists because mined rules need history and a new branch has none, and
+    because someone who runs the shop knows things the till has never seen —
+    that the new pastry needs pushing, that nobody wants bottled water offered.
+
+    A block always beats a pin.  Both are the admin's own instruction, but
+    "never do this" is the safer one to honour when they contradict.
+    """
+    MODE_CHOICES = [("pin", "Always suggest"), ("block", "Never suggest")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="suggestion_overrides",
+    )
+    mode = models.CharField(max_length=8, choices=MODE_CHOICES, default="pin")
+
+    # "when the cart contains this" — NULL means "whatever is in the cart".
+    # CASCADE rather than SET_NULL: SET_NULL would silently promote a scoped
+    # rule into an unconditional one the day its trigger product is deleted.
+    trigger = models.ForeignKey(
+        "Product", on_delete=models.CASCADE, related_name="+",
+        null=True, blank=True,
+    )
+    product = models.ForeignKey(
+        "Product", on_delete=models.CASCADE, related_name="+",
+    )
+    sort_order = models.IntegerField(default=0)
+    note = models.CharField(max_length=200, blank=True, default="")
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sort_order", "created_at"]
+        # Two partial constraints rather than one: Django 4.2 on Postgres
+        # treats NULLs as distinct, so a single constraint spanning ``trigger``
+        # would not stop the same unconditional block being added twice.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "mode", "trigger", "product"],
+                condition=models.Q(trigger__isnull=False),
+                name="uniq_suggestion_override_scoped",
+            ),
+            models.UniqueConstraint(
+                fields=["branch", "mode", "product"],
+                condition=models.Q(trigger__isnull=True),
+                name="uniq_suggestion_override_global",
+            ),
+        ]
+        indexes = [models.Index(fields=["branch", "active"])]
+
+    def __str__(self) -> str:
+        return f"{self.mode} {self.product_id}"
 
 
 # ─── Peak (full tax-invoice) integration ────────────────────────────────────
