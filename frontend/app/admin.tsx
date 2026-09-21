@@ -5246,7 +5246,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
     >
       <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
       {showList && (
-        <Panel style={[styles.setNav, !isWide && { width: "100%", flex: 1 }]}>
+        <Panel style={isWide ? styles.setNav : styles.setNavFull}>
           <ScrollView showsVerticalScrollIndicator={false}>
             {visibleSections.map((sec, i) => {
               const on = isWide && active === sec.key;
@@ -6624,6 +6624,12 @@ const styles = StyleSheet.create({
 
   // Settings
   setNav: { width: 262, flexGrow: 0, flexShrink: 0 },
+  // The same list on a phone, where it is the whole screen. Swapped for
+  // `setNav` rather than layered over it: a `flex: 1` merged on top keeps
+  // that row's flexGrow/flexShrink zeros and contributes only a 0 basis, so
+  // the panel resolves to no height at all in the stacked column — which is
+  // how this page came to be a blank screen with one hairline on it.
+  setNavFull: { width: "100%", flex: 1, minHeight: 0 },
   setRow: {
     flexDirection: "row",
     alignItems: "center",
