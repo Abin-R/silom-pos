@@ -139,6 +139,21 @@ class Command(BaseCommand):
             branches = branches.filter(id=sel) if _looks_like_uuid(sel) else \
                 branches.filter(name__iexact=sel)
 
+        # The learned tiers are mined ONCE, across every branch's history, and
+        # served everywhere.  Only one branch rings up enough multi-item sales
+        # to discover anything on its own; pooling is what lets the other
+        # eleven benefit from what the busy one already knows.  Safe to pool
+        # because the catalogues are near-identical — 10 of 12 branches carry
+        # the same 52 products, and rules are keyed by name.
+        if not opts['popular_only']:
+            try:
+                self._report_global(self._mine_global(since, opts), opts)
+            except Exception as e:            # noqa: BLE001
+                self.stderr.write(f'shop-wide: FAILED — {e}')
+
+        # Popularity stays per-branch: "what sells best here" is inherently
+        # local, and pooling it would recommend a mall pop-up's bestseller to
+        # a coffee shop that has never stocked it.
         for branch in branches.order_by('name'):
             try:
                 stats = self._mine_branch(branch, since, opts)
@@ -151,7 +166,60 @@ class Command(BaseCommand):
         if opts['report']:
             self._attribution_report(since, opts)
 
-    # ── One branch ──────────────────────────────────────────────────────
+    # ── The whole shop, pooled ──────────────────────────────────────────
+    def _mine_global(self, since, opts):
+        """Pairings learned from every branch's receipts at once.
+
+        Written with ``branch=None`` and keyed by product name, so every
+        branch's till can use them and each one resolves a suggestion against
+        its own catalogue.
+        """
+        baskets = _load_baskets(None, since)
+        n = len(baskets)
+        multi = [b for b in baskets if len(b) >= 2]
+        singles = Counter()
+        for basket in baskets:
+            singles.update(basket)
+
+        rows = list(_pair_rows(None, multi, singles, n))
+        stats = {
+            'baskets': n, 'multi_item': len(multi),
+            'median_size': _median([len(b) for b in baskets]),
+            'pairs': len(rows), 'rules': 0, 'apriori': 'skipped',
+        }
+        if len(multi) >= MIN_BASKETS_FOR_MINING:
+            rule_rows, note = _rule_rows(None, multi)
+            rows.extend(rule_rows)
+            stats['rules'] = len(rule_rows)
+            stats['apriori'] = note
+        else:
+            stats['apriori'] = f'gated (multi<{MIN_BASKETS_FOR_MINING})'
+
+        rows = rows[:MAX_ROWS_PER_BRANCH]
+        stats['written'] = 0 if opts['dry_run'] else len(rows)
+        if opts['dry_run']:
+            stats['would_write'] = len(rows)
+            return stats
+
+        with transaction.atomic():
+            with audit.pause():
+                SuggestionRule.objects.filter(
+                    branch__isnull=True).exclude(kind='popular').delete()
+                SuggestionRule.objects.bulk_create(rows, batch_size=500)
+        return stats
+
+    def _report_global(self, st, opts):
+        if opts['json']:
+            self.stdout.write(json.dumps({'branch': '(shop-wide)', **st}))
+            return
+        self.stdout.write(
+            f"{'SHOP-WIDE':<16} baskets={st['baskets']:<6} "
+            f"multi={st['multi_item']:<5} median={st['median_size']:<4} "
+            f"rules={st['rules']:<4} pairs={st['pairs']:<4} "
+            f"apriori={st['apriori']}"
+        )
+
+    # ── One branch: popularity only ─────────────────────────────────────
     def _mine_branch(self, branch, since, opts):
         baskets = _load_baskets(branch, since)
         n = len(baskets)
@@ -169,21 +237,8 @@ class Command(BaseCommand):
             'rules': 0,
             'pairs': 0,
             'popular': len(rows),
-            'apriori': 'skipped',
+            'apriori': 'shop-wide',
         }
-
-        if not opts['popular_only']:
-            pair_rows = list(_pair_rows(branch, multi, singles, n))
-            rows.extend(pair_rows)
-            stats['pairs'] = len(pair_rows)
-
-            if len(multi) >= MIN_BASKETS_FOR_MINING:
-                rule_rows, note = _rule_rows(branch, multi)
-                rows.extend(rule_rows)
-                stats['rules'] = len(rule_rows)
-                stats['apriori'] = note
-            else:
-                stats['apriori'] = f'gated (multi<{MIN_BASKETS_FOR_MINING})'
 
         rows = rows[:MAX_ROWS_PER_BRANCH]
         stats['written'] = len(rows)
@@ -198,10 +253,10 @@ class Command(BaseCommand):
             # human needs.  SuggestionRule is in audit.NEVER already; pausing
             # is belt-and-braces against a future registration.
             with audit.pause():
-                qs = SuggestionRule.objects.filter(branch=branch)
-                if opts['popular_only']:
-                    qs = qs.filter(kind='popular')
-                qs.delete()
+                # Only this branch's popularity rows; the pooled pairings
+                # live on branch=None and are rewritten by _mine_global.
+                SuggestionRule.objects.filter(
+                    branch=branch, kind='popular').delete()
                 SuggestionRule.objects.bulk_create(rows, batch_size=500)
         return stats
 
@@ -259,22 +314,32 @@ class Command(BaseCommand):
 
 
 # ── Basket loading ──────────────────────────────────────────────────────────
+def _norm(name):
+    """The token a rule is keyed by.
+
+    Case- and whitespace-insensitive so "Choco Gems pop" and "Choco Gems Pop"
+    are one product rather than two half-learned ones.
+    """
+    return (name or "").strip().casefold()
+
+
 def _load_baskets(branch, since):
-    """Every multi-line sale as a set of product ids.
+    """Every multi-line sale as a set of product *names*.
+
+    ``branch=None`` loads the whole estate, which is what the learned tiers
+    are mined from.
 
     One query, one join, bounded memory.  ``.exclude(status='cancel')`` matches
     every other report in this project — a voided bill is not evidence of
     anything a guest wanted.
     """
+    qs = OrderItem.objects.filter(order__created_at__gte=since).exclude(
+        order__status='cancel')
+    if branch is not None:
+        qs = qs.filter(order__branch=branch)
     rows = (
-        OrderItem.objects
-        .filter(
-            order__branch=branch,
-            order__created_at__gte=since,
-            product_id__isnull=False,
-        )
-        .exclude(order__status='cancel')
-        .values_list('order_id', 'product_id')
+        qs.exclude(name='')
+        .values_list('order_id', 'name')
         .order_by('order_id')
         .iterator(chunk_size=5000)
     )
@@ -282,17 +347,17 @@ def _load_baskets(branch, since):
     for _order_id, group in itertools.groupby(rows, key=lambda r: r[0]):
         # A set, so a product that somehow landed on two lines of one bill is
         # one observation, not two.
-        baskets.append({pid for _oid, pid in group})
+        baskets.append({_norm(n) for _oid, n in group})
     return baskets
 
 
 # ── Tier 1: popularity ──────────────────────────────────────────────────────
 def _popular_rows(branch, singles, n):
-    for pid, count in singles.most_common(TOP_POPULAR):
+    for name, count in singles.most_common(TOP_POPULAR):
         yield SuggestionRule(
             branch=branch, kind='popular',
             antecedent_key='', antecedent_size=0,
-            consequent_id=pid,
+            consequent_name=name,
             support=count / n if n else 0,
             confidence=0, lift=0,
             basket_count=count,
@@ -312,7 +377,7 @@ def _pair_rows(branch, multi, singles, n):
         return
     pairs = Counter()
     for basket in multi:
-        for combo in itertools.combinations(sorted(basket, key=str), 2):
+        for combo in itertools.combinations(sorted(basket), 2):
             pairs[combo] += 1
 
     per_antecedent = defaultdict(int)
@@ -331,8 +396,8 @@ def _pair_rows(branch, multi, singles, n):
             per_antecedent[lhs] += 1
             yield SuggestionRule(
                 branch=branch, kind='pair',
-                antecedent_key=str(lhs), antecedent_size=1,
-                consequent_id=rhs,
+                antecedent_key=lhs, antecedent_size=1,
+                consequent_name=rhs,
                 support=count / n,
                 confidence=count / singles[lhs] if singles[lhs] else 0,
                 lift=lift,
@@ -363,7 +428,7 @@ def _rule_rows(branch, multi):
     except ImportError:
         return [], 'efficient-apriori not installed'
 
-    transactions = [tuple(str(pid) for pid in basket) for basket in multi]
+    transactions = [tuple(basket) for basket in multi]
     if not transactions:
         return [], 'no multi-item baskets'
 
@@ -384,14 +449,14 @@ def _rule_rows(branch, multi):
         size = len(rule.lhs)
         if size > 2:
             continue
-        key = '|'.join(sorted(str(x) for x in rule.lhs))
+        key = '|'.join(sorted(rule.lhs))
         if per_antecedent[key] >= MAX_PER_ANTECEDENT:
             continue
         per_antecedent[key] += 1
         rows.append(SuggestionRule(
             branch=branch, kind='rule',
             antecedent_key=key, antecedent_size=size,
-            consequent_id=rule.rhs[0],
+            consequent_name=rule.rhs[0],
             support=rule.support,
             confidence=rule.confidence,
             lift=rule.lift,

@@ -2319,16 +2319,21 @@ def _suggestion_payload(product, reason, because_id='', because_name=''):
     }
 
 
-def _antecedent_keys(cart_ids):
+def _norm_name(name):
+    """Match ``mine_suggestions._norm`` exactly, or nothing ever looks up."""
+    return (name or '').strip().casefold()
+
+
+def _antecedent_keys(cart_names):
     """Every size-1 and size-2 subset of the cart, as sorted "a|b" strings.
 
     Mirrors exactly how ``mine_suggestions`` writes the key, which is the whole
     reason the lookup can be one indexed ``__in`` instead of a scan.
     """
-    keys = [str(pid) for pid in cart_ids]
-    for i, a in enumerate(cart_ids):
-        for b in cart_ids[i + 1:]:
-            keys.append('|'.join(sorted((str(a), str(b)))))
+    keys = list(cart_names)
+    for i, a in enumerate(cart_names):
+        for b in cart_names[i + 1:]:
+            keys.append('|'.join(sorted((a, b))))
     return keys
 
 
@@ -2376,21 +2381,34 @@ def suggestions(request):
     cart_ids = cart_ids[-SUGGESTION_CART_CAP:]
 
     cart_set = set(cart_ids)
-    keys = _antecedent_keys(cart_ids) + ['']   # '' is the popularity tier
 
-    # ── Query 1: the mined rules ────────────────────────────────────────
-    # Hits Index(branch, antecedent_key, -score) on its leading columns.
-    # select_related pulls the consequent Product in the same query — the
-    # difference between 3 queries and 3 + N.
+    # ── Query 1: name the cart, so pooled rules can be looked up ────────
+    # Rules are keyed by product name rather than by a branch's own Product
+    # row, which is what lets a pairing learned at one branch be served at
+    # another.  The price is this translation step.
+    cart_products = list(
+        Product.objects.filter(branch=branch, id__in=cart_set)
+        .only('id', 'name')
+    )
+    cart_names = []
+    for p in cart_products:
+        nm = _norm_name(p.name)
+        if nm and nm not in cart_names:
+            cart_names.append(nm)
+    keys = _antecedent_keys(cart_names) + ['']   # '' is the popularity tier
+
+    # ── Query 2: the mined rules ────────────────────────────────────────
+    # branch=NULL carries the shop-wide pairings, branch=<this one> its own
+    # popularity. Hits Index(branch, antecedent_key, -score).
     rows = list(
         SuggestionRule.objects
-        .filter(branch=branch, antecedent_key__in=keys)
-        .exclude(consequent_id__in=cart_set)
-        .select_related('consequent')
-        .order_by('-score')[:60]
+        .filter(Q(branch=branch) | Q(branch__isnull=True))
+        .filter(antecedent_key__in=keys)
+        .exclude(consequent_name__in=cart_names)
+        .order_by('-score')[:80]
     )
 
-    # ── Query 2: the admin's own instructions ───────────────────────────
+    # ── Query 3: the admin's own instructions ───────────────────────────
     overrides = list(
         SuggestionOverride.objects
         .filter(branch=branch, active=True)
@@ -2424,20 +2442,41 @@ def suggestions(request):
     for row in rows:
         by_kind.setdefault(row.kind, []).append(row)
 
+    # ── Query 4: resolve suggested names to THIS branch's catalogue ─────
+    # The filter is the point of the whole design: a pooled rule can only ever
+    # surface something the serving branch actually stocks, is still selling,
+    # and has not run out of.
+    wanted = {r.consequent_name for r in rows}
+    local = {}
+    if wanted:
+        for p in Product.objects.filter(branch=branch, active=True):
+            nm = _norm_name(p.name)
+            if nm in wanted and nm not in local:
+                if p.par_level and p.par_level > 0 and (p.stock or 0) <= 0:
+                    continue          # tracked and out of stock — unsellable
+                local[nm] = p
+
+    # Which cart item triggered a single-item rule, for the "goes with" label.
+    trigger_by_name = {_norm_name(p.name): p for p in cart_products}
+
     for tier in SUGGESTION_TIERS:
         for row in by_kind.get(tier, []):
             if len(picked) >= limit:
                 break
-            if row.consequent_id in chosen_ids or not row.consequent.active:
+            product = local.get(row.consequent_name)
+            if product is None or product.id in chosen_ids:
                 continue
+            trigger = (trigger_by_name.get(row.antecedent_key)
+                       if row.antecedent_size == 1 else None)
             picked.append(_suggestion_payload(
-                row.consequent,
+                product,
                 SUGGESTION_REASONS.get(row.kind, 'popular'),
                 # Only a single-item antecedent names one thing the chip can
                 # point at; {Latte, Croissant} → Cookie has no single "because".
-                because_id=row.antecedent_key if row.antecedent_size == 1 else '',
+                because_id=str(trigger.id) if trigger is not None else '',
+                because_name=trigger.name if trigger is not None else '',
             ))
-            chosen_ids.add(row.consequent_id)
+            chosen_ids.add(product.id)
             source = source or tier
         if len(picked) >= limit:
             break

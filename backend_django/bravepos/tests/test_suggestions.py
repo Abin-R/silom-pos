@@ -58,13 +58,14 @@ class MiningTests(TestCase):
 
         _mine()
 
+        # Learned tiers are pooled across the shop, so branch is NULL.
         forward = SuggestionRule.objects.get(
-            branch=self.branch, kind='pair',
-            antecedent_key=str(self.latte.id), consequent=self.croissant,
+            branch__isnull=True, kind='pair',
+            antecedent_key='latte', consequent_name='croissant',
         )
         reverse = SuggestionRule.objects.get(
-            branch=self.branch, kind='pair',
-            antecedent_key=str(self.croissant.id), consequent=self.latte,
+            branch__isnull=True, kind='pair',
+            antecedent_key='croissant', consequent_name='latte',
         )
         self.assertGreater(forward.lift, 1.0)
         self.assertGreater(reverse.lift, 1.0)
@@ -80,7 +81,7 @@ class MiningTests(TestCase):
         _mine()
 
         self.assertEqual(
-            SuggestionRule.objects.filter(branch=self.branch, kind='rule').count(), 0,
+            SuggestionRule.objects.filter(branch__isnull=True, kind='rule').count(), 0,
         )
         self.assertTrue(
             SuggestionRule.objects.filter(branch=self.branch, kind='popular').exists(),
@@ -104,7 +105,7 @@ class MiningTests(TestCase):
         _mine()
 
         multi = SuggestionRule.objects.filter(
-            branch=self.branch, kind='rule', antecedent_size=2,
+            branch__isnull=True, kind='rule', antecedent_size=2,
         )
         self.assertTrue(multi.exists(), 'expected at least one 2-item antecedent')
 
@@ -127,10 +128,10 @@ class MiningTests(TestCase):
             _mine()
 
         self.assertEqual(
-            SuggestionRule.objects.filter(branch=self.branch, kind='rule').count(), 0,
+            SuggestionRule.objects.filter(branch__isnull=True, kind='rule').count(), 0,
         )
         self.assertTrue(
-            SuggestionRule.objects.filter(branch=self.branch, kind='pair').exists(),
+            SuggestionRule.objects.filter(branch__isnull=True, kind='pair').exists(),
         )
 
     def test_cancelled_orders_are_not_evidence(self):
@@ -141,7 +142,7 @@ class MiningTests(TestCase):
         _mine()
 
         self.assertEqual(
-            SuggestionRule.objects.filter(branch=self.branch, kind='pair').count(), 0,
+            SuggestionRule.objects.filter(branch__isnull=True, kind='pair').count(), 0,
         )
 
     def test_window_excludes_stale_history(self):
@@ -152,7 +153,7 @@ class MiningTests(TestCase):
         _mine(days=180)
 
         self.assertEqual(
-            SuggestionRule.objects.filter(branch=self.branch, kind='pair').count(), 0,
+            SuggestionRule.objects.filter(branch__isnull=True, kind='pair').count(), 0,
         )
 
     def test_rewrite_is_scoped_to_one_branch(self):
@@ -189,12 +190,12 @@ class MiningTests(TestCase):
         for _ in range(20):
             make_order(self.branch, [self.latte, self.croissant])
         _mine()
-        pairs = SuggestionRule.objects.filter(branch=self.branch, kind='pair').count()
+        pairs = SuggestionRule.objects.filter(branch__isnull=True, kind='pair').count()
 
         _mine(popular_only=True)
 
         self.assertEqual(
-            SuggestionRule.objects.filter(branch=self.branch, kind='pair').count(), pairs,
+            SuggestionRule.objects.filter(branch__isnull=True, kind='pair').count(), pairs,
         )
 
     def test_dry_run_writes_nothing(self):
@@ -258,12 +259,20 @@ class EndpointTests(TestCase):
         )
         self.auth = {'HTTP_AUTHORIZATION': f'Bearer {self.session.token}'}
 
-    def _rule(self, antecedent, consequent, kind='pair', score=5.0):
+    def _rule(self, antecedent, consequent, kind='pair', score=5.0, branch=...):
+        """A mined rule, keyed by product name.
+
+        Learned tiers live on ``branch=None`` (shop-wide); ``popular`` is
+        per-branch.  Pass ``branch=`` explicitly to place a row deliberately.
+        """
+        if branch is ...:
+            branch = self.branch if kind == 'popular' else None
         return SuggestionRule.objects.create(
-            branch=self.branch, kind=kind,
-            antecedent_key=str(antecedent.id) if antecedent else '',
+            branch=branch, kind=kind,
+            antecedent_key=antecedent.name.strip().casefold() if antecedent else '',
             antecedent_size=1 if antecedent else 0,
-            consequent=consequent, lift=score, score=score, basket_count=20,
+            consequent_name=consequent.name.strip().casefold(),
+            lift=score, score=score, basket_count=20,
         )
 
     def _post(self, product_ids, **body):
@@ -353,15 +362,42 @@ class EndpointTests(TestCase):
         body = self._post([self.latte.id]).json()
         self.assertEqual(body, {'suggestions': [], 'source': 'off'})
 
-    def test_rules_are_branch_scoped(self):
-        other = make_branch(name='Biohouse')
-        o_latte = make_product(other, name='Latte')
+    def test_a_pairing_learned_anywhere_is_served_here(self):
+        """The whole reason pooling exists.
+
+        Only one branch rings up enough multi-item sales to learn anything; if
+        rules stayed branch-scoped the other eleven could never show a real
+        pairing, only bestsellers."""
+        self._rule(self.latte, self.croissant)    # branch=None, shop-wide
+        names = [s['name'] for s in self._post([self.latte.id]).json()['suggestions']]
+        self.assertIn('Croissant', names)
+
+    def test_a_pooled_rule_cannot_suggest_what_this_branch_does_not_stock(self):
+        """The safeguard that makes pooling safe.
+
+        A rule learned where "Mooncake" sells must not offer it at a branch
+        that has never carried one — the cashier would be pushing something
+        they cannot ring up."""
+        elsewhere = make_branch(name='Biohouse')
+        exotic = make_product(elsewhere, name='Mooncake')
+        SuggestionRule.objects.create(
+            branch=None, kind='pair',
+            antecedent_key='latte', antecedent_size=1,
+            consequent_name=exotic.name.strip().casefold(), lift=9, score=9,
+        )
+        names = [s['name'] for s in self._post([self.latte.id]).json()['suggestions']]
+        self.assertNotIn('Mooncake', names)
+
+    def test_another_branchs_popularity_does_not_leak(self):
+        """Popularity stays local — "what sells best here" means nothing pooled."""
+        other = make_branch(name='Elsewhere')
         o_bun = make_product(other, name='Bun')
         SuggestionRule.objects.create(
-            branch=other, kind='pair', antecedent_key=str(o_latte.id),
-            antecedent_size=1, consequent=o_bun, lift=9, score=9,
+            branch=other, kind='popular', antecedent_key='', antecedent_size=0,
+            consequent_name=o_bun.name.strip().casefold(), lift=9, score=9,
         )
-        self.assertEqual(self._post([self.latte.id]).json()['suggestions'], [])
+        names = [s['name'] for s in self._post([self.latte.id]).json()['suggestions']]
+        self.assertNotIn('Bun', names)
 
     def test_a_junk_payload_degrades_quietly(self):
         """This runs on every cart change; a malformed id must not 500 behind
@@ -383,10 +419,14 @@ class EndpointTests(TestCase):
         self.assertLessEqual(len(got), 6)
 
     def test_query_budget(self):
-        """Two queries plus the session lookup.  This is the test that catches
-        a future N+1 on the consequent's product row."""
+        """Four queries plus the session lookup: name the cart, read the rules,
+        read the overrides, resolve the names to this branch's products.
+
+        Two more than the branch-scoped design cost — that is the price of
+        pooling, and it is a fixed price, not per-suggestion.  This test is
+        what catches a future N+1 creeping into the resolve step."""
         self._rule(self.latte, self.croissant)
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(6):
             self._post([self.latte.id])
 
     def test_status_is_admin_only(self):

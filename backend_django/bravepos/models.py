@@ -1028,6 +1028,14 @@ class SuggestionRule(models.Model):
       * ``popular`` — branch top sellers.  The cold-start floor; works from the
                       very first order ever rung up.
 
+    ``branch`` is NULL for the two learned tiers: pairings are mined once
+    across every branch's history and served everywhere.  Only one branch has
+    enough multi-item receipts to learn anything on its own, so scoping the
+    learning per-branch would leave the other eleven permanently ignorant —
+    the shop knows things no single quiet branch can discover alone.
+    ``popular`` stays per-branch, because "what sells best here" is inherently
+    local and means nothing pooled.
+
     ``score`` is only comparable *within* a kind, which is why the endpoint
     walks the tiers in order rather than sorting the whole table at once.
     """
@@ -1043,18 +1051,26 @@ class SuggestionRule(models.Model):
     )
     kind = models.CharField(max_length=8, choices=KIND_CHOICES, default="pair")
 
-    # Sorted product UUIDs joined by "|" — "" for the popularity tier, which
-    # has no antecedent.  A joined string rather than a Postgres ArrayField
-    # because the test settings run on SQLite, and because it turns the
-    # subset lookup into one plain ``__in`` against a btree index.
-    antecedent_key = models.CharField(max_length=80, blank=True, default="")
+    # Sorted, normalised product *names* joined by "|" — "" for the popularity
+    # tier, which has no antecedent.
+    #
+    # Names rather than product ids because a rule has to cross branches.  Each
+    # branch owns a separate Product row for the same item, so an id-keyed rule
+    # learned at Krabi could never be applied at Silom.  Names are what the two
+    # have in common: 10 of the 12 branches carry byte-identical 52-product
+    # catalogues.  ``OrderItem.name`` is a snapshot, so this also survives a
+    # product being deleted.
+    #
+    # A joined string rather than a Postgres ArrayField because the test
+    # settings run on SQLite, and because it turns the subset lookup into one
+    # plain ``__in`` against a btree index.
+    antecedent_key = models.CharField(max_length=420, blank=True, default="")
     antecedent_size = models.IntegerField(default=0)
 
-    # CASCADE deliberately: a rule pointing at a deleted product is garbage,
-    # not history worth keeping.
-    consequent = models.ForeignKey(
-        "Product", on_delete=models.CASCADE, related_name="+",
-    )
+    # The suggested item, again by normalised name.  Resolved to the *serving*
+    # branch's own Product row at request time, which is what stops a branch
+    # being offered something it does not stock.
+    consequent_name = models.CharField(max_length=200, blank=True, default="")
 
     support = models.FloatField(default=0)       # P(antecedent ∪ consequent)
     confidence = models.FloatField(default=0)    # P(consequent | antecedent)
@@ -1067,7 +1083,7 @@ class SuggestionRule(models.Model):
         ordering = ["-score"]
         constraints = [
             models.UniqueConstraint(
-                fields=["branch", "kind", "antecedent_key", "consequent"],
+                fields=["branch", "kind", "antecedent_key", "consequent_name"],
                 name="uniq_suggestion_rule",
             ),
         ]
@@ -1078,7 +1094,7 @@ class SuggestionRule(models.Model):
         indexes = [models.Index(fields=["branch", "antecedent_key", "-score"])]
 
     def __str__(self) -> str:
-        return f"{self.kind}: {self.antecedent_key or '*'} → {self.consequent_id}"
+        return f"{self.kind}: {self.antecedent_key or '*'} → {self.consequent_name}"
 
 
 class SuggestionOverride(models.Model):
