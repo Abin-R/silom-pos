@@ -194,6 +194,47 @@ class MemberLookupTests(ApiTestCase):
         self.assertEqual([r["redeemable"] for r in rewards], [True, False])
         self.assertEqual(rewards[0]["title"], "Free Americano")
 
+    def test_a_minimum_order_amount_reaches_the_till(self):
+        """Some vouchers cannot be spent below a threshold set in the CRM.
+
+        The CRM enforces it by dropping the voucher id off the order without
+        saying anything, so a till that could not see the threshold would let a
+        cashier hand the reward over with nothing recording it."""
+        body = member_body(to_confirm=[voucher(8812, min_order_amount="500.00")])
+        with mock.patch("bravepos.crm.lookup_member", return_value=body):
+            rewards = self.lookup().json()["rewards"]
+        self.assertEqual(rewards[0]["min_order_amount"], 500.0)
+
+    def test_a_numeric_minimum_is_read_too(self):
+        """Money reaches us as decimal strings elsewhere, but this field is
+        unset on every voucher live today — its wire type is unproven, so both
+        shapes are accepted rather than guessed at."""
+        body = member_body(to_confirm=[voucher(8812, min_order_amount=500)])
+        with mock.patch("bravepos.crm.lookup_member", return_value=body):
+            rewards = self.lookup().json()["rewards"]
+        self.assertEqual(rewards[0]["min_order_amount"], 500.0)
+
+    def test_no_minimum_is_null_and_never_zero(self):
+        """Most vouchers carry no threshold. Turning that into 0 would read as
+        a real minimum that every bill happens to clear — harmless until the
+        day a comparison changes, and invisible when it does."""
+        body = member_body(to_confirm=[voucher(8812)],
+                           available=[voucher(9001, min_order_amount=None)])
+        with mock.patch("bravepos.crm.lookup_member", return_value=body):
+            rewards = self.lookup().json()["rewards"]
+        self.assertIsNone(rewards[0]["min_order_amount"])
+        self.assertIsNone(rewards[1]["min_order_amount"])
+
+    def test_an_unreadable_minimum_is_not_enforced(self):
+        """A threshold we cannot parse is one we must not apply: guessing high
+        locks a cashier out of a reward the customer is entitled to, and there
+        is no way for them to tell why."""
+        for junk in ("", "lots", {}, []):
+            body = member_body(to_confirm=[voucher(8812, min_order_amount=junk)])
+            with mock.patch("bravepos.crm.lookup_member", return_value=body):
+                rewards = self.lookup().json()["rewards"]
+            self.assertIsNone(rewards[0]["min_order_amount"], f"for {junk!r}")
+
     def test_unknown_number_is_registered_on_the_spot(self):
         """The till's customer list is the front door to the programme."""
         with mock.patch("bravepos.crm.lookup_member",

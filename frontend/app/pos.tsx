@@ -30,10 +30,16 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
 import qrcode from "qrcode-generator";
 import { C, MONO, R } from "../lib/theme";
-import { showAlert, confirmDialog } from "../lib/dialog";
+import { showAlert, confirmDialog, showToast } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
 import { methodLabel } from "../lib/payments";
-import { useLoyalty, type Loyalty, type LoyaltyReward } from "../lib/loyalty";
+import {
+  useLoyalty,
+  meetsMinimum,
+  rewardsBelowMinimum,
+  type Loyalty,
+  type LoyaltyReward,
+} from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -460,6 +466,32 @@ export default function POS() {
   // twice. A ref rather than state: both touches in one frame would read the
   // same stale state value and sail past a state-based guard.
   const payingRef = useRef(false);
+
+  /**
+   * Open the payment screen, unless a ticked reward has been left stranded.
+   *
+   * The check belongs here and not only on the tick: the basket moves after a
+   * reward is ticked — a line removed, a quantity edited — and a bill that
+   * cleared the threshold a moment ago may not any more. The CRM enforces the
+   * minimum itself and refuses by dropping the voucher id off the order
+   * without a word, so letting this through means the reward is handed across
+   * the counter with nothing recording it.
+   */
+  const startPayment = (afterClose?: () => void) => {
+    const stranded = rewardsBelowMinimum(loyalty, total);
+    if (stranded.length) {
+      const r = stranded[0];
+      showToast(
+        tr("pos.reward_blocks_checkout", {
+          title: r.title,
+          amount: THB(r.min_order_amount ?? 0),
+        }),
+      );
+      return;
+    }
+    afterClose?.();
+    setShowPayment(true);
+  };
 
   const handlePaySuccess = async (
     method: string,
@@ -1017,7 +1049,7 @@ export default function POS() {
               onClear={clearCart}
               onRemoveCustomer={() => setCustomer(null)}
               onPickCustomer={() => setShowCustomer(true)}
-              onPay={() => setShowPayment(true)}
+              onPay={() => startPayment()}
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
@@ -1162,10 +1194,10 @@ export default function POS() {
                 setShowCart(false);
                 setShowCustomer(true);
               }}
-              onPay={() => {
-                setShowCart(false);
-                setShowPayment(true);
-              }}
+              // The sheet has to close before the payment modal opens — see
+              // the note on onPickCustomer above — but only once the bill has
+              // actually passed, or the sheet closes on a refusal.
+              onPay={() => startPayment(() => setShowCart(false))}
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
@@ -1439,9 +1471,13 @@ function ProductCard({
  */
 function LoyaltyPanel({
   loyalty,
+  orderTotal,
   inScroller,
 }: {
   loyalty: Loyalty;
+  /** The bill as it stands. Some rewards cannot be spent below a minimum, and
+   *  the cashier has to be told before they hand one over, not after. */
+  orderTotal: number;
   /** The panel already sits in a list that scrolls. Its own bounded scroller
    *  then buys nothing and costs a nested gesture surface, so the rewards
    *  render at full height and the list underneath does the scrolling. */
@@ -1597,7 +1633,21 @@ function LoyaltyPanel({
                   key={r.id}
                   reward={r}
                   checked={selected.includes(r.id)}
-                  onToggle={() => toggle(r.id)}
+                  belowMinimum={!meetsMinimum(r, orderTotal)}
+                  onToggle={() => {
+                    // Unticking is always allowed: a bill that has dropped
+                    // below the threshold is exactly when the cashier needs to
+                    // be able to take the reward back off it.
+                    if (selected.includes(r.id) || meetsMinimum(r, orderTotal)) {
+                      toggle(r.id);
+                      return;
+                    }
+                    showToast(
+                      tr("pos.reward_needs_minimum", {
+                        amount: THB(r.min_order_amount ?? 0),
+                      }),
+                    );
+                  }}
                 />
               ))}
             </RewardList>
@@ -1648,10 +1698,14 @@ function RewardList({
 function RewardRow({
   reward,
   checked,
+  belowMinimum,
   onToggle,
 }: {
   reward: LoyaltyReward;
   checked: boolean;
+  /** The bill has not reached this reward's minimum. Still rendered, and still
+   *  tappable — the tap is what explains why it will not tick. */
+  belowMinimum?: boolean;
   onToggle: () => void;
 }) {
   if (!reward.redeemable) {
@@ -1668,11 +1722,11 @@ function RewardRow({
 
   return (
     <TouchableOpacity
-      style={styles.rewardRow}
+      style={[styles.rewardRow, belowMinimum && !checked && styles.rewardRowBlocked]}
       onPress={onToggle}
       testID={`reward-${reward.id}`}
       accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
+      accessibilityState={{ checked, disabled: belowMinimum && !checked }}
     >
       <Ionicons
         name={checked ? "checkbox" : "square-outline"}
@@ -1681,8 +1735,19 @@ function RewardRow({
       />
       <View style={{ flex: 1 }}>
         <Text style={styles.rewardTitle} numberOfLines={1}>{reward.title}</Text>
-        {!!reward.detail && (
-          <Text style={styles.rewardNote} numberOfLines={2}>{reward.detail}</Text>
+        {reward.min_order_amount != null ? (
+          // The threshold outranks the marketing line here. A cashier scanning
+          // the list needs to know which rewards this bill can actually take.
+          <Text
+            style={[styles.rewardNote, belowMinimum && styles.rewardNoteBlocked]}
+            numberOfLines={1}
+          >
+            {tr("pos.reward_minimum", { amount: THB(reward.min_order_amount) })}
+          </Text>
+        ) : (
+          !!reward.detail && (
+            <Text style={styles.rewardNote} numberOfLines={2}>{reward.detail}</Text>
+          )
         )}
       </View>
     </TouchableOpacity>
@@ -1809,7 +1874,7 @@ function CartSidebar({
                   <Ionicons name="close" size={16} color={C.ink3} />
                 </TouchableOpacity>
               </View>
-              <LoyaltyPanel key={customer.id} loyalty={loyalty} inScroller />
+              <LoyaltyPanel key={customer.id} loyalty={loyalty} orderTotal={total} inScroller />
             </>
           ) : (
             // The only other way onto the customer picker is a tile under the
@@ -5002,6 +5067,10 @@ const styles = StyleSheet.create({
   // Held vouchers are the customer's to spend, not the cashier's, and the
   // dimming is what says so before anyone reaches for a control that isn't there.
   rewardRowHeld: { opacity: 0.6 },
+  // Dimmed, never hidden and never truly disabled: the row still has to be
+  // tappable, because the tap is what explains the minimum.
+  rewardRowBlocked: { opacity: 0.55 },
+  rewardNoteBlocked: { color: C.warn, fontWeight: "600" },
   rewardTitle: { fontSize: 13, fontWeight: "600", color: C.ink },
   rewardTitleHeld: { fontSize: 13, fontWeight: "500", color: C.ink2 },
   rewardNote: { fontSize: 11, color: C.ink2Soft, marginTop: 1 },

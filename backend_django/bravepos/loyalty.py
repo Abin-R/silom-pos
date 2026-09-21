@@ -38,6 +38,7 @@ say so.  ``Branch.crm_loyalty_enabled`` is the answer if the wait ever bites.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any
 
 from . import crm
@@ -66,6 +67,28 @@ def enabled_for(branch) -> bool:
 
 # ─── Looking a customer up ──────────────────────────────────────────────────
 
+def _threshold(raw: Any) -> float | None:
+    """A CRM money field as a number the till can compare a cart total against.
+
+    ``None`` means the voucher carries no threshold, and is emphatically not
+    zero — a bug that turned one into the other would gate every reward behind
+    a minimum nobody set.  Anything unparseable is treated the same way, on the
+    same reasoning: a threshold we cannot read is one we must not enforce, or a
+    CRM field arriving in an unexpected shape would silently lock cashiers out
+    of rewards the customer is entitled to.
+
+    A float rather than a Decimal because this crosses to the app as JSON and
+    is only ever compared against a cart total.  Amounts that are *filed* with
+    the CRM still go as decimal strings — see :func:`crm.record_order`.
+    """
+    if raw is None:
+        return None
+    try:
+        return float(Decimal(str(raw)))
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+
+
 def _reward(row: dict[str, Any], *, redeemable: bool) -> dict[str, Any]:
     """One voucher, flattened for the till.
 
@@ -87,6 +110,13 @@ def _reward(row: dict[str, Any], *, redeemable: bool) -> dict[str, Any]:
         # this is a badge and never a reason to hide a voucher.
         "in_redemption_window": bool(row.get("in_redemption_window")),
         "expires_at": row.get("expires_at"),
+        # The bill has to reach this before the voucher can be spent on it.
+        # Set in the CRM, enforced there too — so a cashier who is allowed to
+        # tick one under the threshold has simply had it dropped on filing,
+        # with nothing on screen to say so.  The till gates it up front for
+        # exactly that reason.  Null on every voucher live today; the feature
+        # is new, so this path has never carried a real value yet.
+        "min_order_amount": _threshold(row.get("min_order_amount")),
     }
 
 

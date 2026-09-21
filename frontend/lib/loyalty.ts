@@ -49,6 +49,17 @@ export type LoyaltyReward = {
   /** The five minutes after the customer redeemed it. A badge, not a deadline. */
   in_redemption_window: boolean;
   expires_at: string | null;
+  /**
+   * The bill has to reach this before the voucher can be spent on it. Null —
+   * which is most of them — means no threshold at all, and must never be read
+   * as zero.
+   *
+   * The CRM enforces this itself, and its way of refusing is to drop the
+   * voucher id off the order without a word. So the till checks first: a
+   * cashier who is allowed to tick one under the threshold hands the reward
+   * over and only finds out later that nothing recorded it.
+   */
+  min_order_amount: number | null;
 };
 
 export type LoyaltyMember = {
@@ -376,4 +387,33 @@ export function useLoyalty(
     openViewer,
     viewerOpening,
   };
+}
+
+/**
+ * Can this reward be spent on a bill of `orderTotal`?
+ *
+ * A voucher with no threshold always can — most have none, and `null` here
+ * means "no minimum", never zero.
+ */
+export function meetsMinimum(reward: LoyaltyReward, orderTotal: number): boolean {
+  return reward.min_order_amount == null || orderTotal >= reward.min_order_amount;
+}
+
+/**
+ * Ticked rewards the bill is no longer big enough for.
+ *
+ * Checked again at checkout rather than trusting the tick, because the basket
+ * moves after a reward is ticked: a cashier removes a line, or edits a
+ * quantity, and a bill that cleared the threshold a moment ago no longer does.
+ * The CRM would drop those voucher ids silently, so the reward would be handed
+ * over with nothing recording it.
+ */
+export function rewardsBelowMinimum(
+  loyalty: Loyalty,
+  orderTotal: number,
+): LoyaltyReward[] {
+  if (loyalty.state.status !== "ready") return [];
+  return loyalty.state.rewards.filter(
+    (r) => loyalty.selected.includes(r.id) && !meetsMinimum(r, orderTotal),
+  );
 }
