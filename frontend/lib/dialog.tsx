@@ -12,7 +12,7 @@
 // Mount <DialogHost /> once, at the root (see app/_layout.tsx).
 
 import React, { useEffect, useState } from "react";
-import { Modal, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { C, R } from "./theme";
 import { t as tr } from "./i18n";
 import { Btn } from "./ui";
@@ -67,6 +67,66 @@ export function confirmDialog(
     ]);
   });
 }
+
+// ── Toasts ──────────────────────────────────────────────────────────────
+//
+// A dialog is the wrong shape for "that won't work, and here is why". It stops
+// the cashier, takes a tap to clear, and there is a customer at the counter.
+// A toast says the same thing and gets out of the way on its own.
+//
+// It renders inside a Modal on purpose. The things that raise one — the cart
+// sheet on a phone, the payment screen — are Modals themselves, and a plain
+// view at the root of the tree renders *underneath* those on Android, so the
+// message would simply never be seen. The cost of a Modal is that it captures
+// touches for as long as it is up, so it also dismisses on any tap: a cashier
+// who wants to carry on immediately just taps, and never waits on it.
+
+const TOAST_MS = 2600;
+
+let toastListener: ((t: string | null) => void) | null = null;
+let toastPending: string | null = null;
+
+/** Brief, self-dismissing message. Not for anything that needs a decision. */
+export function showToast(message: string) {
+  if (toastListener) toastListener(message);
+  else toastPending = message;
+}
+
+export function ToastHost() {
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    toastListener = setMessage;
+    if (toastPending) {
+      setMessage(toastPending);
+      toastPending = null;
+    }
+    return () => {
+      toastListener = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (message === null) return;
+    // Keyed on the message so a second toast restarts the clock rather than
+    // inheriting what was left of the first one's.
+    const id = setTimeout(() => setMessage(null), TOAST_MS);
+    return () => clearTimeout(id);
+  }, [message]);
+
+  if (message === null) return null;
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={() => setMessage(null)}>
+      <Pressable style={s.toastWrap} onPress={() => setMessage(null)} testID="app-toast">
+        <View style={s.toast}>
+          <Text style={s.toastText}>{message}</Text>
+        </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
 
 export function DialogHost() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -155,4 +215,27 @@ const s = StyleSheet.create({
     marginTop: 10,
   },
   row: { flexDirection: "row", gap: 12, marginTop: 24 },
+
+  // Low on the screen, clear of the header and of a cashier's own hand on a
+  // tablet held at the counter. No scrim: this is a remark, not a barrier.
+  toastWrap: {
+    flex: 1,
+    justifyContent: "flex-end",
+    alignItems: "center",
+    padding: 28,
+  },
+  toast: {
+    maxWidth: 520,
+    backgroundColor: C.inkStrong,
+    borderRadius: R.control,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  toastText: {
+    color: C.surface,
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 21,
+    textAlign: "center",
+  },
 });

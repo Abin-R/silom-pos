@@ -7,7 +7,7 @@ import { Text, TextInput } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { C } from "../lib/theme";
 import { setUnauthorizedHandler } from "../lib/api";
-import { DialogHost, showAlert } from "../lib/dialog";
+import { DialogHost, showAlert, ToastHost } from "../lib/dialog";
 import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
 
@@ -91,6 +91,7 @@ function RootLayout() {
       {/* Confirmations and error messages. Mounted once, above the stack, so
           a dialog raised from any screen renders over it. */}
       <DialogHost />
+      <ToastHost />
     </SafeAreaProvider>
   );
 }
