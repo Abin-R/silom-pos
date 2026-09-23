@@ -32,6 +32,7 @@
         "buildType": "app-bundle"
       },
       "channel": "production",
+      "environment": "production",
       "env": {
         "EXPO_PUBLIC_SENTRY_ENV": "production"
       }
