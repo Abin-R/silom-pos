@@ -22,6 +22,9 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as Updates from "expo-updates";
+import * as Sentry from "@sentry/react-native";
+import Constants from "expo-constants";
 import * as ImageManipulator from "expo-image-manipulator";
 import PhoneInput from "../components/PhoneInput";
 import {
@@ -5402,6 +5405,8 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
           <StockOutReasonsSection />
         ) : active === "Language" ? (
           <LanguageSection />
+        ) : active === "Advanced" ? (
+          <AdvancedSection />
         ) : (
           <Empty
             icon="construct-outline"
@@ -5424,6 +5429,63 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
       <Text style={styles.formLabel}>{label}</Text>
       {children}
     </View>
+  );
+}
+
+// ── Settings → Advanced: prove the invisible plumbing works ──
+//
+// Two things about a till are invisible until the moment they matter: which
+// JS bundle it is actually running, and whether a crash on it ever reaches
+// anyone. Both are answerable only from the device itself — the dashboard can
+// tell you an update was *published*, not that this tablet took it.
+//
+// So: the update identity as the device sees it, and a button that puts a
+// real event through the live Sentry pipeline. `captureException` rather than
+// a thrown error on purpose — this runs on a counter during service, and
+// proving the transport works is not worth crashing a till to do.
+//
+// English rather than translated, for the same reason the install page is:
+// read by whoever is debugging a tablet, not by a cashier mid-sale.
+function AdvancedSection() {
+  useT(); // re-render when the language changes, like every other section
+  const [eventId, setEventId] = useState<string | null>(null);
+
+  const sendTestError = () => {
+    setEventId(
+      Sentry.captureException(
+        new Error("Brave POS diagnostics: test error from Settings → Advanced"),
+      ),
+    );
+  };
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+      <Text style={styles.h2}>Advanced</Text>
+
+      <Panel style={{ padding: 16 }}>
+        <KV k="App version" v={Constants.expoConfig?.version ?? "—"} />
+        <KV k="Update channel" v={Updates.channel ?? "—"} mono />
+        <KV k="Runtime version" v={Updates.runtimeVersion ?? "—"} mono />
+        <KV
+          k="Running"
+          v={Updates.isEmbeddedLaunch ? "the bundle shipped in the app" : "an over-the-air update"}
+        />
+        <KV k="Update ID" v={Updates.updateId ?? "none — embedded"} mono />
+      </Panel>
+
+      <Notice tone="info" icon="bug-outline">
+        Sends one harmless error to Sentry to confirm crash reporting works
+        from this tablet. Nothing on the till is affected.
+      </Notice>
+
+      <Btn label="Send test error to Sentry" icon="bug-outline" onPress={sendTestError} />
+
+      {eventId ? (
+        <Panel style={{ padding: 16 }}>
+          <KV k="Sent — event ID" v={eventId} mono />
+        </Panel>
+      ) : null}
+    </ScrollView>
   );
 }
 
