@@ -16,7 +16,7 @@
       "package": "com.bravebrand.pos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FFACEF"
+        "backgroundColor": "#FB9FE7"
       }
     },
     "web": {
