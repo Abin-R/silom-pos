@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Brave POS",
-    "slug": "bravepos",
+    "slug": "brave-pos",
     "version": "1.4.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
@@ -64,15 +64,15 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "92b2c7d7-717a-4f60-9d80-c8c81b64eef6"
+        "projectId": "2a3cd2b5-54ec-49b1-9476-af6497db4529"
       }
     },
     "runtimeVersion": {
       "policy": "appVersion"
     },
-    "owner": "shopsterabin1234s-organization",
+    "owner": "therollingpinn",
     "updates": {
-      "url": "https://u.expo.dev/92b2c7d7-717a-4f60-9d80-c8c81b64eef6"
+      "url": "https://u.expo.dev/2a3cd2b5-54ec-49b1-9476-af6497db4529"
     }
   }
 }

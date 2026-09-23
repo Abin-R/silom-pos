@@ -9,7 +9,9 @@ which installed apps can still receive an OTA update.
 | | |
 |---|---|
 | Account | `therollingpinn` |
-| Project | `brave-pos` |
+| Project slug | `brave-pos` |
+| Project ID | `2a3cd2b5-54ec-49b1-9476-af6497db4529` |
+| Update URL | `https://u.expo.dev/2a3cd2b5-54ec-49b1-9476-af6497db4529` |
 | Dashboard | https://expo.dev/accounts/therollingpinn/projects/brave-pos |
 | Signed in as | tech@therollingpinn.com |
 
