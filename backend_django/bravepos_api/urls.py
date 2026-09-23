@@ -10,7 +10,7 @@ Django's auth login."""
 from django.urls import include, path
 
 from backoffice import views as backoffice_views
-from bravepos import appdist, public_views
+from bravepos import appdist, legal_views, public_views
 
 urlpatterns = [
     path('api/', include('bravepos.urls')),
@@ -42,4 +42,9 @@ urlpatterns = [
     path('receipt/<str:order_number>/tax-invoice/save/', backoffice_views.save_tax_invoice, name='save_tax_invoice'),
     path('receipt/<str:order_number>/tax-invoice/progress/', backoffice_views.tax_invoice_progress, name='tax_invoice_progress'),
     path('receipt/<str:order_number>/tax-invoice/process/', backoffice_views.tax_invoice_process, name='tax_invoice_process'),
+
+    # Privacy policy.  Root-level and unauthenticated because Google Play
+    # requires a publicly reachable URL for it, and re-checks that URL for as
+    # long as the listing exists.  See bravepos/legal_views.py.
+    path('privacy/', legal_views.privacy_policy, name='privacy_policy'),
 ]

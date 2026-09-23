@@ -1,0 +1,260 @@
+{% comment %}
+  PUBLIC privacy policy.  Static — no context, no shop data, no input.
+
+  It exists for one reason: Google Play will not pass App content review
+  without a reachable privacy policy URL, and re-checks that URL for as long
+  as the listing lives.  So it is served from our own backend rather than a
+  document host that could rot.
+
+  Standalone rather than extending selforder/base.html, for the same reason
+  appdist/install.html is: it shares the palette and none of the chrome.
+
+  Keep it honest.  Every third party listed below is one the code actually
+  talks to; if that list changes, this page changes with it.
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#d61222">
+  <title>Privacy Policy — Brave POS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --brand-red: #d61222;
+      --ink: #1c1c1e;
+      --ink-2: #55555b;
+      --ink-3: #8a8a90;
+      --line: #ececef;
+      --bg: #f4f4f6;
+      --card: #ffffff;
+      --shadow: 0 2px 10px rgba(0,0,0,.05);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--ink);
+      font-family: "Sarabun", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px; line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { max-width: 760px; margin: 0 auto; }
+    .appbar {
+      background: var(--brand-red); color: #fff;
+      padding: calc(env(safe-area-inset-top, 0px) + 22px) 20px 22px;
+    }
+    .appbar .title { font-weight: 800; font-size: 21px; letter-spacing: -.01em; }
+    .appbar .sub { font-size: 13px; opacity: .85; font-weight: 500; margin-top: 3px; }
+    .wrap { padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 48px); }
+    .card {
+      background: var(--card); border-radius: 16px; box-shadow: var(--shadow);
+      padding: 22px 22px 6px; margin-bottom: 14px;
+    }
+    h2 {
+      font-size: 16.5px; font-weight: 700; letter-spacing: -.01em;
+      margin: 26px 0 8px; padding-top: 18px; border-top: 1px solid var(--line);
+    }
+    .card > h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+    h3 { font-size: 14.5px; font-weight: 700; margin: 18px 0 4px; }
+    p { margin: 0 0 12px; color: var(--ink-2); }
+    ul { margin: 0 0 12px; padding-left: 20px; color: var(--ink-2); }
+    li { margin-bottom: 5px; }
+    strong { color: var(--ink); font-weight: 600; }
+    a { color: var(--brand-red); }
+    .lede { color: var(--ink); font-size: 15.5px; }
+    .meta { color: var(--ink-3); font-size: 13px; margin-top: 18px; }
+    table { width: 100%; border-collapse: collapse; margin: 0 0 14px; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 10px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font-weight: 600; color: var(--ink); width: 34%; }
+    td { color: var(--ink-2); }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="appbar">
+    <div class="title">Privacy Policy</div>
+    <div class="sub">Brave POS &middot; Brave Brand Company Limited</div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <p class="lede">
+        Brave POS is a point-of-sale application used by restaurant and retail
+        staff to take orders, accept payment, print receipts and manage stock.
+        It is a tool for shop employees, not a consumer app.
+      </p>
+      <p>
+        This policy explains what information Brave POS handles, why, and who
+        else sees it. It covers the Android application and the Brave POS
+        backend at <strong>pos.rollingpinn.com</strong>.
+      </p>
+      <p>
+        The data controller is <strong>Brave Brand Company Limited</strong>,
+        55 Bio House, 2nd Floor, Soi Sukhumvit 39 (Phrom Phong), Sukhumvit
+        Road, Khlong Tan Nuea Sub-district, Vadhana District, Bangkok,
+        Thailand. Business Registration Number 0105563083534.
+      </p>
+
+      <h2>Information we handle</h2>
+
+      <h3>Staff account information</h3>
+      <p>
+        When a shop creates an account for an employee, we store their name,
+        email address, username, assigned role and branch, and the time they
+        last signed in. Passwords and till PINs are stored only as one-way
+        cryptographic hashes &mdash; they cannot be read back or recovered by
+        anyone, including us.
+      </p>
+
+      <h3>Customer information entered by shop staff</h3>
+      <p>
+        Shops may record customer details in order to issue tax invoices and
+        operate loyalty programmes. Depending on what the shop chooses to
+        collect, this can include name, telephone number, email address,
+        postal address, date of birth, gender, tax identification number, and
+        a history of that customer's purchases.
+      </p>
+      <p>
+        This information is entered by shop staff, on behalf of the shop, with
+        the customer present. Brave POS does not obtain it from any other
+        source and does not buy, sell or rent it.
+      </p>
+
+      <h3>Transaction records</h3>
+      <p>
+        Every sale creates a record: the items sold, prices, discounts, VAT,
+        service charge, payment method, amount paid, the member of staff who
+        rang it up, and the date and time. These records are the shop's
+        accounting data and are retained as described below.
+      </p>
+
+      <h3>Payment information</h3>
+      <p>
+        <strong>We never see or store card numbers.</strong> Card and QR
+        payments are completed on a payment page hosted by our payment
+        providers. Brave POS receives only the provider's transaction
+        reference and the result, and stores those alongside the order so the
+        payment can be reconciled or refunded.
+      </p>
+
+      <h3>Diagnostic information</h3>
+      <p>
+        To find and fix crashes, the app sends error reports to Sentry. These
+        contain the device model, Android version, app version, and a
+        technical stack trace of what the software was doing when it failed.
+      </p>
+
+      <h3>Photos and camera</h3>
+      <p>
+        The app asks for access to the camera or photo library only when a
+        member of staff chooses to attach a picture to a product in the
+        catalogue. The selected image is uploaded and used for nothing else.
+        No other photos are read.
+      </p>
+
+      <h2>What we do not collect</h2>
+      <ul>
+        <li>No location or GPS data</li>
+        <li>No contacts, calendar, SMS, call logs or microphone access</li>
+        <li>No advertising identifiers, and no advertising of any kind</li>
+        <li>No tracking of users across other apps or websites</li>
+        <li>No card numbers, CVV codes or bank credentials</li>
+      </ul>
+      <p>We do not sell personal data, and we never have.</p>
+
+      <h2>Who else receives this information</h2>
+      <p>
+        We share data only with the service providers needed to run the
+        system, and only the data each one needs to do its job:
+      </p>
+      <table>
+        <tr>
+          <th>Omise / Beam</th>
+          <td>Payment processing. Receive the payment amount and order
+              reference; they, not us, handle the card details.</td>
+        </tr>
+        <tr>
+          <th>PEAK Accounting</th>
+          <td>Thai bookkeeping software. Receives sales documents where a shop
+              has enabled accounting integration.</td>
+        </tr>
+        <tr>
+          <th>Loyalty service</th>
+          <td>Where a shop enables loyalty, member identifiers and purchase
+              totals are exchanged with our customer relationship system in
+              order to award and redeem points.</td>
+        </tr>
+        <tr>
+          <th>Sentry</th>
+          <td>Crash and performance diagnostics. Receives the technical error
+              reports described above.</td>
+        </tr>
+        <tr>
+          <th>Expo (EAS)</th>
+          <td>Delivers software updates to installed apps. Receives no
+              customer or transaction data.</td>
+        </tr>
+      </table>
+      <p>
+        We also disclose information where Thai law requires it &mdash; for
+        example, tax records provided to the Revenue Department.
+      </p>
+
+      <h2>Where data is stored, and for how long</h2>
+      <p>
+        Data is held on our servers in Europe and transmitted over encrypted
+        HTTPS connections. Passwords and PINs are hashed. Access to shop data
+        requires a login and is limited by role.
+      </p>
+      <p>
+        Sales and tax records are retained for at least five years, as Thai
+        tax law requires. Customer records are kept until the shop deletes
+        them or the customer asks for removal. Crash reports are kept for 90
+        days.
+      </p>
+
+      <h2>Your rights</h2>
+      <p>
+        Under Thailand's Personal Data Protection Act (PDPA), you may ask us
+        to give you a copy of your personal data, correct it, delete it,
+        restrict how it is used, or object to its use. You may also withdraw
+        consent where processing relies on it, and you may complain to the
+        Personal Data Protection Committee.
+      </p>
+      <p>
+        Note that we may be unable to delete records we are legally required
+        to keep, such as issued tax invoices.
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        Brave POS is a workplace tool for shop staff. It is not directed at
+        children and we do not knowingly collect data from them.
+      </p>
+
+      <h2>Changes to this policy</h2>
+      <p>
+        If we change what we collect or who we share it with, we will update
+        this page and the date below.
+      </p>
+
+      <h2>Contact us</h2>
+      <p>
+        Questions about this policy, or requests about your data:<br>
+        <a href="mailto:tech@therollingpinn.com">tech@therollingpinn.com</a>
+      </p>
+      <p>
+        Brave Brand Company Limited, 55 Bio House, 2nd Floor, Soi Sukhumvit 39
+        (Phrom Phong), Sukhumvit Road, Khlong Tan Nuea, Vadhana, Bangkok,
+        Thailand.
+      </p>
+
+      <p class="meta">Last updated 23 September 2026.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>
