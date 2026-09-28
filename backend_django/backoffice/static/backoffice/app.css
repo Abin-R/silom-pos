@@ -579,8 +579,10 @@ body {
 /* Header stays put while the panel body scrolls under it. */
 .panel-scroll .tbl thead th { position: sticky; top: 0; z-index: 2; }
 
-.tbl a { color: var(--blue); text-decoration: none; }
-.tbl a:hover { text-decoration: underline; }
+/* Text links only: a .btn placed in a table (an empty state's call to action)
+   keeps its own colours — blue link text on a blue button is invisible. */
+.tbl a:not(.btn) { color: var(--blue); text-decoration: none; }
+.tbl a:not(.btn):hover { text-decoration: underline; }
 
 .sub { font-size: 11.5px; color: var(--mut2); margin-top: 2px; }
 .sub.amber { color: var(--amber); }
@@ -592,7 +594,8 @@ body {
   color: var(--mut);
   font-size: 14px;
 }
-.empty svg {
+/* The empty state's own icon only — not the one inside its button. */
+.empty > svg {
   width: 34px; height: 34px;
   stroke: var(--mut2); fill: none; stroke-width: 1.4;
   display: block; margin: 0 auto 14px;
