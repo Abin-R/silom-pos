@@ -3401,6 +3401,7 @@ function CartItemModal({
   const [choiceId, setChoiceId] = useState("");
   const [reason, setReason] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [presetQuery, setPresetQuery] = useState("");
 
   useEffect(() => {
     if (item) {
@@ -3420,6 +3421,7 @@ function CartItemModal({
       );
       setReason(item.discount_reason || "");
       setPickerOpen(false);
+      setPresetQuery("");
     }
   }, [item]);
 
@@ -3430,6 +3432,10 @@ function CartItemModal({
     (p) => p.all_products || p.product_ids.includes(item.product_id),
   );
   const preset = offered.find((p) => p.id === choiceId);
+  // The search narrows the presets only: "No discount" and "Other" stay put,
+  // so a cashier can never search their way out of either.
+  const needle = presetQuery.trim().toLowerCase();
+  const shown = needle ? offered.filter((p) => p.name.toLowerCase().includes(needle)) : offered;
   const isOther = !usingPresets || choiceId === DISCOUNT_OTHER;
 
   const gross = item.price * qty;
@@ -3488,6 +3494,7 @@ function CartItemModal({
   const pick = (id: string) => {
     setChoiceId(id);
     setPickerOpen(false);
+    setPresetQuery("");
     if (id === DISCOUNT_OTHER && choiceId !== DISCOUNT_OTHER) {
       setDisc("");
       setDiscMode("pct");
@@ -3613,10 +3620,23 @@ function CartItemModal({
               </View>
               {pickerOpen && (
                 <View style={styles.discOptions}>
+                  {offered.length > 0 && (
+                    <SearchField
+                      height={40}
+                      value={presetQuery}
+                      onChangeText={setPresetQuery}
+                      placeholder={tr("pos.discount_search")}
+                      style={styles.discSearch}
+                      testID="item-discount-search"
+                    />
+                  )}
                   <ScrollView keyboardShouldPersistTaps="handled">
                     {option("", tr("pos.discount_none"), null, "item-discount-none")}
-                    {offered.map((p) =>
+                    {shown.map((p) =>
                       option(p.id, p.name, presetValue(p), `item-discount-preset-${p.id}`),
+                    )}
+                    {needle && shown.length === 0 && (
+                      <Text style={styles.discNoMatch}>{tr("pos.discount_no_match")}</Text>
                     )}
                     {option(DISCOUNT_OTHER, tr("pos.discount_other"), null, "item-discount-other")}
                   </ScrollView>
@@ -5646,7 +5666,7 @@ const styles = StyleSheet.create({
   discSelectOpen: { borderColor: C.brand },
   discSelectText: { flex: 1, fontSize: 15, fontWeight: "600", color: C.ink },
   discOptions: {
-    maxHeight: 260,
+    maxHeight: 320,
     marginHorizontal: 20,
     marginBottom: 8,
     borderWidth: 1,
@@ -5663,6 +5683,15 @@ const styles = StyleSheet.create({
     borderBottomColor: C.bg,
   },
   discOptionOn: { backgroundColor: C.bg },
+  discSearch: { margin: 8 },
+  discNoMatch: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: C.ink3,
+    borderBottomWidth: 1,
+    borderBottomColor: C.bg,
+  },
   discOptionText: { flex: 1, fontSize: 15, fontWeight: "600", color: C.ink },
   discOptionDetail: { fontSize: 14, fontWeight: "700", color: C.danger },
   discReasonWrap: {

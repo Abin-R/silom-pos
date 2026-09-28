@@ -577,6 +577,8 @@ const th = {
     last_visit: "เข้าใช้บริการล่าสุด",
     discount_amount: "จำนวน",
     discount_none: "ไม่มีส่วนลด",
+    discount_no_match: "ไม่พบประเภทส่วนลดที่ตรงกัน",
+    discount_search: "ค้นหาประเภทส่วนลด",
     discount_other: "อื่นๆ",
     discount_reason: "เหตุผล",
     discount_reason_placeholder: "ให้ส่วนลดนี้เพราะอะไร?",

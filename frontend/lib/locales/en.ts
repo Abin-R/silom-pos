@@ -583,6 +583,8 @@ const en = {
     last_visit: "Last visit",
     discount_amount: "Amount",
     discount_none: "No discount",
+    discount_no_match: "No discount type matches",
+    discount_search: "Search discount types",
     discount_other: "Other",
     discount_reason: "Reason",
     discount_reason_placeholder: "Why is this discount being given?",
