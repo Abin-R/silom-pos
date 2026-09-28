@@ -33,6 +33,7 @@ from bravepos.models import (
     BranchSession,
     Category,
     Customer,
+    DiscountType,
     Order,
     OrderItem,
     Product,
@@ -3212,6 +3213,168 @@ def category_delete(request, category_id):
     return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
 
 
+# ─── Discount types ─────────────────────────────────────────────────────
+# The presets a cashier picks from the till's discount dropdown.  Branch-scoped
+# like categories, because each branch owns its own product rows.  The branch's
+# ``discount_types_enabled`` switch lives on this page rather than the branch
+# form: it is meaningless without the presets, and this is where someone
+# setting them up will look for it.
+def _discount_products(branch):
+    """Active products at ``branch``, in the till's category order, for the
+    "applies to" picker."""
+    if branch is None:
+        return Product.objects.none()
+    return (Product.objects.filter(branch=branch, active=True)
+            .select_related("category")
+            .order_by("category__order", "category__name", "sort_order", "name"))
+
+
+def _apply_discount_form(dt, post, branch):
+    """Read a POSTed discount-type form onto ``dt``.
+
+    Returns ``(errors, product_ids)``; the M2M is set by the caller after the
+    row has been saved, since a new row has no id to hang products off yet.
+    """
+    errors = []
+    dt.branch = branch
+    dt.name = (post.get("name") or "").strip()[:120]
+    if not dt.name:
+        errors.append("Give the discount a name — it is what the cashier sees in the dropdown.")
+    elif dt.name.lower() == "other":
+        # The till adds its own "Other" entry — the hand-entered, reason-required
+        # one that raises an alert.  A preset with the same name would be
+        # indistinguishable from it on the till and in the order history.
+        errors.append("“Other” is reserved for the till's own hand-entered discount — pick another name.")
+
+    dt.kind = post.get("kind") if post.get("kind") in dict(DiscountType.KIND_CHOICES) \
+        else DiscountType.KIND_PERCENT
+    try:
+        dt.value = Decimal((post.get("value") or "").strip())
+    except InvalidOperation:
+        dt.value = Decimal(0)
+        errors.append("Enter the discount as a number.")
+    else:
+        if dt.value <= 0:
+            errors.append("The discount must be more than zero.")
+        elif dt.kind == DiscountType.KIND_PERCENT and dt.value > 100:
+            errors.append("A percentage discount cannot be more than 100%.")
+
+    try:
+        dt.sort_order = int(post.get("sort_order") or 0)
+    except ValueError:
+        dt.sort_order = 0
+    dt.active = post.get("active") == "on"
+
+    dt.all_products = post.get("applies_to") != "selected"
+    product_ids = []
+    if not dt.all_products:
+        wanted = set(post.getlist("products"))
+        product_ids = list(
+            _discount_products(branch).filter(id__in=[w for w in wanted if w])
+            .values_list("id", flat=True)
+        ) if wanted else []
+        if not product_ids:
+            errors.append("Pick at least one product, or make the discount apply to all products.")
+    return errors, product_ids
+
+
+def _discount_form_context(request, branches, branch, dt, mode, selected_ids):
+    return {
+        "active": "discounts",
+        "branches": branches,
+        "branch": branch,
+        "dt": dt,
+        "mode": mode,
+        "kinds": DiscountType.KIND_CHOICES,
+        "products": _discount_products(dt.branch or branch),
+        "selected_ids": {str(i) for i in selected_ids},
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+
+
+@login_required
+def discount_list(request):
+    """Discount presets for the selected branch, and its till on/off switch."""
+    branches, branch, _, _ = _common_filters(request)
+
+    if request.method == "POST" and branch is not None:
+        # The branch switch.  Admin-only: turning it on changes what every
+        # cashier at that branch sees on the till.
+        if getattr(request.user, "role", "") != "admin":
+            messages.error(request, "Only an admin can switch discount types on or off.")
+        else:
+            branch.discount_types_enabled = request.POST.get("enabled") == "on"
+            branch.save(update_fields=["discount_types_enabled"])
+            messages.success(
+                request,
+                f"Discount types are now {'on' if branch.discount_types_enabled else 'off'} "
+                f"at {branch.name}.")
+        return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
+
+    qs = DiscountType.objects.filter(branch=branch) if branch else DiscountType.objects.none()
+    qs = qs.annotate(product_count=Count("products")).order_by("sort_order", "name")
+
+    context = {
+        "active": "discounts",
+        "branches": branches,
+        "branch": branch,
+        "discount_types": qs,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/discount_list.html", context)
+
+
+@login_required
+def discount_new(request):
+    branches, branch, _, _ = _common_filters(request)
+    dt = DiscountType(branch=branch, active=True, all_products=True,
+                      kind=DiscountType.KIND_PERCENT)
+    selected = []
+    if request.method == "POST":
+        errors, selected = _apply_discount_form(dt, request.POST, branch)
+        if not errors:
+            with transaction.atomic():
+                dt.save()
+                dt.products.set(selected)
+            messages.success(request, f"“{dt.name}” added.")
+            return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
+        for e in errors:
+            messages.error(request, e)
+    return render(request, "backoffice/discount_form.html",
+                  _discount_form_context(request, branches, branch, dt, "new", selected))
+
+
+@login_required
+def discount_detail(request, discount_id):
+    branches, branch, _, _ = _common_filters(request)
+    dt = get_object_or_404(DiscountType, id=discount_id)
+    selected = list(dt.products.values_list("id", flat=True))
+    if request.method == "POST":
+        errors, selected = _apply_discount_form(dt, request.POST, dt.branch or branch)
+        if not errors:
+            with transaction.atomic():
+                dt.save()
+                dt.products.set(selected)
+            messages.success(request, f"“{dt.name}” saved.")
+            return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
+        for e in errors:
+            messages.error(request, e)
+    return render(request, "backoffice/discount_form.html",
+                  _discount_form_context(request, branches, branch, dt, "edit", selected))
+
+
+@login_required
+def discount_delete(request, discount_id):
+    """Delete a preset.  Past sales keep its name — OrderItem snapshots it."""
+    dt = get_object_or_404(DiscountType, id=discount_id)
+    if request.method == "POST":
+        dt.delete()
+        messages.success(request, f"“{dt.name}” deleted.")
+    return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
+
+
 # ─── Units ──────────────────────────────────────────────────────────────
 def _apply_unit_form(unit, post, branch):
     """Pull fields out of a POSTed unit form onto a Unit instance.
@@ -4851,7 +5014,7 @@ AUDIT_MODEL_CHOICES = [
     "Staff", "Branch", "Settings", "Product", "Category", "Unit",
     "DrawerCategory", "StockOutReason", "Order", "OrderItem", "SelfOrder",
     "StockDocument", "StockDocumentItem", "StockMovement", "Shift",
-    "ShiftMovement", "Customer",
+    "ShiftMovement", "Customer", "DiscountType",
 ]
 
 

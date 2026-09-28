@@ -581,6 +581,12 @@ const en = {
     items: "items)",
     kbank: "KBank",
     last_visit: "Last visit",
+    discount_amount: "Amount",
+    discount_none: "No discount",
+    discount_other: "Other",
+    discount_reason: "Reason",
+    discount_reason_placeholder: "Why is this discount being given?",
+    discount_reason_required: "A reason is required for an Other discount.",
     line_total: "Line Total",
     // Loyalty (CRM points + rewards). "Ready" counts the vouchers the customer
     // already redeemed on their phone and is standing there to collect.

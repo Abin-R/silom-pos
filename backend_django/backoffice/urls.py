@@ -73,6 +73,12 @@ urlpatterns = [
     path("categories/<uuid:category_id>", views.category_detail, name="category_detail"),
     path("categories/<uuid:category_id>/delete", views.category_delete, name="category_delete"),
 
+    # Discount types (the till's discount dropdown)
+    path("discounts", views.discount_list, name="discount_list"),
+    path("discounts/new", views.discount_new, name="discount_new"),
+    path("discounts/<uuid:discount_id>", views.discount_detail, name="discount_detail"),
+    path("discounts/<uuid:discount_id>/delete", views.discount_delete, name="discount_delete"),
+
     # Units
     path("units", views.unit_list, name="unit_list"),
     path("units/new", views.unit_new, name="unit_new"),

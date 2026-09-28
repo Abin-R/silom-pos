@@ -1,0 +1,111 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Discount types — the presets in the till's discount dropdown. The branch's
+  on/off switch sits at the top because the presets do nothing until it is on,
+  and "why isn't the dropdown showing?" should be answered on this page.
+{% endcomment %}
+
+{% block title %}Discounts{% endblock %}
+{% block page_title %}Discounts{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ discount_types|length }} discount type{{ discount_types|length|pluralize }}{% if branch %} at {{ branch.name }}{% endif %} · what a cashier can pick for a product at the till</div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if branch %}
+  <a class="btn btn-blue" href="{% url 'backoffice:discount_new' %}?{{ qs }}">
+    <svg><use href="#i-plus"/></svg> Add discount type</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% if branch %}
+<div class="panel" style="margin-bottom:16px">
+  <form method="post" style="display:flex;align-items:center;gap:14px;padding:16px 18px;flex-wrap:wrap">
+    {% csrf_token %}
+    <span class="tog {% if branch.discount_types_enabled %}on{% endif %}"><i></i></span>
+    <div style="flex:1;min-width:240px">
+      <b style="font-weight:620">
+        Discount types are {% if branch.discount_types_enabled %}on{% else %}off{% endif %} at {{ branch.name }}</b>
+      <div class="hint" style="color:var(--mut2);font-size:12.5px;margin-top:2px">
+        {% if branch.discount_types_enabled %}
+          The till's discount box is a dropdown of the types below. “Other” lets the
+          cashier type their own ฿ or % discount, but only with a reason, and every
+          sale with one is posted to SeaTalk.
+        {% else %}
+          The till keeps its free ฿/% discount box. Switch this on to give cashiers
+          the dropdown instead.
+        {% endif %}
+      </div>
+    </div>
+    {% if user.role == 'admin' %}
+      {% if branch.discount_types_enabled %}
+        <button type="submit" class="btn">Switch off</button>
+      {% else %}
+        <input type="hidden" name="enabled" value="on">
+        <button type="submit" class="btn btn-blue">Switch on</button>
+      {% endif %}
+    {% endif %}
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:70px">Order</th><th>Name</th>
+        <th style="width:140px">Discount</th>
+        <th style="width:180px">Applies to</th>
+        <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in discount_types %}
+      <tr>
+        <td class="money" style="color:var(--mut)">{{ d.sort_order }}</td>
+        <td>
+          <a href="{% url 'backoffice:discount_detail' discount_id=d.id %}?{{ qs }}">
+            <b style="font-weight:620;color:var(--txt)">{{ d.name }}</b></a>
+        </td>
+        <td class="money">
+          {% if d.kind == 'percent' %}{{ d.value|floatformat:"-2" }}%{% else %}฿{{ d.value|floatformat:2 }}{% endif %}
+        </td>
+        <td>
+          {% if d.all_products %}All products
+          {% else %}{{ d.product_count }} product{{ d.product_count|pluralize }}{% endif %}
+        </td>
+        <td>
+          {% if d.active %}<span class="tag t-ok">Active</span>
+          {% else %}<span class="tag t-out">Hidden</span>{% endif %}
+        </td>
+        <td class="r">
+          <span style="display:inline-flex;gap:6px">
+            <a class="ico-btn" title="Edit" href="{% url 'backoffice:discount_detail' discount_id=d.id %}?{{ qs }}">
+              <svg><use href="#i-pencil"/></svg></a>
+            <form method="post" action="{% url 'backoffice:discount_delete' discount_id=d.id %}?{{ qs }}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete discount type “{{ d.name|escapejs }}”? Past sales keep its name.');">
+              {% csrf_token %}
+              <button type="submit" class="ico-btn danger" title="Delete"><svg><use href="#i-trash"/></svg></button>
+            </form>
+          </span>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="empty">
+        <svg><use href="#i-tag"/></svg>
+        {% if branch %}
+          No discount types yet. With none set up, the till's dropdown offers only “Other”.
+          <div style="margin-top:16px">
+            <a class="btn btn-blue" href="{% url 'backoffice:discount_new' %}?{{ qs }}">
+              <svg><use href="#i-plus"/></svg> Create the first discount type</a></div>
+        {% else %}
+          Pick a branch at the top to see its discount types.
+        {% endif %}
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

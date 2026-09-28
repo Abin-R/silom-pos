@@ -22,13 +22,14 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, gateways, loyalty
+from . import audit, crm, discounts, gateways, loyalty
 from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
-    Branch, BranchSession, Category, Customer, DrawerCategory, Order, OrderItem,
+    Branch, BranchSession, Category, Customer, DiscountType, DrawerCategory,
+    Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
     StockMovement, StockDocument, StockDocumentItem, StockOutReason,
     SuggestionOverride, SuggestionRule,
@@ -583,6 +584,41 @@ class StockOutReasonViewSet(BranchScopedMixin, viewsets.ModelViewSet):
         return qs
 
 
+@api_view(['GET'])
+@require_session
+def discount_types(request):
+    """The discount presets this till's dropdown offers, and whether to use them.
+
+    ``enabled`` is the branch's ``discount_types_enabled``.  When it is False
+    the list is empty and the till keeps its plain ฿/% discount box, so a
+    branch outside the rollout behaves exactly as it did before.
+
+    ``product_ids`` is empty for a preset that applies to every product.
+    """
+    branch = request.session_obj.branch
+    if branch is None or not branch.discount_types_enabled:
+        return Response({'enabled': False, 'discount_types': []})
+    rows = (
+        DiscountType.objects
+        .filter(branch=branch, active=True)
+        .prefetch_related('products')
+    )
+    return Response({
+        'enabled': True,
+        'discount_types': [
+            {
+                'id': str(d.id),
+                'name': d.name,
+                'kind': d.kind,
+                'value': float(d.value),
+                'all_products': d.all_products,
+                'product_ids': [] if d.all_products else [str(p.id) for p in d.products.all()],
+            }
+            for d in rows
+        ],
+    })
+
+
 class BranchViewSet(viewsets.ModelViewSet):
     """Branches (physical shop locations).
 
@@ -1031,6 +1067,13 @@ def orders_list_create(request):
     # system may change what this endpoint returns.  Off at every branch until
     # `crm_loyalty_enabled` is ticked — see bravepos.loyalty.
     loyalty.record_sale(order, _reward_ids(payload.get('crm_reward_ids')))
+    # A hand-entered ("Other") discount is reported to SeaTalk.  Same footing
+    # as the CRM call above: after the sale, off the request thread, unable to
+    # raise.  Does nothing unless the branch has discount types switched on.
+    try:
+        discounts.alert_other_discounts(order)
+    except Exception:  # noqa: BLE001 — the customer has already paid
+        logger.exception("Other-discount alert failed for %s", order.order_number)
     return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 

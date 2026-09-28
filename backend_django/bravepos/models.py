@@ -192,6 +192,14 @@ class Branch(models.Model):
     # Same shape, and same reasoning, as self_order_enabled above.
     suggestions_enabled = models.BooleanField(default=False)
 
+    # Per-branch switch for preset discounts at the till (see DiscountType).
+    # Off, the cart-item screen keeps its free ฿/% discount box exactly as
+    # before; on, the cashier picks a preset from a dropdown, and the free box
+    # moves behind "Other", which needs a written reason and raises a SeaTalk
+    # alert when the sale goes through.  Default False for the same
+    # test-branch-first reason as the two flags above.
+    discount_types_enabled = models.BooleanField(default=False)
+
     # ── CRM link ───────────────────────────────────────────────────────
     # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
     # its own branch list for the customer-facing loyalty app.  Set from the
@@ -729,6 +737,14 @@ class OrderItem(models.Model):
     # Per-line discount (flat THB). There is no order-level discount in the POS —
     # the order's discount_amount is just the sum of these line discounts.
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Which discount the cashier chose for this line: a preset's name as it
+    # read at the time of sale (a snapshot, so renaming the preset later does
+    # not rewrite history), or "Other" for a hand-entered one.  Blank for an
+    # undiscounted line and for every line from a branch without presets.
+    discount_label = models.CharField(max_length=120, blank=True, default="")
+    # The cashier's written reason for an "Other" discount.  Required by the
+    # till before it will apply one; blank everywhere else.
+    discount_reason = models.TextField(blank=True, default="")
     category_id = models.UUIDField(null=True, blank=True)
     category_name = models.CharField(max_length=120, blank=True, default="")
 
@@ -993,6 +1009,53 @@ class StockOutReason(models.Model):
     name_th = models.CharField(max_length=120, blank=True, default="")
     sort_order = models.IntegerField(default=0)
     active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        indexes = [models.Index(fields=["branch"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+# ─── Discount presets ────────────────────────────────────────────────────────
+class DiscountType(models.Model):
+    """A discount the cashier can pick from the till's dropdown.
+
+    Set up in the backoffice so the shop, not the cashier, decides what a
+    discount is worth: "Staff 20%" or "Damaged box ฿30" arrive the same way
+    every time and can be counted.  Anything else goes through the dropdown's
+    "Other" entry, which is free-form but must carry a reason and is reported
+    to SeaTalk.
+
+    Branch-scoped like Category: each branch owns its own Product rows, so a
+    product list only means something inside one branch.  ``all_products`` is
+    the default; when it is off the preset is offered only on ``products``.
+    Only read by a till whose branch has ``discount_types_enabled``.
+    """
+    KIND_PERCENT = "percent"
+    KIND_FIXED = "fixed"
+    KIND_CHOICES = [
+        (KIND_PERCENT, "Percentage"),
+        (KIND_FIXED, "Fixed amount"),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="discount_types",
+        null=True, blank=True,
+    )
+    name = models.CharField(max_length=120)
+    kind = models.CharField(max_length=8, choices=KIND_CHOICES, default=KIND_PERCENT)
+    # Percent (0–100) for ``percent``; baht off the line for ``fixed``.
+    value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    all_products = models.BooleanField(default=True)
+    products = models.ManyToManyField(
+        Product, blank=True, related_name="discount_types",
+    )
+    sort_order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["sort_order", "name"]

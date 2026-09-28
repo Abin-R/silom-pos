@@ -12,6 +12,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
+  KeyboardAvoidingView,
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -96,8 +97,30 @@ type CartItem = {
   price: number;
   qty: number;
   discount?: number;
+  // Which discount the line carries when the branch uses discount presets:
+  // the preset's id + name, or DISCOUNT_OTHER with the cashier's reason.
+  // Ride to the backend inside `items` like `suggested`; absent at a branch
+  // without presets, so its order POST is byte-for-byte what it always was.
+  discount_type_id?: string;
+  discount_label?: string;
+  discount_reason?: string;
   suggested?: boolean;
 };
+// A preset from the backoffice's Discounts page (GET /discount-types).
+// `product_ids` is empty when the preset applies to every product.
+type DiscountPreset = {
+  id: string;
+  name: string;
+  kind: "percent" | "fixed";
+  value: number;
+  all_products: boolean;
+  product_ids: string[];
+};
+// The dropdown's last entry: a hand-typed ฿/% discount that needs a reason.
+// The label is what the backend keys the SeaTalk alert on.
+const DISCOUNT_OTHER = "other";
+const DISCOUNT_OTHER_LABEL = "Other";
+type DiscountChoice = { discount_type_id?: string; discount_label?: string; discount_reason?: string };
 // `phone` is null, not "", for a customer with no number on file — that is what
 // the column stores, so it is what the API sends. Every read here goes through
 // `c.phone || ""` or a `!c.phone` guard, which treat null and undefined alike.
@@ -234,6 +257,9 @@ export default function POS() {
   const [activeCat, setActiveCat] = useState<string>("favorite");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
+  // The branch's discount presets, or null when the branch doesn't use them —
+  // null keeps the cart-item modal's plain ฿/% box, exactly as before.
+  const [discountPresets, setDiscountPresets] = useState<DiscountPreset[] | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   // The chosen customer's points and rewards. Fetched here, while the basket
   // is still being built, so the CRM round trip is over long before anyone
@@ -341,6 +367,27 @@ export default function POS() {
 
   // Load initial data. `silent` skips the full-screen spinner (used by
   // pull-to-refresh, which shows its own inline spinner instead).
+  // Fails closed: any error (or a backend that predates the endpoint) leaves
+  // the till on the plain discount box rather than an empty dropdown.
+  const loadDiscountTypes = useCallback(async () => {
+    try {
+      const res = await apiFetch(`${API}/discount-types`);
+      if (!res.ok) { setDiscountPresets(null); return; }
+      const body = await safeJson<any>(res, null);
+      setDiscountPresets(
+        body?.enabled && Array.isArray(body.discount_types) ? body.discount_types : null,
+      );
+    } catch {
+      setDiscountPresets(null);
+    }
+  }, []);
+  // Re-read whenever a line is opened, so a preset added in the backoffice
+  // shows up without restarting the till.
+  const openItemEditor = (item: CartItem) => {
+    setEditItem(item);
+    loadDiscountTypes();
+  };
+
   const reloadPosData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -358,7 +405,8 @@ export default function POS() {
       if (!silent) setLoading(false);
     }
     refreshBadges();
-  }, []);
+    loadDiscountTypes();
+  }, [loadDiscountTypes]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -497,11 +545,21 @@ export default function POS() {
     setCart((c) => c.filter((i) => i.product_id !== pid));
 
   // Apply qty/discount edits from the cart-item modal. A zero qty removes the line.
-  const applyItemEdit = (pid: string, qty: number, discount: number) => {
+  const applyItemEdit = (pid: string, qty: number, discount: number, choice: DiscountChoice = {}) => {
+    const on = discount > 0;
     setCart((c) =>
       c
         .map((i) =>
-          i.product_id === pid ? { ...i, qty, discount: discount > 0 ? discount : undefined } : i
+          i.product_id === pid
+            ? {
+                ...i,
+                qty,
+                discount: on ? discount : undefined,
+                discount_type_id: on ? choice.discount_type_id : undefined,
+                discount_label: on ? choice.discount_label : undefined,
+                discount_reason: on ? choice.discount_reason : undefined,
+              }
+            : i
         )
         .filter((i) => i.qty > 0)
     );
@@ -1106,7 +1164,7 @@ export default function POS() {
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
-              onEdit={setEditItem}
+              onEdit={openItemEditor}
             />
           )}
         </View>
@@ -1254,7 +1312,7 @@ export default function POS() {
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
-              onEdit={setEditItem}
+              onEdit={openItemEditor}
               embedded
             />
           </View>
@@ -1272,9 +1330,10 @@ export default function POS() {
       />
       <CartItemModal
         item={editItem}
+        presets={discountPresets}
         onClose={() => setEditItem(null)}
-        onSave={(pid, qty, discount) => {
-          applyItemEdit(pid, qty, discount);
+        onSave={(pid, qty, discount, choice) => {
+          applyItemEdit(pid, qty, discount, choice);
           setEditItem(null);
         }}
         onRemove={(pid) => {
@@ -3317,21 +3376,31 @@ function PaymentModal({
 }
 
 // ---------- Cart Item Modal (per-line quantity + discount) ----------
+// With `presets` null (the branch doesn't use discount presets) this is the
+// plain ฿/% discount box. With presets it is a dropdown of the backoffice's
+// discount types for this product, ending in "Other": the same ฿/% box, but
+// it will not save without a reason — the backend reports those to SeaTalk.
 function CartItemModal({
   item,
+  presets,
   onClose,
   onSave,
   onRemove,
 }: {
   item: CartItem | null;
+  presets: DiscountPreset[] | null;
   onClose: () => void;
-  onSave: (pid: string, qty: number, discount: number) => void;
+  onSave: (pid: string, qty: number, discount: number, choice: DiscountChoice) => void;
   onRemove: (pid: string) => void;
 }) {
   useT(); // re-render this screen when the language changes
   const [qty, setQty] = useState(1);
   const [disc, setDisc] = useState("");
   const [discMode, setDiscMode] = useState<"thb" | "pct">("thb");
+  // "" = no discount, a preset's id, or DISCOUNT_OTHER.
+  const [choiceId, setChoiceId] = useState("");
+  const [reason, setReason] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     if (item) {
@@ -3342,22 +3411,153 @@ function CartItemModal({
       // stored in baht — stay in baht for it, or the saved 119.60 would be
       // re-read as 119.6% and wipe the line.
       setDiscMode(item.discount ? "thb" : "pct");
+      // A discount saved before presets were switched on has no type: it was
+      // typed by hand, which is what "Other" is.
+      setChoiceId(
+        !item.discount ? "" : item.discount_type_id && item.discount_type_id !== DISCOUNT_OTHER
+          ? item.discount_type_id
+          : DISCOUNT_OTHER,
+      );
+      setReason(item.discount_reason || "");
+      setPickerOpen(false);
     }
   }, [item]);
 
   if (!item) return null;
 
+  const usingPresets = presets !== null;
+  const offered = (presets || []).filter(
+    (p) => p.all_products || p.product_ids.includes(item.product_id),
+  );
+  const preset = offered.find((p) => p.id === choiceId);
+  const isOther = !usingPresets || choiceId === DISCOUNT_OTHER;
+
   const gross = item.price * qty;
   const entered = Math.max(0, parseFloat(disc) || 0);
-  // Resolve the entered value into an absolute ฿ amount (the cart stores ฿).
-  const discAmount =
-    discMode === "pct" ? Math.min(gross, (gross * entered) / 100) : Math.min(gross, entered);
+  // Resolve the choice into an absolute ฿ amount (the cart stores ฿).
+  let discAmount: number;
+  if (isOther) {
+    discAmount =
+      discMode === "pct" ? Math.min(gross, (gross * entered) / 100) : Math.min(gross, entered);
+  } else if (!choiceId) {
+    discAmount = 0;
+  } else if (preset) {
+    discAmount =
+      preset.kind === "percent"
+        ? Math.min(gross, (gross * preset.value) / 100)
+        : Math.min(gross, preset.value);
+  } else {
+    // The line's preset has since been removed in the backoffice: keep what
+    // the cashier already applied rather than silently dropping it.
+    discAmount = Math.min(gross, item.discount || 0);
+  }
   const lineTotal = Math.max(0, gross - discAmount);
   const discPct = gross > 0 ? (discAmount / gross) * 100 : 0;
 
+  const reasonMissing = usingPresets && isOther && discAmount > 0 && !reason.trim();
+
+  const choiceLabel = !choiceId
+    ? tr("pos.discount_none")
+    : choiceId === DISCOUNT_OTHER
+      ? tr("pos.discount_other")
+      : preset?.name || item.discount_label || tr("pos.discount_other");
+
+  const presetValue = (p: DiscountPreset) =>
+    p.kind === "percent" ? `${p.value % 1 === 0 ? p.value : p.value.toFixed(2)}%` : THB(p.value);
+
+  const save = () => {
+    if (reasonMissing) return;
+    let choice: DiscountChoice = {};
+    if (usingPresets) {
+      if (choiceId === DISCOUNT_OTHER) {
+        choice = {
+          discount_type_id: DISCOUNT_OTHER,
+          discount_label: DISCOUNT_OTHER_LABEL,
+          discount_reason: reason.trim(),
+        };
+      } else if (choiceId) {
+        choice = {
+          discount_type_id: choiceId,
+          discount_label: preset?.name || item.discount_label,
+        };
+      }
+    }
+    onSave(item.product_id, qty, discAmount, choice);
+  };
+
+  const pick = (id: string) => {
+    setChoiceId(id);
+    setPickerOpen(false);
+    if (id === DISCOUNT_OTHER && choiceId !== DISCOUNT_OTHER) {
+      setDisc("");
+      setDiscMode("pct");
+    }
+  };
+
+  // The hand-typed ฿/% box: the whole discount UI without presets, and the
+  // "Other" entry with them.
+  const discInputs = (
+    <View style={styles.itemDiscControls}>
+      <View style={styles.discModeToggle}>
+        <TouchableOpacity
+          style={[styles.discModeBtn, discMode === "thb" && styles.discModeBtnActive]}
+          onPress={() => setDiscMode("thb")}
+          testID="item-discount-mode-thb"
+        >
+          <Text
+            style={[styles.discModeText, discMode === "thb" && styles.discModeTextActive]}
+          >
+            ฿
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.discModeBtn, discMode === "pct" && styles.discModeBtnActive]}
+          onPress={() => setDiscMode("pct")}
+          testID="item-discount-mode-pct"
+        >
+          <Text
+            style={[styles.discModeText, discMode === "pct" && styles.discModeTextActive]}
+          >
+            %
+          </Text>
+        </TouchableOpacity>
+      </View>
+      <TextInput
+        style={styles.itemDiscInput}
+        value={disc}
+        onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
+        keyboardType="decimal-pad"
+        placeholder={discMode === "pct" ? "0%" : "0.00"}
+        placeholderTextColor={C.lineStrong}
+        testID="item-discount-input"
+      />
+    </View>
+  );
+
+  const option = (id: string, label: string, detail: string | null, testID: string) => {
+    const on = choiceId === id;
+    return (
+      <TouchableOpacity
+        key={id || "none"}
+        style={[styles.discOption, on && styles.discOptionOn]}
+        onPress={() => pick(id)}
+        testID={testID}
+      >
+        <Text style={[styles.discOptionText, on && { color: C.brand }]} numberOfLines={1}>
+          {label}
+        </Text>
+        {detail ? <Text style={styles.discOptionDetail}>{detail}</Text> : null}
+        {on && <Ionicons name="checkmark" size={18} color={C.brand} style={{ marginLeft: 8 }} />}
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.overlay}
+      >
         <View style={styles.itemModal} testID="cart-item-modal">
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={onClose} testID="close-item-modal">
@@ -3392,44 +3592,67 @@ function CartItemModal({
             </View>
           </View>
 
-          <View style={styles.itemRow}>
-            <Text style={styles.itemRowLabel}>{tr("common.discount")}</Text>
-            <View style={styles.itemDiscControls}>
-              <View style={styles.discModeToggle}>
+          {usingPresets ? (
+            <>
+              <View style={styles.itemRow}>
+                <Text style={styles.itemRowLabel}>{tr("common.discount")}</Text>
                 <TouchableOpacity
-                  style={[styles.discModeBtn, discMode === "thb" && styles.discModeBtnActive]}
-                  onPress={() => setDiscMode("thb")}
-                  testID="item-discount-mode-thb"
+                  style={[styles.discSelect, pickerOpen && styles.discSelectOpen]}
+                  onPress={() => setPickerOpen((v) => !v)}
+                  testID="item-discount-select"
                 >
-                  <Text
-                    style={[styles.discModeText, discMode === "thb" && styles.discModeTextActive]}
-                  >
-                    ฿
+                  <Text style={styles.discSelectText} numberOfLines={1}>
+                    {choiceLabel}
                   </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.discModeBtn, discMode === "pct" && styles.discModeBtnActive]}
-                  onPress={() => setDiscMode("pct")}
-                  testID="item-discount-mode-pct"
-                >
-                  <Text
-                    style={[styles.discModeText, discMode === "pct" && styles.discModeTextActive]}
-                  >
-                    %
-                  </Text>
+                  <Ionicons
+                    name={pickerOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={pickerOpen ? C.brand : C.ink3}
+                  />
                 </TouchableOpacity>
               </View>
-              <TextInput
-                style={styles.itemDiscInput}
-                value={disc}
-                onChangeText={(t) => setDisc(t.replace(/[^0-9.]/g, ""))}
-                keyboardType="decimal-pad"
-                placeholder={discMode === "pct" ? "0%" : "0.00"}
-                placeholderTextColor={C.lineStrong}
-                testID="item-discount-input"
-              />
+              {pickerOpen && (
+                <View style={styles.discOptions}>
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                    {option("", tr("pos.discount_none"), null, "item-discount-none")}
+                    {offered.map((p) =>
+                      option(p.id, p.name, presetValue(p), `item-discount-preset-${p.id}`),
+                    )}
+                    {option(DISCOUNT_OTHER, tr("pos.discount_other"), null, "item-discount-other")}
+                  </ScrollView>
+                </View>
+              )}
+              {choiceId === DISCOUNT_OTHER && !pickerOpen && (
+                <>
+                  <View style={styles.itemRow}>
+                    <Text style={styles.itemRowLabel}>{tr("pos.discount_amount")}</Text>
+                    {discInputs}
+                  </View>
+                  <View style={styles.discReasonWrap}>
+                    <Text style={styles.itemRowLabel}>{tr("pos.discount_reason")}</Text>
+                    <TextInput
+                      style={[styles.discReasonInput, reasonMissing && styles.discReasonInputErr]}
+                      value={reason}
+                      onChangeText={setReason}
+                      placeholder={tr("pos.discount_reason_placeholder")}
+                      placeholderTextColor={C.lineStrong}
+                      multiline
+                      maxLength={500}
+                      testID="item-discount-reason"
+                    />
+                    {reasonMissing && (
+                      <Text style={styles.discReasonHint}>{tr("pos.discount_reason_required")}</Text>
+                    )}
+                  </View>
+                </>
+              )}
+            </>
+          ) : (
+            <View style={styles.itemRow}>
+              <Text style={styles.itemRowLabel}>{tr("common.discount")}</Text>
+              {discInputs}
             </View>
-          </View>
+          )}
 
           {discAmount > 0 && (
             <View style={styles.itemDiscSummaryRow}>
@@ -3445,14 +3668,15 @@ function CartItemModal({
           </View>
 
           <TouchableOpacity
-            style={styles.doneBtn}
-            onPress={() => onSave(item.product_id, qty, discAmount)}
+            style={[styles.doneBtn, reasonMissing && { opacity: 0.45 }]}
+            onPress={save}
+            disabled={reasonMissing}
             testID="item-modal-save"
           >
             <Text style={styles.doneBtnText}>{tr("common.save")}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -5406,6 +5630,61 @@ const styles = StyleSheet.create({
   },
   itemTotalVal: { fontSize: 18, fontWeight: "800", color: C.brand },
   cartItemDisc: { fontSize: 11, color: C.danger, marginTop: 2, fontWeight: "600" },
+  // Discount-preset dropdown (branches with discount types switched on)
+  discSelect: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minWidth: 180,
+    maxWidth: 240,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  discSelectOpen: { borderColor: C.brand },
+  discSelectText: { flex: 1, fontSize: 15, fontWeight: "600", color: C.ink },
+  discOptions: {
+    maxHeight: 260,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  discOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.bg,
+  },
+  discOptionOn: { backgroundColor: C.bg },
+  discOptionText: { flex: 1, fontSize: 15, fontWeight: "600", color: C.ink },
+  discOptionDetail: { fontSize: 14, fontWeight: "700", color: C.danger },
+  discReasonWrap: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: C.bg,
+  },
+  discReasonInput: {
+    minHeight: 64,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 15,
+    color: C.ink,
+    textAlignVertical: "top",
+  },
+  discReasonInputErr: { borderColor: C.danger },
+  discReasonHint: { fontSize: 12.5, color: C.danger, fontWeight: "600" },
 
   // Payment modal
   paymentModal: {

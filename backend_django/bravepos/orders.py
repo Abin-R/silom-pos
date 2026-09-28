@@ -225,6 +225,10 @@ def create_order_from_items(
                         price=price,
                         qty=qty,
                         discount=Decimal(str(it.get('discount', 0) or 0)),
+                        # Which preset (or "Other") and why.  Sent only by a
+                        # till at a branch with discount types switched on.
+                        discount_label=str(it.get('discount_label') or '')[:120],
+                        discount_reason=str(it.get('discount_reason') or ''),
                         category_id=cat_id,
                         category_name=cat_name or '',
                         # Did this line come from the cashier's upsell strip?

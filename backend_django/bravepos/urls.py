@@ -29,6 +29,10 @@ urlpatterns = [
     # Healthcheck
     path('', views.api_root),
 
+    # Discount presets for the cart-item dropdown (branch-gated).
+    path('discount-types', views.discount_types),
+    path('discount-types/', views.discount_types),
+
     # Auth — new email/password flow with branch-scoped sessions
     path('auth/login', views.auth_login),
     path('auth/logout', views.auth_logout),

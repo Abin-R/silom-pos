@@ -67,6 +67,8 @@
       <a class="nv {% if active == 'products' or active == 'categories' or active == 'units' %}on{% endif %}"
          href="{% url 'backoffice:product_list' %}">
         <svg><use href="#i-box"/></svg>Catalogue{% if nav_products %}<u>{{ nav_products }}</u>{% endif %}</a>
+      <a class="nv {% if active == 'discounts' %}on{% endif %}" href="{% url 'backoffice:discount_list' %}">
+        <svg><use href="#i-tag"/></svg>Discounts</a>
       <a class="nv {% if active == 'branches' %}on{% endif %}" href="{% url 'backoffice:branch_list' %}">
         <svg><use href="#i-store"/></svg>Branches{% if nav_branches %}<u>{{ nav_branches }}</u>{% endif %}</a>
       <a class="nv {% if active == 'staff' %}on{% endif %}" href="{% url 'backoffice:staff_list' %}">
