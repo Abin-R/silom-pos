@@ -2614,6 +2614,30 @@ def _stock_report_export(request, kind):
     return response
 
 
+def _stock_document(request, kind, doc_id):
+    """One stock document, read-only: its header and every line as saved."""
+    conf = _STOCK_REPORT_KINDS[kind]
+    doc = get_object_or_404(StockDocument.objects.select_related("branch"), id=doc_id, type=kind)
+    items = list(
+        doc.items.select_related("product__unit")
+        .annotate(image_len=Length("product__image_url") + Length("product__image_base64"))
+        .order_by("id")
+    )
+    back = request.GET.urlencode()
+    return render(request, "backoffice/stock_document.html", {
+        "active": conf["active"],
+        "kind": kind,
+        "title": conf["title"],
+        "party_label": conf["party"],
+        "doc": doc,
+        "items": items,
+        "qty_total": sum((it.qty or 0 for it in items), Decimal(0)),
+        "back_url": reverse(f"backoffice:{conf['active']}") + (f"?{back}" if back else ""),
+        "hide_branch": True,
+        "hide_dates": True,
+    })
+
+
 @login_required
 def stock_in_report(request):
     return _stock_report(request, "in")
@@ -2632,6 +2656,16 @@ def stock_out_report(request):
 @login_required
 def stock_out_export(request):
     return _stock_report_export(request, "out")
+
+
+@login_required
+def stock_in_document(request, doc_id):
+    return _stock_document(request, "in", doc_id)
+
+
+@login_required
+def stock_out_document(request, doc_id):
+    return _stock_document(request, "out", doc_id)
 
 
 # ─── Products ───────────────────────────────────────────────────────────

@@ -114,3 +114,33 @@ class StockReportTests(TestCase):
         doc = self._doc("in", [(self.cookie, 1, 0)])
         other = make_branch(name="Central World")
         self.assertNotContains(self._get("stock_in", branch=str(other.id)), doc["document_no"])
+
+    def test_document_row_links_to_a_read_only_view_of_its_lines(self):
+        doc = self._doc("in", [(self.cookie, 24, 5), (self.cake, 3, 0)],
+                        vendor="Bakery Co", ref_no="PO-7", note="Morning delivery")
+        url = reverse("backoffice:stock_in_document", args=[doc["id"]])
+        self.assertContains(self._get("stock_in"), url)
+
+        page = self.client.get(url)
+        self.assertEqual(page.status_code, 200)
+        for text in (doc["document_no"], "Bakery Co", "PO-7", "Morning delivery",
+                     "Confetti Cookie", "38022", "ชิ้น", "Mochi Cake", "235.00"):
+            self.assertContains(page, text)
+        # View only: nothing in the page body is editable. (The shared layout's
+        # sign-out form is the one <form> outside <main>.)
+        body = page.content.decode().split('<main class="body">', 1)[1]
+        for tag in ("<input", "<textarea", "<select", "<form"):
+            self.assertNotIn(tag, body)
+
+    def test_document_view_only_serves_its_own_direction(self):
+        doc = self._doc("out", [(self.cake, 2, 0)], reason="Expired")
+        self.assertEqual(self.client.get(
+            reverse("backoffice:stock_in_document", args=[doc["id"]])).status_code, 404)
+        page = self.client.get(reverse("backoffice:stock_out_document", args=[doc["id"]]))
+        self.assertContains(page, "Expired")
+
+    def test_document_view_survives_a_deleted_product(self):
+        doc = self._doc("out", [(self.cake, 2, 0)], reason="Expired")
+        self.cake.delete()
+        self.assertContains(self.client.get(
+            reverse("backoffice:stock_out_document", args=[doc["id"]])), "Mochi Cake")

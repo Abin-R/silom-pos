@@ -1,0 +1,91 @@
+{% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  One stock document, read-only. Saved documents can't be edited anywhere —
+  their stock has already moved — so nothing here looks like an input.
+  A mistake is corrected with a new Adjust or opposite-direction document.
+{% endcomment %}
+
+{% block title %}{{ doc.document_no }}{% endblock %}
+{% block page_title %}{{ title }} · {{ doc.document_no }}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ doc.created_at|date:"d/m/Y H:i:s" }}{% if doc.branch %} · {{ doc.branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{{ back_url }}"><svg><use href="#i-back"/></svg> Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="panel" style="flex:none">
+  <div class="panel-h">Information</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px 28px;padding:18px 20px">
+    <div><div class="sub">Date</div><b>{{ doc.created_at|date:"d/m/Y H:i" }}</b></div>
+    <div><div class="sub">Branch</div><b>{{ doc.branch.name|default:"—" }}</b></div>
+    <div><div class="sub">Ref. No.</div><b>{{ doc.ref_no|default:"—" }}</b></div>
+    <div><div class="sub">{{ party_label }}</div>
+      <b>{% if kind == 'in' %}{{ doc.vendor|default:"—" }}{% else %}{{ doc.receiver|default:"—" }}{% endif %}</b></div>
+    {% if kind == 'out' %}<div><div class="sub">Reason</div><b>{{ doc.reason|default:"—" }}</b></div>{% endif %}
+    <div><div class="sub">Created by</div><b>{{ doc.created_by|default:"—" }}</b></div>
+    <div style="grid-column:1/-1"><div class="sub">Note</div><div>{{ doc.note|default:"—"|linebreaksbr }}</div></div>
+  </div>
+</div>
+
+<div class="panel panel-grow">
+  <div class="panel-h">
+    Products
+    <div class="spacer"></div>
+    <span class="tag t-info">{{ items|length }} line{{ items|length|pluralize }}</span>
+  </div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:50px">#</th><th>Barcode</th><th style="width:36%">Product</th><th>Unit</th>
+          <th class="r">Quantity</th><th class="r">Cost/unit</th><th class="r">Discount</th><th class="r">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
+          <td class="money" style="color:var(--mut)">{{ it.barcode|default:"—" }}</td>
+          <td>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="thumb">
+                {% if it.image_len %}
+                  <img src="{% url 'backoffice:product_image' it.product_id %}" alt="" loading="lazy" width="38" height="38">
+                {% else %}{{ it.product_name|initial }}{% endif %}
+              </span>
+              <b style="font-weight:620">{{ it.product_name }}</b>
+            </div>
+          </td>
+          <td>{% if it.product and it.product.unit %}{{ it.product.unit.name }}{% else %}—{% endif %}</td>
+          <td class="r money" style="font-weight:650">{{ it.qty|floatformat:"-2"|intcomma }}</td>
+          <td class="r money">฿{{ it.price|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ it.discount|floatformat:2|intcomma }}</td>
+          <td class="r money" style="font-weight:660">฿{{ it.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="empty"><svg><use href="#i-inbox"/></svg>This document has no lines.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if items %}
+      <tfoot>
+        <tr>
+          <td colspan="4">Total</td>
+          <td class="r money">{{ qty_total|floatformat:"-2"|intcomma }}</td>
+          <td></td>
+          <td class="r money">฿{{ doc.discount|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ doc.total|floatformat:2|intcomma }}</td>
+        </tr>
+        {% if doc.tax %}
+        <tr><td colspan="7">VAT{% if doc.tax_included %} (included){% endif %}</td>
+          <td class="r money">฿{{ doc.tax|floatformat:2|intcomma }}</td></tr>
+        {% endif %}
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+{% endblock %}

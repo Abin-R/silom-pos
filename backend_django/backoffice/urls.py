@@ -60,6 +60,8 @@ urlpatterns = [
     path("inventory/stock-in/export", views.stock_in_export, name="stock_in_export"),
     path("inventory/stock-out", views.stock_out_report, name="stock_out"),
     path("inventory/stock-out/export", views.stock_out_export, name="stock_out_export"),
+    path("inventory/stock-in/<uuid:doc_id>", views.stock_in_document, name="stock_in_document"),
+    path("inventory/stock-out/<uuid:doc_id>", views.stock_out_document, name="stock_out_document"),
 
     # Products
     path("products", views.product_list, name="product_list"),

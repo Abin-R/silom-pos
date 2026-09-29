@@ -75,7 +75,8 @@
         {% for d in rows %}
         <tr>
           <td class="money" style="white-space:nowrap">{{ d.created_at|date:"d/m/Y H:i:s" }}</td>
-          <td class="money" style="font-weight:620">{{ d.document_no }}</td>
+          <td class="money" style="font-weight:620">
+            <a href="{% if kind == 'in' %}{% url 'backoffice:stock_in_document' d.id %}{% else %}{% url 'backoffice:stock_out_document' d.id %}{% endif %}?{{ qs }}">{{ d.document_no }}</a></td>
           <td>{{ d.ref_no|default:"—" }}</td>
           <td>{% if kind == 'in' %}{{ d.vendor|default:"—" }}{% else %}{{ d.receiver|default:"—" }}{% endif %}</td>
           {% if kind == 'out' %}<td>{{ d.reason|default:"—" }}</td>{% endif %}
