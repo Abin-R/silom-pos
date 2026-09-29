@@ -59,21 +59,31 @@
     header's: this page hides the header dates (the on-hand table is a snapshot,
     not a window), so a shared control would filter nothing on screen while
     silently changing the file. Its own form keeps that honest.
+
+    It lives behind a button rather than in the header row: laid out inline,
+    the direction and dates read as filters on the table, and people changed
+    them expecting the page to move.
   {% endcomment %}
-  <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="ctl" style="gap:6px"
-        {% if multi_branch %}title="Movement export covers {{ branch.name }} only"{% endif %}>
-    {% if branch %}<input type="hidden" name="branch" value="{{ branch.id }}">{% endif %}
-    <select name="type" title="Movement direction">
-      <option value="out">Stock out</option>
-      <option value="in">Stock in</option>
-      <option value="all">In &amp; out</option>
-    </select>
-    <svg class="cv"><use href="#i-chev"/></svg>
-    <input type="date" name="from" value="{{ today|date:'Y-m-d' }}" title="Movement from">
-    <span class="arrow">→</span>
-    <input type="date" name="to" value="{{ today|date:'Y-m-d' }}" title="Movement to">
-    <button class="btn" type="submit"><svg><use href="#i-dl"/></svg> Movement</button>
-  </form>
+  <details class="mvpop">
+    <summary class="btn"><svg><use href="#i-dl"/></svg> Movement</summary>
+    <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="mvpop-panel">
+      {% if branch %}<input type="hidden" name="branch" value="{{ branch.id }}">{% endif %}
+      <div class="mvpop-head">
+        <b>Stock movement CSV</b>
+        <span>{{ branch.name }} · downloads a file, doesn't change this page</span>
+      </div>
+      <div class="mvpop-seg" role="radiogroup" aria-label="Direction">
+        <label><input type="radio" name="type" value="out" checked><span>Stock out</span></label>
+        <label><input type="radio" name="type" value="in"><span>Stock in</span></label>
+        <label><input type="radio" name="type" value="all"><span>In &amp; out</span></label>
+      </div>
+      <div class="mvpop-dates">
+        <label>From<input type="date" name="from" value="{{ today|date:'Y-m-d' }}" required></label>
+        <label>To<input type="date" name="to" value="{{ today|date:'Y-m-d' }}" required></label>
+      </div>
+      <button class="btn btn-blue" type="submit"><svg><use href="#i-dl"/></svg> Download CSV</button>
+    </form>
+  </details>
 {% endblock %}
 
 {% block filter_extra %}
@@ -215,5 +225,15 @@
     boxes.forEach(function (b) { b.addEventListener('change', sync); });
     sync();
   })();
+
+  // A <details> only closes from its own summary; close the header popovers
+  // on a click anywhere else, and the Movement one once its file is asked for.
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details.mvpop[open], details.bpick[open]').forEach(function (d) {
+      if (!d.contains(e.target)) d.open = false;
+    });
+  });
+  var mv = document.querySelector('.mvpop form');
+  if (mv) mv.addEventListener('submit', function () { mv.parentNode.open = false; });
 </script>
 {% endblock %}
