@@ -69,6 +69,7 @@
         <td>
           <a href="{% url 'backoffice:discount_detail' discount_id=d.id %}?{{ qs }}">
             <b style="font-weight:620;color:var(--txt)">{{ d.name }}</b></a>
+          {% if d.also_at %}<div class="sub" title="{{ d.also_at|join:', ' }}">Also at {{ d.also_at|length }} other branch{{ d.also_at|length|pluralize:"es" }}</div>{% endif %}
         </td>
         <td>
           {% if d.kind == 'free' %}Free: {{ d.free_product.name|default:"—" }} × {{ d.free_qty }}

@@ -114,6 +114,52 @@
     </div>
   </div>
 
+  {# ── Branches ───────────────────────────────────────────────────── #}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-h">Branches</div>
+    <div class="form-grid">
+      <div class="field wide">
+        <label class="check">
+          <input type="radio" name="sync_scope" value="this" {% if sync_scope == 'this' %}checked{% endif %}>
+          Only {{ dt.branch.name|default:"this branch" }}
+        </label>
+        <label class="check">
+          <input type="radio" name="sync_scope" value="all" {% if sync_scope == 'all' %}checked{% endif %}
+                 {% if not sync_rows %}disabled{% endif %}>
+          All branches
+        </label>
+        <label class="check">
+          <input type="radio" name="sync_scope" value="selected" {% if sync_scope == 'selected' %}checked{% endif %}
+                 {% if not sync_rows %}disabled{% endif %}>
+          {{ dt.branch.name|default:"This branch" }} and selected branches
+        </label>
+        <span class="hint">
+          Each branch gets its own copy with the same promotion ID, using that branch's
+          products and categories (matched by name). A branch missing any of them is
+          skipped, and saving says which. Unticking a branch removes the promotion there.
+        </span>
+      </div>
+    </div>
+    {% if sync_rows %}
+    <div id="syncPicker" {% if sync_scope != 'selected' %}hidden{% endif %} style="padding:0 18px 18px">
+      <div style="border:1px solid var(--line);border-radius:10px;padding:6px 12px">
+        {% for r in sync_rows %}
+          <label class="check" style="display:flex;padding:5px 0;align-items:center">
+            <input type="checkbox" name="sync_branches" value="{{ r.branch.id }}" {% if r.checked %}checked{% endif %}>
+            {{ r.branch.name }}
+            <span style="margin-left:auto;display:inline-flex;gap:6px">
+              {% if r.held %}<span class="tag t-ok">Running</span>{% endif %}
+              {% if not r.branch.discount_types_enabled %}
+                <span class="tag t-low" title="This branch's till still has the plain discount box — switch discount types on in its Discounts page.">Till off</span>
+              {% endif %}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
   {# ── Customer buys ──────────────────────────────────────────────── #}
   <div class="panel" style="margin-top:16px">
     <div class="panel-h">Customer buys</div>
@@ -584,6 +630,12 @@ function enhancePick(sel) {
 
   document.querySelectorAll('input[name="applies_to"]').forEach(function (r) {
     r.addEventListener('change', sync);
+  });
+  var syncPicker = $('syncPicker');
+  document.querySelectorAll('input[name="sync_scope"]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      if (syncPicker) syncPicker.hidden = r.value !== 'selected';
+    });
   });
   $('f-start').addEventListener('change', function () { $('f-end').min = this.value; });
   $('f-end').min = $('f-start').value;

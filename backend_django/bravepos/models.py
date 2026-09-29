@@ -1083,8 +1083,15 @@ class DiscountType(models.Model):
     )
     free_qty = models.PositiveIntegerField(default=1)
     # "PR-0001": the promotion's ID on paper, receipts and in conversation.
-    # Assigned once on first save and never reused or edited.
-    code = models.CharField(max_length=16, unique=True, null=True, blank=True, editable=False)
+    # Assigned once on first save and never reused or edited.  Shared by the
+    # copies of one promotion at other branches (see ``group_id``), so it is
+    # unique per branch rather than globally.
+    code = models.CharField(max_length=16, null=True, blank=True, editable=False)
+    # One promotion run at several branches is one row per branch — each
+    # branch's discount has to point at that branch's own product rows — tied
+    # together by this id.  Editing any copy with branches ticked updates the
+    # others; see ``discounts.sync_promotion``.
+    group_id = models.UUIDField(null=True, blank=True, db_index=True, editable=False)
     # Validity period, inclusive, in shop-local dates.  Blank = open-ended.
     # The status (scheduled / active / ended) is derived from these and the
     # transaction date — nobody sets it by hand.
@@ -1105,6 +1112,10 @@ class DiscountType(models.Model):
     class Meta:
         ordering = ["name"]
         indexes = [models.Index(fields=["branch"])]
+        constraints = [
+            models.UniqueConstraint(fields=["code", "branch"], name="discounttype_code_per_branch"),
+            models.UniqueConstraint(fields=["group_id", "branch"], name="discounttype_one_copy_per_branch"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -1132,6 +1143,8 @@ class DiscountType(models.Model):
                     .order_by("-code").values_list("code", flat=True).first())
             n = int(last.split("-")[1]) + 1 if last else 1
             self.code = f"PR-{n:04d}"
+        if not self.group_id:
+            self.group_id = self.id
         super().save(*args, **kwargs)
 
 

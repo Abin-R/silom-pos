@@ -462,3 +462,102 @@ class PromotionFormTests(ComboFormTests):
             "value": "10", "start_date": "2026-09-30", "end_date": "2026-09-01"})
         self.assertEqual(res.status_code, 200)
         self.assertFalse(DiscountType.objects.exists())
+
+
+class BranchSyncTests(TestCase):
+    """One promotion at several branches: a copy per branch, same ID,
+    pointing at each branch's own products and categories."""
+
+    def setUp(self):
+        admin = Staff(name="Admin", username="adm", email="adm@therollingpinn.com",
+                      role="admin", active=True, backoffice_access=True)
+        admin.set_password("pw-long-enough")
+        admin.save()
+        make_shop()
+        self.a = make_branch(name="Alpha")
+        self.b = make_branch(name="Bravo")
+        self.c = make_branch(name="Charlie")
+        self.menu = {}
+        for br in (self.a, self.b, self.c):
+            cookies = Category.objects.create(name="Cookies", branch=br)
+            cookie = make_product(br, name="Choc chip", price="95.00")
+            cookie.category = cookies
+            cookie.save()
+            self.menu[br.name] = {"cookies": cookies, "cookie": cookie}
+        # Only Alpha and Bravo sell lattes.
+        for br in (self.a, self.b):
+            self.menu[br.name]["latte"] = make_product(br, name="LATTE", price="100.00")
+        self.client.post(reverse("backoffice:login"),
+                         {"username": "adm", "password": "pw-long-enough"})
+        self.new_url = reverse("backoffice:discount_new") + f"?branch={self.a.id}"
+
+    def create(self, **fields):
+        body = {"name": "Set", "active": "on", "applies_to": "combo", "kind": "fixed",
+                "value": "30",
+                "cond_target": [f"p:{self.menu['Alpha']['latte'].id}",
+                                f"c:{self.menu['Alpha']['cookies'].id}"],
+                "cond_qty": ["1", "1"], "sync_scope": "all"}
+        body.update(fields)
+        return self.client.post(self.new_url, body, follow=True)
+
+    def test_all_branches_copies_with_local_products_and_skips_what_is_missing(self):
+        res = self.create()
+        src = DiscountType.objects.get(branch=self.a)
+        copy = DiscountType.objects.get(branch=self.b)
+        self.assertEqual((copy.code, copy.group_id, copy.value, copy.applies_to),
+                         (src.code, src.group_id, src.value, "combo"))
+        rows = [(r.product, r.category) for r in copy.conditions.all()]
+        # Matched by name, case-insensitively, at Bravo's own rows.
+        self.assertEqual(rows, [(self.menu["Bravo"]["latte"], None),
+                                (None, self.menu["Bravo"]["cookies"])])
+        # Charlie has no latte: skipped, and the admin is told.
+        self.assertFalse(DiscountType.objects.filter(branch=self.c).exists())
+        self.assertContains(res, "Not added at Charlie")
+        self.assertContains(res, "LATTE")
+
+    def test_editing_a_copy_updates_the_others_and_unticking_removes(self):
+        self.create()
+        copy = DiscountType.objects.get(branch=self.b)
+        url = reverse("backoffice:discount_detail", args=[copy.id]) + f"?branch={self.b.id}"
+        body = {"name": "Set v2", "active": "on", "applies_to": "all", "kind": "percent",
+                "value": "10", "sync_scope": "selected", "sync_branches": [str(self.a.id)]}
+        self.client.post(url, body)
+        src = DiscountType.objects.get(branch=self.a)
+        self.assertEqual((src.name, src.kind, src.value), ("Set v2", "percent", Decimal("10")))
+        self.assertFalse(src.conditions.exists())
+        # Now only this branch: Alpha's copy goes.
+        body.update(sync_scope="this", sync_branches=[])
+        self.client.post(url, body)
+        self.assertEqual(list(DiscountType.objects.values_list("branch__name", flat=True)),
+                         ["Bravo"])
+
+    def test_only_this_branch_is_the_default(self):
+        self.create(sync_scope="this")
+        self.assertEqual(DiscountType.objects.count(), 1)
+
+    def test_fixed_combo_skips_a_branch_where_it_would_go_below_zero(self):
+        cheap = self.menu["Bravo"]["latte"]
+        cheap.price = Decimal("5.00")
+        cheap.save()
+        # Bravo: 5 + 95 = 100, discount 120 at Alpha is fine (195) but not there.
+        res = self.create(value="120")
+        self.assertFalse(DiscountType.objects.filter(branch=self.b).exists())
+        self.assertContains(res, "Not added at Bravo")
+
+    def test_deleting_removes_only_this_copy(self):
+        self.create()
+        src = DiscountType.objects.get(branch=self.a)
+        res = self.client.post(reverse("backoffice:discount_delete", args=[src.id])
+                               + f"?branch={self.a.id}", follow=True)
+        self.assertTrue(DiscountType.objects.filter(branch=self.b).exists())
+        self.assertContains(res, "still running at Bravo")
+
+    def test_list_and_form_show_where_it_runs(self):
+        self.create()
+        page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.a.id}")
+        self.assertContains(page, "Also at 1 other branch")
+        src = DiscountType.objects.get(branch=self.a)
+        form = self.client.get(reverse("backoffice:discount_detail", args=[src.id])
+                               + f"?branch={self.a.id}")
+        self.assertRegex(form.content.decode(),
+                         r'name="sync_scope" value="selected"\s+checked')

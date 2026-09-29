@@ -46,7 +46,7 @@ from bravepos.models import (
     StockMovement,
     Unit,
 )
-from bravepos import appdist, catalog, crm, images
+from bravepos import appdist, catalog, crm, discounts, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 
@@ -3425,8 +3425,47 @@ def _apply_discount_form(dt, post, branch):
     return errors, picks
 
 
-def _discount_form_context(request, branches, branch, dt, mode, picks):
+def _discount_sync_choice(post, dt):
+    """Which other branches the form asked this promotion to run at.
+
+    Returns ``(scope, branches)``: scope is "this", "all" or "selected".
+    """
+    others = list(catalog.other_branches(dt.branch))
+    scope = post.get("sync_scope")
+    if scope == "all":
+        return scope, others
+    if scope == "selected":
+        wanted = set(post.getlist("sync_branches"))
+        return scope, [b for b in others if str(b.id) in wanted]
+    return "this", []
+
+
+def _discount_sync_message(report) -> str:
+    parts = []
+    if report["created"]:
+        parts.append("added at " + ", ".join(report["created"]))
+    if report["updated"]:
+        parts.append("updated at " + ", ".join(report["updated"]))
+    if report["removed"]:
+        parts.append("removed from " + ", ".join(report["removed"]))
+    return (" It was " + "; ".join(parts) + ".") if parts else ""
+
+
+def _discount_form_context(request, branches, branch, dt, mode, picks, sync=None):
     b = dt.branch or branch
+    # Where the promotion runs besides here: the other branches, each marked
+    # with whether it already has a copy and whether its till uses discounts.
+    held = {c.branch_id for c in discounts.branch_copies(dt)} if dt.pk else set()
+    others = list(catalog.other_branches(b)) if b else []
+    if sync is None:
+        chosen = held
+        scope = ("all" if others and held >= {o.pk for o in others}
+                 else "selected" if held else "this")
+    else:
+        scope, picked = sync
+        chosen = {o.pk for o in picked}
+    sync_rows = [{"branch": o, "checked": o.pk in chosen, "held": o.pk in held}
+                 for o in others]
     products = list(_discount_products(b))
     categories = list(_discount_categories(b))
     # The cheapest active product per category, for the form's live
@@ -3452,6 +3491,8 @@ def _discount_form_context(request, branches, branch, dt, mode, picks):
         "selected_cats": {str(i) for i in picks.categories},
         "cond_rows": picks.rows or [{"target": "", "min_qty": 1}],
         "today": timezone.localdate(),
+        "sync_scope": scope,
+        "sync_rows": sync_rows,
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -3487,8 +3528,16 @@ def discount_list(request):
     # start/end dates (plus the manual pause).
     today = timezone.localdate()
     rows = list(qs)
+    # Which other branches run each promotion, for the "also at" line.
+    groups = {d.group_id for d in rows if d.group_id}
+    elsewhere = {}
+    for gid, name in (DiscountType.objects.filter(group_id__in=groups)
+                      .exclude(branch=branch).order_by("branch__name")
+                      .values_list("group_id", "branch__name")):
+        elsewhere.setdefault(gid, []).append(name)
     for d in rows:
         d.current_status = d.status_on(today)
+        d.also_at = elsewhere.get(d.group_id, [])
 
     context = {
         "active": "discounts",
@@ -3507,18 +3556,23 @@ def discount_new(request):
     dt = DiscountType(branch=branch, active=True, applies_to=DiscountType.APPLIES_ALL,
                       kind=DiscountType.KIND_PERCENT)
     picks = _DiscountPicks()
+    sync = None
     if request.method == "POST":
         errors, picks = _apply_discount_form(dt, request.POST, branch)
+        sync = _discount_sync_choice(request.POST, dt)
         if not errors:
             with transaction.atomic():
                 dt.save()
                 picks.save(dt)
-            messages.success(request, f"“{dt.name}” added.")
+                report = discounts.sync_promotion(dt, sync[1])
+            messages.success(request, f"“{dt.name}” added." + _discount_sync_message(report))
+            for name, why in report["skipped"]:
+                messages.warning(request, f"Not added at {name}: {why}.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "new", picks))
+                  _discount_form_context(request, branches, branch, dt, "new", picks, sync))
 
 
 @login_required
@@ -3526,8 +3580,10 @@ def discount_detail(request, discount_id):
     branches, branch, _, _ = _common_filters(request)
     dt = get_object_or_404(DiscountType, id=discount_id)
     picks = _DiscountPicks.of(dt)
+    sync = None
     if request.method == "POST":
         errors, picks = _apply_discount_form(dt, request.POST, dt.branch or branch)
+        sync = _discount_sync_choice(request.POST, dt)
         if not errors:
             with transaction.atomic():
                 dt.save()
@@ -3535,21 +3591,30 @@ def discount_detail(request, discount_id):
                 # from categories to products must not leave the old
                 # categories (or combination rows) quietly attached.
                 picks.save(dt)
-            messages.success(request, f"“{dt.name}” saved.")
+                report = discounts.sync_promotion(dt, sync[1])
+            messages.success(request, f"“{dt.name}” saved." + _discount_sync_message(report))
+            for name, why in report["skipped"]:
+                messages.warning(request, f"Not added at {name}: {why}.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "edit", picks))
+                  _discount_form_context(request, branches, branch, dt, "edit", picks, sync))
 
 
 @login_required
 def discount_delete(request, discount_id):
-    """Delete a preset.  Past sales keep its name — OrderItem snapshots it."""
+    """Delete this branch's copy of a promotion.  Copies at other branches
+    keep running (untick them on the form to take it off there too).  Past
+    sales keep its name — OrderItem snapshots it."""
     dt = get_object_or_404(DiscountType, id=discount_id)
     if request.method == "POST":
+        still = [c.branch.name for c in discounts.branch_copies(dt) if c.branch]
+        where = dt.branch.name if dt.branch else "this branch"
         dt.delete()
-        messages.success(request, f"“{dt.name}” deleted.")
+        messages.success(
+            request, f"“{dt.name}” deleted at {where}."
+            + (f" It is still running at {', '.join(sorted(still))}." if still else ""))
     return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
 
 
