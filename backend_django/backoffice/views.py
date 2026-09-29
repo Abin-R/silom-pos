@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -2134,42 +2135,24 @@ def _inventory_qs(request):
     return branches, selected, field, q, sort, qs
 
 
-@login_required
-def inventory_summary(request):
-    """Current on-hand balance per product. Searchable by Name / Barcode /
-    Category and sortable by Name / Barcode / Category / OnhandQty (matching
-    the SilomPOS options)."""
-    branches, selected, field, q, sort, qs = _inventory_qs(request)
+def _set_stock_level(p):
+    """Level bar, colour and status tag for one row of the on-hand table."""
+    if p.stock <= 0:
+        p.level_label, p.level_class, p.level_colour, p.fill = "Out", "t-red", "var(--red)", 0
+    elif p.par_level and p.stock < p.par_level:
+        p.level_label, p.level_class, p.level_colour = "Low", "t-low", "var(--amber)"
+        p.fill = round(p.stock * 100 / p.par_level)
+    elif p.par_level:
+        p.level_label, p.level_class, p.level_colour = "Good", "t-ok", "var(--green)"
+        p.fill = min(100, round(p.stock * 100 / p.par_level))
+    else:
+        # No par level set, so there is no "enough" to compare against.
+        # Saying so beats inventing a threshold and flagging on it.
+        p.level_label, p.level_class, p.level_colour, p.fill = "Untracked", "t-out", "var(--mut2)", 0
 
-    # "Needs attention" first, because that is what the page is opened for.
-    # `all` is a click away, and the tab says which one you're looking at.
-    level = request.GET.get("level") or "attention"
-    if level == "out":
-        qs = qs.filter(stock__lte=0)
-    elif level == "low":
-        qs = qs.filter(stock__gt=0, par_level__gt=0, stock__lt=F("par_level"))
-    elif level == "attention":
-        qs = qs.filter(Q(stock__lte=0)
-                       | Q(par_level__gt=0, stock__lt=F("par_level")))
 
-    # Whole-branch figures, not the filtered page: "4 out of stock" must not
-    # become "4 of 4" because you're standing on the out-of-stock tab.
-    _, _, _, _, _, all_products = _inventory_qs(request)
-    totals = all_products.aggregate(
-        skus=Count("id"), value=Sum(F("cost") * F("stock")),
-    )
-    out_of_stock = all_products.filter(stock__lte=0).count()
-    below_par = all_products.filter(
-        stock__gt=0, par_level__gt=0, stock__lt=F("par_level")).count()
-    untracked = all_products.filter(par_level__lte=0).count()
-
-    paginator = Paginator(qs, 50)
-    page_obj = paginator.get_page(request.GET.get("page"))
-    products = list(page_obj.object_list)
-
-    # Days cover is the column that decides anything: "4 on hand" is
-    # meaningless without the sell-through rate beside it. Measured over the
-    # last seven days, so a weekend spike doesn't dominate a single day.
+def _week_sold_and_received(products):
+    """Units sold in the last seven days and the last stock-in date, by product id."""
     week_start, week_end = _date_window(
         timezone.localdate() - timedelta(days=6), timezone.localdate())
     sold = {
@@ -2184,25 +2167,136 @@ def inventory_summary(request):
         for row in StockMovement.objects.filter(product__in=products, type="in")
         .values("product_id").annotate(last=Max("created_at"))
     }
+    return sold, received
 
+
+def _inventory_grouped(qs, sort):
+    """Several branches' products merged by name into one row each.
+
+    Each branch has its own Product row, so "Hella Nutella" at three branches
+    is three rows. Matched on the name, trimmed and ignoring case, which is
+    how catalogue sync decides two branches carry the same product. On hand,
+    par level, sales and stock value add up; ``by_branch`` keeps the split.
+    """
+    products = list(qs)
+    sold, received = _week_sold_and_received(products)
+
+    groups: dict = {}
     for p in products:
-        p.sold_7d = sold.get(p.id, 0)
-        daily = p.sold_7d / 7 if p.sold_7d else 0
-        p.days_cover = (p.stock / daily) if daily else None
-        p.value = p.cost * p.stock
-        p.last_received = received.get(p.id)
-        if p.stock <= 0:
-            p.level_label, p.level_class, p.level_colour, p.fill = "Out", "t-red", "var(--red)", 0
-        elif p.par_level and p.stock < p.par_level:
-            p.level_label, p.level_class, p.level_colour = "Low", "t-low", "var(--amber)"
-            p.fill = round(p.stock * 100 / p.par_level)
-        elif p.par_level:
-            p.level_label, p.level_class, p.level_colour = "Good", "t-ok", "var(--green)"
-            p.fill = min(100, round(p.stock * 100 / p.par_level))
-        else:
-            # No par level set, so there is no "enough" to compare against.
-            # Saying so beats inventing a threshold and flagging on it.
-            p.level_label, p.level_class, p.level_colour, p.fill = "Untracked", "t-out", "var(--mut2)", 0
+        key = (p.name or "").strip().lower()
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = SimpleNamespace(
+                id=None, name=p.name, name_th=p.name_th, category=p.category,
+                sku=p.sku, barcode=p.barcode, members=[], costs=set(),
+                stock=0, par_level=0, sold_7d=0, value=Decimal(0),
+                last_received=None, by_branch=[],
+            )
+        g.members.append(p)
+        g.costs.add(p.cost)
+        g.sku = g.sku or p.sku
+        g.barcode = g.barcode or p.barcode
+        g.name_th = g.name_th or p.name_th
+        g.category = g.category or p.category
+        g.stock += p.stock
+        g.par_level += p.par_level or 0
+        g.sold_7d += sold.get(p.id, 0)
+        g.value += p.cost * p.stock
+        last = received.get(p.id)
+        if last and (g.last_received is None or last > g.last_received):
+            g.last_received = last
+        g.by_branch.append((p.branch.name if p.branch_id else "", p.stock))
+
+    rows = list(groups.values())
+    for g in rows:
+        # One product row can still be opened; a merged one has no single page.
+        g.id = g.members[0].id if len(g.members) == 1 else None
+        # Branches can price the same product differently. A made-up average
+        # would read as a real cost, so a mixed row says so instead.
+        g.cost = next(iter(g.costs)) if len(g.costs) == 1 else None
+        daily = g.sold_7d / 7 if g.sold_7d else 0
+        g.days_cover = (g.stock / daily) if daily else None
+        _set_stock_level(g)
+
+    keys = {
+        "barcode": lambda g: (g.barcode or "").lower(),
+        "category": lambda g: (g.category.name if g.category else "").lower(),
+        "stock_min": lambda g: g.stock,
+        "stock_max": lambda g: -g.stock,
+    }
+    rows.sort(key=lambda g: g.name.lower())
+    if sort in keys:
+        rows.sort(key=keys[sort])
+    return rows
+
+
+@login_required
+def inventory_summary(request):
+    """Current on-hand balance per product. Searchable by Name / Barcode /
+    Category and sortable by Name / Barcode / Category / OnhandQty (matching
+    the SilomPOS options)."""
+    branches, selected, field, q, sort, qs = _inventory_qs(request)
+    multi_branch = len(selected) > 1
+
+    # "Needs attention" first, because that is what the page is opened for.
+    # `all` is a click away, and the tab says which one you're looking at.
+    level = request.GET.get("level") or "attention"
+
+    def wanted(p):
+        if level == "out":
+            return p.stock <= 0
+        if level == "low":
+            return p.stock > 0 and p.par_level > 0 and p.stock < p.par_level
+        if level == "attention":
+            return p.stock <= 0 or (p.par_level > 0 and p.stock < p.par_level)
+        return True
+
+    if multi_branch:
+        # Merged rows are built in Python, so the level filter, the cards and
+        # the paging all work on those rows rather than on the queryset.
+        all_rows = _inventory_grouped(qs, sort)
+        paginator = Paginator([g for g in all_rows if wanted(g)], 50)
+        page_obj = paginator.get_page(request.GET.get("page"))
+        products = list(page_obj.object_list)
+        totals = {"skus": len(all_rows), "value": sum((g.value for g in all_rows), Decimal(0))}
+        out_of_stock = sum(1 for g in all_rows if g.stock <= 0)
+        below_par = sum(1 for g in all_rows if 0 < g.stock < g.par_level)
+        untracked = sum(1 for g in all_rows if g.par_level <= 0)
+    else:
+        all_products = qs
+        if level == "out":
+            qs = qs.filter(stock__lte=0)
+        elif level == "low":
+            qs = qs.filter(stock__gt=0, par_level__gt=0, stock__lt=F("par_level"))
+        elif level == "attention":
+            qs = qs.filter(Q(stock__lte=0)
+                           | Q(par_level__gt=0, stock__lt=F("par_level")))
+
+        # Whole-branch figures, not the filtered page: "4 out of stock" must not
+        # become "4 of 4" because you're standing on the out-of-stock tab.
+        totals = all_products.aggregate(
+            skus=Count("id"), value=Sum(F("cost") * F("stock")),
+        )
+        out_of_stock = all_products.filter(stock__lte=0).count()
+        below_par = all_products.filter(
+            stock__gt=0, par_level__gt=0, stock__lt=F("par_level")).count()
+        untracked = all_products.filter(par_level__lte=0).count()
+
+        paginator = Paginator(qs, 50)
+        page_obj = paginator.get_page(request.GET.get("page"))
+        products = list(page_obj.object_list)
+
+        # Days cover is the column that decides anything: "4 on hand" is
+        # meaningless without the sell-through rate beside it. Measured over the
+        # last seven days, so a weekend spike doesn't dominate a single day.
+        sold, received = _week_sold_and_received(products)
+        for p in products:
+            p.sold_7d = sold.get(p.id, 0)
+            daily = p.sold_7d / 7 if p.sold_7d else 0
+            p.days_cover = (p.stock / daily) if daily else None
+            p.value = p.cost * p.stock
+            p.last_received = received.get(p.id)
+            _set_stock_level(p)
 
     context = {
         "active": "inventory",
@@ -2213,7 +2307,7 @@ def inventory_summary(request):
         "branch": selected[0] if selected else None,
         "selected": selected,
         "selected_ids": {str(b.id) for b in selected},
-        "multi_branch": len(selected) > 1,
+        "multi_branch": multi_branch,
         "hide_branch": True,
         "sorts": [("name", "Name"), ("barcode", "Barcode"), ("category", "Category"),
                   ("stock_min", "On hand: low → high"), ("stock_max", "On hand: high → low")],
@@ -2275,9 +2369,20 @@ def inventory_export(request):
     writer.writerow(["Branch", branch_name])
     writer.writerow(["Date", today.strftime("%d %B %Y")])
     writer.writerow([])
-    writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"]
-                    + (["Branch"] if multi else []))
+    if multi:
+        # Same merge as the page: one row per product name, stock summed,
+        # and the per-branch split spelled out beside it.
+        writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category",
+                         "Balance", "By branch"])
+        for no, g in enumerate(_inventory_grouped(qs, _sort), start=1):
+            writer.writerow([
+                no, g.barcode or "", g.name, "ชิ้น",
+                g.category.name if g.category else "", g.stock,
+                "; ".join(f"{name} {stock}" for name, stock in g.by_branch),
+            ])
+        return response
 
+    writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
     for no, p in enumerate(qs.iterator(), start=1):
         balance = "non-stock" if p.product_type == "S" else p.stock
         writer.writerow([
@@ -2287,7 +2392,7 @@ def inventory_export(request):
             "ชิ้น",
             p.category.name if p.category_id else "",
             balance,
-        ] + ([p.branch.name if p.branch_id else ""] if multi else []))
+        ])
 
     return response
 

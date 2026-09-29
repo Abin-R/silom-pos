@@ -64,11 +64,41 @@ class InventoryMultiBranchTests(TestCase):
         self.assertIn(f"branches={self.paragon.id}", page.context["qs"])
         self.assertIn(f"branches={self.central.id}", page.context["qs"])
 
-    def test_export_covers_every_ticked_branch_with_a_branch_column(self):
+    def test_same_name_is_merged_into_one_row_with_stock_summed(self):
+        make_product(self.central, name="paragon cookie ", stock=4)   # same product, sloppy name
+        page = self._page(branches=[str(self.paragon.id), str(self.central.id)])
+        rows = page.context["products"]
+        merged = [r for r in rows if r.name.strip().lower() == "paragon cookie"]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].stock, 7)
+        self.assertEqual(sorted(merged[0].by_branch), [("Central World", 4), ("Paragon", 3)])
+        self.assertIsNone(merged[0].id, "a merged row has no single product page")
+        self.assertContains(page, "Central World <b")
+
+    def test_different_costs_show_as_varies(self):
+        p = make_product(self.central, name="Paragon Cookie", stock=4)
+        p.cost = p.cost + 5
+        p.save()
+        page = self._page(branches=[str(self.paragon.id), str(self.central.id)])
+        self.assertContains(page, "varies")
+
+    def test_level_filter_uses_the_combined_stock(self):
+        make_product(self.central, name="Paragon Cookie", stock=-1)   # out here, 3 at Paragon: 2 in all
+        page = self._page(branches=[str(self.paragon.id), str(self.central.id)], level="out")
+        self.assertNotContains(page, "Paragon Cookie")
+
+    def test_one_branch_is_unchanged(self):
+        page = self._page(branches=[str(self.paragon.id)])
+        self.assertContains(page, reverse("backoffice:product_detail",
+                                          args=[page.context["products"][0].id]))
+
+    def test_export_merges_by_name_with_a_per_branch_split(self):
+        make_product(self.central, name="Paragon Cookie", stock=4)
         res = self.client.get(reverse("backoffice:inventory_export"),
                               {"branches": [str(self.paragon.id), str(self.central.id)]})
         rows = list(csv.reader(io.StringIO(res.content.decode("utf-8-sig"))))
         header = rows.index(["No.", "Barcode", "Product Name", "Unit", "Category",
-                             "Balance", "Branch"])
-        by_name = {r[2]: r[6] for r in rows[header + 1:]}
-        self.assertEqual(by_name, {"Paragon Cookie": "Paragon", "Central Cake": "Central World"})
+                             "Balance", "By branch"])
+        by_name = {r[2]: (r[5], r[6]) for r in rows[header + 1:]}
+        self.assertEqual(by_name["Paragon Cookie"], ("7", "Central World 4; Paragon 3"))
+        self.assertEqual(by_name["Central Cake"], ("9", "Central World 9"))

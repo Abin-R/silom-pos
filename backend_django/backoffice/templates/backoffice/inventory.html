@@ -162,14 +162,19 @@
             <div style="display:flex;align-items:center;gap:12px">
               <span class="thumb">{{ p.name|initial }}</span>
               <div>
-                <a href="{% url 'backoffice:product_detail' p.id %}?{{ qs }}"><b style="font-weight:620">{{ p.name }}</b></a>
+                {% if p.id %}<a href="{% url 'backoffice:product_detail' p.id %}?{{ qs }}"><b style="font-weight:620">{{ p.name }}</b></a>
+                {% else %}<b style="font-weight:620">{{ p.name }}</b>{% endif %}
                 {% comment %}
                   Not `default:p.category.name` — a filter *argument* that
                   dereferences a null FK raises VariableDoesNotExist rather
                   than resolving to empty, so one uncategorised product used
                   to 500 the whole page.
                 {% endcomment %}
-                <div class="sub">{% if multi_branch and p.branch %}{{ p.branch.name }}{% if p.name_th or p.category %} · {% endif %}{% endif %}{% if p.name_th %}{{ p.name_th }}{% elif p.category %}{{ p.category.name }}{% endif %}</div>
+                <div class="sub">{% if p.name_th %}{{ p.name_th }}{% elif p.category %}{{ p.category.name }}{% endif %}</div>
+                {% if multi_branch %}
+                {# Merged across branches: where the stock actually sits. #}
+                <div class="sub">{% for name, stock in p.by_branch %}{{ name }} <b style="{% if stock <= 0 %}color:var(--red-d){% endif %}">{{ stock }}</b>{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+                {% endif %}
               </div>
             </div>
           </td>
@@ -185,7 +190,7 @@
           <td class="r money">{{ p.sold_7d }}</td>
           <td class="r money" {% if p.days_cover != None and p.days_cover < 1 %}style="color:var(--red-d)"{% elif p.days_cover != None and p.days_cover < 3 %}style="color:var(--amber)"{% endif %}>
             {% if p.days_cover == None %}<span style="color:var(--mut2)">—</span>{% else %}{{ p.days_cover|floatformat:1 }}{% endif %}</td>
-          <td class="r money">฿{{ p.cost|floatformat:2|intcomma }}</td>
+          <td class="r money">{% if p.cost == None %}<span style="color:var(--mut2)" title="Branches have different costs">varies</span>{% else %}฿{{ p.cost|floatformat:2|intcomma }}{% endif %}</td>
           <td class="r money">฿{{ p.value|floatformat:0|intcomma }}</td>
           <td class="r money" style="color:var(--mut)">{{ p.last_received|date:"j M"|default:"—" }}</td>
           <td class="r"><span class="tag {{ p.level_class }}">{{ p.level_label }}</span></td>
