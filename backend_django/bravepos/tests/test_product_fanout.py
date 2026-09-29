@@ -6,12 +6,11 @@ name twice.  Adding a cake therefore meant adding it eight more times, and a
 price change meant opening eight forms — or opening the Sync page afterwards
 and remembering to.  The toggle does it on the save that is already happening.
 
-What it must *not* do is the interesting half.  An edit carries three fields —
-name, Shopster product ID, price — and leaves each branch's cost, photo, stock
-and category exactly as they are: those are the things a shop sets for itself,
-and a sync that flattened them would be unusable anywhere that had ever set
-one.  A rename has to find the copies under the name they still hold.  A
-removed product must not be born dead at a branch that never had it.
+An edit carries the whole form — cost, photo, category and unit included —
+except stock and par level, which describe one shop's shelves.  A rename has
+to find the copies under the name they still hold.  A removed product must not
+be born dead at a branch that never had it.  Removing and restoring are their
+own buttons, each with its own "at all branches too" box.
 
 Run:
     python manage.py test bravepos.tests.test_product_fanout \
@@ -141,7 +140,7 @@ class CreatingWithTheToggleOnTests(FanoutTestCase):
 
 
 class EditingWithTheToggleOnTests(FanoutTestCase):
-    """An edit carries three fields and leaves the rest of each branch alone."""
+    """An edit carries the form, except each branch's stock and par level."""
 
     def setUp(self):
         super().setUp()
@@ -150,7 +149,8 @@ class EditingWithTheToggleOnTests(FanoutTestCase):
         # Give the other branches prices, costs and stock of their own, so a
         # test that says "left alone" has something to leave alone.
         Product.objects.filter(branch__in=[self.silom, self.bio]).update(
-            cost=Decimal("55.00"), stock=9, image_url="https://x/y.jpg")
+            cost=Decimal("55.00"), stock=9, par_level=4,
+            image_url="https://x/y.jpg")
 
     def test_the_price_reaches_the_other_branches(self):
         self.edit(self.product, price="135.00")
@@ -167,12 +167,39 @@ class EditingWithTheToggleOnTests(FanoutTestCase):
             Product.objects.filter(branch=self.silom).count(), 1)
         self.assertIsNotNone(self.at(self.silom, "Cherry Mousse Pop Large"))
 
-    def test_cost_photo_and_stock_stay_branch_local(self):
-        self.edit(self.product, price="135.00", cost="10.00", stock="3")
+    def test_stock_and_par_level_stay_branch_local(self):
+        self.edit(self.product, price="135.00", stock="3", par_level="12")
         copy = self.at(self.silom)
-        self.assertEqual(copy.cost, Decimal("55.00"))
         self.assertEqual(copy.stock, 9)
-        self.assertEqual(copy.image_url, "https://x/y.jpg")
+        self.assertEqual(copy.par_level, 4)
+
+    def test_cost_description_sku_and_flags_travel(self):
+        self.edit(self.product, cost="10.00", name_th="เค้ก", sku="BK-9",
+                  tax_type="V", is_favorite="1")
+        copy = self.at(self.silom)
+        self.assertEqual(copy.cost, Decimal("10.00"))
+        self.assertEqual(copy.name_th, "เค้ก")
+        self.assertEqual(copy.sku, "BK-9")
+        self.assertEqual(copy.tax_type, "V")
+        self.assertTrue(copy.is_favorite)
+
+    def test_the_photo_travels(self):
+        self.edit(self.product, image_url="https://x/new.jpg")
+        self.assertEqual(self.at(self.silom).image_url, "https://x/new.jpg")
+
+    def test_the_category_travels_as_the_target_branch_own(self):
+        cat = Category.objects.create(branch=self.branch, name="Pops")
+        self.edit(self.product, category=str(cat.id))
+        copy = self.at(self.silom)
+        self.assertEqual(copy.category.name, "Pops")
+        self.assertEqual(copy.category.branch, self.silom)
+
+    def test_the_unit_travels(self):
+        unit = Unit.objects.create(branch=self.branch, name="Box")
+        self.edit(self.product, unit=str(unit.id))
+        copy = self.at(self.silom)
+        self.assertEqual(copy.unit.name, "Box")
+        self.assertEqual(copy.unit.branch, self.silom)
 
     def test_a_branch_missing_the_product_gets_it(self):
         self.at(self.bio).delete()
@@ -235,9 +262,7 @@ class WhatTheBannerSaysTests(FanoutTestCase):
     def test_editing_names_the_branches_it_updated(self):
         self.create()
         response = self.edit(self.at(self.branch), price="135.00", follow=True)
-        self.assertContains(
-            response,
-            "name, Shopster ID and price updated at BIO HOUSE, Silom")
+        self.assertContains(response, "Also updated at BIO HOUSE, Silom.")
 
     def test_a_run_that_changed_nothing_says_so(self):
         self.create()
@@ -268,7 +293,7 @@ class TheToggleOnScreenTests(FanoutTestCase):
         self.create(sync=False)
         response = self.client.get(
             reverse("backoffice:product_detail", args=[self.at(self.branch).id]))
-        self.assertContains(response, "Shopster product ID and price")
+        self.assertContains(response, "except stock and par level")
 
     def test_a_shop_with_one_branch_is_not_offered_it(self):
         Branch.objects.filter(pk__in=[self.silom.pk, self.bio.pk]).update(
@@ -276,3 +301,48 @@ class TheToggleOnScreenTests(FanoutTestCase):
         response = self.client.get(
             f"{reverse('backoffice:product_new')}?branch={self.branch.id}")
         self.assertNotContains(response, "Sync to all branches")
+
+
+class RemovingAtEveryBranchTests(FanoutTestCase):
+    """Remove and Restore carry on-sale status when their box is ticked."""
+
+    def setUp(self):
+        super().setUp()
+        self.create()
+        self.product = self.at(self.branch)
+
+    def remove(self, *, sync=True, follow=False):
+        return self.client.post(
+            reverse("backoffice:product_archive", args=[self.product.id]),
+            {"sync_all": "1"} if sync else {}, follow=follow)
+
+    def restore(self, *, sync=True):
+        return self.client.post(
+            reverse("backoffice:product_restore", args=[self.product.id]),
+            {"sync_all": "1"} if sync else {})
+
+    def test_removing_reaches_every_branch(self):
+        self.remove()
+        self.assertFalse(self.at(self.silom).active)
+        self.assertFalse(self.at(self.bio).active)
+
+    def test_without_the_box_only_this_branch_is_removed(self):
+        self.remove(sync=False)
+        self.assertFalse(self.at(self.branch).active)
+        self.assertTrue(self.at(self.silom).active)
+
+    def test_restoring_reaches_every_branch(self):
+        self.remove()
+        self.restore()
+        self.assertTrue(self.at(self.silom).active)
+        self.assertTrue(self.at(self.bio).active)
+
+    def test_restoring_creates_nothing(self):
+        self.at(self.bio).delete()
+        self.remove()
+        self.restore()
+        self.assertIsNone(self.at(self.bio))
+
+    def test_the_banner_names_the_branches(self):
+        response = self.remove(follow=True)
+        self.assertContains(response, "Also removed at BIO HOUSE, Silom.")

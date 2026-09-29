@@ -213,10 +213,10 @@
                 above copied across. Stock starts at 0 there — what is on one
                 shop's shelves is not a fact about another's.
               {% else %}
-                Copies the name, Shopster product ID and price to
-                {{ sync_branches|join:", " }}. Their own cost, photo, stock and
-                category are left alone; a branch that does not have this
-                product yet gets it.
+                Copies everything above except stock and par level to
+                {{ sync_branches|join:", " }} — including cost, photo and
+                category. Their own stock and par level are left alone; a
+                branch that does not have this product yet gets it.
               {% endif %}
             </span>
           </div>
@@ -268,9 +268,14 @@
             <b>Removed</b> in the catalogue.</u>
         </span>
         <form method="post" action="{% url 'backoffice:product_archive' product.id %}?{{ qs }}"
-              style="margin:0"
+              style="margin:0;display:flex;align-items:center;flex-shrink:0"
               onsubmit="return confirm('Remove \u201c{{ product.name|escapejs }}\u201d from the catalogue?\n\nIt stops being sellable. Reports keep it, and you can restore it from Removed.');">
           {% csrf_token %}
+          {% if sync_branches %}
+          <label class="check" style="margin-right:8px">
+            <input type="checkbox" name="sync_all" value="1"> At all branches too
+          </label>
+          {% endif %}
           <button type="submit" class="btn btn-sm btn-danger">
             <svg><use href="#i-trash"/></svg> Remove</button>
         </form>
@@ -288,8 +293,13 @@
             screen with everything below unchanged.</u>
         </span>
         <form method="post" action="{% url 'backoffice:product_restore' product.id %}?{{ qs }}"
-              style="margin:0">
+              style="margin:0;display:flex;align-items:center;flex-shrink:0">
           {% csrf_token %}
+          {% if sync_branches %}
+          <label class="check" style="margin-right:8px">
+            <input type="checkbox" name="sync_all" value="1"> At all branches too
+          </label>
+          {% endif %}
           <button type="submit" class="btn btn-sm btn-blue">
             <svg><use href="#i-check"/></svg> Restore</button>
         </form>

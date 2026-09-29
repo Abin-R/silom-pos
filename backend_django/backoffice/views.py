@@ -2734,11 +2734,19 @@ def _fanout_message(report) -> str:
     if report["created"]:
         parts.append("added to " + ", ".join(report["created"]))
     if report["updated"]:
-        parts.append("name, Shopster ID and price updated at "
-                     + ", ".join(report["updated"]))
+        parts.append("updated at " + ", ".join(report["updated"]))
     if not parts:
         return " Every other branch already matched it."
     return " Also " + "; ".join(parts) + "."
+
+
+def _active_fanout_message(report, verb) -> str:
+    """`_fanout_message` for the Remove and Restore buttons."""
+    if report is None:
+        return ""
+    if report["updated"]:
+        return f" Also {verb} at " + ", ".join(report["updated"]) + "."
+    return " No other branch needed changing."
 
 
 @login_required
@@ -2750,10 +2758,9 @@ def product_detail(request, product_id):
     form, the same values, no banner.  That ambiguity is what produced the
     duplicate rows `product_duplicate` warns about — see its docstring.
 
-    "Sync to all branches" carries three fields to the other branches' copies:
-    the name, the Shopster product ID and the price.  Not the rest, because
-    cost, photo and stock are each shop's own and flattening them would make
-    the toggle unusable anywhere that had ever set one.  ``previous_name`` is
+    "Sync to all branches" carries the whole form to the other branches'
+    copies except stock and par level, which are each shop's own
+    (`catalog.FANOUT_FIELDS` has the list).  ``previous_name`` is
     captured before the form is applied, so a rename reaches the copies that
     still answer to the old name instead of adding a second row beside them.
     """
@@ -2828,11 +2835,15 @@ def product_archive(request, product_id):
         return redirect("backoffice:product_detail", product_id=product.id)
 
     product.active = False
-    product.save(update_fields=["active"])
+    with transaction.atomic():
+        product.save(update_fields=["active"])
+        fanout = (catalog.fanout_active(product)
+                  if request.POST.get("sync_all") else None)
     messages.success(
         request,
         f"\u201c{product.name}\u201d was removed from the catalogue. "
-        f"Reports keep it, and Removed products can restore it.",
+        f"Reports keep it, and Removed products can restore it."
+        + _active_fanout_message(fanout, "removed"),
     )
     return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
 
@@ -2845,8 +2856,14 @@ def product_restore(request, product_id):
         return redirect("backoffice:product_detail", product_id=product.id)
 
     product.active = True
-    product.save(update_fields=["active"])
-    messages.success(request, f"\u201c{product.name}\u201d is back in the catalogue.")
+    with transaction.atomic():
+        product.save(update_fields=["active"])
+        fanout = (catalog.fanout_active(product)
+                  if request.POST.get("sync_all") else None)
+    messages.success(
+        request,
+        f"\u201c{product.name}\u201d is back in the catalogue."
+        + _active_fanout_message(fanout, "restored"))
     return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
 
 

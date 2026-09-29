@@ -273,18 +273,18 @@ def preview(source, target, catalogue=None, removed=None):
 
 
 # ── One product, every branch ───────────────────────────────────────────────
-# What an *edit* carries to the other branches' copies.  Three fields, not
-# `PRODUCT_FIELDS`, and the difference is the point: cost, photo, par level and
-# stock are things each shop settles for itself, so a toggle that flattened
-# them would be unusable at any branch that had ever tuned its own — which is
-# every branch that has traded for a week.  These three are facts about the
-# product rather than about the shop.  The name because one cake under two
-# names is two lines in every report; the price because a price list that
-# disagrees between tills is the thing customers notice; the Shopster id
-# because it is what ties our per-branch row back to the single master row in
-# Shopster's catalogue, and a copy without it drops out of any count that
-# joins the two.
-FANOUT_FIELDS = ("name", "barcode", "price")
+# What an *edit* carries to the other branches' copies: everything on the
+# product form except the two numbers that describe one shop's shelves.  Stock
+# is what a cashier is counting right now, and a par level is tuned to how fast
+# one shop sells — neither means anything at another branch.  Category and unit
+# travel too, but as foreign keys they are resolved under each target rather
+# than copied, so they are handled beside this list, not in it.  On-sale status
+# is not here either: removing a product is its own button, not a save, and
+# `fanout_active` is what carries it.
+FANOUT_FIELDS = (
+    "name", "barcode", "price", "cost", "name_th", "sku", "tax_type",
+    "product_type", "is_favorite", "image_url", "image_base64",
+)
 
 
 def _fanout_match(target, product, previous_name):
@@ -313,7 +313,8 @@ def fanout_product(product, *, previous_name=None, branches=None):
     difference is which way it leans.  `copy_catalogue` runs over a whole
     catalogue at an admin's request and therefore only ever *adds*; this runs
     on one product the admin is looking at and has just typed, so for that one
-    row an overwrite is what they asked for — but only of `FANOUT_FIELDS`.
+    row an overwrite is what they asked for — of `FANOUT_FIELDS`, category and
+    unit, never stock or par level.
 
     A branch that does not have the product gets it, which is what makes the
     toggle mean what it says on a product created before the toggle existed.
@@ -344,15 +345,51 @@ def fanout_product(product, *, previous_name=None, branches=None):
             report["created"].append(target.name)
             continue
 
+        category = None
+        if product.category_id:
+            category, _, _ = upsert_category(
+                target, product.category, update_existing=False,
+            )
+        unit = unit_for(target, product.unit)
+
         changed = _diff(dest, product, FANOUT_FIELDS)
+        for field in changed:
+            setattr(dest, field, getattr(product, field))
+        if dest.category_id != (category.pk if category else None):
+            dest.category = category
+            changed.append("category")
+        if dest.unit_id != (unit.pk if unit else None):
+            dest.unit = unit
+            changed.append("unit")
         if not changed:
             report["unchanged"].append(target.name)
             continue
-        for field in changed:
-            setattr(dest, field, getattr(product, field))
         # update_fields, so this cannot clobber a column it was not asked to
         # touch — stock above all, which a cashier may be moving right now.
         dest.save(update_fields=changed)
         report["updated"].append(target.name)
 
+    return report
+
+
+def fanout_active(product, *, branches=None):
+    """Carry ``product``'s on-sale status to the other branches' copies.
+
+    The Remove and Restore buttons' "at all branches too" box.  Only copies
+    that exist are touched: removing never needs to create anything, and a
+    restore that created rows would be the Sync page's job done by the wrong
+    button.  Matched by name, the way every other sync here matches.
+    """
+    report = {"updated": [], "unchanged": []}
+    targets = other_branches(product.branch) if branches is None else branches
+    for target in targets:
+        dest = _find(target.products, product.name)
+        if dest is None:
+            continue
+        if dest.active == product.active:
+            report["unchanged"].append(target.name)
+            continue
+        dest.active = product.active
+        dest.save(update_fields=["active"])
+        report["updated"].append(target.name)
     return report
