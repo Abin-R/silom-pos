@@ -22,7 +22,7 @@ from django.urls import reverse
 
 from bravepos import seatalk
 from bravepos.models import (
-    Branch, BranchSession, Category, DiscountType, OrderItem, Staff,
+    Branch, BranchSession, Category, DiscountCondition, DiscountType, OrderItem, Staff,
 )
 from bravepos.tests.factories import make_branch, make_product, make_shop, open_shift
 
@@ -262,3 +262,136 @@ class BackofficeTests(TestCase):
             res = self.client.post(reverse("backoffice:discount_new") + self.qs, bad)
             self.assertEqual(res.status_code, 200, bad)
         self.assertFalse(DiscountType.objects.exists())
+
+
+class ComboAndFreeFeedTests(TillTestCase):
+    """Combination and free-item discounts reach only a till that asks for v2."""
+
+    def setUp(self):
+        super().setUp()
+        self.drinks = Category.objects.create(name="Drinks", branch=self.branch)
+        self.latte.category = self.drinks
+        self.latte.save()
+        self.combo = DiscountType.objects.create(
+            branch=self.branch, name="Cake + drink", kind="fixed", value=30,
+            applies_to="combo")
+        DiscountCondition.objects.create(discount_type=self.combo, product=self.cake,
+                                         min_qty=1, sort_order=0)
+        DiscountCondition.objects.create(discount_type=self.combo, category=self.drinks,
+                                         min_qty=2, sort_order=1)
+        self.free = DiscountType.objects.create(
+            branch=self.branch, name="Free latte", kind="free",
+            free_product=self.latte, free_qty=2)
+        DiscountType.objects.create(branch=self.branch, name="Staff", value=10)
+
+    def feed(self, v2):
+        url = "/api/discount-types" + ("?v=2" if v2 else "")
+        return {d["name"]: d for d in self.client.get(url, **self.auth).json()["discount_types"]}
+
+    def test_old_till_never_sees_combos_or_free_items(self):
+        self.assertEqual(set(self.feed(False)), {"Staff"})
+
+    def test_v2_carries_conditions_and_free_item(self):
+        rows = self.feed(True)
+        self.assertEqual(set(rows), {"Staff", "Cake + drink", "Free latte"})
+        combo = rows["Cake + drink"]
+        self.assertFalse(combo["all_products"])
+        self.assertEqual(combo["product_ids"], [])
+        self.assertEqual(combo["conditions"], [
+            {"product_ids": [str(self.cake.id)], "min_qty": 1},
+            {"product_ids": [str(self.latte.id)], "min_qty": 2},
+        ])
+        free = rows["Free latte"]
+        self.assertEqual(free["free_product"], {"id": str(self.latte.id), "name": "Latte",
+                                                "price": 100.0})
+        self.assertEqual(free["free_qty"], 2)
+
+    def test_free_item_whose_product_is_retired_is_dropped(self):
+        self.latte.active = False
+        self.latte.save()
+        self.assertNotIn("Free latte", self.feed(True))
+
+
+class ComboFormTests(TestCase):
+    def setUp(self):
+        admin = Staff(name="Admin", username="adm", email="adm@therollingpinn.com",
+                      role="admin", active=True, backoffice_access=True)
+        admin.set_password("pw-long-enough")
+        admin.save()
+        make_shop()
+        self.branch = make_branch(name="test branch")
+        self.cookies = Category.objects.create(name="Cookies", branch=self.branch)
+        self.cookie = make_product(self.branch, name="Choc chip", price="95.00")
+        self.cookie.category = self.cookies
+        self.cookie.save()
+        self.latte = make_product(self.branch, name="Latte", price="100.00")
+        self.client.post(reverse("backoffice:login"),
+                         {"username": "adm", "password": "pw-long-enough"})
+        self.url = reverse("backoffice:discount_new") + f"?branch={self.branch.id}"
+
+    def post(self, **fields):
+        body = {"name": "Set", "active": "on", "applies_to": "combo", "kind": "fixed",
+                "value": "30", "cond_target": [f"p:{self.latte.id}", f"c:{self.cookies.id}"],
+                "cond_qty": ["1", "1"]}
+        body.update(fields)
+        return self.client.post(self.url, body)
+
+    def test_creates_rows_in_order(self):
+        self.assertEqual(self.post().status_code, 302)
+        dt = DiscountType.objects.get()
+        rows = [(c.product, c.category, c.min_qty) for c in dt.conditions.all()]
+        self.assertEqual(rows, [(self.latte, None, 1), (None, self.cookies, 1)])
+        page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.branch.id}")
+        self.assertContains(page, "Latte + Cookies")
+        edit = self.client.get(reverse("backoffice:discount_detail", args=[dt.id])
+                               + f"?branch={self.branch.id}")
+        # The saved rows come back selected when the discount is edited.
+        html = edit.content.decode()
+        self.assertRegex(html, rf'value="c:{self.cookies.id}"[^>]*\s+selected')
+        self.assertRegex(html, rf'value="p:{self.latte.id}"[^>]*\s+selected')
+
+    def test_fixed_discount_must_be_under_the_cheapest_combo(self):
+        # Latte 100 + cheapest cookie 95 = 195.
+        self.assertEqual(self.post(value="195").status_code, 200)
+        self.assertEqual(self.post(value="194.99").status_code, 302)
+
+    def test_quantity_counts_toward_the_cheapest_combo(self):
+        self.assertEqual(self.post(value="250", cond_qty=["1", "2"]).status_code, 302)  # 100+190
+
+    def test_empty_category_can_never_be_met(self):
+        empty = Category.objects.create(name="Empty", branch=self.branch)
+        res = self.post(cond_target=[f"c:{empty.id}"], cond_qty=["1"])
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(DiscountType.objects.exists())
+
+    def test_rejects_no_rows_foreign_targets_and_free_on_combo(self):
+        other = make_product(make_branch(name="Silom"), name="Elsewhere")
+        for bad in ({"cond_target": [""], "cond_qty": ["1"]},
+                    {"cond_target": [f"p:{other.id}"], "cond_qty": ["1"]},
+                    {"kind": "free", "free_product": str(self.latte.id)}):
+            self.assertEqual(self.post(**bad).status_code, 200, bad)
+        self.assertFalse(DiscountType.objects.exists())
+
+    def test_free_item_discount(self):
+        res = self.client.post(self.url, {
+            "name": "Free latte with cookie", "active": "on", "applies_to": "categories",
+            "categories": [str(self.cookies.id)], "kind": "free",
+            "free_product": str(self.latte.id), "free_qty": "1"})
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual((dt.kind, dt.free_product, dt.free_qty, dt.value),
+                         ("free", self.latte, 1, Decimal(0)))
+        # Missing product → refused.
+        self.assertEqual(self.client.post(self.url, {
+            "name": "x", "applies_to": "all", "kind": "free", "free_qty": "1"}).status_code, 200)
+
+    def test_switching_away_from_combo_drops_its_rows(self):
+        self.post()
+        dt = DiscountType.objects.get()
+        self.client.post(reverse("backoffice:discount_detail", args=[dt.id])
+                         + f"?branch={self.branch.id}",
+                         {"name": "Set", "active": "on", "applies_to": "all",
+                          "kind": "percent", "value": "10"})
+        dt.refresh_from_db()
+        self.assertEqual(dt.applies_to, "all")
+        self.assertFalse(dt.conditions.exists())

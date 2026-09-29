@@ -55,8 +55,8 @@
     <thead>
       <tr>
         <th style="width:70px">Order</th><th>Name</th>
-        <th style="width:140px">Discount</th>
-        <th style="width:220px">Applies to</th>
+        <th style="width:200px">Discount</th>
+        <th style="width:280px">Customer buys</th>
         <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
       </tr>
     </thead>
@@ -68,8 +68,11 @@
           <a href="{% url 'backoffice:discount_detail' discount_id=d.id %}?{{ qs }}">
             <b style="font-weight:620;color:var(--txt)">{{ d.name }}</b></a>
         </td>
-        <td class="money">
-          {% if d.kind == 'percent' %}{{ d.value|floatformat:"-2" }}%{% else %}฿{{ d.value|floatformat:2 }}{% endif %}
+        <td>
+          {% if d.kind == 'free' %}Free: {{ d.free_product.name|default:"—" }} × {{ d.free_qty }}
+          {% elif d.kind == 'percent' %}<span class="money">{{ d.value|floatformat:"-2" }}%</span>
+          {% else %}<span class="money">฿{{ d.value|floatformat:2 }}</span>{% endif %}
+          {% if d.applies_to == 'combo' and d.kind != 'free' %}<div class="sub">off the set</div>{% endif %}
         </td>
         <td>
           {% if d.applies_to == 'products' %}{{ d.product_count }} product{{ d.product_count|pluralize }}
@@ -77,6 +80,9 @@
             <span title="{% for c in d.categories.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}">
               {% for c in d.categories.all|slice:":2" %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if d.category_count > 2 %} +{{ d.category_count|add:"-2" }}{% endif %}</span>
             <div class="sub">categor{{ d.category_count|pluralize:"y,ies" }}</div>
+          {% elif d.applies_to == 'combo' %}
+            {% for c in d.conditions.all %}{% if not forloop.first %} + {% endif %}{% if c.product %}{{ c.product.name }}{% else %}{{ c.category.name }}{% endif %}{% if c.min_qty > 1 %} ×{{ c.min_qty }}{% endif %}{% endfor %}
+            <div class="sub">combination</div>
           {% else %}All products{% endif %}
         </td>
         <td>

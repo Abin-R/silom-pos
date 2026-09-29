@@ -1039,17 +1039,27 @@ class DiscountType(models.Model):
     """
     KIND_PERCENT = "percent"
     KIND_FIXED = "fixed"
+    # Free item: choosing the discount on a product adds ``free_qty`` pcs of
+    # ``free_product`` to the bill at ฿0.  One-product discounts only.
+    KIND_FREE = "free"
     KIND_CHOICES = [
         (KIND_PERCENT, "Percentage"),
         (KIND_FIXED, "Fixed amount"),
+        (KIND_FREE, "Free item"),
     ]
     APPLIES_ALL = "all"
     APPLIES_PRODUCTS = "products"
     APPLIES_CATEGORIES = "categories"
+    # A combination: every row in ``conditions`` must be in the cart together
+    # (Product A AND Product B, Product AND Category, Category ≥ Y pcs …).
+    # The discount is taken off the matched items as a set and split across
+    # their lines in proportion to price — the POS has no order-level discount.
+    APPLIES_COMBO = "combo"
     APPLIES_CHOICES = [
         (APPLIES_ALL, "All products"),
         (APPLIES_PRODUCTS, "Selected products"),
         (APPLIES_CATEGORIES, "Selected categories"),
+        (APPLIES_COMBO, "Combination"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
@@ -1067,6 +1077,11 @@ class DiscountType(models.Model):
     categories = models.ManyToManyField(
         Category, blank=True, related_name="discount_types",
     )
+    free_product = models.ForeignKey(
+        Product, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="free_with_discount_types",
+    )
+    free_qty = models.PositiveIntegerField(default=1)
     sort_order = models.IntegerField(default=0)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1078,6 +1093,31 @@ class DiscountType(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class DiscountCondition(models.Model):
+    """One row of a combination discount: a product or a category, and how
+    many pieces of it the cart must hold.  All rows must be met together."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    discount_type = models.ForeignKey(
+        DiscountType, on_delete=models.CASCADE, related_name="conditions",
+    )
+    # Exactly one of the two is set.
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, null=True, blank=True, related_name="+",
+    )
+    category = models.ForeignKey(
+        Category, on_delete=models.CASCADE, null=True, blank=True, related_name="+",
+    )
+    min_qty = models.PositiveIntegerField(default=1)
+    sort_order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order"]
+
+    def __str__(self) -> str:
+        target = self.product or self.category
+        return f"{target} ≥ {self.min_qty}"
 
 
 # ─── Upsell suggestions ──────────────────────────────────────────────────────

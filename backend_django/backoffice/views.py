@@ -33,6 +33,7 @@ from bravepos.models import (
     BranchSession,
     Category,
     Customer,
+    DiscountCondition,
     DiscountType,
     Order,
     OrderItem,
@@ -3242,11 +3243,62 @@ def _discount_categories(branch):
             .order_by("order", "name"))
 
 
+class _DiscountPicks:
+    """What a discount-type form chose besides the row's own fields: the
+    product/category lists and the combination rows.  M2Ms and rows are saved
+    by the caller after the discount itself, since a new row has no id yet."""
+
+    def __init__(self, products=(), categories=(), rows=()):
+        self.products = list(products)
+        self.categories = list(categories)
+        # [{"target": "p:<uuid>" | "c:<uuid>", "min_qty": int}]
+        self.rows = list(rows)
+
+    @classmethod
+    def of(cls, dt):
+        if dt.pk is None:
+            return cls()
+        return cls(
+            dt.products.values_list("id", flat=True),
+            dt.categories.values_list("id", flat=True),
+            [{"target": f"p:{c.product_id}" if c.product_id else f"c:{c.category_id}",
+              "min_qty": c.min_qty} for c in dt.conditions.all()],
+        )
+
+    def save(self, dt):
+        dt.products.set(self.products)
+        dt.categories.set(self.categories)
+        dt.conditions.all().delete()
+        DiscountCondition.objects.bulk_create([
+            DiscountCondition(
+                discount_type=dt, sort_order=i, min_qty=r["min_qty"],
+                product_id=r["target"][2:] if r["target"].startswith("p:") else None,
+                category_id=r["target"][2:] if r["target"].startswith("c:") else None,
+            )
+            for i, r in enumerate(self.rows)
+        ])
+
+
+def _cheapest_combo(branch, rows):
+    """The lowest price a cart meeting every row could come to, or None when a
+    row can't be met at all (a category with no active products).  A fixed
+    discount must stay under this, or some combo would ring up below ฿0."""
+    total = Decimal(0)
+    for r in rows:
+        kind, ident = r["target"][:1], r["target"][2:]
+        qs = Product.objects.filter(branch=branch, active=True)
+        qs = qs.filter(id=ident) if kind == "p" else qs.filter(category_id=ident)
+        cheapest = qs.order_by("price").values_list("price", flat=True).first()
+        if cheapest is None:
+            return None
+        total += cheapest * r["min_qty"]
+    return total
+
+
 def _apply_discount_form(dt, post, branch):
     """Read a POSTed discount-type form onto ``dt``.
 
-    Returns ``(errors, product_ids, category_ids)``; the M2Ms are set by the
-    caller after the row has been saved, since a new row has no id yet.
+    Returns ``(errors, picks)`` — see :class:`_DiscountPicks`.
     """
     errors = []
     dt.branch = branch
@@ -3259,19 +3311,6 @@ def _apply_discount_form(dt, post, branch):
         # indistinguishable from it on the till and in the order history.
         errors.append("“Other” is reserved for the till's own hand-entered discount — pick another name.")
 
-    dt.kind = post.get("kind") if post.get("kind") in dict(DiscountType.KIND_CHOICES) \
-        else DiscountType.KIND_PERCENT
-    try:
-        dt.value = Decimal((post.get("value") or "").strip())
-    except InvalidOperation:
-        dt.value = Decimal(0)
-        errors.append("Enter the discount as a number.")
-    else:
-        if dt.value <= 0:
-            errors.append("The discount must be more than zero.")
-        elif dt.kind == DiscountType.KIND_PERCENT and dt.value > 100:
-            errors.append("A percentage discount cannot be more than 100%.")
-
     try:
         dt.sort_order = int(post.get("sort_order") or 0)
     except ValueError:
@@ -3281,25 +3320,101 @@ def _apply_discount_form(dt, post, branch):
     applies = post.get("applies_to")
     dt.applies_to = applies if applies in dict(DiscountType.APPLIES_CHOICES) \
         else DiscountType.APPLIES_ALL
-    product_ids, category_ids = [], []
+    dt.kind = post.get("kind") if post.get("kind") in dict(DiscountType.KIND_CHOICES) \
+        else DiscountType.KIND_PERCENT
+
+    # ── What the customer buys ─────────────────────────────────────────
+    picks = _DiscountPicks()
     if dt.applies_to == DiscountType.APPLIES_PRODUCTS:
         wanted = [w for w in post.getlist("products") if w]
-        product_ids = list(
+        picks.products = list(
             _discount_products(branch).filter(id__in=wanted).values_list("id", flat=True)
         ) if wanted else []
-        if not product_ids:
+        if not picks.products:
             errors.append("Pick at least one product, or make the discount apply to all products.")
     elif dt.applies_to == DiscountType.APPLIES_CATEGORIES:
         wanted = [w for w in post.getlist("categories") if w]
-        category_ids = list(
+        picks.categories = list(
             _discount_categories(branch).filter(id__in=wanted).values_list("id", flat=True)
         ) if wanted else []
-        if not category_ids:
+        if not picks.categories:
             errors.append("Pick at least one category, or make the discount apply to all products.")
-    return errors, product_ids, category_ids
+    elif dt.applies_to == DiscountType.APPLIES_COMBO:
+        valid = ({f"p:{i}" for i in _discount_products(branch).values_list("id", flat=True)}
+                 | {f"c:{i}" for i in _discount_categories(branch).values_list("id", flat=True)})
+        for target, qty in zip(post.getlist("cond_target"), post.getlist("cond_qty")):
+            if not target:
+                continue
+            try:
+                n = int(qty or 1)
+            except ValueError:
+                n = 0
+            if target not in valid:
+                errors.append("A combination row names a product or category that is not at this branch.")
+                continue
+            if n < 1:
+                errors.append("Each combination row needs a quantity of at least 1.")
+                n = 1
+            picks.rows.append({"target": target, "min_qty": n})
+        if not picks.rows:
+            errors.append("Add at least one product or category the customer has to buy.")
+
+    # ── What the customer gets ─────────────────────────────────────────
+    dt.free_product = None
+    if dt.kind == DiscountType.KIND_FREE:
+        dt.value = Decimal(0)
+        if dt.applies_to == DiscountType.APPLIES_COMBO:
+            errors.append("A free item can only be given with a one-product discount for now — "
+                          "pick a fixed or percentage discount for a combination.")
+        wanted = (post.get("free_product") or "").strip()
+        dt.free_product = next(
+            (p for p in _discount_products(branch) if str(p.id) == wanted), None)
+        if dt.free_product is None:
+            errors.append("Pick the product that is given free.")
+        try:
+            dt.free_qty = int(post.get("free_qty") or 1)
+        except ValueError:
+            dt.free_qty = 0
+        if dt.free_qty < 1:
+            errors.append("Give away at least 1 piece.")
+            dt.free_qty = 1
+    else:
+        try:
+            dt.value = Decimal((post.get("value") or "").strip())
+        except InvalidOperation:
+            dt.value = Decimal(0)
+            errors.append("Enter the discount as a number.")
+        else:
+            if dt.value <= 0:
+                errors.append("The discount must be more than zero.")
+            elif dt.kind == DiscountType.KIND_PERCENT and dt.value > 100:
+                errors.append("A percentage discount cannot be more than 100%.")
+            elif dt.kind == DiscountType.KIND_FIXED and picks.rows:
+                cheapest = _cheapest_combo(branch, picks.rows)
+                if cheapest is None:
+                    errors.append("A category in the combination has no active products, "
+                                  "so the combination can never be met.")
+                elif dt.value >= cheapest:
+                    errors.append(
+                        f"The discount (฿{dt.value:,.2f}) must be less than the cheapest "
+                        f"this combination can ring up at (฿{cheapest:,.2f}).")
+    return errors, picks
 
 
-def _discount_form_context(request, branches, branch, dt, mode, selected_ids, selected_cats):
+def _discount_form_context(request, branches, branch, dt, mode, picks):
+    b = dt.branch or branch
+    products = list(_discount_products(b))
+    categories = list(_discount_categories(b))
+    # The cheapest active product per category, for the form's live
+    # "cheapest combo" hint.  The server checks it again on save.
+    cat_min = dict(Product.objects.filter(branch=b, active=True, category__isnull=False)
+                   .values("category_id").annotate(m=Min("price"))
+                   .values_list("category_id", "m")) if b else {}
+    for c in categories:
+        c.min_price = cat_min.get(c.id)
+        c.key = f"c:{c.id}"
+    for p in products:
+        p.key = f"p:{p.id}"
     return {
         "active": "discounts",
         "branches": branches,
@@ -3307,10 +3422,11 @@ def _discount_form_context(request, branches, branch, dt, mode, selected_ids, se
         "dt": dt,
         "mode": mode,
         "kinds": DiscountType.KIND_CHOICES,
-        "products": _discount_products(dt.branch or branch),
-        "categories": _discount_categories(dt.branch or branch),
-        "selected_ids": {str(i) for i in selected_ids},
-        "selected_cats": {str(i) for i in selected_cats},
+        "products": products,
+        "categories": categories,
+        "selected_ids": {str(i) for i in picks.products},
+        "selected_cats": {str(i) for i in picks.categories},
+        "cond_rows": picks.rows or [{"target": "", "min_qty": 1}],
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -3338,7 +3454,8 @@ def discount_list(request):
     qs = DiscountType.objects.filter(branch=branch) if branch else DiscountType.objects.none()
     qs = (qs.annotate(product_count=Count("products", distinct=True),
                       category_count=Count("categories", distinct=True))
-          .prefetch_related("categories")
+          .select_related("free_product")
+          .prefetch_related("categories", "conditions__product", "conditions__category")
           .order_by("sort_order", "name"))
 
     context = {
@@ -3357,44 +3474,41 @@ def discount_new(request):
     branches, branch, _, _ = _common_filters(request)
     dt = DiscountType(branch=branch, active=True, applies_to=DiscountType.APPLIES_ALL,
                       kind=DiscountType.KIND_PERCENT)
-    selected, cats = [], []
+    picks = _DiscountPicks()
     if request.method == "POST":
-        errors, selected, cats = _apply_discount_form(dt, request.POST, branch)
+        errors, picks = _apply_discount_form(dt, request.POST, branch)
         if not errors:
             with transaction.atomic():
                 dt.save()
-                dt.products.set(selected)
-                dt.categories.set(cats)
+                picks.save(dt)
             messages.success(request, f"“{dt.name}” added.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "new", selected, cats))
+                  _discount_form_context(request, branches, branch, dt, "new", picks))
 
 
 @login_required
 def discount_detail(request, discount_id):
     branches, branch, _, _ = _common_filters(request)
     dt = get_object_or_404(DiscountType, id=discount_id)
-    selected = list(dt.products.values_list("id", flat=True))
-    cats = list(dt.categories.values_list("id", flat=True))
+    picks = _DiscountPicks.of(dt)
     if request.method == "POST":
-        errors, selected, cats = _apply_discount_form(dt, request.POST, dt.branch or branch)
+        errors, picks = _apply_discount_form(dt, request.POST, dt.branch or branch)
         if not errors:
             with transaction.atomic():
                 dt.save()
-                # Only the list the chosen mode uses is kept; switching a
-                # preset from categories to products must not leave the old
-                # categories quietly attached.
-                dt.products.set(selected)
-                dt.categories.set(cats)
+                # Only what the chosen mode uses is kept; switching a discount
+                # from categories to products must not leave the old
+                # categories (or combination rows) quietly attached.
+                picks.save(dt)
             messages.success(request, f"“{dt.name}” saved.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "edit", selected, cats))
+                  _discount_form_context(request, branches, branch, dt, "edit", picks))
 
 
 @login_required

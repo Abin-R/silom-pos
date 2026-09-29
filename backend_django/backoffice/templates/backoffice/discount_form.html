@@ -1,8 +1,17 @@
 {% extends "backoffice/base.html" %}
 {% comment %}
-  Add / edit a discount type. "Applies to" defaults to every product; picking
-  "Selected products" reveals the branch's catalogue, grouped the way the till
-  groups it, with a filter box because a branch carries dozens of products.
+  Add / edit a discount type, in the "customer buys → customer gets" shape
+  the big POS systems use rather than a free AND/OR rule builder (non-technical
+  users misread Boolean logic).
+
+  Customer buys: one product at a time (all products, picked products, or
+  every product in picked categories), or a combination — rows of product or
+  category + minimum quantity that must all be in the cart together. That one
+  row form covers Product+Product, Product+Category, Category+Category and
+  "≥ Y pcs".
+
+  Customer gets: percentage, fixed baht, or (one-product discounts only) a
+  free item.
 {% endcomment %}
 
 {% block title %}{% if mode == 'new' %}Add discount type{% else %}{{ dt.name }}{% endif %}{% endblock %}
@@ -15,7 +24,7 @@
 {% endblock %}
 
 {% block content %}
-<form method="post" style="max-width:720px">
+<form method="post" style="max-width:760px" id="discountForm">
   {% csrf_token %}
   <div class="panel">
     <div class="panel-h">Discount type</div>
@@ -23,29 +32,13 @@
       <div class="field">
         <label for="f-name">Name</label>
         <input id="f-name" type="text" name="name" required maxlength="120" value="{{ dt.name }}"
-               placeholder="e.g. Staff discount">
+               placeholder="e.g. Cookie + Latte set">
         <span class="hint">What the cashier sees in the dropdown.</span>
       </div>
       <div class="field">
         <label for="f-order">Order</label>
         <input id="f-order" type="number" name="sort_order" value="{{ dt.sort_order }}">
         <span class="hint">Lower numbers show first in the dropdown.</span>
-      </div>
-      <div class="field">
-        <label for="f-kind">Type</label>
-        <select id="f-kind" name="kind">
-          {% for value, label in kinds %}
-            <option value="{{ value }}" {% if dt.kind == value %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label for="f-value">Discount</label>
-        <input id="f-value" type="number" name="value" required min="0.01" step="0.01"
-               value="{% if dt.value %}{{ dt.value }}{% endif %}" placeholder="e.g. 10">
-        <span class="hint" id="valueHint">
-          {% if dt.kind == 'fixed' %}Baht off each line it is applied to.{% else %}Percent off the line, 0–100.{% endif %}
-        </span>
       </div>
       <div class="field wide">
         <label class="check">
@@ -56,22 +49,28 @@
     </div>
   </div>
 
+  {# ── Customer buys ──────────────────────────────────────────────── #}
   <div class="panel" style="margin-top:16px">
-    <div class="panel-h">Applies to</div>
+    <div class="panel-h">Customer buys</div>
     <div class="form-grid">
       <div class="field wide">
         <label class="check">
           <input type="radio" name="applies_to" value="all" {% if dt.applies_to == 'all' %}checked{% endif %}>
-          All products
+          Any product
         </label>
         <label class="check">
           <input type="radio" name="applies_to" value="products" {% if dt.applies_to == 'products' %}checked{% endif %}>
-          Selected products only
+          One of the selected products
         </label>
         <label class="check">
           <input type="radio" name="applies_to" value="categories" {% if dt.applies_to == 'categories' %}checked{% endif %}>
-          Every product in selected categories
+          Any product in the selected categories
         </label>
+        <label class="check">
+          <input type="radio" name="applies_to" value="combo" {% if dt.applies_to == 'combo' %}checked{% endif %}>
+          A combination — all of these together
+        </label>
+        <span class="hint" id="appliesHint"></span>
       </div>
     </div>
 
@@ -119,6 +118,80 @@
       </div>
     </div>
 
+    <div id="comboPicker" {% if dt.applies_to != 'combo' %}hidden{% endif %} style="padding:0 18px 18px">
+      <div class="hint" style="color:var(--mut2);font-size:12.5px;margin-bottom:10px">
+        Every row must be in the cart. A category row is met by any of its products.
+        The discount comes off these items only — anything else on the bill stays full price.
+      </div>
+      <div id="condRows" style="display:flex;flex-direction:column;gap:8px">
+        {% for r in cond_rows %}
+        <div class="cond-row" style="display:flex;gap:8px;align-items:center">
+          <select name="cond_target" class="inp cond-target" style="flex:1;min-width:0">
+            <option value="">Pick a product or category…</option>
+            <optgroup label="Categories — any product in it">
+              {% for c in categories %}
+                <option value="{{ c.key }}" data-price="{{ c.min_price|default_if_none:'' }}"
+                        {% if r.target == c.key %}selected{% endif %}>
+                  {{ c.name }} (category · {{ c.product_count }} product{{ c.product_count|pluralize }})</option>
+              {% endfor %}
+            </optgroup>
+            <optgroup label="Products">
+              {% for p in products %}
+                <option value="{{ p.key }}" data-price="{{ p.price }}"
+                        {% if r.target == p.key %}selected{% endif %}>
+                  {{ p.name }} — ฿{{ p.price|floatformat:2 }}</option>
+              {% endfor %}
+            </optgroup>
+          </select>
+          <span style="color:var(--mut2);font-size:13px;white-space:nowrap">qty ≥</span>
+          <input type="number" name="cond_qty" class="inp cond-qty" min="1" step="1"
+                 value="{{ r.min_qty }}" style="width:72px">
+          <button type="button" class="ico-btn danger cond-del" title="Remove row">
+            <svg><use href="#i-x"/></svg></button>
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" class="btn btn-sm" id="condAdd" style="margin-top:10px">
+        <svg><use href="#i-plus"/></svg> Add product or category</button>
+      <div id="comboPrice" style="margin-top:10px;color:var(--mut2);font-size:12.5px"></div>
+    </div>
+  </div>
+
+  {# ── Customer gets ──────────────────────────────────────────────── #}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-h">Customer gets</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-kind">Benefit</label>
+        <select id="f-kind" name="kind">
+          {% for value, label in kinds %}
+            <option value="{{ value }}" {% if dt.kind == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" id="valueField">
+        <label for="f-value">Discount</label>
+        <input id="f-value" type="number" name="value" min="0.01" step="0.01"
+               value="{% if dt.value %}{{ dt.value }}{% endif %}" placeholder="e.g. 10">
+        <span class="hint" id="valueHint"></span>
+      </div>
+      <div class="field" id="freeProductField">
+        <label for="f-free">Free product</label>
+        <select id="f-free" name="free_product">
+          <option value="">Pick the product given free…</option>
+          {% for p in products %}
+            <option value="{{ p.id }}" {% if dt.free_product_id == p.id %}selected{% endif %}>
+              {{ p.name }} — ฿{{ p.price|floatformat:2 }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" id="freeQtyField">
+        <label for="f-freeqty">Pieces free</label>
+        <input id="f-freeqty" type="number" name="free_qty" min="1" step="1" value="{{ dt.free_qty|default:1 }}">
+        <span class="hint">Added to the bill at ฿0 each time the cashier picks this discount.</span>
+      </div>
+    </div>
+
     <div class="form-actions">
       <button type="submit" class="btn btn-blue">
         <svg><use href="#i-check"/></svg>
@@ -130,24 +203,107 @@
 
 <script>
 (function () {
-  var picker = document.getElementById('productPicker');
-  var catPicker = document.getElementById('categoryPicker');
-  var radios = document.querySelectorAll('input[name="applies_to"]');
-  var filter = document.getElementById('productFilter');
-  var count = document.getElementById('pickedCount');
-  var kind = document.getElementById('f-kind');
-  var hint = document.getElementById('valueHint');
+  var $ = function (id) { return document.getElementById(id); };
+  var kind = $('f-kind'), value = $('f-value'), hint = $('valueHint');
+  var freeOpt = kind.querySelector('option[value="free"]');
+
+  function applies() {
+    var sel = document.querySelector('input[name="applies_to"]:checked');
+    return sel ? sel.value : 'all';
+  }
+
+  function money(n) { return '฿' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+  // The cheapest a cart meeting every row can come to — a fixed discount
+  // must stay under it. Mirrors the server's check.
+  function cheapestCombo() {
+    var total = 0, rows = 0;
+    var bad = false;
+    document.querySelectorAll('#condRows .cond-row').forEach(function (row) {
+      var opt = row.querySelector('.cond-target').selectedOptions[0];
+      if (!opt || !opt.value) return;
+      var p = parseFloat(opt.dataset.price);
+      if (isNaN(p)) { bad = true; return; }
+      total += p * Math.max(1, parseInt(row.querySelector('.cond-qty').value, 10) || 1);
+      rows++;
+    });
+    return {total: total, rows: rows, bad: bad};
+  }
 
   function sync() {
-    var sel = document.querySelector('input[name="applies_to"]:checked');
-    picker.hidden = !sel || sel.value !== 'products';
-    catPicker.hidden = !sel || sel.value !== 'categories';
+    var a = applies(), k = kind.value, combo = a === 'combo';
+    $('productPicker').hidden = a !== 'products';
+    $('categoryPicker').hidden = a !== 'categories';
+    $('comboPicker').hidden = !combo;
+
+    // A free item is a one-product benefit for now.
+    freeOpt.disabled = combo;
+    if (combo && k === 'free') { kind.value = k = 'percent'; }
+
+    var free = k === 'free';
+    // style.display, not .hidden: `.field` sets its own display, which beats
+    // the hidden attribute.
+    var show = function (id, on) { $(id).style.display = on ? '' : 'none'; };
+    show('valueField', !free);
+    value.required = !free;
+    show('freeProductField', free);
+    show('freeQtyField', free);
+
+    if (k === 'fixed') {
+      hint.textContent = combo ? 'Baht off the combination as a whole.' : 'Baht off each line it is applied to.';
+    } else if (k === 'percent') {
+      hint.textContent = combo ? 'Percent off the combination as a whole, 0–100.' : 'Percent off the line, 0–100.';
+    }
+
+    var cp = $('comboPrice');
+    if (combo) {
+      var c = cheapestCombo();
+      if (c.bad) {
+        cp.textContent = 'A category in this combination has no active products, so it can never be met.';
+        cp.style.color = 'var(--red)';
+      } else if (c.rows) {
+        var over = k === 'fixed' && parseFloat(value.value) >= c.total;
+        cp.textContent = 'Cheapest this combination can ring up at: ' + money(c.total) +
+          (k === 'fixed' ? ' · the discount must be less than that' : '');
+        cp.style.color = over ? 'var(--red)' : 'var(--mut2)';
+      } else {
+        cp.textContent = '';
+      }
+    }
+    $('appliesHint').textContent = combo
+      ? 'Shown on the till only once every row is in the cart; applies again for each complete set.'
+      : '';
   }
+
+  // ── Combination rows ─────────────────────────────────────────────
+  var rows = $('condRows');
+  var template = rows.querySelector('.cond-row').cloneNode(true);
+  template.querySelector('.cond-target').value = '';
+  template.querySelector('.cond-qty').value = 1;
+  $('condAdd').addEventListener('click', function () {
+    rows.appendChild(template.cloneNode(true));
+    sync();
+  });
+  rows.addEventListener('click', function (e) {
+    var del = e.target.closest('.cond-del');
+    if (!del) return;
+    var row = del.closest('.cond-row');
+    if (rows.querySelectorAll('.cond-row').length > 1) {
+      row.remove();
+    } else {
+      row.querySelector('.cond-target').value = '';
+      row.querySelector('.cond-qty').value = 1;
+    }
+    sync();
+  });
+  rows.addEventListener('change', sync);
+  rows.addEventListener('input', sync);
+
+  // ── Product picker filter + count ─────────────────────────────────
+  var filter = $('productFilter'), count = $('pickedCount');
   function recount() {
-    var n = document.querySelectorAll('input[name="products"]:checked').length;
-    count.textContent = n + ' selected';
+    count.textContent = document.querySelectorAll('input[name="products"]:checked').length + ' selected';
   }
-  radios.forEach(function (r) { r.addEventListener('change', sync); });
   document.querySelectorAll('input[name="products"]').forEach(function (c) {
     c.addEventListener('change', recount);
   });
@@ -163,10 +319,12 @@
       g.style.display = any ? '' : 'none';
     });
   });
-  kind.addEventListener('change', function () {
-    hint.textContent = kind.value === 'fixed'
-      ? 'Baht off each line it is applied to.' : 'Percent off the line, 0–100.';
+
+  document.querySelectorAll('input[name="applies_to"]').forEach(function (r) {
+    r.addEventListener('change', sync);
   });
+  kind.addEventListener('change', sync);
+  value.addEventListener('input', sync);
   sync(); recount();
 })();
 </script>

@@ -598,25 +598,36 @@ def discount_types(request):
     the till only understands a product list, and resolving it here is what
     covers a product added to the category after the preset was made.
     ``category_ids`` rides along for a till that wants to match on it itself.
+
+    Combination and free-item discounts are sent only to a till that asks with
+    ``?v=2``.  An older till reads every row as "percent, else baht off", so it
+    would offer a free item as ฿0 off and a combination as a one-product
+    discount — leaving them out is what keeps it correct.
     """
     branch = request.session_obj.branch
     if branch is None or not branch.discount_types_enabled:
         return Response({'enabled': False, 'discount_types': []})
-    rows = list(
-        DiscountType.objects
-        .filter(branch=branch, active=True)
-        .prefetch_related('products', 'categories')
-    )
+    v2 = request.query_params.get('v') == '2'
+    qs = DiscountType.objects.filter(branch=branch, active=True)
+    if not v2:
+        qs = (qs.exclude(applies_to=DiscountType.APPLIES_COMBO)
+                .exclude(kind=DiscountType.KIND_FREE))
+    rows = list(qs.select_related('free_product')
+                  .prefetch_related('products', 'categories', 'conditions'))
 
-    # One query for every category any preset names, not one per preset.
+    # One query for every category any preset or combination row names.
     cat_ids = {c.id for d in rows if d.applies_to == DiscountType.APPLIES_CATEGORIES
                for c in d.categories.all()}
+    cat_ids |= {c.category_id for d in rows for c in d.conditions.all() if c.category_id}
     by_cat: dict = {}
     if cat_ids:
         for pid, cid in (Product.objects
                          .filter(branch=branch, active=True, category_id__in=cat_ids)
                          .values_list('id', 'category_id')):
             by_cat.setdefault(cid, []).append(str(pid))
+    live_ids = {str(i) for i in Product.objects.filter(branch=branch, active=True)
+                .filter(id__in={c.product_id for d in rows for c in d.conditions.all()
+                                if c.product_id}).values_list('id', flat=True)}
 
     def product_ids(d):
         if d.applies_to == DiscountType.APPLIES_PRODUCTS:
@@ -625,23 +636,48 @@ def discount_types(request):
             return [pid for c in d.categories.all() for pid in by_cat.get(c.id, [])]
         return []
 
-    return Response({
-        'enabled': True,
-        'discount_types': [
-            {
-                'id': str(d.id),
-                'name': d.name,
-                'kind': d.kind,
-                'value': float(d.value),
-                'applies_to': d.applies_to,
-                'all_products': d.applies_to == DiscountType.APPLIES_ALL,
-                'product_ids': product_ids(d),
-                'category_ids': ([str(c.id) for c in d.categories.all()]
-                                 if d.applies_to == DiscountType.APPLIES_CATEGORIES else []),
-            }
-            for d in rows
-        ],
-    })
+    def conditions(d):
+        out = []
+        for c in d.conditions.all():
+            if c.product_id:
+                ids = [str(c.product_id)] if str(c.product_id) in live_ids else []
+            else:
+                ids = by_cat.get(c.category_id, [])
+            out.append({'product_ids': ids, 'min_qty': c.min_qty})
+        return out
+
+    def free_product(d):
+        p = d.free_product
+        if p is None or not p.active or p.branch_id != branch.id:
+            return None
+        return {'id': str(p.id), 'name': p.name, 'price': float(p.price)}
+
+    payload = []
+    for d in rows:
+        row = {
+            'id': str(d.id),
+            'name': d.name,
+            'kind': d.kind,
+            'value': float(d.value),
+            'applies_to': d.applies_to,
+            'all_products': d.applies_to == DiscountType.APPLIES_ALL,
+            'product_ids': product_ids(d),
+            'category_ids': ([str(c.id) for c in d.categories.all()]
+                             if d.applies_to == DiscountType.APPLIES_CATEGORIES else []),
+        }
+        if v2:
+            if d.applies_to == DiscountType.APPLIES_COMBO:
+                row['conditions'] = conditions(d)
+            if d.kind == DiscountType.KIND_FREE:
+                row['free_product'] = free_product(d)
+                row['free_qty'] = d.free_qty
+                # A free item whose product has since been retired has
+                # nothing left to give away.
+                if row['free_product'] is None:
+                    continue
+        payload.append(row)
+
+    return Response({'enabled': True, 'discount_types': payload})
 
 
 class BranchViewSet(viewsets.ModelViewSet):
