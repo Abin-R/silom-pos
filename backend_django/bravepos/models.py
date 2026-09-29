@@ -1082,10 +1082,26 @@ class DiscountType(models.Model):
         related_name="free_with_discount_types",
     )
     free_qty = models.PositiveIntegerField(default=1)
+    # "PR-0001": the promotion's ID on paper, receipts and in conversation.
+    # Assigned once on first save and never reused or edited.
+    code = models.CharField(max_length=16, unique=True, null=True, blank=True, editable=False)
+    # Validity period, inclusive, in shop-local dates.  Blank = open-ended.
+    # The status (scheduled / active / ended) is derived from these and the
+    # transaction date — nobody sets it by hand.
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
     sort_order = models.IntegerField(default=0)
+    # The manual pause switch ("Offer this discount on the till").  Separate
+    # from the date-driven status: it stops a promotion early without
+    # rewriting the dates it was planned with.
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    STATUS_ACTIVE = "active"
+    STATUS_SCHEDULED = "scheduled"
+    STATUS_ENDED = "ended"
+    STATUS_PAUSED = "paused"
 
     class Meta:
         ordering = ["sort_order", "name"]
@@ -1093,6 +1109,31 @@ class DiscountType(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def status_on(self, day) -> str:
+        """The promotion's status on ``day`` (a shop-local date)."""
+        if not self.active:
+            return self.STATUS_PAUSED
+        if self.start_date and day < self.start_date:
+            return self.STATUS_SCHEDULED
+        if self.end_date and day > self.end_date:
+            return self.STATUS_ENDED
+        return self.STATUS_ACTIVE
+
+    @property
+    def status(self) -> str:
+        return self.status_on(timezone.localdate())
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            # Next number after the highest issued.  Promotions are made by
+            # hand a few at a time, so the unique constraint is the guard
+            # against the vanishingly rare race rather than a lock.
+            last = (DiscountType.objects.exclude(code__isnull=True)
+                    .order_by("-code").values_list("code", flat=True).first())
+            n = int(last.split("-")[1]) + 1 if last else 1
+            self.code = f"PR-{n:04d}"
+        super().save(*args, **kwargs)
 
 
 class DiscountCondition(models.Model):

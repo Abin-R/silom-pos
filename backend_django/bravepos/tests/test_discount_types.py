@@ -395,3 +395,70 @@ class ComboFormTests(TestCase):
         dt.refresh_from_db()
         self.assertEqual(dt.applies_to, "all")
         self.assertFalse(dt.conditions.exists())
+
+
+class PromotionPeriodTests(TillTestCase):
+    """Promotion ID, start/end dates, and the status derived from them."""
+
+    def test_ids_are_sequential_and_permanent(self):
+        a = DiscountType.objects.create(branch=self.branch, name="A", value=5)
+        b = DiscountType.objects.create(branch=self.branch, name="B", value=5)
+        self.assertEqual((a.code, b.code), ("PR-0001", "PR-0002"))
+        a.name = "A renamed"
+        a.save()
+        a.refresh_from_db()
+        self.assertEqual(a.code, "PR-0001")
+        b.delete()
+        self.assertEqual(DiscountType.objects.create(branch=self.branch, name="C", value=5).code,
+                         "PR-0002")  # next after the highest still on file
+
+    def test_status_follows_the_dates(self):
+        from datetime import date
+        d = DiscountType(start_date=date(2026, 9, 10), end_date=date(2026, 9, 20), active=True)
+        self.assertEqual(d.status_on(date(2026, 9, 9)), "scheduled")
+        self.assertEqual(d.status_on(date(2026, 9, 10)), "active")   # inclusive
+        self.assertEqual(d.status_on(date(2026, 9, 20)), "active")   # inclusive
+        self.assertEqual(d.status_on(date(2026, 9, 21)), "ended")
+        d.active = False
+        self.assertEqual(d.status_on(date(2026, 9, 15)), "paused")
+        self.assertEqual(DiscountType(active=True).status_on(date(2030, 1, 1)), "active")
+
+    def test_feed_offers_only_promotions_running_today(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        today = timezone.localdate()
+        DiscountType.objects.create(branch=self.branch, name="Open", value=5)
+        DiscountType.objects.create(branch=self.branch, name="Today only", value=5,
+                                    start_date=today, end_date=today)
+        DiscountType.objects.create(branch=self.branch, name="Tomorrow", value=5,
+                                    start_date=today + timedelta(days=1))
+        DiscountType.objects.create(branch=self.branch, name="Yesterday", value=5,
+                                    end_date=today - timedelta(days=1))
+        rows = {d["name"]: d for d in
+                self.client.get("/api/discount-types?v=2", **self.auth).json()["discount_types"]}
+        self.assertEqual(set(rows), {"Open", "Today only"})
+        self.assertEqual(rows["Today only"]["start_date"], today.isoformat())
+        self.assertEqual(rows["Open"]["end_date"], None)
+        self.assertEqual(rows["Open"]["summary"], "All products")
+        self.assertTrue(rows["Open"]["code"].startswith("PR-"))
+
+
+class PromotionFormTests(ComboFormTests):
+    def test_saves_dates_and_lists_them(self):
+        res = self.client.post(self.url, {
+            "name": "September", "active": "on", "applies_to": "all", "kind": "percent",
+            "value": "10", "start_date": "2026-09-01", "end_date": "2026-09-30"})
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual((str(dt.start_date), str(dt.end_date)), ("2026-09-01", "2026-09-30"))
+        page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.branch.id}")
+        self.assertContains(page, "1 Sep 2026")
+        self.assertContains(page, "30 Sep 2026")
+        self.assertContains(page, dt.code)
+
+    def test_end_before_start_is_refused(self):
+        res = self.client.post(self.url, {
+            "name": "Backwards", "active": "on", "applies_to": "all", "kind": "percent",
+            "value": "10", "start_date": "2026-09-30", "end_date": "2026-09-01"})
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(DiscountType.objects.exists())

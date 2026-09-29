@@ -69,3 +69,32 @@ def alert_other_discounts(order):
         return None
     return seatalk.send_group_text_async(
         seatalk.discount_group_id(), build_alert(order, lines))
+
+
+def describe_buys(d, limit: int = 3) -> str:
+    """What the customer has to buy, in one line: "All products",
+    "Choc chip, Latte +2 more", "Cookies", "Choc chip + Drinks ×2".
+
+    Expects ``products``, ``categories`` and ``conditions`` (with their
+    product/category) to be prefetched when called over many rows.
+    """
+    from .models import DiscountType  # local: models imports nothing from here
+
+    def some(names):
+        names = list(names)
+        more = len(names) - limit
+        return ", ".join(names[:limit]) + (f" +{more} more" if more > 0 else "")
+
+    if d.applies_to == DiscountType.APPLIES_PRODUCTS:
+        return some(p.name for p in d.products.all())
+    if d.applies_to == DiscountType.APPLIES_CATEGORIES:
+        return some(c.name for c in d.categories.all())
+    if d.applies_to == DiscountType.APPLIES_COMBO:
+        parts = []
+        for c in d.conditions.all():
+            target = c.product or c.category
+            name = target.name if target else "?"
+            parts.append(f"{name} ×{c.min_qty}" if c.min_qty > 1 else name)
+        return " + ".join(parts)
+    return "All products"
+

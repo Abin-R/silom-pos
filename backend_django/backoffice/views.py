@@ -3334,6 +3334,17 @@ def _apply_discount_form(dt, post, branch):
         dt.sort_order = 0
     dt.active = post.get("active") == "on"
 
+    # Validity period. Blank means open-ended on that side.
+    for field, label in (("start_date", "start"), ("end_date", "end")):
+        raw = (post.get(field) or "").strip()
+        try:
+            setattr(dt, field, date.fromisoformat(raw) if raw else None)
+        except ValueError:
+            setattr(dt, field, None)
+            errors.append(f"The {label} date isn't a valid date.")
+    if dt.start_date and dt.end_date and dt.end_date < dt.start_date:
+        errors.append("The end date is before the start date.")
+
     applies = post.get("applies_to")
     dt.applies_to = applies if applies in dict(DiscountType.APPLIES_CHOICES) \
         else DiscountType.APPLIES_ALL
@@ -3444,6 +3455,7 @@ def _discount_form_context(request, branches, branch, dt, mode, picks):
         "selected_ids": {str(i) for i in picks.products},
         "selected_cats": {str(i) for i in picks.categories},
         "cond_rows": picks.rows or [{"target": "", "min_qty": 1}],
+        "today": timezone.localdate(),
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -3475,11 +3487,18 @@ def discount_list(request):
           .prefetch_related("categories", "conditions__product", "conditions__category")
           .order_by("sort_order", "name"))
 
+    # Status is derived, never stored: today's date against each promotion's
+    # start/end dates (plus the manual pause).
+    today = timezone.localdate()
+    rows = list(qs)
+    for d in rows:
+        d.current_status = d.status_on(today)
+
     context = {
         "active": "discounts",
         "branches": branches,
         "branch": branch,
-        "discount_types": qs,
+        "discount_types": rows,
         "hide_dates": True,
         "qs": _filter_qs(request),
     }

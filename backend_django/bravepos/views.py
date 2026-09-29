@@ -608,12 +608,18 @@ def discount_types(request):
     if branch is None or not branch.discount_types_enabled:
         return Response({'enabled': False, 'discount_types': []})
     v2 = request.query_params.get('v') == '2'
-    qs = DiscountType.objects.filter(branch=branch, active=True)
+    # Only promotions running today (shop-local date): outside its start/end
+    # dates a promotion simply isn't offered.  Blank dates are open-ended.
+    today = djtz.localdate()
+    qs = (DiscountType.objects.filter(branch=branch, active=True)
+          .filter(Q(start_date__isnull=True) | Q(start_date__lte=today))
+          .filter(Q(end_date__isnull=True) | Q(end_date__gte=today)))
     if not v2:
         qs = (qs.exclude(applies_to=DiscountType.APPLIES_COMBO)
                 .exclude(kind=DiscountType.KIND_FREE))
     rows = list(qs.select_related('free_product')
-                  .prefetch_related('products', 'categories', 'conditions'))
+                  .prefetch_related('products', 'categories', 'conditions__product',
+                                    'conditions__category'))
 
     # One query for every category any preset or combination row names.
     cat_ids = {c.id for d in rows if d.applies_to == DiscountType.APPLIES_CATEGORIES
@@ -664,6 +670,11 @@ def discount_types(request):
             'product_ids': product_ids(d),
             'category_ids': ([str(c.id) for c in d.categories.all()]
                              if d.applies_to == DiscountType.APPLIES_CATEGORIES else []),
+            # Promotion details the till shows under each dropdown entry.
+            'code': d.code or '',
+            'start_date': d.start_date.isoformat() if d.start_date else None,
+            'end_date': d.end_date.isoformat() if d.end_date else None,
+            'summary': discounts.describe_buys(d),
         }
         if v2:
             if d.applies_to == DiscountType.APPLIES_COMBO:

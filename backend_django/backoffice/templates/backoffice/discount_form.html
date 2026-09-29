@@ -16,7 +16,63 @@
 
 {% block title %}{% if mode == 'new' %}Add discount type{% else %}{{ dt.name }}{% endif %}{% endblock %}
 {% block page_title %}{% if mode == 'new' %}Add discount type{% else %}{{ dt.name }}{% endif %}{% endblock %}
-{% block page_sub %}<div class="tb-sub">{% if dt.branch %}{{ dt.branch.name }} · {% endif %}shown in the till's discount dropdown</div>{% endblock %}
+{% block page_sub %}<div class="tb-sub">{% if dt.code %}<span class="money">{{ dt.code }}</span> · {% endif %}{% if dt.branch %}{{ dt.branch.name }} · {% endif %}shown in the till's discount dropdown</div>{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* Searchable product picker (see enhancePick below). */
+  .pick { position: relative; min-width: 0; }
+  .pick-btn {
+    width: 100%; height: 40px; display: flex; align-items: center; gap: 10px;
+    padding: 0 12px 0 13px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); font: inherit; font-size: 14px; color: var(--txt);
+    cursor: pointer; text-align: left;
+  }
+  .pick-btn:hover { border-color: var(--line-strong); }
+  .pick.open .pick-btn, .pick-btn:focus-visible {
+    border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); outline: none;
+  }
+  .pick-btn .pl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick-btn .pl.empty { color: var(--mut2); }
+  .pick-btn .pm, .pick-opt .pm { color: var(--mut2); font-size: 12.5px; white-space: nowrap; }
+  .pick-btn .pm.num, .pick-opt .pm.num { font-family: var(--mono); }
+  .pick-btn svg { width: 16px; height: 16px; stroke: var(--mut); fill: none; stroke-width: 2; flex: none;
+    transition: transform .15s ease; }
+  .pick.open .pick-btn svg { transform: rotate(180deg); }
+  /* Fixed to the viewport and attached to <body>: the form's panels clip
+     their overflow, which cut an in-panel popup in half. */
+  .pick-pop {
+    position: fixed; z-index: 1000; min-width: 300px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(16, 42, 99, .16); overflow: hidden;
+  }
+  .pick-sbox { padding: 10px; border-bottom: 1px solid var(--line); background: var(--sunk); }
+  .pick-search {
+    width: 100%; height: 36px; border: 1px solid var(--line); border-radius: 8px;
+    padding: 0 12px; font: inherit; font-size: 14px; background: var(--card); color: var(--txt);
+  }
+  .pick-search:focus { border-color: var(--blue); outline: none; box-shadow: 0 0 0 3px var(--blue-soft); }
+  .pick-list { max-height: 320px; overflow-y: auto; padding: 4px 0; }
+  .pick-grp {
+    position: sticky; top: 0; background: var(--card); z-index: 1;
+    padding: 9px 14px 4px; font-size: 11px; font-weight: 650; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--mut);
+  }
+  .pick-opt {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px; margin: 0 4px;
+    border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--txt);
+  }
+  .pick-opt .pl { flex: 1; min-width: 0; }
+  .pick-opt .ck { width: 16px; height: 16px; flex: none; stroke: var(--blue); fill: none; stroke-width: 2.4;
+    visibility: hidden; }
+  .pick-opt.sel { color: var(--blue); font-weight: 600; }
+  .pick-opt.sel .ck { visibility: visible; }
+  .pick-opt.act { background: var(--blue-soft); }
+  .pick-opt mark { background: none; color: inherit; font-weight: 700; text-decoration: underline; }
+  .pick-none { padding: 18px 14px; text-align: center; color: var(--mut2); font-size: 13px; }
+  .pick-count { padding: 7px 14px; border-top: 1px solid var(--line); color: var(--mut2); font-size: 12px; }
+</style>
+{% endblock %}
 
 {% block topbar_end %}
   <a class="btn" href="{% url 'backoffice:discount_list' %}?{{ qs }}">
@@ -40,11 +96,25 @@
         <input id="f-order" type="number" name="sort_order" value="{{ dt.sort_order }}">
         <span class="hint">Lower numbers show first in the dropdown.</span>
       </div>
+      <div class="field">
+        <label for="f-start">Start date</label>
+        <input id="f-start" type="date" name="start_date"
+               value="{{ dt.start_date|date:'Y-m-d' }}">
+        <span class="hint">Blank starts it straight away.</span>
+      </div>
+      <div class="field">
+        <label for="f-end">End date</label>
+        <input id="f-end" type="date" name="end_date"
+               value="{{ dt.end_date|date:'Y-m-d' }}">
+        <span class="hint">Blank runs it until it is switched off. Both dates are included.</span>
+      </div>
       <div class="field wide">
         <label class="check">
           <input type="checkbox" name="active" {% if dt.active %}checked{% endif %}>
           Offer this discount on the till
         </label>
+        <span class="hint">Untick to pause it early. Otherwise the status follows the dates:
+          it is offered on the till only from the start date to the end date.</span>
       </div>
     </div>
   </div>
@@ -126,22 +196,25 @@
       <div id="condRows" style="display:flex;flex-direction:column;gap:8px">
         {% for r in cond_rows %}
         <div class="cond-row" style="display:flex;gap:8px;align-items:center">
-          <select name="cond_target" class="inp cond-target" style="flex:1;min-width:0">
+          <select name="cond_target" class="inp cond-target pickable" style="flex:1;min-width:0"
+                  data-placeholder="Pick a product or category…" data-search="Search products or categories…">
             <option value="">Pick a product or category…</option>
             <optgroup label="Categories — any product in it">
               {% for c in categories %}
                 <option value="{{ c.key }}" data-price="{{ c.min_price|default_if_none:'' }}"
-                        {% if r.target == c.key %}selected{% endif %}>
-                  {{ c.name }} (category · {{ c.product_count }} product{{ c.product_count|pluralize }})</option>
+                        data-meta="{{ c.product_count }} product{{ c.product_count|pluralize }}"
+                        {% if r.target == c.key %}selected{% endif %}>{{ c.name }}</option>
               {% endfor %}
             </optgroup>
-            <optgroup label="Products">
-              {% for p in products %}
-                <option value="{{ p.key }}" data-price="{{ p.price }}"
-                        {% if r.target == p.key %}selected{% endif %}>
-                  {{ p.name }} — ฿{{ p.price|floatformat:2 }}</option>
+            {% regroup products by category as pgroups %}
+            {% for g in pgroups %}
+            <optgroup label="{{ g.grouper.name|default:'Uncategorised' }}">
+              {% for p in g.list %}
+                <option value="{{ p.key }}" data-price="{{ p.price }}" data-meta="฿{{ p.price|floatformat:2 }}"
+                        {% if r.target == p.key %}selected{% endif %}>{{ p.name }}</option>
               {% endfor %}
             </optgroup>
+            {% endfor %}
           </select>
           <span style="color:var(--mut2);font-size:13px;white-space:nowrap">qty ≥</span>
           <input type="number" name="cond_qty" class="inp cond-qty" min="1" step="1"
@@ -177,11 +250,17 @@
       </div>
       <div class="field" id="freeProductField">
         <label for="f-free">Free product</label>
-        <select id="f-free" name="free_product">
+        <select id="f-free" name="free_product" class="pickable"
+                data-placeholder="Pick the product given free…" data-search="Search products…">
           <option value="">Pick the product given free…</option>
-          {% for p in products %}
-            <option value="{{ p.id }}" {% if dt.free_product_id == p.id %}selected{% endif %}>
-              {{ p.name }} — ฿{{ p.price|floatformat:2 }}</option>
+          {% regroup products by category as fgroups %}
+          {% for g in fgroups %}
+          <optgroup label="{{ g.grouper.name|default:'Uncategorised' }}">
+            {% for p in g.list %}
+              <option value="{{ p.id }}" data-meta="฿{{ p.price|floatformat:2 }}"
+                      {% if dt.free_product_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
       </div>
@@ -202,6 +281,187 @@
 </form>
 
 <script>
+/**
+ * Turn a <select> into a searchable picker: a button showing the choice, and
+ * a panel with a search box over the options, grouped by their <optgroup>,
+ * each option's data-meta (price, product count) in its own column.
+ *
+ * The <select> stays in the form, hidden, and remains the source of truth:
+ * picking sets its value and fires `change`, so the form posts exactly what
+ * it did before and the rest of the page's script needs no changes.
+ */
+function enhancePick(sel) {
+  if (sel._pick) return;
+  var ICON_CHEV = '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>';
+  var ICON_CHECK = '<svg class="ck" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
+  var esc = function (t) {
+    return String(t).replace(/[&<>"]/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+    });
+  };
+
+  // Prices line up in the money font; "3 products" reads as prose.
+  var metaSpan = function (m) {
+    return '<span class="pm' + (m.charAt(0) === '฿' ? ' num' : '') + '">' + esc(m) + '</span>';
+  };
+
+  var wrap = document.createElement('div');
+  wrap.className = 'pick';
+  wrap.style.cssText = sel.style.cssText;
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel);
+  sel.style.display = 'none';
+  sel.tabIndex = -1;
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pick-btn';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  wrap.appendChild(btn);
+
+  var pop = document.createElement('div');
+  pop.className = 'pick-pop';
+  pop.hidden = true;
+  pop._owner = wrap;
+  pop.innerHTML = '<div class="pick-sbox"><input type="search" class="pick-search" autocomplete="off"></div>' +
+                  '<div class="pick-list" role="listbox"></div><div class="pick-count"></div>';
+  document.body.appendChild(pop);
+  var search = pop.querySelector('.pick-search');
+  var list = pop.querySelector('.pick-list');
+  var countEl = pop.querySelector('.pick-count');
+  search.placeholder = sel.dataset.search || 'Search…';
+
+  // One entry per real option, remembering its group for search + headers.
+  var items = [];
+  Array.prototype.forEach.call(sel.options, function (o) {
+    if (!o.value) return;
+    var g = o.parentNode.tagName === 'OPTGROUP' ? o.parentNode.label : '';
+    items.push({value: o.value, label: o.text.trim(), meta: o.dataset.meta || '', group: g,
+                hay: (o.text + ' ' + g).toLowerCase()});
+  });
+
+  var visible = [], active = -1;
+
+  function render() {
+    var o = sel.selectedOptions[0];
+    var has = o && o.value;
+    btn.innerHTML = '<span class="pl' + (has ? '' : ' empty') + '">' +
+      esc(has ? o.text.trim() : (sel.dataset.placeholder || 'Pick…')) + '</span>' +
+      (has && o.dataset.meta ? metaSpan(o.dataset.meta) : '') + ICON_CHEV;
+  }
+
+  function highlight(label, q) {
+    if (!q) return esc(label);
+    var i = label.toLowerCase().indexOf(q);
+    if (i < 0) return esc(label);
+    return esc(label.slice(0, i)) + '<mark>' + esc(label.slice(i, i + q.length)) + '</mark>' +
+           esc(label.slice(i + q.length));
+  }
+
+  function build() {
+    var q = search.value.trim().toLowerCase();
+    var html = '', group = null;
+    visible = items.filter(function (it) { return !q || it.hay.indexOf(q) !== -1; });
+    visible.forEach(function (it, i) {
+      if (it.group !== group) {
+        group = it.group;
+        if (group) html += '<div class="pick-grp">' + esc(group) + '</div>';
+      }
+      html += '<div class="pick-opt' + (it.value === sel.value ? ' sel' : '') + '" role="option" data-i="' + i + '">' +
+              '<span class="pl">' + highlight(it.label, q) + '</span>' +
+              (it.meta ? metaSpan(it.meta) : '') + ICON_CHECK + '</div>';
+    });
+    list.innerHTML = html || '<div class="pick-none">Nothing matches “' + esc(search.value.trim()) + '”</div>';
+    countEl.textContent = q ? visible.length + ' of ' + items.length : items.length + ' to choose from';
+    var cur = visible.findIndex(function (it) { return it.value === sel.value; });
+    setActive(cur >= 0 && !q ? cur : (visible.length ? 0 : -1));
+  }
+
+  function setActive(i) {
+    active = i;
+    list.querySelectorAll('.pick-opt').forEach(function (el) {
+      el.classList.toggle('act', +el.dataset.i === i);
+    });
+    // Scroll the list only. scrollIntoView would also scroll the panel
+    // itself (it clips its overflow, so it is scrollable) and push the
+    // search box out of sight.
+    var el = list.querySelector('.pick-opt[data-i="' + i + '"]');
+    if (el) {
+      var top = el.offsetTop - list.offsetTop, grp = 30;
+      if (top - grp < list.scrollTop) list.scrollTop = Math.max(0, top - grp);
+      else if (top + el.offsetHeight > list.scrollTop + list.clientHeight)
+        list.scrollTop = top + el.offsetHeight - list.clientHeight;
+    }
+  }
+
+  function choose(i) {
+    var it = visible[i];
+    if (!it) return;
+    sel.value = it.value;
+    sel.dispatchEvent(new Event('change', {bubbles: true}));
+    render();
+    close();
+    btn.focus();
+  }
+
+  function open() {
+    document.querySelectorAll('.pick.open').forEach(function (w) { if (w !== wrap) w._close(); });
+    search.value = '';
+    pop.hidden = false;
+    wrap.classList.add('open');
+    build();
+    place();
+    search.focus();
+  }
+  // Under the button, or above it when there is more room there.
+  function place() {
+    var r = btn.getBoundingClientRect();
+    var below = window.innerHeight - r.bottom, above = r.top;
+    pop.style.left = r.left + 'px';
+    pop.style.width = Math.max(r.width, 300) + 'px';
+    if (below < pop.offsetHeight + 12 && above > below) {
+      pop.style.top = '';
+      pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    } else {
+      pop.style.bottom = '';
+      pop.style.top = (r.bottom + 6) + 'px';
+    }
+  }
+  function close() { pop.hidden = true; wrap.classList.remove('open'); }
+  wrap._close = close;
+
+  btn.addEventListener('click', function () { pop.hidden ? open() : close(); });
+  btn.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+  });
+  search.addEventListener('input', build);
+  search.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(Math.min(visible.length - 1, active + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }
+    else if (e.key === 'Enter') { e.preventDefault(); choose(active); }  // never submit the form
+    else if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); }
+  });
+  list.addEventListener('mousemove', function (e) {
+    var el = e.target.closest('.pick-opt');
+    if (el && +el.dataset.i !== active) setActive(+el.dataset.i);
+  });
+  list.addEventListener('click', function (e) {
+    var el = e.target.closest('.pick-opt');
+    if (el) choose(+el.dataset.i);
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (!pop.hidden && !wrap.contains(e.target) && !pop.contains(e.target)) close();
+  });
+  // A fixed panel would float away from its button as the page scrolls.
+  window.addEventListener('scroll', function (e) {
+    if (!pop.hidden && !pop.contains(e.target)) close();
+  }, true);
+  window.addEventListener('resize', function () { if (!pop.hidden) place(); });
+
+  sel._pick = {render: render};
+  render();
+}
+
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var kind = $('f-kind'), value = $('f-value'), hint = $('valueHint');
@@ -277,12 +537,17 @@
 
   // ── Combination rows ─────────────────────────────────────────────
   var rows = $('condRows');
+  // Cloned from the plain markup, before any picker is attached to it.
   var template = rows.querySelector('.cond-row').cloneNode(true);
   template.querySelector('.cond-target').value = '';
   template.querySelector('.cond-qty').value = 1;
+  document.querySelectorAll('select.pickable').forEach(enhancePick);
   $('condAdd').addEventListener('click', function () {
-    rows.appendChild(template.cloneNode(true));
+    var row = template.cloneNode(true);
+    rows.appendChild(row);
+    enhancePick(row.querySelector('.cond-target'));
     sync();
+    row.querySelector('.pick-btn').click();
   });
   rows.addEventListener('click', function (e) {
     var del = e.target.closest('.cond-del');
@@ -291,7 +556,9 @@
     if (rows.querySelectorAll('.cond-row').length > 1) {
       row.remove();
     } else {
-      row.querySelector('.cond-target').value = '';
+      var t = row.querySelector('.cond-target');
+      t.value = '';
+      t._pick && t._pick.render();
       row.querySelector('.cond-qty').value = 1;
     }
     sync();
@@ -323,6 +590,8 @@
   document.querySelectorAll('input[name="applies_to"]').forEach(function (r) {
     r.addEventListener('change', sync);
   });
+  $('f-start').addEventListener('change', function () { $('f-end').min = this.value; });
+  $('f-end').min = $('f-start').value;
   kind.addEventListener('change', sync);
   value.addEventListener('input', sync);
   sync(); recount();

@@ -54,16 +54,18 @@
   <table class="tbl">
     <thead>
       <tr>
-        <th style="width:70px">Order</th><th>Name</th>
-        <th style="width:200px">Discount</th>
-        <th style="width:280px">Customer buys</th>
-        <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
+        <th style="width:90px">ID</th><th>Name</th>
+        <th style="width:170px">Discount</th>
+        <th style="width:240px">Customer buys</th>
+        <th style="width:120px">Start date</th>
+        <th style="width:120px">End date</th>
+        <th style="width:110px">Status</th><th class="r" style="width:100px">Actions</th>
       </tr>
     </thead>
     <tbody>
       {% for d in discount_types %}
       <tr>
-        <td class="money" style="color:var(--mut)">{{ d.sort_order }}</td>
+        <td class="money" style="color:var(--mut);white-space:nowrap">{{ d.code|default:"—" }}</td>
         <td>
           <a href="{% url 'backoffice:discount_detail' discount_id=d.id %}?{{ qs }}">
             <b style="font-weight:620;color:var(--txt)">{{ d.name }}</b></a>
@@ -85,9 +87,14 @@
             <div class="sub">combination</div>
           {% else %}All products{% endif %}
         </td>
+        <td class="money" style="font-size:12.5px">{{ d.start_date|date:"j M Y"|default:"—" }}</td>
+        <td class="money" style="font-size:12.5px">{{ d.end_date|date:"j M Y"|default:"No end" }}</td>
         <td>
-          {% if d.active %}<span class="tag t-ok">Active</span>
-          {% else %}<span class="tag t-out">Hidden</span>{% endif %}
+          {# Derived from today's date against start/end — never set by hand. #}
+          {% if d.current_status == 'active' %}<span class="tag t-ok">Active</span>
+          {% elif d.current_status == 'scheduled' %}<span class="tag t-info">Scheduled</span>
+          {% elif d.current_status == 'ended' %}<span class="tag t-out">Ended</span>
+          {% else %}<span class="tag t-low">Paused</span>{% endif %}
         </td>
         <td class="r">
           <span style="display:inline-flex;gap:6px">
@@ -103,7 +110,7 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="6" class="empty">
+      <tr><td colspan="8" class="empty">
         <svg><use href="#i-tag"/></svg>
         {% if branch %}
           No discount types yet. With none set up, the till's dropdown offers only “Other”.
