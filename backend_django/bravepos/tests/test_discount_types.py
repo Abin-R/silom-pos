@@ -22,7 +22,7 @@ from django.urls import reverse
 
 from bravepos import seatalk
 from bravepos.models import (
-    Branch, BranchSession, DiscountType, OrderItem, Staff,
+    Branch, BranchSession, Category, DiscountType, OrderItem, Staff,
 )
 from bravepos.tests.factories import make_branch, make_product, make_shop, open_shift
 
@@ -68,7 +68,7 @@ class FeedTests(TillTestCase):
         other = make_branch(name="Silom")
         DiscountType.objects.create(branch=other, name="Elsewhere", value=5)
         some = DiscountType.objects.create(branch=self.branch, name="Cake ฿30",
-                                           kind="fixed", value=30, all_products=False)
+                                           kind="fixed", value=30, applies_to="products")
         some.products.set([self.cake])
 
         res = self.client.get("/api/discount-types", **self.auth).json()
@@ -79,6 +79,38 @@ class FeedTests(TillTestCase):
         self.assertTrue(by_name["Staff"]["all_products"])
         self.assertEqual(by_name["Cake ฿30"]["product_ids"], [str(self.cake.id)])
         self.assertEqual(by_name["Cake ฿30"]["kind"], "fixed")
+
+    def test_category_preset_covers_its_products_including_new_ones(self):
+        cookies = Category.objects.create(name="Cookies", branch=self.branch)
+        self.latte.category = cookies
+        self.latte.save()
+        dt = DiscountType.objects.create(branch=self.branch, name="Cookie 10%",
+                                         value=10, applies_to="categories")
+        dt.categories.set([cookies])
+
+        def offered():
+            res = self.client.get("/api/discount-types", **self.auth).json()
+            (row,) = res["discount_types"]
+            return row
+
+        row = offered()
+        self.assertFalse(row["all_products"])
+        self.assertEqual(row["applies_to"], "categories")
+        self.assertEqual(row["category_ids"], [str(cookies.id)])
+        self.assertEqual(row["product_ids"], [str(self.latte.id)])
+
+        # Added to the category after the preset was made: covered, no edit.
+        new = make_product(self.branch, name="Oat cookie", price="80.00")
+        new.category = cookies
+        new.save()
+        self.assertEqual(set(offered()["product_ids"]), {str(self.latte.id), str(new.id)})
+
+        # Retired, or moved out of the category: dropped.
+        new.active = False
+        new.save()
+        self.latte.category = None
+        self.latte.save()
+        self.assertEqual(offered()["product_ids"], [])
 
     def test_needs_a_session(self):
         self.assertEqual(self.client.get("/api/discount-types").status_code, 401)
@@ -188,20 +220,42 @@ class BackofficeTests(TestCase):
     def test_create_for_selected_products(self):
         res = self.client.post(reverse("backoffice:discount_new") + self.qs, {
             "name": "Cake deal", "kind": "fixed", "value": "30", "active": "on",
-            "applies_to": "selected", "products": [str(self.cake.id)],
+            "applies_to": "products", "products": [str(self.cake.id)],
         })
         self.assertEqual(res.status_code, 302)
         dt = DiscountType.objects.get()
-        self.assertEqual((dt.branch, dt.kind, dt.value, dt.all_products),
-                         (self.branch, "fixed", Decimal("30"), False))
+        self.assertEqual((dt.branch, dt.kind, dt.value, dt.applies_to),
+                         (self.branch, "fixed", Decimal("30"), "products"))
         self.assertEqual(list(dt.products.all()), [self.cake])
+
+    def test_create_for_categories_then_switch_to_all(self):
+        cakes = Category.objects.create(name="Cakes", branch=self.branch)
+        res = self.client.post(reverse("backoffice:discount_new") + self.qs, {
+            "name": "Cake week", "kind": "percent", "value": "15", "active": "on",
+            "applies_to": "categories", "categories": [str(cakes.id)],
+        })
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual(dt.applies_to, "categories")
+        self.assertEqual(list(dt.categories.all()), [cakes])
+        self.assertContains(self.client.get(reverse("backoffice:discount_list") + self.qs), "Cakes")
+
+        # Switching mode must not leave the old categories quietly attached.
+        self.client.post(reverse("backoffice:discount_detail", args=[dt.id]) + self.qs, {
+            "name": "Cake week", "kind": "percent", "value": "15", "active": "on",
+            "applies_to": "all",
+        })
+        dt.refresh_from_db()
+        self.assertEqual(dt.applies_to, "all")
+        self.assertFalse(dt.categories.exists())
 
     def test_rejects_bad_input(self):
         for bad in (
             {"name": "", "kind": "percent", "value": "10", "applies_to": "all"},
             {"name": "x", "kind": "percent", "value": "150", "applies_to": "all"},
             {"name": "x", "kind": "fixed", "value": "0", "applies_to": "all"},
-            {"name": "x", "kind": "fixed", "value": "5", "applies_to": "selected"},
+            {"name": "x", "kind": "fixed", "value": "5", "applies_to": "products"},
+            {"name": "x", "kind": "fixed", "value": "5", "applies_to": "categories"},
             # "Other" is the till's own hand-entered entry.
             {"name": "other", "kind": "fixed", "value": "5", "applies_to": "all"},
         ):

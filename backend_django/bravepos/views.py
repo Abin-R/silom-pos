@@ -593,16 +593,38 @@ def discount_types(request):
     the list is empty and the till keeps its plain ฿/% discount box, so a
     branch outside the rollout behaves exactly as it did before.
 
-    ``product_ids`` is empty for a preset that applies to every product.
+    ``product_ids`` is empty for a preset that applies to every product.  For
+    a category preset it is the category's products *as of this request* —
+    the till only understands a product list, and resolving it here is what
+    covers a product added to the category after the preset was made.
+    ``category_ids`` rides along for a till that wants to match on it itself.
     """
     branch = request.session_obj.branch
     if branch is None or not branch.discount_types_enabled:
         return Response({'enabled': False, 'discount_types': []})
-    rows = (
+    rows = list(
         DiscountType.objects
         .filter(branch=branch, active=True)
-        .prefetch_related('products')
+        .prefetch_related('products', 'categories')
     )
+
+    # One query for every category any preset names, not one per preset.
+    cat_ids = {c.id for d in rows if d.applies_to == DiscountType.APPLIES_CATEGORIES
+               for c in d.categories.all()}
+    by_cat: dict = {}
+    if cat_ids:
+        for pid, cid in (Product.objects
+                         .filter(branch=branch, active=True, category_id__in=cat_ids)
+                         .values_list('id', 'category_id')):
+            by_cat.setdefault(cid, []).append(str(pid))
+
+    def product_ids(d):
+        if d.applies_to == DiscountType.APPLIES_PRODUCTS:
+            return [str(p.id) for p in d.products.all()]
+        if d.applies_to == DiscountType.APPLIES_CATEGORIES:
+            return [pid for c in d.categories.all() for pid in by_cat.get(c.id, [])]
+        return []
+
     return Response({
         'enabled': True,
         'discount_types': [
@@ -611,8 +633,11 @@ def discount_types(request):
                 'name': d.name,
                 'kind': d.kind,
                 'value': float(d.value),
-                'all_products': d.all_products,
-                'product_ids': [] if d.all_products else [str(p.id) for p in d.products.all()],
+                'applies_to': d.applies_to,
+                'all_products': d.applies_to == DiscountType.APPLIES_ALL,
+                'product_ids': product_ids(d),
+                'category_ids': ([str(c.id) for c in d.categories.all()]
+                                 if d.applies_to == DiscountType.APPLIES_CATEGORIES else []),
             }
             for d in rows
         ],

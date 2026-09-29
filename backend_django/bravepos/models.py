@@ -1029,15 +1029,27 @@ class DiscountType(models.Model):
     to SeaTalk.
 
     Branch-scoped like Category: each branch owns its own Product rows, so a
-    product list only means something inside one branch.  ``all_products`` is
-    the default; when it is off the preset is offered only on ``products``.
-    Only read by a till whose branch has ``discount_types_enabled``.
+    product list only means something inside one branch.  ``applies_to`` says
+    which products the preset is offered on: every product (the default), the
+    ``products`` picked, or every product in the ``categories`` picked.  The
+    category form is resolved when the till asks, not when the preset is
+    saved, so a product added to the category later is covered without anyone
+    touching the preset.  Only read by a till whose branch has
+    ``discount_types_enabled``.
     """
     KIND_PERCENT = "percent"
     KIND_FIXED = "fixed"
     KIND_CHOICES = [
         (KIND_PERCENT, "Percentage"),
         (KIND_FIXED, "Fixed amount"),
+    ]
+    APPLIES_ALL = "all"
+    APPLIES_PRODUCTS = "products"
+    APPLIES_CATEGORIES = "categories"
+    APPLIES_CHOICES = [
+        (APPLIES_ALL, "All products"),
+        (APPLIES_PRODUCTS, "Selected products"),
+        (APPLIES_CATEGORIES, "Selected categories"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
@@ -1048,9 +1060,12 @@ class DiscountType(models.Model):
     kind = models.CharField(max_length=8, choices=KIND_CHOICES, default=KIND_PERCENT)
     # Percent (0–100) for ``percent``; baht off the line for ``fixed``.
     value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    all_products = models.BooleanField(default=True)
+    applies_to = models.CharField(max_length=12, choices=APPLIES_CHOICES, default=APPLIES_ALL)
     products = models.ManyToManyField(
         Product, blank=True, related_name="discount_types",
+    )
+    categories = models.ManyToManyField(
+        Category, blank=True, related_name="discount_types",
     )
     sort_order = models.IntegerField(default=0)
     active = models.BooleanField(default=True)

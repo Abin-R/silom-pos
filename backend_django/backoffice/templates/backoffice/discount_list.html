@@ -56,7 +56,7 @@
       <tr>
         <th style="width:70px">Order</th><th>Name</th>
         <th style="width:140px">Discount</th>
-        <th style="width:180px">Applies to</th>
+        <th style="width:220px">Applies to</th>
         <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
       </tr>
     </thead>
@@ -72,8 +72,12 @@
           {% if d.kind == 'percent' %}{{ d.value|floatformat:"-2" }}%{% else %}฿{{ d.value|floatformat:2 }}{% endif %}
         </td>
         <td>
-          {% if d.all_products %}All products
-          {% else %}{{ d.product_count }} product{{ d.product_count|pluralize }}{% endif %}
+          {% if d.applies_to == 'products' %}{{ d.product_count }} product{{ d.product_count|pluralize }}
+          {% elif d.applies_to == 'categories' %}
+            <span title="{% for c in d.categories.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}">
+              {% for c in d.categories.all|slice:":2" %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if d.category_count > 2 %} +{{ d.category_count|add:"-2" }}{% endif %}</span>
+            <div class="sub">categor{{ d.category_count|pluralize:"y,ies" }}</div>
+          {% else %}All products{% endif %}
         </td>
         <td>
           {% if d.active %}<span class="tag t-ok">Active</span>

@@ -3229,11 +3229,24 @@ def _discount_products(branch):
             .order_by("category__order", "category__name", "sort_order", "name"))
 
 
+def _discount_categories(branch):
+    """Active categories at ``branch``, each with how many active products it
+    holds — the count is what tells an admin a category preset will reach
+    something on the till today."""
+    if branch is None:
+        return Category.objects.none()
+    return (Category.objects
+            .filter(Q(branch=branch) | Q(branch__isnull=True), active=True)
+            .annotate(product_count=Count(
+                "products", filter=Q(products__branch=branch, products__active=True)))
+            .order_by("order", "name"))
+
+
 def _apply_discount_form(dt, post, branch):
     """Read a POSTed discount-type form onto ``dt``.
 
-    Returns ``(errors, product_ids)``; the M2M is set by the caller after the
-    row has been saved, since a new row has no id to hang products off yet.
+    Returns ``(errors, product_ids, category_ids)``; the M2Ms are set by the
+    caller after the row has been saved, since a new row has no id yet.
     """
     errors = []
     dt.branch = branch
@@ -3265,20 +3278,28 @@ def _apply_discount_form(dt, post, branch):
         dt.sort_order = 0
     dt.active = post.get("active") == "on"
 
-    dt.all_products = post.get("applies_to") != "selected"
-    product_ids = []
-    if not dt.all_products:
-        wanted = set(post.getlist("products"))
+    applies = post.get("applies_to")
+    dt.applies_to = applies if applies in dict(DiscountType.APPLIES_CHOICES) \
+        else DiscountType.APPLIES_ALL
+    product_ids, category_ids = [], []
+    if dt.applies_to == DiscountType.APPLIES_PRODUCTS:
+        wanted = [w for w in post.getlist("products") if w]
         product_ids = list(
-            _discount_products(branch).filter(id__in=[w for w in wanted if w])
-            .values_list("id", flat=True)
+            _discount_products(branch).filter(id__in=wanted).values_list("id", flat=True)
         ) if wanted else []
         if not product_ids:
             errors.append("Pick at least one product, or make the discount apply to all products.")
-    return errors, product_ids
+    elif dt.applies_to == DiscountType.APPLIES_CATEGORIES:
+        wanted = [w for w in post.getlist("categories") if w]
+        category_ids = list(
+            _discount_categories(branch).filter(id__in=wanted).values_list("id", flat=True)
+        ) if wanted else []
+        if not category_ids:
+            errors.append("Pick at least one category, or make the discount apply to all products.")
+    return errors, product_ids, category_ids
 
 
-def _discount_form_context(request, branches, branch, dt, mode, selected_ids):
+def _discount_form_context(request, branches, branch, dt, mode, selected_ids, selected_cats):
     return {
         "active": "discounts",
         "branches": branches,
@@ -3287,7 +3308,9 @@ def _discount_form_context(request, branches, branch, dt, mode, selected_ids):
         "mode": mode,
         "kinds": DiscountType.KIND_CHOICES,
         "products": _discount_products(dt.branch or branch),
+        "categories": _discount_categories(dt.branch or branch),
         "selected_ids": {str(i) for i in selected_ids},
+        "selected_cats": {str(i) for i in selected_cats},
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -3313,7 +3336,10 @@ def discount_list(request):
         return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
 
     qs = DiscountType.objects.filter(branch=branch) if branch else DiscountType.objects.none()
-    qs = qs.annotate(product_count=Count("products")).order_by("sort_order", "name")
+    qs = (qs.annotate(product_count=Count("products", distinct=True),
+                      category_count=Count("categories", distinct=True))
+          .prefetch_related("categories")
+          .order_by("sort_order", "name"))
 
     context = {
         "active": "discounts",
@@ -3329,21 +3355,22 @@ def discount_list(request):
 @login_required
 def discount_new(request):
     branches, branch, _, _ = _common_filters(request)
-    dt = DiscountType(branch=branch, active=True, all_products=True,
+    dt = DiscountType(branch=branch, active=True, applies_to=DiscountType.APPLIES_ALL,
                       kind=DiscountType.KIND_PERCENT)
-    selected = []
+    selected, cats = [], []
     if request.method == "POST":
-        errors, selected = _apply_discount_form(dt, request.POST, branch)
+        errors, selected, cats = _apply_discount_form(dt, request.POST, branch)
         if not errors:
             with transaction.atomic():
                 dt.save()
                 dt.products.set(selected)
+                dt.categories.set(cats)
             messages.success(request, f"“{dt.name}” added.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "new", selected))
+                  _discount_form_context(request, branches, branch, dt, "new", selected, cats))
 
 
 @login_required
@@ -3351,18 +3378,23 @@ def discount_detail(request, discount_id):
     branches, branch, _, _ = _common_filters(request)
     dt = get_object_or_404(DiscountType, id=discount_id)
     selected = list(dt.products.values_list("id", flat=True))
+    cats = list(dt.categories.values_list("id", flat=True))
     if request.method == "POST":
-        errors, selected = _apply_discount_form(dt, request.POST, dt.branch or branch)
+        errors, selected, cats = _apply_discount_form(dt, request.POST, dt.branch or branch)
         if not errors:
             with transaction.atomic():
                 dt.save()
+                # Only the list the chosen mode uses is kept; switching a
+                # preset from categories to products must not leave the old
+                # categories quietly attached.
                 dt.products.set(selected)
+                dt.categories.set(cats)
             messages.success(request, f"“{dt.name}” saved.")
             return redirect(reverse("backoffice:discount_list") + f"?{_filter_qs(request)}")
         for e in errors:
             messages.error(request, e)
     return render(request, "backoffice/discount_form.html",
-                  _discount_form_context(request, branches, branch, dt, "edit", selected))
+                  _discount_form_context(request, branches, branch, dt, "edit", selected, cats))
 
 
 @login_required

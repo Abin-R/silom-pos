@@ -61,17 +61,40 @@
     <div class="form-grid">
       <div class="field wide">
         <label class="check">
-          <input type="radio" name="applies_to" value="all" {% if dt.all_products %}checked{% endif %}>
+          <input type="radio" name="applies_to" value="all" {% if dt.applies_to == 'all' %}checked{% endif %}>
           All products
         </label>
         <label class="check">
-          <input type="radio" name="applies_to" value="selected" {% if not dt.all_products %}checked{% endif %}>
+          <input type="radio" name="applies_to" value="products" {% if dt.applies_to == 'products' %}checked{% endif %}>
           Selected products only
+        </label>
+        <label class="check">
+          <input type="radio" name="applies_to" value="categories" {% if dt.applies_to == 'categories' %}checked{% endif %}>
+          Every product in selected categories
         </label>
       </div>
     </div>
 
-    <div id="productPicker" {% if dt.all_products %}hidden{% endif %} style="padding:0 18px 18px">
+    <div id="categoryPicker" {% if dt.applies_to != 'categories' %}hidden{% endif %} style="padding:0 18px 18px">
+      <div class="hint" style="color:var(--mut2);font-size:12.5px;margin-bottom:10px">
+        Offered on every product in these categories — including products added to them later.
+      </div>
+      <div style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 12px">
+        {% for c in categories %}
+          <label class="check" style="display:flex;padding:5px 0">
+            <input type="checkbox" name="categories" value="{{ c.id }}"
+                   {% if c.id|stringformat:"s" in selected_cats %}checked{% endif %}>
+            {{ c.name }}
+            <span style="color:var(--mut2);margin-left:auto;font-size:12.5px">
+              {{ c.product_count }} product{{ c.product_count|pluralize }}</span>
+          </label>
+        {% empty %}
+          <div class="empty" style="padding:18px">This branch has no active categories.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div id="productPicker" {% if dt.applies_to != 'products' %}hidden{% endif %} style="padding:0 18px 18px">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <input type="search" id="productFilter" class="inp" placeholder="Filter products…" style="flex:1;min-width:180px">
         <span id="pickedCount" style="color:var(--mut2);font-size:12.5px"></span>
@@ -108,6 +131,7 @@
 <script>
 (function () {
   var picker = document.getElementById('productPicker');
+  var catPicker = document.getElementById('categoryPicker');
   var radios = document.querySelectorAll('input[name="applies_to"]');
   var filter = document.getElementById('productFilter');
   var count = document.getElementById('pickedCount');
@@ -116,7 +140,8 @@
 
   function sync() {
     var sel = document.querySelector('input[name="applies_to"]:checked');
-    picker.hidden = !sel || sel.value !== 'selected';
+    picker.hidden = !sel || sel.value !== 'products';
+    catPicker.hidden = !sel || sel.value !== 'categories';
   }
   function recount() {
     var n = document.querySelectorAll('input[name="products"]:checked').length;
