@@ -589,6 +589,8 @@ const en = {
     discount_off_set: "off the set",
     discount_from: "From",
     discount_until: "Until",
+    discount_max_off: "Max off",
+    discount_min_bill: "Bill ≥",
     discount_no_match: "No discount type matches",
     discount_search: "Search discount types",
     discount_other: "Other",

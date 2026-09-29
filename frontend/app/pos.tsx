@@ -47,6 +47,8 @@ import {
   comboSetsWith,
   isCombo,
   isFree,
+  billBeforeDiscounts,
+  meetsMinimum as meetsPromoMinimum,
   presetDetails,
   reconcileDiscounts,
   type DiscountPreset,
@@ -3516,7 +3518,10 @@ function CartItemModal({
   // The cart as it would be with this line's edited quantity — what a
   // combination is matched and previewed against.
   const cartNow = cart.map((c) => (c.product_id === item.product_id ? { ...c, qty } : c));
+  const bill = billBeforeDiscounts(cartNow);
   const offered = (presets || []).filter((p) => {
+    // Not offered until the bill (before discounts) reaches the minimum.
+    if (!meetsPromoMinimum(p, bill)) return false;
     if (isCombo(p)) {
       // Only once the rest of the combination is in the cart: offering one
       // the cashier can't complete would just be a dead entry.
@@ -3546,8 +3551,9 @@ function CartItemModal({
   } else if (preset && isFree(preset)) {
     // The free product carries the ฿0 on its own line; this one is unchanged.
     discAmount = 0;
-  } else if (preset && isCombo(preset)) {
-    // This line's share of the combination, exactly as the cart will get it.
+  } else if (preset) {
+    // Exactly what the cart will get once this is saved: a combination's
+    // share, a percentage on the new quantity, and any per-bill cap.
     const applied = reconcileDiscounts(
       cartNow.map((c) =>
         c.product_id === item.product_id
@@ -3557,11 +3563,6 @@ function CartItemModal({
       presets,
     );
     discAmount = applied.find((c) => c.product_id === item.product_id)?.discount || 0;
-  } else if (preset) {
-    discAmount =
-      preset.kind === "percent"
-        ? Math.min(gross, (gross * preset.value) / 100)
-        : Math.min(gross, preset.value);
   } else {
     // The line's preset has since been removed in the backoffice: keep what
     // the cashier already applied rather than silently dropping it.
@@ -3655,7 +3656,12 @@ function CartItemModal({
   );
 
   const detailsOf = (p: DiscountPreset) =>
-    presetDetails(p, { until: tr("pos.discount_until"), from: tr("pos.discount_from") });
+    presetDetails(p, {
+      until: tr("pos.discount_until"),
+      from: tr("pos.discount_from"),
+      minBill: tr("pos.discount_min_bill"),
+      maxOff: tr("pos.discount_max_off"),
+    });
 
   const option = (
     id: string,

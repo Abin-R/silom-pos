@@ -12,10 +12,18 @@
  * - **Free item**: choosing the discount on a product adds a separate line of
  *   the free product at ฿0, linked to the line that earned it.
  *
- * `reconcileDiscounts` recomputes both from scratch and is run after every
- * cart change, so a discount never outlives its reason: remove the drink and
- * the cake's share of the combination goes too; remove the cake and its free
- * item goes with it.
+ * Two bill-level rules apply to every kind of promotion:
+ *
+ * - **Minimum order**: offered, and kept, only while the bill before any
+ *   discount is at least `min_order_amount`.
+ * - **Maximum discount**: everything one promotion takes off the bill is
+ *   capped at `max_discount`, shared across its lines in proportion.
+ *
+ * `reconcileDiscounts` recomputes all of it from scratch and is run after
+ * every cart change, so a discount never outlives its reason: remove the
+ * drink and the cake's share of the combination goes too; remove the cake and
+ * its free item goes with it; drop below the minimum and the promotion comes
+ * off.
  *
  * Pure functions, no React — so the arithmetic can be checked on its own.
  */
@@ -28,8 +36,13 @@ export type DiscountPreset = {
   applies_to?: "all" | "products" | "categories" | "combo";
   all_products: boolean;
   product_ids: string[];
-  /** Combination rows; every row must be met. */
+  /** Combination rows: every row together (`match` "all") or any one ("any"). */
   conditions?: { product_ids: string[]; min_qty: number }[];
+  match?: "all" | "any";
+  /** Bill total before discounts the promotion needs; null = none. */
+  min_order_amount?: number | null;
+  /** Most the promotion can take off one bill; null = no cap. */
+  max_discount?: number | null;
   free_product?: { id: string; name: string; price: number } | null;
   free_qty?: number;
   /** Promotion details shown under the dropdown entry. */
@@ -54,14 +67,34 @@ export function shortDate(iso: string): string {
  */
 export function presetDetails(
   p: DiscountPreset,
-  words: { until: string; from: string },
+  words: { until: string; from: string; minBill: string; maxOff: string },
 ): string {
   let when = "";
   if (p.start_date && p.end_date) when = `${shortDate(p.start_date)} – ${shortDate(p.end_date)}`;
   else if (p.end_date) when = `${words.until} ${shortDate(p.end_date)}`;
   else if (p.start_date) when = `${words.from} ${shortDate(p.start_date)}`;
-  return [p.code, p.summary, when].filter(Boolean).join(" · ");
+  const baht = (n: number) => `฿${n % 1 === 0 ? n : n.toFixed(2)}`;
+  return [
+    p.code,
+    p.summary,
+    p.min_order_amount ? `${words.minBill} ${baht(p.min_order_amount)}` : "",
+    p.max_discount ? `${words.maxOff} ${baht(p.max_discount)}` : "",
+    when,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
+
+/** The bill before any discount — what a minimum order is checked against. */
+export function billBeforeDiscounts(lines: DiscountLine[]): number {
+  return lines
+    .filter((l) => !l.free_of)
+    .reduce((s, l) => s + l.price * l.qty, 0);
+}
+
+/** Does the bill reach `p`'s minimum order (if it has one)? */
+export const meetsMinimum = (p: DiscountPreset, bill: number) =>
+  !p.min_order_amount || bill + 1e-9 >= p.min_order_amount;
 
 export type DiscountLine = {
   product_id: string;
@@ -119,31 +152,37 @@ export function matchCombo(
     if (eligible(l, combo.id) && l.qty > 0) avail.set(l.product_id, { price: l.price, left: l.qty });
   }
 
+  // Fill one row from what is left, most expensive units first, into `take`.
+  // Returns false (leaving `take` untouched) when the row can't be met.
+  const fill = (row: { product_ids: string[]; min_qty: number }, take: Map<string, number>) => {
+    let need = Math.max(1, row.min_qty || 1);
+    const got = new Map<string, number>();
+    const candidates = row.product_ids
+      .filter((pid) => avail.has(pid))
+      .sort((a, b) => avail.get(b)!.price - avail.get(a)!.price);
+    for (const pid of candidates) {
+      if (need === 0) break;
+      const free = avail.get(pid)!.left - (take.get(pid) || 0) - (got.get(pid) || 0);
+      const n = Math.min(free, need);
+      if (n > 0) {
+        got.set(pid, (got.get(pid) || 0) + n);
+        need -= n;
+      }
+    }
+    if (need > 0) return false;
+    for (const [pid, n] of got) take.set(pid, (take.get(pid) || 0) + n);
+    return true;
+  };
+
+  const any = combo.match === "any";
   let sets = 0;
   // A generous ceiling rather than `while (true)`: a set always consumes at
   // least one unit, so this is never the limit in practice.
   for (let guard = 0; guard < 1000; guard++) {
     const take = new Map<string, number>();
-    let ok = true;
-    for (const row of rows) {
-      let need = Math.max(1, row.min_qty || 1);
-      const candidates = row.product_ids
-        .filter((pid) => avail.has(pid))
-        .sort((a, b) => avail.get(b)!.price - avail.get(a)!.price);
-      for (const pid of candidates) {
-        if (need === 0) break;
-        const free = avail.get(pid)!.left - (take.get(pid) || 0);
-        const n = Math.min(free, need);
-        if (n > 0) {
-          take.set(pid, (take.get(pid) || 0) + n);
-          need -= n;
-        }
-      }
-      if (need > 0) {
-        ok = false;
-        break;
-      }
-    }
+    // AND: every row, into one set. OR: the first row that can still be met
+    // is a set on its own.
+    const ok = any ? rows.some((row) => fill(row, take)) : rows.every((row) => fill(row, take));
     if (!ok) break;
 
     sets++;
@@ -182,6 +221,36 @@ export function reconcileDiscounts<T extends DiscountLine>(
   if (!presets) return cart;
   const byId = new Map(presets.map((p) => [p.id, p]));
   let lines = cart.map((l) => ({ ...l }));
+
+  // ── Minimum order ────────────────────────────────────────────────
+  // A promotion whose minimum the bill no longer reaches comes off. Its free
+  // item then goes below, with the discount that earned it.
+  const bill = billBeforeDiscounts(lines);
+  lines = lines.map((l) => {
+    const p = l.discount_type_id ? byId.get(l.discount_type_id) : undefined;
+    if (!p || isFreeLine(l) || meetsMinimum(p, bill)) return l;
+    return {
+      ...l,
+      discount: undefined,
+      discount_type_id: undefined,
+      discount_label: undefined,
+      discount_reason: undefined,
+    };
+  });
+
+  // ── One-product presets ──────────────────────────────────────────
+  // Recomputed from the preset, not kept from when it was picked: a quantity
+  // change moves a percentage with it, and an amount trimmed by the cap below
+  // comes back if the other lines sharing the cap go.
+  lines = lines.map((l) => {
+    const p = l.discount_type_id ? byId.get(l.discount_type_id) : undefined;
+    if (!p || isFreeLine(l) || isCombo(p) || isFree(p)) return l;
+    const gross = l.price * l.qty;
+    const d = round2(
+      p.kind === "percent" ? (gross * Math.min(100, p.value)) / 100 : Math.min(gross, p.value),
+    );
+    return { ...l, discount: d > 0 ? d : undefined, discount_label: p.name };
+  });
 
   // ── Free items ───────────────────────────────────────────────────
   // What should exist: one free line per line carrying a free-item preset.
@@ -247,6 +316,28 @@ export function reconcileDiscounts<T extends DiscountLine>(
         };
       }
       return l;
+    });
+  }
+
+  // ── Maximum discount ─────────────────────────────────────────────
+  // Everything one promotion takes off the bill, capped and shared across its
+  // lines in proportion; the last line takes the rounding remainder.
+  for (const p of presets) {
+    if (!p.max_discount || isFree(p)) continue;
+    const idx = lines
+      .map((l, i) => (l.discount_type_id === p.id && !isFreeLine(l) && (l.discount || 0) > 0 ? i : -1))
+      .filter((i) => i >= 0);
+    const total = idx.reduce((s, i) => s + (lines[i].discount || 0), 0);
+    if (total <= p.max_discount + 1e-9) continue;
+    const cap = p.max_discount;
+    let given = 0;
+    idx.forEach((i, k) => {
+      const share =
+        k === idx.length - 1
+          ? round2(cap - given)
+          : round2((cap * (lines[i].discount || 0)) / total);
+      given = round2(given + share);
+      lines[i] = { ...lines[i], discount: share };
     });
   }
   return lines;

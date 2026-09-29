@@ -583,6 +583,8 @@ const th = {
     discount_off_set: "ของทั้งชุด",
     discount_from: "ตั้งแต่",
     discount_until: "ถึง",
+    discount_max_off: "ลดสูงสุด",
+    discount_min_bill: "ยอดขั้นต่ำ",
     discount_no_match: "ไม่พบประเภทส่วนลดที่ตรงกัน",
     discount_search: "ค้นหาประเภทส่วนลด",
     discount_other: "อื่นๆ",
