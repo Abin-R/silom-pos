@@ -2563,6 +2563,13 @@ function thaiDate(d: Date): string {
   return `${d.getDate()} ${tr(`date.months.${d.getMonth()}`)} ${d.getFullYear() + BE_OFFSET}`;
 }
 
+// The document list and item tables need ~640px of fixed columns; below that
+// (phones) they overflow the screen, so those widths switch to stacked cards.
+const DOC_TABLE_MIN_WIDTH = 640;
+function useDocCompact() {
+  return useWindowDimensions().width < DOC_TABLE_MIN_WIDTH;
+}
+
 // Document list for a given type (images 4 / adjust / check).
 function StockDocuments({
   type, products, categories, onChanged,
@@ -2571,6 +2578,7 @@ function StockDocuments({
 }) {
   useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
+  const compact = useDocCompact();
   const [docs, setDocs] = useState<StockDoc[] | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -2591,8 +2599,8 @@ function StockDocuments({
 
   return (
     <View style={{ flex: 1 }} testID={`stockdoc-${type}`}>
-      <View style={styles.docListBar}>
-        <View style={styles.docDateRange}>
+      <View style={[styles.docListBar, compact && styles.docListBarCompact]}>
+        <View style={[styles.docDateRange, compact && styles.docDateRangeCompact]}>
           <Ionicons name="chevron-back" size={16} color={C.lineStrong} />
           <Text style={styles.docDateRangeText}>{rangeLabel}</Text>
           <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
@@ -2606,8 +2614,8 @@ function StockDocuments({
         </TouchableOpacity>
       </View>
 
-      {/* column headers */}
-      <View style={styles.docColHead}>
+      {/* column headers — the compact cards label themselves */}
+      {!compact && <View style={styles.docColHead}>
         <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.date")}</Text>
         <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.document_no")}</Text>
         <Text style={[styles.docColCell, { flex: 1 }]}>{cfg.refCol ? tr(cfg.refCol) : null}</Text>
@@ -2615,7 +2623,7 @@ function StockDocuments({
         {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>{tr("common.total")}</Text>}
         {cfg.hasAdjustType && <Text style={[styles.docColCell, { width: 110 }]}>{tr("admin.document_type")}</Text>}
         <Text style={[styles.docColCell, { width: 100, textAlign: "right" }]}>{tr("admin.created_by")}</Text>
-      </View>
+      </View>}
 
       {docs === null ? (
         <ActivityIndicator color={C.brand} style={{ marginTop: 40 }} />
@@ -2630,6 +2638,27 @@ function StockDocuments({
             const refText = type === "in" || type === "out"
               ? item.ref_no
               : (item.document_name || item.note || "");
+            if (compact) {
+              const outReason = type === "out" ? (item.reason || item.note || "") : "";
+              return (
+                <View style={styles.docCard} testID={`doc-${item.id}`}>
+                  <View style={styles.docCardLine}>
+                    <Text style={styles.docCardNo} numberOfLines={1}>{item.document_no}</Text>
+                    {cfg.hasPrice && <Text style={styles.docCardTotal}>{(item.total || 0).toFixed(2)}</Text>}
+                    {cfg.hasAdjustType && !!item.adjust_type && <Text style={styles.docCardTotal}>{item.adjust_type}</Text>}
+                  </View>
+                  <View style={styles.docCardLine}>
+                    <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
+                    <Text style={[styles.docCell, { color: C.ink3 }]} numberOfLines={1}>{item.created_by || ""}</Text>
+                  </View>
+                  {!!(refText || outReason) && (
+                    <Text style={[styles.docCell, { color: C.ink2Soft }]} numberOfLines={1}>
+                      {[refText, outReason].filter(Boolean).join(" · ")}
+                    </Text>
+                  )}
+                </View>
+              );
+            }
             return (
               <View style={styles.docRow} testID={`doc-${item.id}`}>
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
@@ -2690,6 +2719,7 @@ function CreateStockDocModal({
   useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
   const reconcile = cfg.mode === "reconcile";
+  const compact = useDocCompact();
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [ref, setRef] = useState("");
   const [docName, setDocName] = useState("");
@@ -2826,7 +2856,7 @@ function CreateStockDocModal({
             <Ionicons name="chevron-back" size={22} color={C.ink} />
             <Text style={styles.docBackText}>{tr("common.back")}</Text>
           </TouchableOpacity>
-          <Text style={styles.docTopTitle}>{tr(cfg.title)}</Text>
+          <Text style={[styles.docTopTitle, compact && styles.docTopTitleCompact]} numberOfLines={1}>{tr(cfg.title)}</Text>
           <TouchableOpacity onPress={confirmSave} disabled={!canSave} testID="doc-save">
             <Text style={[styles.docSaveText, !canSave && { color: C.lineStrong }]}>{tr("common.save")}</Text>
           </TouchableOpacity>
@@ -2900,8 +2930,8 @@ function CreateStockDocModal({
             </View>
           )}
 
-          {/* ── items table header ── */}
-          <View style={styles.itemsHead}>
+          {/* ── items table header (compact cards label each field instead) ── */}
+          {!compact && <View style={styles.itemsHead}>
             <Text style={[styles.itemsHeadCell, { width: 30 }]}>#</Text>
             <Text style={[styles.itemsHeadCell, { width: 130 }]}>{tr("admin.barcode")}</Text>
             <Text style={[styles.itemsHeadCell, { flex: 1, textAlign: "left" }]}>{tr("admin.product_name_2")}</Text>
@@ -2920,10 +2950,74 @@ function CreateStockDocModal({
               </>
             )}
             <View style={{ width: 28 }} />
-          </View>
+          </View>}
 
           {lines.map((l, i) => {
             const d = updateDelta(l);
+            if (compact) {
+              const deltaColour = d > 0 ? C.ok : d < 0 ? C.danger : C.ink2Soft;
+              return (
+                <View key={l.product_id} style={styles.itemCard}>
+                  <View style={styles.itemCardHead}>
+                    <Text style={styles.itemCardIdx}>{i + 1}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemCardName} numberOfLines={2}>{l.product_name}</Text>
+                      {!!l.barcode && <Text style={styles.itemCardBarcode} numberOfLines={1}>{l.barcode}</Text>}
+                    </View>
+                    <TouchableOpacity style={{ padding: 4 }} onPress={() => removeLine(i)}>
+                      <Ionicons name="close-circle" size={20} color={C.danger} />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.itemCardFields}>
+                    {reconcile ? (
+                      <>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{rc ? tr(rc.before) : null}</Text>
+                          <Text style={[styles.itemCellRO, { textAlign: "center" }]}>{parseFloat(l.before) || 0}</Text>
+                        </View>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{rc ? tr(rc.input) : null}</Text>
+                          <TouchableOpacity style={styles.itemInput} onPress={() => setKeypad({ idx: i, field: "reconcile" })} testID={`reconcile-${i}`}>
+                            <Text style={styles.itemInputText}>{parseFloat(l.reconcile) || 0}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{rc ? tr(rc.result) : null}</Text>
+                          <Text style={[styles.itemCellRO, { textAlign: "center", color: deltaColour }]}>
+                            {d > 0 ? `+${d}` : `${d}`}
+                          </Text>
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{tr("common.quantity")}</Text>
+                          <TouchableOpacity style={styles.itemInput} onPress={() => setKeypad({ idx: i, field: "qty" })}>
+                            <Text style={styles.itemInputText}>{l.qty}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{tr("admin.price_unit")}</Text>
+                          <TouchableOpacity style={styles.itemInput} onPress={() => setKeypad({ idx: i, field: "price" })}>
+                            <Text style={styles.itemInputText}>{(parseFloat(l.price) || 0).toFixed(2)}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{tr("common.discount")}</Text>
+                          <TouchableOpacity style={styles.itemInput} onPress={() => setKeypad({ idx: i, field: "discount" })}>
+                            <Text style={styles.itemInputText}>{(parseFloat(l.discount) || 0).toFixed(2)}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.itemCardField}>
+                          <Text style={styles.itemCardLabel} numberOfLines={1}>{tr("common.total")}</Text>
+                          <Text style={[styles.itemCell, { paddingVertical: 7, fontWeight: "700" }]}>{lineTotal(l).toFixed(2)}</Text>
+                        </View>
+                      </>
+                    )}
+                  </View>
+                </View>
+              );
+            }
             return (
               <View key={l.product_id} style={styles.itemRow}>
                 <Text style={[styles.itemCell, { width: 30 }]}>{i + 1}</Text>
@@ -2967,7 +3061,7 @@ function CreateStockDocModal({
 
         {/* ── footer totals (purchase only) ── */}
         {!reconcile && (
-          <View style={styles.docFooter}>
+          <View style={[styles.docFooter, compact && styles.docFooterCompact]}>
             {cfg.hasAvgCost && (
               <View style={styles.footToggle}>
                 <Text style={styles.footToggleLabel}>{tr("admin.avg_cost_calculate")}</Text>
@@ -7662,6 +7756,7 @@ const styles = StyleSheet.create({
   docBackBtn: { flexDirection: "row", alignItems: "center", width: 70 },
   docBackText: { fontSize: 15, color: C.ink, fontWeight: "600" },
   docTopTitle: { fontSize: 16, fontWeight: "700", color: C.ink },
+  docTopTitleCompact: { flex: 1, fontSize: 14, textAlign: "center", marginHorizontal: 6 },
   docSaveText: { fontSize: 15, color: C.brand, fontWeight: "700", width: 70, textAlign: "right" },
 
   // ── Channel report ──
@@ -7710,6 +7805,9 @@ const styles = StyleSheet.create({
   },
   docDateRange: { flexDirection: "row", alignItems: "center", gap: 10 },
   docDateRangeText: { fontSize: 13, fontWeight: "700", color: C.brand },
+  // Phone: date range takes its own line; total + Create sit beneath it.
+  docListBarCompact: { flexWrap: "wrap", rowGap: 8 },
+  docDateRangeCompact: { width: "100%", justifyContent: "center" },
   docListTotal: { fontSize: 13, color: C.ink2Soft },
   createDocBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
@@ -7727,6 +7825,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: C.bg,
   },
   docCell: { fontSize: 13, color: C.ink2 },
+  docCard: {
+    paddingHorizontal: 14, paddingVertical: 12, gap: 4,
+    borderBottomWidth: 1, borderBottomColor: C.bg,
+  },
+  docCardLine: { flexDirection: "row", alignItems: "center", gap: 10 },
+  docCardNo: { flex: 1, fontSize: 14, fontWeight: "700", color: C.ink },
+  docCardTotal: { fontSize: 14, fontWeight: "700", color: C.ink },
 
   // ── Create document form ──
   docForm: { padding: 14, gap: 12, borderBottomWidth: 1, borderBottomColor: C.bg },
@@ -7768,6 +7873,17 @@ const styles = StyleSheet.create({
     paddingVertical: 6, paddingHorizontal: 6, alignItems: "center",
   },
   itemInputText: { fontSize: 13, color: C.ink },
+  itemCard: {
+    paddingHorizontal: 14, paddingVertical: 10, gap: 8,
+    borderBottomWidth: 1, borderBottomColor: C.bg,
+  },
+  itemCardHead: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  itemCardIdx: { width: 20, fontSize: 13, color: C.ink3, paddingTop: 1 },
+  itemCardName: { fontSize: 14, fontWeight: "600", color: C.ink },
+  itemCardBarcode: { fontSize: 11, color: C.ink3, marginTop: 2 },
+  itemCardFields: { flexDirection: "row", gap: 6, paddingLeft: 28 },
+  itemCardField: { flex: 1, minWidth: 0, gap: 4 },
+  itemCardLabel: { fontSize: 11, color: C.ink3, textAlign: "center" },
   itemsAddBar: {
     backgroundColor: C.brand, margin: 14, borderRadius: 8,
     paddingVertical: 14, alignItems: "center",
@@ -7780,6 +7896,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.bg,
   },
   footToggle: { flexDirection: "row", alignItems: "center", gap: 6 },
+  docFooterCompact: { justifyContent: "space-between", gap: 10, paddingHorizontal: 14 },
   footToggleLabel: { fontSize: 12, color: C.ink2Soft, fontWeight: "600" },
   footStat: { alignItems: "center" },
   footStatLabel: { fontSize: 11, color: C.ink3 },
