@@ -1,15 +1,13 @@
-"""Stock-out reasons replace the free-text remark, and the export reports them.
+"""Stock-out reasons replace the free-text remark.
 
 Staff were typing the remark by hand, so the same reason arrived spelled six
 different ways and nothing could be grouped or counted.  These tests pin the
-three properties that make the replacement worth having:
+two properties that make the replacement worth having:
 
   * every branch has a reason list — including branches created *after* the
     feature shipped, which is where the DrawerCategory precedent has a gap;
   * a saved document keeps the reason it was saved with, even if the reason
-    row is later renamed or deleted;
-  * the CSV export carries the SilomPOS column layout the shop reconciles
-    against, plus the reason.
+    row is later renamed or deleted.
 
 Run:
     python manage.py test bravepos.tests.test_stock_out_reasons \\
@@ -17,16 +15,13 @@ Run:
 """
 from __future__ import annotations
 
-import csv
-import io
 from decimal import Decimal
 
 from django.test import TestCase
-from django.urls import reverse
 
 from bravepos.models import (
     DEFAULT_STOCK_OUT_REASONS, SUPERSEDED_STOCK_OUT_REASONS, Branch,
-    BranchSession, Settings, Staff, StockDocument, StockMovement,
+    BranchSession, Staff, StockDocument, StockMovement,
     StockOutReason,
 )
 
@@ -157,144 +152,6 @@ class StockOutReasonApiTests(TestCase):
         )
         self.assertEqual(res.status_code, 201, res.content)
         self.assertEqual(StockDocument.objects.get(type="in").reason, "")
-
-
-class StockMovementExportTests(TestCase):
-    """The file has to drop into the shop's existing spreadsheet, so the column
-    layout is pinned against the SilomPOS sample it replaces."""
-
-    def setUp(self):
-        Settings.objects.get_or_create(id="shop")
-        self.password = "correct-horse-battery"
-        self.admin = Staff(
-            name="Bo", username="bo", email="bo@therollingpinn.com",
-            role="admin", active=True, backoffice_access=True,
-        )
-        self.admin.set_password(self.password)
-        self.admin.save()
-        self.branch = make_branch(name="Paragon")
-        self.product = make_product(self.branch, name="Breakfast Confetti Cookie", stock=50)
-
-        self.staff = Staff.objects.create(
-            name="Nok", email="nok2@test.local", password_hash="x", role="admin",
-        )
-        self.staff.branches.add(self.branch)
-        self.session = BranchSession.objects.create(
-            token="tk2" * 12, branch=self.branch, staff=self.staff,
-        )
-        self.client.post(reverse("backoffice:login"),
-                         {"username": "bo", "password": self.password})
-
-    def _stock_out(self, reason, qty, barcode="38022"):
-        res = self.client.post(
-            "/api/stock-documents",
-            {
-                "type": "out", "reason": reason,
-                "items": [{
-                    "product_id": str(self.product.id), "barcode": barcode,
-                    "product_name": self.product.name, "qty": qty,
-                    "price": "10.00", "discount": "0", "total": str(10 * qty),
-                }],
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Bearer {self.session.token}",
-        )
-        self.assertEqual(res.status_code, 201, res.content)
-
-    def _export(self, **params):
-        params.setdefault("branch", str(self.branch.id))
-        response = self.client.get(reverse("backoffice:stock_movement_export"), params)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("text/csv", response["Content-Type"])
-        body = response.content.decode("utf-8-sig")
-        return list(csv.reader(io.StringIO(body)))
-
-    def test_header_block_matches_the_sample(self):
-        rows = self._export()
-        # Generic title, exactly as the sample carries it even under a
-        # stock-out filter.
-        self.assertEqual(rows[0][0], "รายงานการ รับเข้า-จ่ายออก แยกตามสินค้า")
-        self.assertEqual(rows[1][0], "Shop")
-        self.assertEqual(rows[2][0], "Branch")
-        self.assertEqual(rows[2][1], "Paragon")
-        self.assertEqual(rows[4][0], "From")
-        self.assertEqual(rows[5][0], "To")
-        # Blank spacer rows land where the sample has them (rows 4 and 7).
-        self.assertEqual(rows[3], [])
-        self.assertEqual(rows[6], [])
-
-    def test_column_headers_match_the_sample_then_one_column_per_day(self):
-        rows = self._export()
-        self.assertEqual(rows[7][:12], [
-            "ลำดับ", "รหัส", "สินค้า", "เอกสารรับเข้า", "เอกสารจ่ายออก",
-            "จำนวนรับเข้า", "จำนวนจ่ายออก", "มูลค่ารับเข้า", "มูลค่าจ่ายออก",
-            "ส่วนลดรับเข้า", "ส่วนลดจ่ายออก", "เหตุผล",
-        ])
-        self.assertEqual(len(rows[7]), 13, "one trailing column for a single-day window")
-
-    def test_a_stock_out_row_carries_qty_and_reason(self):
-        self._stock_out("Expired", 3)
-        rows = self._export()
-        row = rows[8]
-        self.assertEqual(row[0], "1")            # ลำดับ
-        self.assertEqual(row[1], "38022")        # รหัส
-        self.assertEqual(row[2], "Breakfast Confetti Cookie")
-        self.assertEqual(row[3], "0")            # no stock-in documents
-        self.assertEqual(row[4], "1")            # one stock-out document
-        self.assertEqual(row[6], "3")            # จำนวนจ่ายออก, integer like the sample
-        self.assertEqual(row[11], "Expired")
-        self.assertEqual(row[12], "3")           # the per-day column
-
-    def test_multiple_reasons_for_one_product_are_listed(self):
-        self._stock_out("Expired", 3)
-        self._stock_out("Damaged (In-Store)", 2)
-        rows = self._export()
-        self.assertEqual(rows[8][4], "2")        # two documents
-        self.assertEqual(rows[8][6], "5")        # 3 + 2
-        self.assertEqual(rows[8][11], "Expired, Damaged (In-Store)")
-
-    def test_totals_row_places_รวม_and_sums_the_numeric_block(self):
-        self._stock_out("Expired", 3)
-        self._stock_out("Damaged (In-Store)", 2)
-        total = self._export()[-1]
-        self.assertEqual(total[4], "รวม")
-        self.assertEqual(total[6], "5")          # จำนวนจ่ายออก
-        self.assertEqual(total[0], "")           # ลำดับ stays blank, as in the sample
-        self.assertEqual(total[12], "")          # per-day column is not summed
-
-    def test_stock_in_is_excluded_by_default(self):
-        """The sample is a stock-out report; ?type=out is the default."""
-        self.client.post(
-            "/api/stock-documents",
-            {"type": "in", "vendor": "Supplier", "items": [{
-                "product_id": str(self.product.id), "product_name": self.product.name,
-                "qty": 7, "price": "10.00", "discount": "0", "total": "70.00",
-            }]},
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Bearer {self.session.token}",
-        )
-        rows = self._export()
-        self.assertEqual(rows[-1][4], "รวม")
-        self.assertEqual(len(rows), 9, "only the totals row follows the header")
-
-        both = self._export(type="all")
-        self.assertEqual(both[8][5], "7")        # จำนวนรับเข้า now reported
-
-    def test_export_survives_a_deleted_product(self):
-        """Lines snapshot name/barcode, so stock that genuinely moved keeps
-        being reported after the product row is gone."""
-        self._stock_out("Damaged (In-Store)", 4)
-        self.product.delete()
-        rows = self._export()
-        self.assertEqual(rows[8][2], "Breakfast Confetti Cookie")
-        self.assertEqual(rows[8][6], "4")
-
-    def test_export_is_scoped_to_the_selected_branch(self):
-        self._stock_out("Damaged (In-Store)", 4)
-        other = make_branch(name="Central World")
-        rows = self._export(branch=str(other.id))
-        self.assertEqual(rows[2][1], "Central World")
-        self.assertEqual(len(rows), 9, "the other branch's stock-out must not leak in")
 
 
 class StockDocumentReasonMigrationTests(TestCase):

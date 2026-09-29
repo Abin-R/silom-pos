@@ -15,7 +15,7 @@
 {% block title %}Inventory{% endblock %}
 {% block page_title %}Inventory{% endblock %}
 {% block page_sub %}
-  <div class="tb-sub">{% if multi_branch %}{{ selected|length }} branches{% else %}{{ branch.name|default:"All products" }}{% endif %} · {{ sku_count }} SKU{{ sku_count|pluralize }} tracked</div>
+  <div class="tb-sub">{% if multi_branch %}{{ selected|length }} branches{% else %}{{ branch.name|default:"All products" }}{% endif %} · {{ sku_count }} SKU{{ sku_count|pluralize }} tracked{% if as_of %} · stock at end of {{ as_of|date:"j M Y" }}{% endif %}</div>
 {% endblock %}
 
 {% block topbar %}
@@ -55,35 +55,18 @@
     <svg><use href="#i-dl"/></svg> Export</a>
 
   {% comment %}
-    Stock-movement export carries its OWN date range rather than borrowing the
-    header's: this page hides the header dates (the on-hand table is a snapshot,
-    not a window), so a shared control would filter nothing on screen while
-    silently changing the file. Its own form keeps that honest.
-
-    It lives behind a button rather than in the header row: laid out inline,
-    the direction and dates read as filters on the table, and people changed
-    them expecting the page to move.
+    One date, not a range: the on-hand table is a balance, so the question it
+    can answer is "what was on the shelf at the end of that day". Blank means
+    now. It can't go back past the first recorded stock edit (`as_of_min`) —
+    before that, product-form overwrites left no trace to rewind.
   {% endcomment %}
-  <details class="mvpop">
-    <summary class="btn"><svg><use href="#i-dl"/></svg> Movement</summary>
-    <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="mvpop-panel">
-      {% if branch %}<input type="hidden" name="branch" value="{{ branch.id }}">{% endif %}
-      <div class="mvpop-head">
-        <b>Stock movement CSV</b>
-        <span>{{ branch.name }} · downloads a file, doesn't change this page</span>
-      </div>
-      <div class="mvpop-seg" role="radiogroup" aria-label="Direction">
-        <label><input type="radio" name="type" value="out" checked><span>Stock out</span></label>
-        <label><input type="radio" name="type" value="in"><span>Stock in</span></label>
-        <label><input type="radio" name="type" value="all"><span>In &amp; out</span></label>
-      </div>
-      <div class="mvpop-dates">
-        <label>From<input type="date" name="from" value="{{ today|date:'Y-m-d' }}" required></label>
-        <label>To<input type="date" name="to" value="{{ today|date:'Y-m-d' }}" required></label>
-      </div>
-      <button class="btn btn-blue" type="submit"><svg><use href="#i-dl"/></svg> Download CSV</button>
-    </form>
-  </details>
+  <div class="ctl" title="Stock as it stood at the end of this day">
+    <svg><use href="#i-cal"/></svg>
+    <span>As of</span>
+    <input type="date" name="as_of" value="{{ as_of|date:'Y-m-d' }}" form="filterForm"
+           max="{{ today|date:'Y-m-d' }}" {% if as_of_min %}min="{{ as_of_min|date:'Y-m-d' }}"{% endif %}
+           onchange="this.form.submit()">
+  </div>
 {% endblock %}
 
 {% block filter_extra %}
@@ -91,6 +74,16 @@
 {% endblock %}
 
 {% block content %}
+
+{% if as_of %}
+<div class="banner b-blue">
+  <svg><use href="#i-cal"/></svg>
+  <span><b>Stock at the end of {{ as_of|date:"j F Y" }}.</b>
+    Rebuilt from sales and stock edits since then. Value uses today's unit cost; products added later aren't listed.</span>
+  <div class="spacer"></div>
+  <a class="btn btn-sm" href="?{% qs_replace request as_of=None page=None %}">Back to today</a>
+</div>
+{% endif %}
 
 <div class="stats s4">
   <div class="stat">
@@ -101,12 +94,12 @@
   <div class="stat">
     <span class="k">Out of stock</span>
     <span class="v money" {% if out_of_stock %}style="color:var(--red-d)"{% endif %}>{{ out_of_stock }}</span>
-    <span class="d {% if out_of_stock %}down{% endif %}">hidden from every till until received</span>
+    <span class="d {% if out_of_stock %}down{% endif %}">{% if as_of %}at the end of that day{% else %}hidden from every till until received{% endif %}</span>
   </div>
   <div class="stat">
     <span class="k">Below par level</span>
     <span class="v money" {% if below_par %}style="color:var(--amber)"{% endif %}>{{ below_par }}</span>
-    <span class="d {% if below_par %}amber{% endif %}">reorder before tomorrow</span>
+    <span class="d {% if below_par %}amber{% endif %}">{% if as_of %}at the end of that day{% else %}reorder before tomorrow{% endif %}</span>
   </div>
   <div class="stat">
     <span class="k">No par level set</span>
@@ -115,7 +108,7 @@
   </div>
 </div>
 
-{% if out_of_stock %}
+{% if out_of_stock and not as_of %}
 <div class="banner b-amber">
   <svg><use href="#i-alert"/></svg>
   <span><b>{{ out_of_stock }} SKU{{ out_of_stock|pluralize }} out of stock.</b>
@@ -231,14 +224,12 @@
     sync();
   })();
 
-  // A <details> only closes from its own summary; close the header popovers
-  // on a click anywhere else, and the Movement one once its file is asked for.
+  // A <details> only closes from its own summary; close the branch picker
+  // on a click anywhere else.
   document.addEventListener('click', function (e) {
-    document.querySelectorAll('details.mvpop[open], details.bpick[open]').forEach(function (d) {
+    document.querySelectorAll('details.bpick[open]').forEach(function (d) {
       if (!d.contains(e.target)) d.open = false;
     });
   });
-  var mv = document.querySelector('.mvpop form');
-  if (mv) mv.addEventListener('submit', function () { mv.parentNode.open = false; });
 </script>
 {% endblock %}

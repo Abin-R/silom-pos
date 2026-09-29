@@ -21,7 +21,9 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.http import Http404, HttpResponse, HttpResponseNotModified, HttpResponseRedirect
 from django.db import transaction
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Max, Min, Sum, Q
+from django.db.models import (
+    Count, DecimalField, Exists, ExpressionWrapper, F, Max, Min, OuterRef, Sum, Q,
+)
 from django.db.models.functions import Coalesce, Length, TruncDate
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -2151,10 +2153,11 @@ def _set_stock_level(p):
         p.level_label, p.level_class, p.level_colour, p.fill = "Untracked", "t-out", "var(--mut2)", 0
 
 
-def _week_sold_and_received(products):
-    """Units sold in the last seven days and the last stock-in date, by product id."""
-    week_start, week_end = _date_window(
-        timezone.localdate() - timedelta(days=6), timezone.localdate())
+def _week_sold_and_received(products, as_of=None):
+    """Units sold in the seven days up to ``as_of`` (default today) and the
+    last stock-in on or before it, by product id."""
+    end_day = as_of or timezone.localdate()
+    week_start, week_end = _date_window(end_day - timedelta(days=6), end_day)
     sold = {
         row["product_id"]: row["qty"] or 0
         for row in OrderItem.objects.filter(
@@ -2164,13 +2167,96 @@ def _week_sold_and_received(products):
     }
     received = {
         row["product_id"]: row["last"]
-        for row in StockMovement.objects.filter(product__in=products, type="in")
+        for row in StockMovement.objects.filter(
+            product__in=products, type="in", created_at__lte=week_end)
         .values("product_id").annotate(last=Max("created_at"))
     }
     return sold, received
 
 
-def _inventory_grouped(qs, sort):
+def _inventory_as_of(request):
+    """The ``?as_of=`` date, or None for "now" (blank, unparseable, today or
+    later). Clamped to ``_as_of_floor`` so the page never shows a rewind it
+    can't do."""
+    today = timezone.localdate()
+    as_of = _parse_date(request.GET.get("as_of"), None)
+    if as_of is None or as_of >= today:
+        return None
+    floor = _as_of_floor()
+    if floor is not None and as_of < floor:
+        as_of = floor
+    return as_of if as_of < today else None
+
+
+def _as_of_floor():
+    """The earliest day stock can be rewound to: the day of the first audited
+    Product change. Edits from the product forms, the till's product save and
+    catalogue sync overwrite ``stock`` without a StockMovement; the audit log
+    is their only record, and it didn't exist before this."""
+    first = (AuditLog.objects.filter(model="Product")
+             .order_by("at").values_list("at", flat=True).first())
+    return timezone.localtime(first).date() if first else None
+
+
+def _rewind_stock(products, as_of):
+    """Set each product's ``stock`` to what it was at the end of ``as_of``,
+    working back from today's figure, and drop products that didn't exist yet.
+
+    Everything that changed stock since then is undone:
+
+    * sales — ``create_order_from_items`` decrements with a queryset
+      ``update()`` (no audit row), so they're read from the StockMovement it
+      writes alongside, recognised by ``document_no`` being an order number.
+      Voids don't give stock back, so voided sales count too;
+    * every other change — stock documents, the app's stock modal, product
+      edits from the till or the backoffice, catalogue sync — goes through
+      ``Product.save()``, whose audit row carries ``stock`` from/to. That
+      covers absolute overwrites a StockMovement can't express.
+    """
+    if not products:
+        return products
+    _, cutoff = _date_window(as_of, as_of)
+    branch_ids = {p.branch_id for p in products}
+    by_id = {str(p.id): p for p in products}
+    change = {}          # product id -> net stock change after the cutoff
+    born_later = set()
+
+    for oid, action, changes in (
+        AuditLog.objects.filter(model="Product", branch_id__in=branch_ids,
+                                at__gt=cutoff, action__in=("create", "update"))
+        .values_list("object_id", "action", "changes")
+    ):
+        if oid not in by_id:
+            continue
+        if action == "create":
+            born_later.add(oid)
+            continue
+        stock = (changes or {}).get("stock")
+        if isinstance(stock, dict):
+            change[oid] = (change.get(oid, 0)
+                           + int(stock.get("to") or 0) - int(stock.get("from") or 0))
+
+    sales = (
+        StockMovement.objects
+        .filter(product__in=products, type="out", created_at__gt=cutoff)
+        .filter(Exists(Order.objects.filter(order_number=OuterRef("document_no"))))
+        .values("product_id").annotate(qty=Sum("qty"))
+    )
+    for row in sales:
+        oid = str(row["product_id"])
+        change[oid] = change.get(oid, 0) - (row["qty"] or 0)
+
+    kept = []
+    for p in products:
+        oid = str(p.id)
+        if oid in born_later:
+            continue
+        p.stock = p.stock - change.get(oid, 0)
+        kept.append(p)
+    return kept
+
+
+def _inventory_grouped(qs, sort, as_of=None):
     """Several branches' products merged by name into one row each.
 
     Each branch has its own Product row, so "Hella Nutella" at three branches
@@ -2179,7 +2265,10 @@ def _inventory_grouped(qs, sort):
     par level, sales and stock value add up; ``by_branch`` keeps the split.
     """
     products = list(qs)
-    sold, received = _week_sold_and_received(products)
+    if as_of:
+        # Before grouping, so the merged row sums the rewound figures.
+        products = _rewind_stock(products, as_of)
+    sold, received = _week_sold_and_received(products, as_of)
 
     groups: dict = {}
     for p in products:
@@ -2218,25 +2307,48 @@ def _inventory_grouped(qs, sort):
         g.days_cover = (g.stock / daily) if daily else None
         _set_stock_level(g)
 
+    _sort_rows(rows, sort)
+    return rows
+
+
+def _sort_rows(rows, sort):
+    """The page's sort options, for rows built in Python rather than SQL."""
     keys = {
         "barcode": lambda g: (g.barcode or "").lower(),
         "category": lambda g: (g.category.name if g.category else "").lower(),
         "stock_min": lambda g: g.stock,
         "stock_max": lambda g: -g.stock,
     }
-    rows.sort(key=lambda g: g.name.lower())
+    rows.sort(key=lambda g: (g.name or "").lower())
     if sort in keys:
         rows.sort(key=keys[sort])
+
+
+def _inventory_as_of_rows(qs, sort, as_of):
+    """One branch's products with stock rewound to ``as_of``. The stock
+    filters, totals and sort can't run in SQL on a figure that isn't in the
+    table, so the rows are built here like the merged ones."""
+    rows = _rewind_stock(list(qs), as_of)
+    sold, received = _week_sold_and_received(rows, as_of)
+    for p in rows:
+        p.sold_7d = sold.get(p.id, 0)
+        daily = p.sold_7d / 7 if p.sold_7d else 0
+        p.days_cover = (p.stock / daily) if daily else None
+        p.value = p.cost * p.stock
+        p.last_received = received.get(p.id)
+        _set_stock_level(p)
+    _sort_rows(rows, sort)
     return rows
 
 
 @login_required
 def inventory_summary(request):
-    """Current on-hand balance per product. Searchable by Name / Barcode /
-    Category and sortable by Name / Barcode / Category / OnhandQty (matching
-    the SilomPOS options)."""
+    """On-hand balance per product, now or (``?as_of=``) at the end of a past
+    day. Searchable by Name / Barcode / Category and sortable by Name /
+    Barcode / Category / OnhandQty (matching the SilomPOS options)."""
     branches, selected, field, q, sort, qs = _inventory_qs(request)
     multi_branch = len(selected) > 1
+    as_of = _inventory_as_of(request)
 
     # "Needs attention" first, because that is what the page is opened for.
     # `all` is a click away, and the tab says which one you're looking at.
@@ -2251,10 +2363,11 @@ def inventory_summary(request):
             return p.stock <= 0 or (p.par_level > 0 and p.stock < p.par_level)
         return True
 
-    if multi_branch:
-        # Merged rows are built in Python, so the level filter, the cards and
-        # the paging all work on those rows rather than on the queryset.
-        all_rows = _inventory_grouped(qs, sort)
+    if multi_branch or as_of:
+        # Merged or rewound rows are built in Python, so the level filter, the
+        # cards and the paging all work on those rows rather than the queryset.
+        all_rows = (_inventory_grouped(qs, sort, as_of) if multi_branch
+                    else _inventory_as_of_rows(qs, sort, as_of))
         paginator = Paginator([g for g in all_rows if wanted(g)], 50)
         page_obj = paginator.get_page(request.GET.get("page"))
         products = list(page_obj.object_list)
@@ -2308,6 +2421,8 @@ def inventory_summary(request):
         "selected": selected,
         "selected_ids": {str(b.id) for b in selected},
         "multi_branch": multi_branch,
+        "as_of": as_of,
+        "as_of_min": _as_of_floor(),
         "hide_branch": True,
         "sorts": [("name", "Name"), ("barcode", "Barcode"), ("category", "Category"),
                   ("stock_min", "On hand: low → high"), ("stock_max", "On hand: high → low")],
@@ -2333,6 +2448,7 @@ def inventory_summary(request):
                 field=field if field != "all" else None,
                 q=q or None,
                 level=level if level != "attention" else None,
+                as_of=as_of.isoformat() if as_of else None,
             ),
         ])),
         "hide_dates": True,
@@ -2347,11 +2463,12 @@ def inventory_export(request):
     sort selection. Covers every matching product, not just the visible page."""
     _branches, selected, _field, _q, _sort, qs = _inventory_qs(request)
     multi = len(selected) > 1
+    as_of = _inventory_as_of(request)
 
     settings_row = Settings.objects.first()
     shop_name = settings_row.shop_name if settings_row else "Brave POS"
     branch_name = ", ".join(b.name for b in selected) if selected else "All branches"
-    today = timezone.localdate()
+    today = as_of or timezone.localdate()
 
     if len(selected) == 1:
         fname_branch = selected[0].name.replace(" ", "_")
@@ -2374,7 +2491,7 @@ def inventory_export(request):
         # and the per-branch split spelled out beside it.
         writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category",
                          "Balance", "By branch"])
-        for no, g in enumerate(_inventory_grouped(qs, _sort), start=1):
+        for no, g in enumerate(_inventory_grouped(qs, _sort, as_of), start=1):
             writer.writerow([
                 no, g.barcode or "", g.name, "ชิ้น",
                 g.category.name if g.category else "", g.stock,
@@ -2383,7 +2500,8 @@ def inventory_export(request):
         return response
 
     writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
-    for no, p in enumerate(qs.iterator(), start=1):
+    rows = _inventory_as_of_rows(qs, _sort, as_of) if as_of else qs.iterator()
+    for no, p in enumerate(rows, start=1):
         balance = "non-stock" if p.product_type == "S" else p.stock
         writer.writerow([
             no,
@@ -2397,149 +2515,11 @@ def inventory_export(request):
     return response
 
 
-# ─── Stock movement export (รายงานการ รับเข้า-จ่ายออก แยกตามสินค้า) ──────────
-# Column layout is copied from the SilomPOS export the shop already reconciles
-# against, so the file drops into their existing spreadsheet without rework.
-# Indexes are 0-based into the data rows built below.
-_STOCK_EXPORT_HEADERS = [
-    "ลำดับ",            # 0  No.
-    "รหัส",             # 1  Code / barcode
-    "สินค้า",            # 2  Product
-    "เอกสารรับเข้า",      # 3  Stock-in documents
-    "เอกสารจ่ายออก",     # 4  Stock-out documents
-    "จำนวนรับเข้า",       # 5  Qty in
-    "จำนวนจ่ายออก",      # 6  Qty out
-    "มูลค่ารับเข้า",       # 7  Value in
-    "มูลค่าจ่ายออก",      # 8  Value out
-    "ส่วนลดรับเข้า",      # 9  Discount in
-    "ส่วนลดจ่ายออก",     # 10 Discount out
-    "เหตุผล",            # 11 Reason — our addition, absent from the SilomPOS file
-]
-# The totals row puts "รวม" here and sums only the numeric block after it,
-# exactly like the sample (document counts and the per-day columns are left
-# blank — a count of documents doesn't total meaningfully across products).
-_STOCK_TOTAL_LABEL_COL = 4
-_STOCK_TOTAL_COLS = range(5, 11)
-
-
 def _stock_qty(v) -> str:
     """Quantities print as integers when whole (3, not 3.00) to match the
-    sample; fractional units still show their decimals."""
+    SilomPOS files; fractional units still show their decimals."""
     d = Decimal(v or 0)
     return str(d.quantize(Decimal(1))) if d == d.to_integral_value() else f"{d:.2f}"
-
-
-@login_required
-def stock_movement_export(request):
-    """CSV of stock in/out aggregated per product, in the SilomPOS layout.
-
-    ``?type=out`` (the default) reports stock-out only, which is what the
-    provided sample is; ``in`` and ``all`` are also accepted.
-
-    The trailing per-day columns hold the quantity moved on that date **in the
-    direction being reported** — for ``type=out`` that is the qty out, which is
-    what the sample shows.  With ``type=all`` a day is the net (in − out), the
-    only reading that stays meaningful once both directions are in scope.
-    """
-    _branches, branch, dfrom, dto = _common_filters(request)
-    start, end = _date_window(dfrom, dto)
-    kind = request.GET.get("type") or "out"
-    if kind not in ("in", "out", "all"):
-        kind = "out"
-    types = ["in", "out"] if kind == "all" else [kind]
-
-    items = (
-        StockDocumentItem.objects
-        .filter(
-            document__branch=branch,
-            document__type__in=types,
-            document__created_at__gte=start,
-            document__created_at__lte=end,
-        )
-        .select_related("document", "product")
-        .order_by("document__created_at", "id")
-    )
-
-    days = [dfrom + timedelta(days=i) for i in range((dto - dfrom).days + 1)]
-    day_index = {d: i for i, d in enumerate(days)}
-
-    # Aggregate in Python rather than SQL: the per-day pivot and the distinct
-    # reason list are both awkward as an ORM annotation, and a branch-day holds
-    # a handful of stock documents, not a table scan.
-    rows: dict[object, dict] = {}
-    for it in items:
-        doc = it.document
-        # Deleted products still have their name/barcode snapshotted on the
-        # line, so the report keeps reporting them rather than dropping stock
-        # that genuinely moved.
-        key = it.product_id or (it.barcode, it.product_name)
-        row = rows.get(key)
-        if row is None:
-            row = rows[key] = {
-                "code": it.barcode or (it.product.barcode if it.product else ""),
-                "name": it.product_name or (it.product.name if it.product else ""),
-                "docs_in": set(), "docs_out": set(),
-                "qty_in": Decimal(0), "qty_out": Decimal(0),
-                "val_in": Decimal(0), "val_out": Decimal(0),
-                "disc_in": Decimal(0), "disc_out": Decimal(0),
-                "reasons": [],
-                "per_day": [Decimal(0)] * len(days),
-            }
-        side = "in" if doc.type == "in" else "out"
-        row[f"docs_{side}"].add(doc.id)
-        row[f"qty_{side}"] += Decimal(it.qty or 0)
-        row[f"val_{side}"] += Decimal(it.total or 0)
-        row[f"disc_{side}"] += Decimal(it.discount or 0)
-        if doc.reason and doc.reason not in row["reasons"]:
-            row["reasons"].append(doc.reason)
-        i = day_index.get(timezone.localtime(doc.created_at).date())
-        if i is not None:
-            if kind == "all":
-                row["per_day"][i] += Decimal(it.qty or 0) * (1 if side == "in" else -1)
-            else:
-                row["per_day"][i] += Decimal(it.qty or 0)
-
-    fname_branch = branch.name.replace(" ", "_") if branch else "all"
-    response, writer = _csv_response(
-        f"stock_{kind}_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
-    )
-    # The sample keeps this generic report name even when it was exported with
-    # a stock-out filter applied, so the title does not vary with ``type``.
-    _write_export_header(
-        writer, "รายงานการ รับเข้า-จ่ายออก แยกตามสินค้า", branch, dfrom, dto,
-    )
-    writer.writerow(_STOCK_EXPORT_HEADERS + [d.strftime("%d/%m/%Y") for d in days])
-
-    totals = {k: Decimal(0) for k in
-              ("qty_in", "qty_out", "val_in", "val_out", "disc_in", "disc_out")}
-    for no, row in enumerate(rows.values(), start=1):
-        for k in totals:
-            totals[k] += row[k]
-        writer.writerow([
-            no,
-            row["code"],
-            row["name"],
-            len(row["docs_in"]),
-            len(row["docs_out"]),
-            _stock_qty(row["qty_in"]),
-            _stock_qty(row["qty_out"]),
-            _csv_num(row["val_in"]),
-            _csv_num(row["val_out"]),
-            _csv_num(row["disc_in"]),
-            _csv_num(row["disc_out"]),
-            ", ".join(row["reasons"]),
-        ] + [_stock_qty(v) for v in row["per_day"]])
-
-    total_cells = [""] * (len(_STOCK_EXPORT_HEADERS) + len(days))
-    total_cells[_STOCK_TOTAL_LABEL_COL] = "รวม"
-    for col, key in zip(_STOCK_TOTAL_COLS,
-                        ("qty_in", "qty_out", "val_in", "val_out", "disc_in", "disc_out")):
-        total_cells[col] = (
-            _stock_qty(totals[key]) if key.startswith("qty") else _csv_num(totals[key])
-        )
-    writer.writerow(total_cells)
-
-    return response
 
 
 # ─── Stock-in / stock-out reports ───────────────────────────────────────

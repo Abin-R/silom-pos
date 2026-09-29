@@ -54,8 +54,6 @@ urlpatterns = [
     # Inventory
     path("inventory", views.inventory_summary, name="inventory"),
     path("inventory/export", views.inventory_export, name="inventory_export"),
-    path("inventory/stock-movement-export", views.stock_movement_export,
-         name="stock_movement_export"),
     path("inventory/stock-in", views.stock_in_report, name="stock_in"),
     path("inventory/stock-in/export", views.stock_in_export, name="stock_in_export"),
     path("inventory/stock-out", views.stock_out_report, name="stock_out"),
