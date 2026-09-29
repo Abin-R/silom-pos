@@ -1090,7 +1090,6 @@ class DiscountType(models.Model):
     # transaction date — nobody sets it by hand.
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
-    sort_order = models.IntegerField(default=0)
     # The manual pause switch ("Offer this discount on the till").  Separate
     # from the date-driven status: it stops a promotion early without
     # rewriting the dates it was planned with.
@@ -1104,7 +1103,7 @@ class DiscountType(models.Model):
     STATUS_PAUSED = "paused"
 
     class Meta:
-        ordering = ["sort_order", "name"]
+        ordering = ["name"]
         indexes = [models.Index(fields=["branch"])]
 
     def __str__(self) -> str:

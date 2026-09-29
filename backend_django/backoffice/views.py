@@ -3328,10 +3328,6 @@ def _apply_discount_form(dt, post, branch):
         # indistinguishable from it on the till and in the order history.
         errors.append("“Other” is reserved for the till's own hand-entered discount — pick another name.")
 
-    try:
-        dt.sort_order = int(post.get("sort_order") or 0)
-    except ValueError:
-        dt.sort_order = 0
     dt.active = post.get("active") == "on"
 
     # Validity period. Blank means open-ended on that side.
@@ -3485,7 +3481,7 @@ def discount_list(request):
                       category_count=Count("categories", distinct=True))
           .select_related("free_product")
           .prefetch_related("categories", "conditions__product", "conditions__category")
-          .order_by("sort_order", "name"))
+          .order_by("name"))
 
     # Status is derived, never stored: today's date against each promotion's
     # start/end dates (plus the manual pause).
