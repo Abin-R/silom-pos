@@ -2093,9 +2093,18 @@ def _inventory_qs(request):
     category at once)."""
     branches, branch, _, _ = _common_filters(request)
 
-    qs = Product.objects.filter(active=True).select_related("category")
-    if branch:
-        qs = qs.filter(branch=branch)
+    # Several branches can be ticked at once (``?branches=<id>&branches=<id>``).
+    # With none ticked the page shows the header's branch, as every other
+    # page does. Ticking doesn't move the remembered branch: the other pages
+    # can only show one, so they keep the one you last picked there.
+    by_id = {str(b.id): b for b in branches}
+    selected = [by_id[i] for i in dict.fromkeys(request.GET.getlist("branches")) if i in by_id]
+    if not selected and branch:
+        selected = [branch]
+
+    qs = Product.objects.filter(active=True).select_related("category", "branch")
+    if selected:
+        qs = qs.filter(branch__in=selected)
 
     field = request.GET.get("field", "all")
     q = (request.GET.get("q") or "").strip()
@@ -2121,8 +2130,8 @@ def _inventory_qs(request):
         "stock_min": "stock",   # OnhandQty → lowest on-hand first
         "stock_max": "-stock",  # OnhandQty → highest on-hand first
     }
-    qs = qs.order_by(sort_map.get(sort, "name"))
-    return branches, branch, field, q, sort, qs
+    qs = qs.order_by(sort_map.get(sort, "name"), "branch__name")
+    return branches, selected, field, q, sort, qs
 
 
 @login_required
@@ -2130,7 +2139,7 @@ def inventory_summary(request):
     """Current on-hand balance per product. Searchable by Name / Barcode /
     Category and sortable by Name / Barcode / Category / OnhandQty (matching
     the SilomPOS options)."""
-    branches, branch, field, q, sort, qs = _inventory_qs(request)
+    branches, selected, field, q, sort, qs = _inventory_qs(request)
 
     # "Needs attention" first, because that is what the page is opened for.
     # `all` is a click away, and the tab says which one you're looking at.
@@ -2199,7 +2208,15 @@ def inventory_summary(request):
         "active": "inventory",
         "page_title": "Inventory",
         "branches": branches,
-        "branch": branch,
+        # The stock-movement export is one branch's file, so it takes the
+        # first of the ticked ones.
+        "branch": selected[0] if selected else None,
+        "selected": selected,
+        "selected_ids": {str(b.id) for b in selected},
+        "multi_branch": len(selected) > 1,
+        "hide_branch": True,
+        "sorts": [("name", "Name"), ("barcode", "Barcode"), ("category", "Category"),
+                  ("stock_min", "On hand: low → high"), ("stock_max", "On hand: high → low")],
         "products": products,
         "page_obj": page_obj,
         "paginator": paginator,
@@ -2214,13 +2231,16 @@ def inventory_summary(request):
         "out_of_stock": out_of_stock,
         "below_par": below_par,
         "untracked": untracked,
-        "qs": _filter_qs(
-            request,
-            sort=sort if sort != "name" else None,
-            field=field if field != "all" else None,
-            q=q or None,
-            level=level if level != "attention" else None,
-        ),
+        "qs": "&".join(filter(None, [
+            urlencode([("branches", b.id) for b in selected]),
+            _filter_qs(
+                request,
+                sort=sort if sort != "name" else None,
+                field=field if field != "all" else None,
+                q=q or None,
+                level=level if level != "attention" else None,
+            ),
+        ])),
         "hide_dates": True,
         "today": timezone.localdate(),
     }
@@ -2231,14 +2251,18 @@ def inventory_summary(request):
 def inventory_export(request):
     """CSV download of the inventory summary for the current branch / search /
     sort selection. Covers every matching product, not just the visible page."""
-    _branches, branch, _field, _q, _sort, qs = _inventory_qs(request)
+    _branches, selected, _field, _q, _sort, qs = _inventory_qs(request)
+    multi = len(selected) > 1
 
     settings_row = Settings.objects.first()
     shop_name = settings_row.shop_name if settings_row else "Brave POS"
-    branch_name = branch.name if branch else "All branches"
+    branch_name = ", ".join(b.name for b in selected) if selected else "All branches"
     today = timezone.localdate()
 
-    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    if len(selected) == 1:
+        fname_branch = selected[0].name.replace(" ", "_")
+    else:
+        fname_branch = f"{len(selected)}_branches" if selected else "all"
     filename = f"inventory_{fname_branch}_{today.isoformat()}.csv"
 
     response = HttpResponse(content_type="text/csv")
@@ -2251,7 +2275,8 @@ def inventory_export(request):
     writer.writerow(["Branch", branch_name])
     writer.writerow(["Date", today.strftime("%d %B %Y")])
     writer.writerow([])
-    writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
+    writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"]
+                    + (["Branch"] if multi else []))
 
     for no, p in enumerate(qs.iterator(), start=1):
         balance = "non-stock" if p.product_type == "S" else p.stock
@@ -2262,7 +2287,7 @@ def inventory_export(request):
             "ชิ้น",
             p.category.name if p.category_id else "",
             balance,
-        ])
+        ] + ([p.branch.name if p.branch_id else ""] if multi else []))
 
     return response
 

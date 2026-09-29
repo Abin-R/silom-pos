@@ -15,10 +15,35 @@
 {% block title %}Inventory{% endblock %}
 {% block page_title %}Inventory{% endblock %}
 {% block page_sub %}
-  <div class="tb-sub">{{ branch.name|default:"All products" }} · {{ sku_count }} SKU{{ sku_count|pluralize }} tracked</div>
+  <div class="tb-sub">{% if multi_branch %}{{ selected|length }} branches{% else %}{{ branch.name|default:"All products" }}{% endif %} · {{ sku_count }} SKU{{ sku_count|pluralize }} tracked</div>
 {% endblock %}
 
 {% block topbar %}
+  {% comment %}
+    Several branches at once, so this page has its own picker in place of the
+    header's single-branch one. Ticks post into the filter form; nothing
+    reloads until Apply, so picking three branches is one page load, not three.
+  {% endcomment %}
+  {% if branches|length > 1 %}
+  <details class="bpick">
+    <summary class="ctl">
+      <svg><use href="#i-store"/></svg>
+      <b>{% if multi_branch %}{{ selected|length }} branches{% else %}{{ branch.name }}{% endif %}</b>
+      <svg class="cv"><use href="#i-chev"/></svg>
+    </summary>
+    <div class="bpick-list">
+      <label class="bpick-all"><input type="checkbox" id="bpickAll"> All branches</label>
+      {% for b in branches %}
+        <label><input type="checkbox" name="branches" value="{{ b.id }}" form="filterForm"
+               {% if b.id|stringformat:"s" in selected_ids %}checked{% endif %}> {{ b.name }}</label>
+      {% endfor %}
+      <button class="btn btn-sm" type="submit" form="filterForm">Apply</button>
+    </div>
+  </details>
+  {% elif branch %}
+  <div class="ctl is-static"><svg><use href="#i-store"/></svg><b>{{ branch.name }}</b></div>
+  {% endif %}
+
   <div class="ctl ctl-search">
     <svg><use href="#i-search"/></svg>
     <input type="search" name="q" value="{{ q }}" form="filterForm" placeholder="Name, SKU or barcode">
@@ -35,7 +60,8 @@
     not a window), so a shared control would filter nothing on screen while
     silently changing the file. Its own form keeps that honest.
   {% endcomment %}
-  <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="ctl" style="gap:6px">
+  <form method="get" action="{% url 'backoffice:stock_movement_export' %}" class="ctl" style="gap:6px"
+        {% if multi_branch %}title="Movement export covers {{ branch.name }} only"{% endif %}>
     {% if branch %}<input type="hidden" name="branch" value="{{ branch.id }}">{% endif %}
     <select name="type" title="Movement direction">
       <option value="out">Stock out</option>
@@ -99,6 +125,14 @@
            href="?{% qs_replace request level=key page=None %}">{{ label }}</a>
       {% endfor %}
     </div>
+    <div class="ctl" style="height:34px" title="Sort">
+      <select name="sort" form="filterForm" aria-label="Sort" onchange="this.form.submit()">
+        {% for key, label in sorts %}
+          <option value="{{ key }}" {% if sort == key %}selected{% endif %}>Sort: {{ label }}</option>
+        {% endfor %}
+      </select>
+      <svg class="cv"><use href="#i-chev"/></svg>
+    </div>
   </div>
   <div class="panel-scroll">
     <table class="tbl">
@@ -125,7 +159,7 @@
                   than resolving to empty, so one uncategorised product used
                   to 500 the whole page.
                 {% endcomment %}
-                <div class="sub">{% if p.name_th %}{{ p.name_th }}{% elif p.category %}{{ p.category.name }}{% endif %}</div>
+                <div class="sub">{% if multi_branch and p.branch %}{{ p.branch.name }}{% if p.name_th or p.category %} · {% endif %}{% endif %}{% if p.name_th %}{{ p.name_th }}{% elif p.category %}{{ p.category.name }}{% endif %}</div>
               </div>
             </div>
           </td>
@@ -157,7 +191,7 @@
       {% if products %}
       <tfoot>
         <tr>
-          <td colspan="8">{{ sku_count }} tracked SKU{{ sku_count|pluralize }}{% if branch %} · {{ branch.name }}{% endif %}</td>
+          <td colspan="8">{{ sku_count }} tracked SKU{{ sku_count|pluralize }}{% if multi_branch %} · {{ selected|length }} branches{% elif branch %} · {{ branch.name }}{% endif %}</td>
           <td class="r money" style="color:var(--blue)">฿{{ stock_value|floatformat:0|intcomma }}</td>
           <td colspan="2"></td>
         </tr>
@@ -167,4 +201,19 @@
   </div>
   {% include "backoffice/_pagination.html" %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // "All branches" ticks or clears every branch box, and follows them back.
+  (function () {
+    var all = document.getElementById('bpickAll');
+    if (!all) return;
+    var boxes = document.querySelectorAll('.bpick-list input[name="branches"]');
+    function sync() { all.checked = Array.prototype.every.call(boxes, function (b) { return b.checked; }); }
+    all.addEventListener('change', function () { boxes.forEach(function (b) { b.checked = all.checked; }); });
+    boxes.forEach(function (b) { b.addEventListener('change', sync); });
+    sync();
+  })();
+</script>
 {% endblock %}
