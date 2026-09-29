@@ -47,6 +47,7 @@ import {
   comboSetsWith,
   isCombo,
   isFree,
+  presetDetails,
   reconcileDiscounts,
   type DiscountPreset,
 } from "../lib/discountRules";
@@ -3653,7 +3654,16 @@ function CartItemModal({
     </View>
   );
 
-  const option = (id: string, label: string, detail: string | null, testID: string) => {
+  const detailsOf = (p: DiscountPreset) =>
+    presetDetails(p, { until: tr("pos.discount_until"), from: tr("pos.discount_from") });
+
+  const option = (
+    id: string,
+    label: string,
+    detail: string | null,
+    testID: string,
+    sub?: string,
+  ) => {
     const on = choiceId === id;
     return (
       <TouchableOpacity
@@ -3662,9 +3672,16 @@ function CartItemModal({
         onPress={() => pick(id)}
         testID={testID}
       >
-        <Text style={[styles.discOptionText, on && { color: C.brand }]} numberOfLines={1}>
-          {label}
-        </Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.discOptionText, on && { color: C.brand }]} numberOfLines={1}>
+            {label}
+          </Text>
+          {sub ? (
+            <Text style={styles.discOptionSub} numberOfLines={2}>
+              {sub}
+            </Text>
+          ) : null}
+        </View>
         {detail ? <Text style={styles.discOptionDetail}>{detail}</Text> : null}
         {on && <Ionicons name="checkmark" size={18} color={C.brand} style={{ marginLeft: 8 }} />}
       </TouchableOpacity>
@@ -3730,6 +3747,11 @@ function CartItemModal({
                   />
                 </TouchableOpacity>
               </View>
+              {preset && !pickerOpen && !!detailsOf(preset) && (
+                <View style={styles.discChosenDetails}>
+                  <Text style={styles.discOptionSub}>{detailsOf(preset)}</Text>
+                </View>
+              )}
               {pickerOpen && (
                 <View style={styles.discOptions}>
                   {offered.length > 0 && (
@@ -3745,7 +3767,13 @@ function CartItemModal({
                   <ScrollView keyboardShouldPersistTaps="handled">
                     {option("", tr("pos.discount_none"), null, "item-discount-none")}
                     {shown.map((p) =>
-                      option(p.id, p.name, presetValue(p), `item-discount-preset-${p.id}`),
+                      option(
+                        p.id,
+                        p.name,
+                        presetValue(p),
+                        `item-discount-preset-${p.id}`,
+                        detailsOf(p),
+                      ),
                     )}
                     {needle && shown.length === 0 && (
                       <Text style={styles.discNoMatch}>{tr("pos.discount_no_match")}</Text>
@@ -5811,8 +5839,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.bg,
   },
-  discOptionText: { flex: 1, fontSize: 15, fontWeight: "600", color: C.ink },
+  discOptionText: { fontSize: 15, fontWeight: "600", color: C.ink },
   discOptionDetail: { fontSize: 14, fontWeight: "700", color: C.danger },
+  discOptionSub: { fontSize: 12, color: C.ink3, marginTop: 2 },
+  discChosenDetails: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 10, marginTop: -8 },
   discReasonWrap: {
     paddingHorizontal: 20,
     paddingVertical: 12,

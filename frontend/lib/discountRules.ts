@@ -32,7 +32,36 @@ export type DiscountPreset = {
   conditions?: { product_ids: string[]; min_qty: number }[];
   free_product?: { id: string; name: string; price: number } | null;
   free_qty?: number;
+  /** Promotion details shown under the dropdown entry. */
+  code?: string;
+  start_date?: string | null; // YYYY-MM-DD, inclusive
+  end_date?: string | null;
+  summary?: string;
 };
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-09-30" → "30 Sep 2026", without relying on Intl (thin on Hermes). */
+export function shortDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return y && m && d ? `${d} ${MONTHS[m - 1]} ${y}` : iso;
+}
+
+/**
+ * "PR-0003 · Choc chip + Drinks ×2 · 1 Sep – 30 Sep 2026": the promotion's
+ * ID, what the customer buys, and when it runs. `until`/`from` are the
+ * translated words for a one-sided period.
+ */
+export function presetDetails(
+  p: DiscountPreset,
+  words: { until: string; from: string },
+): string {
+  let when = "";
+  if (p.start_date && p.end_date) when = `${shortDate(p.start_date)} – ${shortDate(p.end_date)}`;
+  else if (p.end_date) when = `${words.until} ${shortDate(p.end_date)}`;
+  else if (p.start_date) when = `${words.from} ${shortDate(p.start_date)}`;
+  return [p.code, p.summary, when].filter(Boolean).join(" · ");
+}
 
 export type DiscountLine = {
   product_id: string;

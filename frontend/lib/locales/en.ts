@@ -587,6 +587,8 @@ const en = {
     discount_free_line: "%{qty} free with %{product} (%{discount})",
     discount_free_line_remove: "Removing it also takes the free-item discount off that product.",
     discount_off_set: "off the set",
+    discount_from: "From",
+    discount_until: "Until",
     discount_no_match: "No discount type matches",
     discount_search: "Search discount types",
     discount_other: "Other",
