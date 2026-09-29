@@ -40,7 +40,7 @@ from .models import Branch, Category, Product, Unit
 # either identity (id, branch), a foreign key resolved per-branch below
 # (category, unit), or deliberately branch-local (stock — see the docstring).
 PRODUCT_FIELDS = (
-    "name_th", "price", "cost", "par_level", "sku", "barcode",
+    "name_th", "price", "cost", "par_level", "shelf_life", "sku", "barcode",
     "image_url", "image_base64", "is_favorite", "tax_type", "product_type",
     "active", "sort_order",
 )
@@ -283,7 +283,7 @@ def preview(source, target, catalogue=None, removed=None):
 # `fanout_active` is what carries it.
 FANOUT_FIELDS = (
     "name", "barcode", "price", "cost", "name_th", "sku", "tax_type",
-    "product_type", "is_favorite", "image_url", "image_base64",
+    "product_type", "is_favorite", "image_url", "image_base64", "shelf_life",
 )
 
 

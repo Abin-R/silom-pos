@@ -183,6 +183,10 @@ class EditingWithTheToggleOnTests(FanoutTestCase):
         self.assertEqual(copy.tax_type, "V")
         self.assertTrue(copy.is_favorite)
 
+    def test_shelf_life_travels(self):
+        self.edit(self.product, shelf_life="3")
+        self.assertEqual(self.at(self.silom).shelf_life, 3)
+
     def test_the_photo_travels(self):
         self.edit(self.product, image_url="https://x/new.jpg")
         self.assertEqual(self.at(self.silom).image_url, "https://x/new.jpg")
@@ -346,3 +350,31 @@ class RemovingAtEveryBranchTests(FanoutTestCase):
     def test_the_banner_names_the_branches(self):
         response = self.remove(follow=True)
         self.assertContains(response, "Also removed at BIO HOUSE, Silom.")
+
+
+class ShelfLifeFormTests(FanoutTestCase):
+    """Blank is "not set"; 0 is a real answer — sell the same day."""
+
+    def test_a_number_is_saved(self):
+        self.create(sync=False, shelf_life="5")
+        self.assertEqual(self.at(self.branch).shelf_life, 5)
+
+    def test_zero_is_kept_as_zero(self):
+        self.create(sync=False, shelf_life="0")
+        self.assertEqual(self.at(self.branch).shelf_life, 0)
+
+    def test_blank_is_not_set(self):
+        self.create(sync=False, shelf_life="")
+        self.assertIsNone(self.at(self.branch).shelf_life)
+
+    def test_a_negative_is_refused(self):
+        response = self.create(sync=False, shelf_life="-2")
+        self.assertContains(response, "Shelf life can")
+        self.assertEqual(Product.objects.count(), 0)
+
+    def test_the_form_shows_it(self):
+        self.create(sync=False, shelf_life="4")
+        response = self.client.get(
+            reverse("backoffice:product_detail", args=[self.at(self.branch).id]))
+        self.assertContains(response, 'name="shelf_life"')
+        self.assertContains(response, 'value="4"')

@@ -2645,6 +2645,15 @@ def _apply_product_form(product, post, branch, errors):
     # 0 means "not tracked" — Inventory says so rather than flagging the
     # product against a threshold nobody set.
     product.par_level = _product_int(post, "par_level", "Par level", errors)
+    # Blank stays blank rather than becoming 0: 0 days means "same day".
+    if (post.get("shelf_life") or "").strip():
+        product.shelf_life = _product_int(
+            post, "shelf_life", "Shelf life", errors)
+        if product.shelf_life < 0:
+            errors.append("Shelf life can't be negative.")
+            product.shelf_life = None
+    else:
+        product.shelf_life = None
     cat_id = post.get("category") or ""
     product.category_id = cat_id if cat_id else None
     product.tax_type = post.get("tax_type") or "V"

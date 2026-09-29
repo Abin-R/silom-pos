@@ -350,6 +350,10 @@ class Product(models.Model):
     # Cannot be derived from sales history: how much stock is "enough"
     # depends on lead time and shelf life, which only the shop knows.
     par_level = models.IntegerField(default=0)
+    # Days the product stays sellable after it is made. Null means nobody has
+    # set one; 0 is a real answer (sell the same day), so it cannot stand in
+    # for "not set" the way par_level's 0 does.
+    shelf_life = models.PositiveIntegerField(null=True, blank=True)
     sku = models.CharField(max_length=64, blank=True, default="")
     barcode = models.CharField(max_length=64, blank=True, default="")
     image_url = models.TextField(blank=True, default="")

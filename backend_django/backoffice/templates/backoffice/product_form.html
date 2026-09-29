@@ -136,6 +136,14 @@
           </div>
 
           <div class="field">
+            <label for="f-shelf">Shelf life (days)</label>
+            <input id="f-shelf" type="number" min="0" step="1" name="shelf_life"
+                   value="{{ product.shelf_life|default_if_none:'' }}" placeholder="Not set">
+            <span class="hint">How many days it stays sellable after it is made. 0 means sell the same day.</span>
+          </div>
+          <div class="field"></div>
+
+          <div class="field">
             <label for="f-unit">Unit</label>
             <select id="f-unit" name="unit" class="unit-select">
               <option value="">Pieces</option>
