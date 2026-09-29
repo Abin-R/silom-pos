@@ -37,6 +37,7 @@
             <th>Barcode</th><th>Name</th><th>Description</th>
             <th>Category</th><th>Unit</th>
             <th class="r">Price</th><th class="r">Cost</th>
+            <th class="r">Shelf life (days)</th>
           </tr>
         </thead>
         <tbody>
@@ -76,9 +77,12 @@
                        style="height:34px;text-align:right"></td>
             <td><input type="number" step="0.01" name="cost" value="{{ p.cost }}" class="inp money"
                        style="height:34px;text-align:right"></td>
+            <td><input type="number" min="0" step="1" name="shelf_life"
+                       value="{{ p.shelf_life|default_if_none:'' }}" placeholder="—"
+                       class="inp money" style="height:34px;text-align:right;width:90px"></td>
           </tr>
           {% empty %}
-          <tr><td colspan="8" class="empty">
+          <tr><td colspan="9" class="empty">
             <svg><use href="#i-box"/></svg>
             No products to edit.
           </td></tr>
@@ -86,6 +90,19 @@
         </tbody>
       </table>
     </div>
+    {% if sync_branches %}
+    <div style="padding:14px 18px 0">
+      <label class="check">
+        <input type="checkbox" name="sync_all" value="1">
+        Sync to all branches
+      </label>
+      <span class="hint">
+        Copies every row on this page — everything except stock and par level —
+        to {{ sync_branches|join:", " }}. Rows you did not change are copied
+        too, so any branch whose copy differs is overwritten.
+      </span>
+    </div>
+    {% endif %}
     <div class="form-actions">
       <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save this page</button>
       <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">Cancel</a>

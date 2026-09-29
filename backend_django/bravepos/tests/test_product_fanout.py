@@ -378,3 +378,57 @@ class ShelfLifeFormTests(FanoutTestCase):
             reverse("backoffice:product_detail", args=[self.at(self.branch).id]))
         self.assertContains(response, 'name="shelf_life"')
         self.assertContains(response, 'value="4"')
+
+
+class BulkEditTests(FanoutTestCase):
+    """Quick edit: a shelf life column, and the same sync toggle."""
+
+    def setUp(self):
+        super().setUp()
+        self.create()
+        self.product = self.at(self.branch)
+
+    def bulk(self, *, sync=False, follow=False, **overrides):
+        data = {
+            "id": [str(self.product.id)], "barcode": [""],
+            "name": ["Cherry Mousse Pop"], "description": [""],
+            "category": [""], "unit": [""],
+            "price": ["120.00"], "cost": ["0"], "shelf_life": [""],
+        }
+        data.update({k: [v] for k, v in overrides.items()})
+        if sync:
+            data["sync_all"] = "1"
+        return self.client.post(
+            f"{reverse('backoffice:product_bulk_edit')}?branch={self.branch.id}",
+            data, follow=follow)
+
+    def test_shelf_life_is_saved(self):
+        self.bulk(shelf_life="2")
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.shelf_life, 2)
+
+    def test_blank_clears_it(self):
+        Product.objects.filter(pk=self.product.pk).update(shelf_life=4)
+        self.bulk(shelf_life="")
+        self.product.refresh_from_db()
+        self.assertIsNone(self.product.shelf_life)
+
+    def test_without_the_toggle_other_branches_do_not_move(self):
+        self.bulk(price="150.00", shelf_life="2")
+        self.assertEqual(self.at(self.silom).price, Decimal("120.00"))
+        self.assertIsNone(self.at(self.silom).shelf_life)
+
+    def test_with_the_toggle_the_row_reaches_every_branch(self):
+        response = self.bulk(sync=True, follow=True,
+                             price="150.00", shelf_life="2")
+        for branch in (self.silom, self.bio):
+            copy = self.at(branch)
+            self.assertEqual(copy.price, Decimal("150.00"))
+            self.assertEqual(copy.shelf_life, 2)
+        self.assertContains(response, "Also synced to BIO HOUSE, Silom.")
+
+    def test_the_grid_shows_the_column_and_the_toggle(self):
+        response = self.client.get(
+            f"{reverse('backoffice:product_bulk_edit')}?branch={self.branch.id}")
+        self.assertContains(response, 'name="shelf_life"')
+        self.assertContains(response, 'name="sync_all"')

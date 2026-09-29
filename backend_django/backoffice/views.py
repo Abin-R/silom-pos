@@ -3088,7 +3088,12 @@ def product_bulk_add(request):
 
 @login_required
 def product_bulk_edit(request):
-    """Inline-editable grid for existing products. POST saves all rows."""
+    """Inline-editable grid for existing products. POST saves all rows.
+
+    "Sync to all branches" runs `catalog.fanout_product` on every row saved,
+    the same as the single product form — so it flattens every row on the
+    page to this branch's values, not only the rows that were changed.
+    """
     branches, branch, _, _ = _common_filters(request)
 
     # Image columns deferred for the same reason as the catalogue — see
@@ -3106,12 +3111,16 @@ def product_bulk_edit(request):
 
     if request.method == "POST":
         ids = request.POST.getlist("id")
+        shelf_lives = request.POST.getlist("shelf_life")
+        sync_all = bool(request.POST.get("sync_all"))
         saved = 0
+        synced = set()
         for idx, pid in enumerate(ids):
             try:
                 p = Product.objects.get(id=pid)
             except Product.DoesNotExist:
                 continue
+            previous_name = p.name
             p.barcode = (request.POST.getlist("barcode")[idx] or "").strip()
             p.name = (request.POST.getlist("name")[idx] or p.name).strip()
             p.name_th = (request.POST.getlist("description")[idx] or "").strip()
@@ -3121,11 +3130,28 @@ def product_bulk_edit(request):
             p.category_id = cat or None
             unit = request.POST.getlist("unit")[idx] or ""
             p.unit_id = unit or None
-            p.save()
+            # A POST without the column leaves the saved value alone; blank
+            # clears it, as on the product form. A bad number is skipped
+            # rather than failing the rest of the page.
+            if idx < len(shelf_lives):
+                raw = shelf_lives[idx].strip()
+                if not raw:
+                    p.shelf_life = None
+                elif raw.isdigit():
+                    p.shelf_life = int(raw)
+            with transaction.atomic():
+                p.save()
+                if sync_all:
+                    report = catalog.fanout_product(
+                        p, previous_name=previous_name)
+                    synced.update(report["created"] + report["updated"])
             saved += 1
         if saved:
-            messages.success(
-                request, f"{saved} product{'' if saved == 1 else 's'} saved.")
+            msg = f"{saved} product{'' if saved == 1 else 's'} saved."
+            if sync_all:
+                msg += (" Also synced to " + ", ".join(sorted(synced)) + "."
+                        if synced else " Every other branch already matched.")
+            messages.success(request, msg)
         return redirect(reverse("backoffice:product_bulk_edit") + f"?{_filter_qs(request)}")
 
     paginator = Paginator(qs, 10)  # SilomPOS shows 10/page on this view
@@ -3140,6 +3166,7 @@ def product_bulk_edit(request):
         "paginator": paginator,
         "categories": _product_form_categories(branch),
         "units": _product_form_units(branch),
+        "sync_branches": _fanout_branch_names(branch) if branch else [],
         "qs": _filter_qs(request),
     }
     return render(request, "backoffice/product_bulk_edit.html", context)
