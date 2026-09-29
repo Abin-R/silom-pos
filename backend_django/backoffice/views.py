@@ -3296,10 +3296,14 @@ class _DiscountPicks:
         ])
 
 
-def _cheapest_combo(branch, rows):
-    """The lowest price a cart meeting every row could come to, or None when a
-    row can't be met at all (a category with no active products).  A fixed
-    discount must stay under this, or some combo would ring up below ฿0."""
+def _cheapest_combo(branch, rows, match=DiscountType.MATCH_ALL):
+    """The lowest price a set could come to, or None when a row can't be met at
+    all (a category with no active products).  For "all" a set is every row;
+    for "any" it is one row, so the cheapest row.  A fixed discount must stay
+    under this, or some set would ring up below ฿0."""
+    if match == DiscountType.MATCH_ANY:
+        prices = [_cheapest_combo(branch, [r]) for r in rows]
+        return None if None in prices else min(prices, default=None)
     total = Decimal(0)
     for r in rows:
         kind, ident = r["target"][:1], r["target"][2:]
@@ -3383,6 +3387,26 @@ def _apply_discount_form(dt, post, branch):
         if not picks.rows:
             errors.append("Add at least one product or category the customer has to buy.")
 
+    dt.combo_match = (post.get("combo_match")
+                      if post.get("combo_match") in dict(DiscountType.MATCH_CHOICES)
+                      else DiscountType.MATCH_ALL)
+
+    def money(field, label):
+        raw = (post.get(field) or "").strip().replace(",", "")
+        if not raw:
+            return None
+        try:
+            v = Decimal(raw)
+        except InvalidOperation:
+            errors.append(f"Enter the {label} as a number.")
+            return None
+        if v <= 0:
+            errors.append(f"The {label} must be more than zero, or left blank.")
+            return None
+        return v
+
+    dt.min_order_amount = money("min_order_amount", "minimum order amount")
+
     # ── What the customer gets ─────────────────────────────────────────
     dt.free_product = None
     if dt.kind == DiscountType.KIND_FREE:
@@ -3402,7 +3426,10 @@ def _apply_discount_form(dt, post, branch):
         if dt.free_qty < 1:
             errors.append("Give away at least 1 piece.")
             dt.free_qty = 1
+        # A free item has no amount to cap.
+        dt.max_discount = None
     else:
+        dt.max_discount = money("max_discount", "maximum discount")
         try:
             dt.value = Decimal((post.get("value") or "").strip())
         except InvalidOperation:
@@ -3414,7 +3441,7 @@ def _apply_discount_form(dt, post, branch):
             elif dt.kind == DiscountType.KIND_PERCENT and dt.value > 100:
                 errors.append("A percentage discount cannot be more than 100%.")
             elif dt.kind == DiscountType.KIND_FIXED and picks.rows:
-                cheapest = _cheapest_combo(branch, picks.rows)
+                cheapest = _cheapest_combo(branch, picks.rows, dt.combo_match)
                 if cheapest is None:
                     errors.append("A category in the combination has no active products, "
                                   "so the combination can never be met.")

@@ -179,7 +179,7 @@
         </label>
         <label class="check">
           <input type="radio" name="applies_to" value="combo" {% if dt.applies_to == 'combo' %}checked{% endif %}>
-          A combination — all of these together
+          A combination of products or categories
         </label>
         <span class="hint" id="appliesHint"></span>
       </div>
@@ -230,10 +230,16 @@
     </div>
 
     <div id="comboPicker" {% if dt.applies_to != 'combo' %}hidden{% endif %} style="padding:0 18px 18px">
-      <div class="hint" style="color:var(--mut2);font-size:12.5px;margin-bottom:10px">
-        Every row must be in the cart. A category row is met by any of its products.
-        The discount comes off these items only — anything else on the bill stays full price.
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:13.5px;font-weight:600">Customer buys</span>
+        <div class="seg sm" id="matchSeg">
+          <label style="cursor:pointer"><input type="radio" name="combo_match" value="all" hidden
+                 {% if dt.combo_match != 'any' %}checked{% endif %}><span>all of these (AND)</span></label>
+          <label style="cursor:pointer"><input type="radio" name="combo_match" value="any" hidden
+                 {% if dt.combo_match == 'any' %}checked{% endif %}><span>any one of these (OR)</span></label>
+        </div>
       </div>
+      <div class="hint" id="matchHint" style="color:var(--mut2);font-size:12.5px;margin-bottom:10px"></div>
       <div id="condRows" style="display:flex;flex-direction:column;gap:8px">
         {% for r in cond_rows %}
         <div class="cond-row" style="display:flex;gap:8px;align-items:center">
@@ -269,6 +275,14 @@
         <svg><use href="#i-plus"/></svg> Add product or category</button>
       <div id="comboPrice" style="margin-top:10px;color:var(--mut2);font-size:12.5px"></div>
     </div>
+    <div class="form-grid" style="border-top:1px solid var(--line)">
+      <div class="field">
+        <label for="f-min">Minimum order amount</label>
+        <input id="f-min" type="number" name="min_order_amount" min="0.01" step="0.01"
+               value="{% if dt.min_order_amount %}{{ dt.min_order_amount }}{% endif %}" placeholder="No minimum">
+        <span class="hint">The till offers it only once the bill, before discounts, reaches this — and takes it back off if the bill drops below.</span>
+      </div>
+    </div>
   </div>
 
   {# ── Customer gets ──────────────────────────────────────────────── #}
@@ -288,6 +302,12 @@
         <input id="f-value" type="number" name="value" min="0.01" step="0.01"
                value="{% if dt.value %}{{ dt.value }}{% endif %}" placeholder="e.g. 10">
         <span class="hint" id="valueHint"></span>
+      </div>
+      <div class="field" id="maxField">
+        <label for="f-max">Maximum discount</label>
+        <input id="f-max" type="number" name="max_discount" min="0.01" step="0.01"
+               value="{% if dt.max_discount %}{{ dt.max_discount }}{% endif %}" placeholder="No limit">
+        <span class="hint">The most this promotion can take off one bill, all its items together.</span>
       </div>
       <div class="field" id="freeProductField">
         <label for="f-free">Free product</label>
@@ -517,18 +537,26 @@ function enhancePick(sel) {
 
   // The cheapest a cart meeting every row can come to — a fixed discount
   // must stay under it. Mirrors the server's check.
+  function matchAny() {
+    var m = document.querySelector('input[name="combo_match"]:checked');
+    return !!m && m.value === 'any';
+  }
+
   function cheapestCombo() {
-    var total = 0, rows = 0;
+    var total = 0, rows = 0, cheapestRow = Infinity;
     var bad = false;
     document.querySelectorAll('#condRows .cond-row').forEach(function (row) {
       var opt = row.querySelector('.cond-target').selectedOptions[0];
       if (!opt || !opt.value) return;
       var p = parseFloat(opt.dataset.price);
       if (isNaN(p)) { bad = true; return; }
-      total += p * Math.max(1, parseInt(row.querySelector('.cond-qty').value, 10) || 1);
+      var rowPrice = p * Math.max(1, parseInt(row.querySelector('.cond-qty').value, 10) || 1);
+      total += rowPrice;
+      cheapestRow = Math.min(cheapestRow, rowPrice);
       rows++;
     });
-    return {total: total, rows: rows, bad: bad};
+    // "Any one of these": a set is a single row, so the cheapest row.
+    return {total: matchAny() ? cheapestRow : total, rows: rows, bad: bad};
   }
 
   function sync() {
@@ -546,6 +574,7 @@ function enhancePick(sel) {
     // the hidden attribute.
     var show = function (id, on) { $(id).style.display = on ? '' : 'none'; };
     show('valueField', !free);
+    show('maxField', !free);
     value.required = !free;
     show('freeProductField', free);
     show('freeQtyField', free);
@@ -556,6 +585,14 @@ function enhancePick(sel) {
       hint.textContent = combo ? 'Percent off the combination as a whole, 0–100.' : 'Percent off the line, 0–100.';
     }
 
+    var any = matchAny();
+    document.querySelectorAll('#matchSeg label').forEach(function (l) {
+      l.querySelector('span').classList.toggle('on', l.querySelector('input').checked);
+    });
+    $('matchHint').textContent = any
+      ? 'Any one row is enough. Each met row is a set; the discount comes off that row\'s items, again for each set.'
+      : 'Every row must be in the cart. A category row is met by any of its products. The discount comes off these items only — anything else on the bill stays full price.';
+
     var cp = $('comboPrice');
     if (combo) {
       var c = cheapestCombo();
@@ -564,7 +601,7 @@ function enhancePick(sel) {
         cp.style.color = 'var(--red)';
       } else if (c.rows) {
         var over = k === 'fixed' && parseFloat(value.value) >= c.total;
-        cp.textContent = 'Cheapest this combination can ring up at: ' + money(c.total) +
+        cp.textContent = (any ? 'Cheapest single row: ' : 'Cheapest this combination can ring up at: ') + money(c.total) +
           (k === 'fixed' ? ' · the discount must be less than that' : '');
         cp.style.color = over ? 'var(--red)' : 'var(--mut2)';
       } else {
@@ -572,7 +609,9 @@ function enhancePick(sel) {
       }
     }
     $('appliesHint').textContent = combo
-      ? 'Shown on the till only once every row is in the cart; applies again for each complete set.'
+      ? (matchAny()
+          ? 'Shown on the till once any one row is in the cart; applies again for each met row.'
+          : 'Shown on the till only once every row is in the cart; applies again for each complete set.')
       : '';
   }
 
@@ -640,6 +679,9 @@ function enhancePick(sel) {
   $('f-start').addEventListener('change', function () { $('f-end').min = this.value; });
   $('f-end').min = $('f-start').value;
   kind.addEventListener('change', sync);
+  document.querySelectorAll('input[name="combo_match"]').forEach(function (r) {
+    r.addEventListener('change', sync);
+  });
   value.addEventListener('input', sync);
   sync(); recount();
 })();

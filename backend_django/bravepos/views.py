@@ -675,6 +675,12 @@ def discount_types(request):
             'start_date': d.start_date.isoformat() if d.start_date else None,
             'end_date': d.end_date.isoformat() if d.end_date else None,
             'summary': discounts.describe_buys(d),
+            # Bill-level rules the till enforces: offered only once the bill
+            # (before discounts) reaches min_order_amount; everything this
+            # promotion takes off one bill is capped at max_discount.
+            'min_order_amount': float(d.min_order_amount) if d.min_order_amount else None,
+            'max_discount': float(d.max_discount) if d.max_discount else None,
+            'match': d.combo_match,
         }
         if v2:
             if d.applies_to == DiscountType.APPLIES_COMBO:

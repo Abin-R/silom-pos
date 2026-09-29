@@ -1082,6 +1082,20 @@ class DiscountType(models.Model):
         related_name="free_with_discount_types",
     )
     free_qty = models.PositiveIntegerField(default=1)
+    # How a combination's rows combine: every row together ("all", AND) or
+    # any one row on its own ("any", OR).  Each complete set / met row is one
+    # set the discount applies to.
+    MATCH_ALL = "all"
+    MATCH_ANY = "any"
+    MATCH_CHOICES = [(MATCH_ALL, "All of these together"), (MATCH_ANY, "Any one of these")]
+    combo_match = models.CharField(max_length=3, choices=MATCH_CHOICES, default=MATCH_ALL)
+    # Only offered once the bill, before any discount, reaches this.  Blank =
+    # no minimum.  Checked by the till, which also takes the discount back off
+    # if the bill later drops below it.
+    min_order_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    # The most this promotion can take off one bill, all its lines together.
+    # Blank = no cap.
+    max_discount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     # "PR-0001": the promotion's ID on paper, receipts and in conversation.
     # Assigned once on first save and never reused or edited.  Shared by the
     # copies of one promotion at other branches (see ``group_id``), so it is

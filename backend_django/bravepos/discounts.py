@@ -95,7 +95,7 @@ def describe_buys(d, limit: int = 3) -> str:
             target = c.product or c.category
             name = target.name if target else "?"
             parts.append(f"{name} ×{c.min_qty}" if c.min_qty > 1 else name)
-        return " + ".join(parts)
+        return (" or " if d.combo_match == DiscountType.MATCH_ANY else " + ").join(parts)
     return "All products"
 
 
@@ -150,7 +150,10 @@ def _translate(dt, target):
     return plan, missing
 
 
-def _cheapest(target, rows):
+def _cheapest(target, rows, match="all"):
+    if match == "any":
+        prices = [_cheapest(target, [r]) for r in rows]
+        return None if None in prices else min(prices, default=None)
     total = Decimal(0)
     for r in rows:
         qs = target.products.filter(active=True)
@@ -163,7 +166,8 @@ def _cheapest(target, rows):
 
 
 COPIED_FIELDS = ("name", "kind", "value", "applies_to", "free_qty",
-                 "start_date", "end_date", "active", "code")
+                 "start_date", "end_date", "active", "code",
+                 "combo_match", "min_order_amount", "max_discount")
 
 
 def sync_promotion(dt, targets):
@@ -202,7 +206,7 @@ def sync_promotion(dt, targets):
             report["skipped"].append((target.name, "doesn't have " + ", ".join(sorted(set(missing)))))
             continue
         if dt.kind == DiscountType.KIND_FIXED and plan["rows"]:
-            cheapest = _cheapest(target, plan["rows"])
+            cheapest = _cheapest(target, plan["rows"], dt.combo_match)
             if cheapest is None or dt.value >= cheapest:
                 report["skipped"].append((
                     target.name,

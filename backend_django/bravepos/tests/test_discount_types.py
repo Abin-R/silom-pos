@@ -561,3 +561,54 @@ class BranchSyncTests(TestCase):
                                + f"?branch={self.a.id}")
         self.assertRegex(form.content.decode(),
                          r'name="sync_scope" value="selected"\s+checked')
+
+
+class MinMaxAndOrTests(ComboFormTests):
+    """Minimum order amount, maximum discount, and "any one of these"."""
+
+    def test_saves_min_order_and_max_discount_and_sends_them_to_the_till(self):
+        res = self.client.post(self.url, {
+            "name": "Big bill", "active": "on", "applies_to": "all", "kind": "percent",
+            "value": "20", "min_order_amount": "300", "max_discount": "100"})
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual((dt.min_order_amount, dt.max_discount), (Decimal("300"), Decimal("100")))
+        page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.branch.id}")
+        self.assertContains(page, "max ฿100.00 per bill")
+        self.assertContains(page, "bill ≥ ฿300.00")
+
+        self.branch.discount_types_enabled = True
+        self.branch.save()
+        staff = Staff.objects.create(name="C", email="c@x.io", password_hash="x", role="cashier")
+        session = BranchSession.objects.create(token="mm" * 18, branch=self.branch, staff=staff)
+        row = self.client.get("/api/discount-types?v=2",
+                              HTTP_AUTHORIZATION=f"Bearer {session.token}").json()["discount_types"][0]
+        self.assertEqual((row["min_order_amount"], row["max_discount"], row["match"]),
+                         (300.0, 100.0, "all"))
+
+    def test_blank_means_none_and_bad_values_are_refused(self):
+        self.assertEqual(self.client.post(self.url, {
+            "name": "Plain", "active": "on", "applies_to": "all", "kind": "percent",
+            "value": "5", "min_order_amount": "", "max_discount": ""}).status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual((dt.min_order_amount, dt.max_discount), (None, None))
+        for bad in ({"min_order_amount": "0"}, {"max_discount": "-5"}, {"min_order_amount": "abc"}):
+            body = {"name": "Bad", "active": "on", "applies_to": "all", "kind": "percent", "value": "5"}
+            body.update(bad)
+            self.assertEqual(self.client.post(self.url, body).status_code, 200, bad)
+
+    def test_free_item_has_no_cap(self):
+        self.client.post(self.url, {
+            "name": "Free", "active": "on", "applies_to": "all", "kind": "free",
+            "free_product": str(self.latte.id), "free_qty": "1", "max_discount": "50"})
+        self.assertIsNone(DiscountType.objects.get().max_discount)
+
+    def test_any_combo_checks_the_cheapest_single_row(self):
+        # Rows: Latte 100, any cookie 95. "Any": cheapest set is one row, 95.
+        self.assertEqual(self.post(combo_match="any", value="95").status_code, 200)
+        res = self.post(combo_match="any", value="94")
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual(dt.combo_match, "any")
+        page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.branch.id}")
+        self.assertContains(page, "Latte or Cookies")

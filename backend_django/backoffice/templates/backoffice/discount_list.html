@@ -76,6 +76,8 @@
           {% elif d.kind == 'percent' %}<span class="money">{{ d.value|floatformat:"-2" }}%</span>
           {% else %}<span class="money">฿{{ d.value|floatformat:2 }}</span>{% endif %}
           {% if d.applies_to == 'combo' and d.kind != 'free' %}<div class="sub">off the set</div>{% endif %}
+          {% if d.max_discount %}<div class="sub">max ฿{{ d.max_discount|floatformat:2 }} per bill</div>{% endif %}
+          {% if d.min_order_amount %}<div class="sub">bill ≥ ฿{{ d.min_order_amount|floatformat:2 }}</div>{% endif %}
         </td>
         <td>
           {% if d.applies_to == 'products' %}{{ d.product_count }} product{{ d.product_count|pluralize }}
@@ -84,8 +86,8 @@
               {% for c in d.categories.all|slice:":2" %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if d.category_count > 2 %} +{{ d.category_count|add:"-2" }}{% endif %}</span>
             <div class="sub">categor{{ d.category_count|pluralize:"y,ies" }}</div>
           {% elif d.applies_to == 'combo' %}
-            {% for c in d.conditions.all %}{% if not forloop.first %} + {% endif %}{% if c.product %}{{ c.product.name }}{% else %}{{ c.category.name }}{% endif %}{% if c.min_qty > 1 %} ×{{ c.min_qty }}{% endif %}{% endfor %}
-            <div class="sub">combination</div>
+            {% for c in d.conditions.all %}{% if not forloop.first %}{% if d.combo_match == 'any' %} or {% else %} + {% endif %}{% endif %}{% if c.product %}{{ c.product.name }}{% else %}{{ c.category.name }}{% endif %}{% if c.min_qty > 1 %} ×{{ c.min_qty }}{% endif %}{% endfor %}
+            <div class="sub">{% if d.combo_match == 'any' %}any one of these{% else %}all together{% endif %}</div>
           {% else %}All products{% endif %}
         </td>
         <td class="money" style="font-size:12.5px">{{ d.start_date|date:"j M Y"|default:"—" }}</td>
