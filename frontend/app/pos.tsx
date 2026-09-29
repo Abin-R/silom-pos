@@ -43,6 +43,13 @@ import {
   type LoyaltyReward,
 } from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
+import {
+  comboSetsWith,
+  isCombo,
+  isFree,
+  reconcileDiscounts,
+  type DiscountPreset,
+} from "../lib/discountRules";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -104,18 +111,15 @@ type CartItem = {
   discount_type_id?: string;
   discount_label?: string;
   discount_reason?: string;
+  // Free-item lines only (lib/discountRules): `product_id` is a key unique to
+  // the free line, `real_product_id` the product itself, `free_of` the line
+  // that earned it. Mapped back to the real product before the order POST.
+  real_product_id?: string;
+  free_of?: string;
   suggested?: boolean;
 };
-// A preset from the backoffice's Discounts page (GET /discount-types).
-// `product_ids` is empty when the preset applies to every product.
-type DiscountPreset = {
-  id: string;
-  name: string;
-  kind: "percent" | "fixed";
-  value: number;
-  all_products: boolean;
-  product_ids: string[];
-};
+// A preset from the backoffice's Discounts page (GET /discount-types?v=2) —
+// see lib/discountRules for combinations and free items.
 // The dropdown's last entry: a hand-typed ฿/% discount that needs a reason.
 // The label is what the backend keys the SeaTalk alert on.
 const DISCOUNT_OTHER = "other";
@@ -260,6 +264,17 @@ export default function POS() {
   // The branch's discount presets, or null when the branch doesn't use them —
   // null keeps the cart-item modal's plain ฿/% box, exactly as before.
   const [discountPresets, setDiscountPresets] = useState<DiscountPreset[] | null>(null);
+  // Read by commitCart, which runs inside setCart's updater — a ref so it
+  // always sees the latest feed rather than the one from its first render.
+  const presetsRef = useRef<DiscountPreset[] | null>(null);
+  useEffect(() => {
+    presetsRef.current = discountPresets;
+  }, [discountPresets]);
+  // Every cart change goes through here so combinations and free items are
+  // recomputed from what is actually in the cart (lib/discountRules).
+  const commitCart = useCallback((fn: (c: CartItem[]) => CartItem[]) => {
+    setCart((c) => reconcileDiscounts(fn(c), presetsRef.current));
+  }, []);
   const [customer, setCustomer] = useState<Customer | null>(null);
   // The chosen customer's points and rewards. Fetched here, while the basket
   // is still being built, so the CRM round trip is over long before anyone
@@ -371,7 +386,9 @@ export default function POS() {
   // the till on the plain discount box rather than an empty dropdown.
   const loadDiscountTypes = useCallback(async () => {
     try {
-      const res = await apiFetch(`${API}/discount-types`);
+      // v=2: this build understands combinations and free items; an older
+      // till asks without it and is never sent either.
+      const res = await apiFetch(`${API}/discount-types?v=2`);
       if (!res.ok) { setDiscountPresets(null); return; }
       const body = await safeJson<any>(res, null);
       setDiscountPresets(
@@ -490,7 +507,10 @@ export default function POS() {
   // appears above the selling gate.  Everything about it fails open: a network
   // problem here shows no chips and nothing else.  A branch with the feature
   // switched off gets an empty list from the server, so nothing renders.
-  const cartProductIds = useMemo(() => cart.map((i) => i.product_id), [cart]);
+  const cartProductIds = useMemo(
+    () => cart.map((i) => i.real_product_id || i.product_id),
+    [cart],
+  );
   const suggestions = useSuggestions(
     cartProductIds,
     products,
@@ -503,7 +523,7 @@ export default function POS() {
   // still opened that line from a suggestion, and erasing the attribution there
   // would quietly under-count the feature.
   const addToCart = useCallback((p: Product, opts: { suggested?: boolean } = {}) => {
-    setCart((c) => {
+    commitCart((c) => {
       const ex = c.find((i) => i.product_id === p.id);
       if (ex)
         return c.map((i) =>
@@ -522,7 +542,7 @@ export default function POS() {
         },
       ];
     });
-  }, []);
+  }, [commitCart]);
 
   const addSuggestion = useCallback(
     (s: Suggestion) => {
@@ -534,20 +554,37 @@ export default function POS() {
   );
 
   const updateQty = (pid: string, delta: number) => {
-    setCart((c) =>
+    commitCart((c) =>
       c
         .map((i) => (i.product_id === pid ? { ...i, qty: i.qty + delta } : i))
         .filter((i) => i.qty > 0)
     );
   };
 
+  // Removing a free item also takes the free-item discount off the line that
+  // earned it — otherwise the next reconcile would put the free line back.
   const removeItem = (pid: string) =>
-    setCart((c) => c.filter((i) => i.product_id !== pid));
+    commitCart((c) => {
+      const gone = c.find((i) => i.product_id === pid);
+      return c
+        .filter((i) => i.product_id !== pid)
+        .map((i) =>
+          gone?.free_of && i.product_id === gone.free_of
+            ? { ...i, discount: undefined, discount_type_id: undefined, discount_label: undefined }
+            : i,
+        );
+    });
 
   // Apply qty/discount edits from the cart-item modal. A zero qty removes the line.
   const applyItemEdit = (pid: string, qty: number, discount: number, choice: DiscountChoice = {}) => {
-    const on = discount > 0;
-    setCart((c) =>
+    // A combination or free item can sit on a line at ฿0 of its own (the
+    // free product carries the ฿0; a combination is priced by reconcile), so
+    // a picked preset keeps its label even when this line's amount is zero.
+    const preset = choice.discount_type_id
+      ? presetsRef.current?.find((p) => p.id === choice.discount_type_id)
+      : undefined;
+    const on = discount > 0 || isCombo(preset) || isFree(preset);
+    commitCart((c) =>
       c
         .map((i) =>
           i.product_id === pid
@@ -614,7 +651,11 @@ export default function POS() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: cart,
+          // A free-item line is keyed by a made-up id; the order records it
+          // (and takes its stock) under the real product.
+          items: cart.map(({ real_product_id, free_of, ...i }) =>
+            real_product_id ? { ...i, product_id: real_product_id } : i,
+          ),
           subtotal,
           discount_type: discountAmount > 0 ? "item" : "none",
           discount_value: 0,
@@ -1331,6 +1372,7 @@ export default function POS() {
       <CartItemModal
         item={editItem}
         presets={discountPresets}
+        cart={cart}
         onClose={() => setEditItem(null)}
         onSave={(pid, qty, discount, choice) => {
           applyItemEdit(pid, qty, discount, choice);
@@ -1362,7 +1404,7 @@ export default function POS() {
         currentCart={cart}
         onPark={parkCurrentOrder}
         onRetrieve={(items) => {
-          setCart(items);
+          commitCart(() => items);
           setShowParked(false);
         }}
       />
@@ -3383,12 +3425,14 @@ function PaymentModal({
 function CartItemModal({
   item,
   presets,
+  cart,
   onClose,
   onSave,
   onRemove,
 }: {
   item: CartItem | null;
   presets: DiscountPreset[] | null;
+  cart: CartItem[];
   onClose: () => void;
   onSave: (pid: string, qty: number, discount: number, choice: DiscountChoice) => void;
   onRemove: (pid: string) => void;
@@ -3413,11 +3457,14 @@ function CartItemModal({
       // re-read as 119.6% and wipe the line.
       setDiscMode(item.discount ? "thb" : "pct");
       // A discount saved before presets were switched on has no type: it was
-      // typed by hand, which is what "Other" is.
+      // typed by hand, which is what "Other" is. A combination or free item
+      // can sit on a line at ฿0, so the preset id wins over the amount.
       setChoiceId(
-        !item.discount ? "" : item.discount_type_id && item.discount_type_id !== DISCOUNT_OTHER
+        item.discount_type_id && item.discount_type_id !== DISCOUNT_OTHER
           ? item.discount_type_id
-          : DISCOUNT_OTHER,
+          : item.discount
+            ? DISCOUNT_OTHER
+            : "",
       );
       setReason(item.discount_reason || "");
       setPickerOpen(false);
@@ -3427,10 +3474,58 @@ function CartItemModal({
 
   if (!item) return null;
 
+  // A free item's own line: nothing to edit, only to take off the bill.
+  if (item.free_of) {
+    const earnedBy = cart.find((c) => c.product_id === item.free_of);
+    return (
+      <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+        <View style={styles.overlay}>
+          <View style={styles.itemModal} testID="cart-item-modal">
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={onClose} testID="close-item-modal">
+                <Ionicons name="chevron-back" size={26} color={C.brand} />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {item.name}
+              </Text>
+              <TouchableOpacity onPress={() => onRemove(item.product_id)} testID="item-modal-remove">
+                <Ionicons name="trash-outline" size={22} color={C.danger} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.discReasonWrap}>
+              <Text style={styles.itemRowLabel}>
+                {tr("pos.discount_free_line", {
+                  qty: item.qty,
+                  discount: item.discount_label || "",
+                  product: earnedBy?.name || "",
+                })}
+              </Text>
+              <Text style={styles.discOptionDetail}>{tr("pos.discount_free_line_remove")}</Text>
+            </View>
+            <TouchableOpacity style={styles.doneBtn} onPress={onClose} testID="item-modal-save">
+              <Text style={styles.doneBtnText}>{tr("admin.close")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
   const usingPresets = presets !== null;
-  const offered = (presets || []).filter(
-    (p) => p.all_products || p.product_ids.includes(item.product_id),
-  );
+  // The cart as it would be with this line's edited quantity — what a
+  // combination is matched and previewed against.
+  const cartNow = cart.map((c) => (c.product_id === item.product_id ? { ...c, qty } : c));
+  const offered = (presets || []).filter((p) => {
+    if (isCombo(p)) {
+      // Only once the rest of the combination is in the cart: offering one
+      // the cashier can't complete would just be a dead entry.
+      return (
+        p.conditions!.some((r) => r.product_ids.includes(item.product_id)) &&
+        comboSetsWith(cartNow, p, item.product_id) > 0
+      );
+    }
+    return p.all_products || p.product_ids.includes(item.product_id);
+  });
   const preset = offered.find((p) => p.id === choiceId);
   // The search narrows the presets only: "No discount" and "Other" stay put,
   // so a cashier can never search their way out of either.
@@ -3447,6 +3542,20 @@ function CartItemModal({
       discMode === "pct" ? Math.min(gross, (gross * entered) / 100) : Math.min(gross, entered);
   } else if (!choiceId) {
     discAmount = 0;
+  } else if (preset && isFree(preset)) {
+    // The free product carries the ฿0 on its own line; this one is unchanged.
+    discAmount = 0;
+  } else if (preset && isCombo(preset)) {
+    // This line's share of the combination, exactly as the cart will get it.
+    const applied = reconcileDiscounts(
+      cartNow.map((c) =>
+        c.product_id === item.product_id
+          ? { ...c, discount: undefined, discount_type_id: preset.id, discount_label: preset.name }
+          : c,
+      ),
+      presets,
+    );
+    discAmount = applied.find((c) => c.product_id === item.product_id)?.discount || 0;
   } else if (preset) {
     discAmount =
       preset.kind === "percent"
@@ -3468,8 +3577,11 @@ function CartItemModal({
       ? tr("pos.discount_other")
       : preset?.name || item.discount_label || tr("pos.discount_other");
 
-  const presetValue = (p: DiscountPreset) =>
-    p.kind === "percent" ? `${p.value % 1 === 0 ? p.value : p.value.toFixed(2)}%` : THB(p.value);
+  const presetValue = (p: DiscountPreset) => {
+    if (isFree(p)) return `${tr("pos.discount_free")} ${p.free_product!.name} ×${p.free_qty || 1}`;
+    const v = p.kind === "percent" ? `${p.value % 1 === 0 ? p.value : p.value.toFixed(2)}%` : THB(p.value);
+    return isCombo(p) ? `${v} ${tr("pos.discount_off_set")}` : v;
+  };
 
   const save = () => {
     if (reasonMissing) return;
@@ -3674,6 +3786,13 @@ function CartItemModal({
             </View>
           )}
 
+          {preset && isFree(preset) && (
+            <View style={styles.itemDiscSummaryRow}>
+              <Text style={styles.itemDiscSummaryText}>
+                {`+ ${preset.free_product!.name} ×${preset.free_qty || 1} ${tr("pos.discount_free")}`}
+              </Text>
+            </View>
+          )}
           {discAmount > 0 && (
             <View style={styles.itemDiscSummaryRow}>
               <Text style={styles.itemDiscSummaryText}>
