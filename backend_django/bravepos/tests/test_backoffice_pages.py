@@ -147,8 +147,9 @@ class BackofficePageSmokeTests(TestCase):
             .content.decode().splitlines()
             if "Red Velvet Cookie" in line
         )
-        # …,Sub Total,Discount,Total
-        self.assertTrue(row.endswith("160.00,110.00,50.00"), row)
+        # Sub Total, Discount, Total — by position, since promotion audit
+        # columns now follow them.
+        self.assertEqual(row.split(",")[7:10], ["160.00", "110.00", "50.00"], row)
 
 
 class ProductArchiveTests(TestCase):

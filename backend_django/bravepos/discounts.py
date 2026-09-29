@@ -100,6 +100,69 @@ def describe_buys(d, limit: int = 3) -> str:
 
 
 
+# ─── What a promotion applies to, with its history ───────────────────────────
+
+def _rows_text(rows) -> str:
+    """Combination rows as one readable line, for the history."""
+    out = []
+    for r in rows:
+        target = r["product"] or r["category"]
+        name = target.name if target else "?"
+        out.append(f"{name} ×{r['min_qty']}" if r["min_qty"] > 1 else name)
+    return " + ".join(out)
+
+
+def apply_targets(dt, products, categories, rows):
+    """Set ``dt``'s products, categories and combination rows, and write one
+    history entry saying what changed.
+
+    The list fields and the rows live outside the discount's own row, so the
+    automatic audit (a diff of one row's columns) never sees them.  This is
+    the one place they are changed, so it is where they are recorded — as a
+    single entry on the promotion ("products: + Latte, − Mocha") rather than
+    a delete and a create per combination row on every save.  Nothing changed,
+    nothing written.
+
+    ``rows``: ``[{"product": Product|None, "category": Category|None,
+    "min_qty": int}]``.
+    """
+    from . import audit
+    from .models import DiscountCondition
+
+    changes = {}
+
+    def diff_set(field, manager, new):
+        old = {o.pk: o for o in manager.all()}
+        new = {o.pk: o for o in new}
+        added = sorted(n.name for k, n in new.items() if k not in old)
+        removed = sorted(o.name for k, o in old.items() if k not in new)
+        if added or removed:
+            manager.set(list(new.values()))
+            changes[field] = {"from": ", ".join(removed) or None,
+                              "to": ", ".join(added) or None}
+
+    diff_set("products (removed → added)", dt.products, products)
+    diff_set("categories (removed → added)", dt.categories, categories)
+
+    old_rows = [{"product": c.product, "category": c.category, "min_qty": c.min_qty}
+                for c in dt.conditions.select_related("product", "category")]
+    key = lambda rs: [(r["product"].pk if r["product"] else None,
+                       r["category"].pk if r["category"] else None, r["min_qty"]) for r in rs]
+    if key(old_rows) != key(rows):
+        dt.conditions.all().delete()
+        DiscountCondition.objects.bulk_create([
+            DiscountCondition(discount_type=dt, sort_order=i, min_qty=r["min_qty"],
+                              product=r["product"], category=r["category"])
+            for i, r in enumerate(rows)
+        ])
+        changes["combination"] = {"from": _rows_text(old_rows) or None,
+                                  "to": _rows_text(rows) or None}
+
+    if changes:
+        audit.record("update", instance=dt, changes=changes)
+    return changes
+
+
 # ─── Running one promotion at several branches ──────────────────────────────
 
 def _by_name(qs, name):
@@ -189,7 +252,7 @@ def sync_promotion(dt, targets):
     "skipped": [(branch name, reason), ...]}``.  The caller runs this in the
     same transaction as the source's own save.
     """
-    from .models import DiscountCondition, DiscountType
+    from .models import DiscountType
 
     report = {"created": [], "updated": [], "removed": [], "skipped": []}
     target_ids = {t.pk for t in targets if t.pk != dt.branch_id}
@@ -221,14 +284,10 @@ def sync_promotion(dt, targets):
         for f in COPIED_FIELDS:
             setattr(copy, f, getattr(dt, f))
         copy.free_product = plan["free"]
+        if created:
+            copy.created_by = dt.updated_by or dt.created_by
+        copy.updated_by = dt.updated_by or dt.created_by
         copy.save()
-        copy.products.set(plan["products"])
-        copy.categories.set(plan["categories"])
-        copy.conditions.all().delete()
-        DiscountCondition.objects.bulk_create([
-            DiscountCondition(discount_type=copy, sort_order=i, min_qty=r["min_qty"],
-                              product=r["product"], category=r["category"])
-            for i, r in enumerate(plan["rows"])
-        ])
+        apply_targets(copy, plan["products"], plan["categories"], plan["rows"])
         report["created" if created else "updated"].append(target.name)
     return report

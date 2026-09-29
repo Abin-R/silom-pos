@@ -33,7 +33,6 @@ from bravepos.models import (
     BranchSession,
     Category,
     Customer,
-    DiscountCondition,
     DiscountType,
     Order,
     OrderItem,
@@ -1885,6 +1884,9 @@ def report_sell_export(request):
     writer.writerow([
         "Date", "Receipt No.", "Barcode", "Product Name", "Quantity",
         "Price / Unit", "Add-on Total", "Sub Total", "Discount", "Total",
+        # Promotion audit columns, after the SilomPOS ones so those stay put.
+        "SKU", "Item Type", "Promotion ID", "Promotion", "Promotion Logic",
+        "Discount Reason",
     ])
 
     qty_total = 0
@@ -1902,6 +1904,12 @@ def report_sell_export(request):
             _csv_num(row["sub_total"]),
             _csv_num(row["discount"]),
             _csv_num(row["total"]),
+            it.sku or "",
+            "Free" if it.is_free else "Purchased",
+            it.discount_code or "",
+            it.discount_label or "",
+            it.discount_logic or "",
+            it.discount_reason or "",
         ])
         qty_total += it.qty or 0
         money_totals["addon"] += row["add_on_total"]
@@ -3319,17 +3327,18 @@ class _DiscountPicks:
         )
 
     def save(self, dt):
-        dt.products.set(self.products)
-        dt.categories.set(self.categories)
-        dt.conditions.all().delete()
-        DiscountCondition.objects.bulk_create([
-            DiscountCondition(
-                discount_type=dt, sort_order=i, min_qty=r["min_qty"],
-                product_id=r["target"][2:] if r["target"].startswith("p:") else None,
-                category_id=r["target"][2:] if r["target"].startswith("c:") else None,
-            )
-            for i, r in enumerate(self.rows)
-        ])
+        """Apply to ``dt`` through ``discounts.apply_targets``, which writes
+        the promotion's history entry for anything that changed."""
+        prods = {p.pk: p for p in Product.objects.filter(pk__in=self.products)}
+        cats = {c.pk: c for c in Category.objects.filter(pk__in=self.categories)}
+        row_prods = {str(p.pk): p for p in Product.objects.filter(
+            pk__in=[r["target"][2:] for r in self.rows if r["target"].startswith("p:")])}
+        row_cats = {str(c.pk): c for c in Category.objects.filter(
+            pk__in=[r["target"][2:] for r in self.rows if r["target"].startswith("c:")])}
+        rows = [{"product": row_prods.get(r["target"][2:]) if r["target"].startswith("p:") else None,
+                 "category": row_cats.get(r["target"][2:]) if r["target"].startswith("c:") else None,
+                 "min_qty": r["min_qty"]} for r in self.rows]
+        discounts.apply_targets(dt, list(prods.values()), list(cats.values()), rows)
 
 
 def _cheapest_combo(branch, rows, match=DiscountType.MATCH_ALL):
@@ -3488,6 +3497,55 @@ def _apply_discount_form(dt, post, branch):
     return errors, picks
 
 
+def _staff_or_none(user):
+    """The signed-in backoffice user as a Staff row (they are Staff rows),
+    or None for anything else."""
+    return user if isinstance(user, Staff) else None
+
+
+def _discount_history(dt, limit=100):
+    """The promotion's audit entries, newest first, flattened for display the
+    way the Audit log page flattens them."""
+    if dt.pk is None:
+        return []
+    entries = list(AuditLog.objects.filter(model="DiscountType", object_id=str(dt.pk))
+                   .order_by("-at")[:limit])
+    # The free product is stored by id; show it by name.
+    ids = set()
+    for e in entries:
+        for field in ("free_product",):
+            ch = (e.changes or {}).get(field)
+            vals = [ch.get("from"), ch.get("to")] if isinstance(ch, dict) else [ch]
+            ids.update(str(v) for v in vals if v)
+    names = {str(k): v for k, v in Product.objects.filter(pk__in=ids).values_list("pk", "name")} \
+        if ids else {}
+
+    def show(field, value):
+        if field == "free_product" and value:
+            return names.get(str(value), "a removed product")
+        return value
+
+    for e in entries:
+        diffs = []
+        for field, change in (e.changes or {}).items():
+            # Plumbing, or already on the page (the branch is in the title).
+            if field in ("id", "branch", "updated_at", "created_at", "group_id",
+                         "updated_by", "created_by"):
+                continue
+            if isinstance(change, dict) and ("from" in change or "to" in change):
+                change = {"from": show(field, change.get("from")), "to": show(field, change.get("to"))}
+            else:
+                change = show(field, change)
+            if isinstance(change, dict) and ("from" in change or "to" in change):
+                diffs.append({"field": field.replace("_", " "), "old": _audit_value(change.get("from")),
+                              "new": _audit_value(change.get("to")), "is_diff": True})
+            else:
+                diffs.append({"field": field.replace("_", " "), "old": "",
+                              "new": _audit_value(change), "is_diff": False})
+        e.diffs = diffs
+    return entries
+
+
 def _discount_sync_choice(post, dt):
     """Which other branches the form asked this promotion to run at.
 
@@ -3556,6 +3614,7 @@ def _discount_form_context(request, branches, branch, dt, mode, picks, sync=None
         "today": timezone.localdate(),
         "sync_scope": scope,
         "sync_rows": sync_rows,
+        "history": _discount_history(dt),
         "hide_dates": True,
         "qs": _filter_qs(request),
     }
@@ -3625,6 +3684,7 @@ def discount_new(request):
         sync = _discount_sync_choice(request.POST, dt)
         if not errors:
             with transaction.atomic():
+                dt.created_by = dt.updated_by = _staff_or_none(request.user)
                 dt.save()
                 picks.save(dt)
                 report = discounts.sync_promotion(dt, sync[1])
@@ -3649,6 +3709,7 @@ def discount_detail(request, discount_id):
         sync = _discount_sync_choice(request.POST, dt)
         if not errors:
             with transaction.atomic():
+                dt.updated_by = _staff_or_none(request.user)
                 dt.save()
                 # Only what the chosen mode uses is kept; switching a discount
                 # from categories to products must not leave the old

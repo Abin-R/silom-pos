@@ -612,3 +612,87 @@ class MinMaxAndOrTests(ComboFormTests):
         self.assertEqual(dt.combo_match, "any")
         page = self.client.get(reverse("backoffice:discount_list") + f"?branch={self.branch.id}")
         self.assertContains(page, "Latte or Cookies")
+
+
+class BillAuditTests(TillTestCase):
+    """Section D: what a bill line records about the promotion."""
+
+    def test_line_records_promotion_id_logic_free_flag_and_sku(self):
+        self.latte.sku = "LAT-001"
+        self.latte.save()
+        promo = DiscountType.objects.create(branch=self.branch, name="Free latte", kind="free",
+                                            free_product=self.latte, free_qty=1)
+        other = DiscountType.objects.create(branch=make_branch(name="Elsewhere"), name="X", value=5)
+        body = {
+            "items": [
+                {"product_id": str(self.cake.id), "name": "Cake", "price": 200, "qty": 1,
+                 "discount_type_id": str(promo.id), "discount_label": "Free latte",
+                 "discount_logic": "earned free Latte ×1"},
+                {"product_id": str(self.latte.id), "name": "Latte", "price": 100, "qty": 1,
+                 "discount": 100, "discount_type_id": str(promo.id), "discount_label": "Free latte",
+                 "discount_logic": "free item with Cake", "is_free": True},
+                # An id from another branch is not trusted into the record.
+                {"product_id": str(self.latte.id), "name": "Latte", "price": 100, "qty": 1,
+                 "discount": 5, "discount_type_id": str(other.id), "discount_label": "X"},
+            ],
+            "subtotal": 400, "total": 295, "discount_amount": 105,
+            "payment_method": "cash", "paid_amount": 295,
+        }
+        res = self.client.post("/api/orders", body, content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 201)
+        lines = {(i.name, i.is_free): i for i in OrderItem.objects.all()}
+        cake, free = lines[("Cake", False)], lines[("Latte", True)]
+        self.assertEqual((cake.discount_code, cake.discount_logic), (promo.code, "earned free Latte ×1"))
+        self.assertEqual((free.discount_code, free.is_free, free.sku), (promo.code, True, "LAT-001"))
+        self.assertEqual(lines[("Latte", False)].discount_code, "")
+
+    def test_old_till_body_still_saves(self):
+        body = {"items": [{"product_id": str(self.cake.id), "name": "Cake", "price": 200, "qty": 1,
+                           "discount_type_id": "other", "discount": 10}],
+                "subtotal": 200, "total": 190, "discount_amount": 10,
+                "payment_method": "cash", "paid_amount": 190}
+        self.assertEqual(self.client.post("/api/orders", body, content_type="application/json",
+                                          **self.auth).status_code, 201)
+        line = OrderItem.objects.get()
+        self.assertEqual((line.discount_code, line.discount_logic, line.is_free), ("", "", False))
+
+
+class PromotionHistoryTests(ComboFormTests):
+    """Section E: who made it, who changed it, and every change kept."""
+
+    def test_created_and_updated_by_and_history(self):
+        from bravepos.models import AuditLog
+        self.client.post(self.url, {
+            "name": "Picks", "active": "on", "applies_to": "products",
+            "products": [str(self.cookie.id)], "kind": "percent", "value": "10"})
+        dt = DiscountType.objects.get()
+        self.assertEqual((dt.created_by.username, dt.updated_by.username), ("adm", "adm"))
+
+        url = reverse("backoffice:discount_detail", args=[dt.id]) + f"?branch={self.branch.id}"
+        base = {"name": "Picks", "active": "on", "applies_to": "products", "kind": "percent"}
+        self.client.post(url, {**base, "value": "15", "products": [str(self.latte.id)]})
+        # The create logged the first list; the edit logs the change.
+        entry = AuditLog.objects.filter(model="DiscountType", object_id=str(dt.id),
+                                        changes__has_key="products (removed → added)").latest("at")
+        self.assertEqual(entry.changes["products (removed → added)"],
+                         {"from": "Choc chip", "to": "Latte"})
+
+        # Saving without changing the list writes no list entry.
+        self.client.post(url, {**base, "value": "15", "products": [str(self.latte.id)]})
+        self.assertEqual(AuditLog.objects.filter(
+            model="DiscountType", object_id=str(dt.id),
+            changes__has_key="products (removed → added)").count(), 2)  # create + the one edit
+
+        page = self.client.get(url)
+        self.assertContains(page, "History")
+        self.assertContains(page, "Created by")
+        self.assertContains(page, "Choc chip")   # the old list, struck through
+        self.assertContains(page, "15.00")        # value change 10 → 15
+
+    def test_combination_rows_are_one_entry_not_a_delete_and_create_per_row(self):
+        from bravepos.models import AuditLog
+        self.post()
+        dt = DiscountType.objects.get()
+        self.assertFalse(AuditLog.objects.filter(model="DiscountCondition").exists())
+        self.assertTrue(AuditLog.objects.filter(model="DiscountType", object_id=str(dt.id),
+                                                changes__has_key="combination").exists())

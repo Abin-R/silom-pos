@@ -42,7 +42,7 @@ AUDITED = {
     "StockMovement", "StockDocument", "StockDocumentItem",
     "Shift", "ShiftMovement",
     "Customer", "PeakProductMap", "SuggestionOverride", "AppRelease",
-    "Order", "OrderItem", "SelfOrder", "DiscountType", "DiscountCondition",
+    "Order", "OrderItem", "SelfOrder", "DiscountType",
 }
 
 # Creating one of these is already fully recorded by the row itself; only

@@ -332,6 +332,14 @@
       </div>
     </div>
 
+    {% if dt.pk %}
+    <div style="padding:10px 18px 0;color:var(--mut2);font-size:12.5px">
+      Created{% if dt.created_by %} by <b style="color:var(--txt2)">{{ dt.created_by.name }}</b>{% endif %}
+      {{ dt.created_at|date:"j M Y, H:i" }}
+      · Last updated{% if dt.updated_by %} by <b style="color:var(--txt2)">{{ dt.updated_by.name }}</b>{% endif %}
+      {{ dt.updated_at|date:"j M Y, H:i" }}
+    </div>
+    {% endif %}
     <div class="form-actions">
       <button type="submit" class="btn btn-blue">
         <svg><use href="#i-check"/></svg>
@@ -340,6 +348,39 @@
     </div>
   </div>
 </form>
+
+{% if dt.pk %}
+{% comment %}
+  History — read from the audit log: every save of this promotion, who made
+  it, and what changed. Kept, never rewritten — editing adds a new entry.
+{% endcomment %}
+<div class="panel" style="max-width:760px;margin-top:16px" id="history">
+  <div class="panel-h">History <span style="color:var(--mut2);font-weight:500;font-size:13px">· {{ history|length }} change{{ history|length|pluralize }}</span></div>
+  <table class="tbl" style="font-size:13px">
+    <thead><tr><th style="width:150px">When</th><th style="width:150px">Who</th><th>What changed</th></tr></thead>
+    <tbody>
+      {% for e in history %}
+      <tr>
+        <td class="money" style="font-size:12.5px;white-space:nowrap">{{ e.at|date:"j M Y H:i" }}</td>
+        <td>{{ e.actor_label|default:"System" }}
+          <div class="sub">{% if e.action == 'create' %}created{% elif e.action == 'delete' %}deleted{% else %}edited{% endif %}</div></td>
+        <td>
+          {% for c in e.diffs %}
+            <div style="margin:2px 0">
+              <span style="color:var(--mut)">{{ c.field }}:</span>
+              {% if c.is_diff %}<span style="color:var(--mut2);text-decoration:line-through">{{ c.old }}</span> → <b style="font-weight:600">{{ c.new }}</b>
+              {% else %}<b style="font-weight:600">{{ c.new }}</b>{% endif %}
+            </div>
+          {% empty %}<span style="color:var(--mut2)">{{ e.note|default:"—" }}</span>{% endfor %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="empty" style="padding:24px">No changes recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <script>
 /**

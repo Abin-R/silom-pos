@@ -749,6 +749,19 @@ class OrderItem(models.Model):
     # The cashier's written reason for an "Other" discount.  Required by the
     # till before it will apply one; blank everywhere else.
     discount_reason = models.TextField(blank=True, default="")
+    # The promotion's ID (PR-0003) as it was when the sale was rung up — a
+    # snapshot, so the bill still names it after the promotion is edited or
+    # deleted.  Blank for "Other" and undiscounted lines.
+    discount_code = models.CharField(max_length=16, blank=True, default="")
+    # How the promotion applied to this line, in words: "combination (all of
+    # these) · 2 sets · capped at ฿100".  What an auditor reads to see *why*
+    # the line got the amount it did.
+    discount_logic = models.CharField(max_length=300, blank=True, default="")
+    # A free item given by a promotion, as opposed to one the customer bought.
+    is_free = models.BooleanField(default=False)
+    # The product's SKU at the time of sale.  ``product`` points at the live
+    # row, whose SKU can change; this is what it was on the day.
+    sku = models.CharField(max_length=64, blank=True, default="")
     category_id = models.UUIDField(null=True, blank=True)
     category_name = models.CharField(max_length=120, blank=True, default="")
 
@@ -1115,6 +1128,14 @@ class DiscountType(models.Model):
     # transaction date — nobody sets it by hand.
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    # Who made the promotion and who last changed it.  The audit log keeps
+    # every change; these are the two a person asks first.
+    created_by = models.ForeignKey(
+        Staff, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
+    updated_by = models.ForeignKey(
+        Staff, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
     # The manual pause switch ("Offer this discount on the till").  Separate
     # from the date-driven status: it stops a promotion early without
     # rewriting the dates it was planned with.

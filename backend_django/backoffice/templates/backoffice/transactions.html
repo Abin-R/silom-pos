@@ -151,7 +151,11 @@
                   <span class="thumb sm">{{ line.item.name|initial }}</span>
                   <div>
                     <b style="font-weight:600">{{ line.item.name }}</b>
-                    {% if line.item.discount %}<div class="sub">less ฿{{ line.item.discount|floatformat:2 }}</div>{% endif %}
+                    {% if line.item.is_free %}<span class="tag t-ok" style="margin-left:6px">FREE</span>{% endif %}
+                    {% if line.item.sku %}<span class="money" style="color:var(--mut2);font-size:11.5px;margin-left:6px">{{ line.item.sku }}</span>{% endif %}
+                    {% if line.item.discount %}<div class="sub">less ฿{{ line.item.discount|floatformat:2 }}{% if line.item.discount_label %} · {% if line.item.discount_code %}{{ line.item.discount_code }} {% endif %}{{ line.item.discount_label }}{% endif %}</div>{% endif %}
+                    {% if line.item.discount_logic %}<div class="sub" style="color:var(--mut2)">{{ line.item.discount_logic }}</div>{% endif %}
+                    {% if line.item.discount_reason %}<div class="sub">Reason: {{ line.item.discount_reason }}</div>{% endif %}
                   </div>
                 </div>
               </td>

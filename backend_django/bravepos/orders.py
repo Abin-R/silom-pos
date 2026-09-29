@@ -8,6 +8,7 @@ service layer.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
 
@@ -21,7 +22,7 @@ from .gateways import (
     compute_order_charges,
     get_shop_settings,
 )
-from .models import Branch, Order, OrderItem, Product, Shift, StockMovement
+from .models import Branch, DiscountType, Order, OrderItem, Product, Shift, StockMovement
 
 # Sentinel so a caller can pass ``shift=None`` to mean "no shift" and be
 # distinguished from "caller didn't say — look up the currently-open one".
@@ -134,6 +135,21 @@ def create_order_from_items(
                 p.category.name if p.category else 'Other',
             )
 
+    # The promotion each line names, resolved to its ID *here*: the till
+    # sends the discount's database id, and the code recorded on the bill is
+    # read from this branch's own promotions, never taken from the request.
+    promo_ids = set()
+    for it in items:
+        try:
+            promo_ids.add(uuid.UUID(str(it.get('discount_type_id'))))
+        except (TypeError, ValueError):
+            pass  # absent, or "other" — a hand-typed discount has no ID
+    promo_codes = {
+        str(pk): code for pk, code in
+        DiscountType.objects.filter(id__in=promo_ids, branch=branch)
+        .values_list('id', 'code')
+    } if promo_ids else {}
+
     # Money.  is_card is detected from the method label — that is what decides
     # whether the customer also covers the processing fee.
     is_beam_card = payment_method == BEAM_CARD_METHOD
@@ -229,6 +245,10 @@ def create_order_from_items(
                         # till at a branch with discount types switched on.
                         discount_label=str(it.get('discount_label') or '')[:120],
                         discount_reason=str(it.get('discount_reason') or ''),
+                        discount_code=promo_codes.get(str(it.get('discount_type_id') or ''), '') or '',
+                        discount_logic=str(it.get('discount_logic') or '')[:300],
+                        is_free=bool(it.get('is_free')),
+                        sku=(prod.sku if prod else str(it.get('sku') or ''))[:64],
                         category_id=cat_id,
                         category_name=cat_name or '',
                         # Did this line come from the cashier's upsell strip?
