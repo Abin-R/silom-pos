@@ -1,0 +1,151 @@
+{% extends "backoffice/base.html" %}
+{% load humanize backoffice_ui %}
+{% comment %}
+  Stock in / Stock out — the same documents seen two ways.
+
+  Documents: one row per saved document, the paperwork as it was filed.
+  By product: every line summed per product, answering "how much of X came
+  in (or went out) this week" without opening documents one by one.
+{% endcomment %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ doc_count }} document{{ doc_count|pluralize }} · {{ date_from }} → {{ date_to }}{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{{ export_url }}?{{ qs }}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
+
+{% block filter_extra %}
+  <input type="hidden" name="view" value="{{ view }}">
+  {% if view == 'products' and sort != 'name' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+{% endblock %}
+
+{% block content %}
+
+<div class="panel panel-grow">
+  <div class="panel-h">
+    <div class="seg sm">
+      <a class="{% if view == 'documents' %}on{% endif %}" href="?{% qs_replace request view='documents' q=None field=None sort=None page=None %}">Documents</a>
+      <a class="{% if view == 'products' %}on{% endif %}" href="?{% qs_replace request view='products' q=None field=None page=None %}">By product</a>
+    </div>
+    <div class="spacer"></div>
+
+    {% if view == 'documents' %}
+      <div class="ctl" style="height:34px">
+        <select name="field" form="filterForm" aria-label="Search in">
+          {% for key, label in fields %}
+            <option value="{{ key }}" {% if field == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <svg class="cv"><use href="#i-chev"/></svg>
+      </div>
+      <div class="ctl ctl-search" style="height:34px">
+        <svg><use href="#i-search"/></svg>
+        <input type="search" name="q" value="{{ q }}" form="filterForm" placeholder="Keyword">
+      </div>
+    {% else %}
+      <div class="ctl ctl-search" style="height:34px">
+        <svg><use href="#i-search"/></svg>
+        <input type="search" name="q" value="{{ q }}" form="filterForm" placeholder="Product, barcode or category">
+      </div>
+      <div class="seg sm">
+        {% for key, label in sorts %}
+          <a class="{% if sort == key %}on{% endif %}" href="?{% qs_replace request sort=key page=None %}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="panel-scroll">
+    {% if view == 'documents' %}
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:150px">Created</th><th>Document No.</th><th>Ref. No.</th>
+          <th>{{ party_label }}</th>
+          {% if kind == 'out' %}<th>Reason</th>{% endif %}
+          <th class="r">Lines</th><th class="r">Total</th><th>Created by</th><th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td class="money" style="white-space:nowrap">{{ d.created_at|date:"d/m/Y H:i:s" }}</td>
+          <td class="money" style="font-weight:620">{{ d.document_no }}</td>
+          <td>{{ d.ref_no|default:"—" }}</td>
+          <td>{% if kind == 'in' %}{{ d.vendor|default:"—" }}{% else %}{{ d.receiver|default:"—" }}{% endif %}</td>
+          {% if kind == 'out' %}<td>{{ d.reason|default:"—" }}</td>{% endif %}
+          <td class="r money">{{ d.line_count }}</td>
+          <td class="r money" style="font-weight:660">฿{{ d.total|floatformat:2|intcomma }}</td>
+          <td>{{ d.created_by|default:"—" }}</td>
+          <td class="sub">{{ d.note|default:"" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="{% if kind == 'out' %}9{% else %}8{% endif %}" class="empty">
+          <svg><use href="#i-inbox"/></svg>
+          {% if q %}No document matches “{{ q }}”.{% else %}No {{ title|lower }} documents between {{ date_from }} and {{ date_to }}.{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot>
+        <tr>
+          <td colspan="{% if kind == 'out' %}6{% else %}5{% endif %}">{{ paginator.count }} document{{ paginator.count|pluralize }}</td>
+          <td class="r money">฿{{ doc_value|floatformat:2|intcomma }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+    {% else %}
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:50px">#</th><th>Barcode</th><th style="width:34%">Product</th><th>Unit</th>
+          <th class="r">Documents</th><th class="r">Quantity</th>
+          <th class="r">Total discount</th><th class="r">Total</th><th class="r">On hand</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="money" style="color:var(--mut)">{{ page_obj.start_index|add:forloop.counter0 }}</td>
+          <td class="money" style="color:var(--mut)">{{ r.barcode|default:"—" }}</td>
+          <td><b style="font-weight:620">{{ r.name }}</b>
+            {% if r.category %}<div class="sub">{{ r.category }}</div>{% endif %}</td>
+          <td>{{ r.unit|default:"—" }}</td>
+          <td class="r money">{{ r.doc_count }}</td>
+          <td class="r money" style="font-weight:650">{{ r.qty|floatformat:"-2"|intcomma }}</td>
+          <td class="r money">฿{{ r.discount|floatformat:2|intcomma }}</td>
+          <td class="r money" style="font-weight:660">฿{{ r.total|floatformat:2|intcomma }}</td>
+          <td class="r money" {% if r.onhand != None and r.onhand <= 0 %}style="color:var(--red-d);font-weight:650"{% endif %}>
+            {% if r.onhand == None %}<span style="color:var(--mut2)">—</span>{% else %}{{ r.onhand }}{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="9" class="empty">
+          <svg><use href="#i-inbox"/></svg>
+          {% if q %}No product matches “{{ q }}”.{% else %}No {{ title|lower }} between {{ date_from }} and {{ date_to }}.{% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot>
+        <tr>
+          <td colspan="5">{{ product_count }} product{{ product_count|pluralize }}</td>
+          <td class="r money">{{ qty_total|floatformat:"-2"|intcomma }}</td>
+          <td class="r money">฿{{ discount_total|floatformat:2|intcomma }}</td>
+          <td class="r money">฿{{ value_total|floatformat:2|intcomma }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+    {% endif %}
+  </div>
+  {% include "backoffice/_pagination.html" %}
+</div>
+{% endblock %}

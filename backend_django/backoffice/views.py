@@ -2412,6 +2412,228 @@ def stock_movement_export(request):
     return response
 
 
+# ─── Stock-in / stock-out reports ───────────────────────────────────────
+# One page per direction, each with two views of the same documents:
+#   documents — one row per saved document, the SilomPOS "Stock-In Documents"
+#               list;
+#   products  — one row per product, summed across those documents, the
+#               SilomPOS "Stock in by Product" report.
+_STOCK_REPORT_KINDS = {
+    "in": {"title": "Stock in", "party": "Supplier", "active": "stock_in"},
+    "out": {"title": "Stock out", "party": "Receiver", "active": "stock_out"},
+}
+
+_STOCK_DOC_FIELDS = [
+    ("all", "All fields"), ("document_no", "Document no."),
+    ("ref_no", "Ref. no."), ("party", "Supplier / receiver"),
+    ("created_by", "Created by"),
+]
+_STOCK_PRODUCT_SORTS = [
+    ("name", "Name"), ("newest", "Newest"),
+    ("price", "Product price"), ("onhand", "On hand"),
+]
+
+
+def _stock_report_filters(request):
+    branches, branch, dfrom, dto = _common_filters(request)
+    view = request.GET.get("view") if request.GET.get("view") in ("documents", "products") else "documents"
+    field = request.GET.get("field") or "all"
+    if field not in dict(_STOCK_DOC_FIELDS):
+        field = "all"
+    sort = request.GET.get("sort") or "name"
+    if sort not in dict(_STOCK_PRODUCT_SORTS):
+        sort = "name"
+    q = (request.GET.get("q") or "").strip()
+    return branches, branch, dfrom, dto, view, field, sort, q
+
+
+def _stock_report_docs(branch, kind, dfrom, dto, field, q):
+    """Documents of one direction in the window, newest first."""
+    start, end = _date_window(dfrom, dto)
+    qs = (StockDocument.objects
+          .filter(type=kind, created_at__gte=start, created_at__lte=end)
+          .annotate(line_count=Count("items"))
+          .order_by("-created_at"))
+    if branch:
+        qs = qs.filter(branch=branch)
+    if q:
+        party = Q(vendor__icontains=q) if kind == "in" else Q(receiver__icontains=q)
+        match = {
+            "document_no": Q(document_no__icontains=q),
+            "ref_no": Q(ref_no__icontains=q),
+            "party": party,
+            "created_by": Q(created_by__icontains=q),
+        }
+        qs = qs.filter(match.get(field) or (
+            Q(document_no__icontains=q) | Q(ref_no__icontains=q)
+            | party | Q(created_by__icontains=q) | Q(note__icontains=q)
+            | Q(reason__icontains=q)
+        ))
+    return qs
+
+
+def _stock_report_products(branch, kind, dfrom, dto, sort, q):
+    """Document lines summed per product.
+
+    Grouped in Python, like ``stock_movement_export``: a line whose product
+    was deleted still has its name and barcode snapshotted, and must keep
+    being reported rather than vanish from the totals.
+    """
+    items = (StockDocumentItem.objects
+             .filter(document__in=_stock_report_docs(branch, kind, dfrom, dto, "all", ""))
+             .select_related("document", "product__unit", "product__category"))
+
+    rows: dict[object, dict] = {}
+    for it in items:
+        p = it.product
+        key = it.product_id or (it.barcode, it.product_name)
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = {
+                "barcode": it.barcode or (p.barcode if p else ""),
+                "name": it.product_name or (p.name if p else ""),
+                "unit": p.unit.name if p and p.unit_id else "",
+                "category": p.category.name if p and p.category_id else "",
+                "price": p.price if p else None,
+                "onhand": p.stock if p else None,
+                "docs": set(), "qty": Decimal(0),
+                "discount": Decimal(0), "total": Decimal(0),
+                "last": it.document.created_at,
+            }
+        row["docs"].add(it.document_id)
+        row["qty"] += it.qty or 0
+        row["discount"] += it.discount or 0
+        row["total"] += it.total or 0
+        row["last"] = max(row["last"], it.document.created_at)
+
+    out = list(rows.values())
+    for row in out:
+        row["doc_count"] = len(row.pop("docs"))
+
+    if q:
+        needle = q.lower()
+        out = [r for r in out if needle in r["name"].lower()
+               or needle in r["barcode"].lower() or needle in r["category"].lower()]
+
+    out.sort(key=lambda r: r["name"].lower())
+    if sort == "newest":
+        out.sort(key=lambda r: r["last"], reverse=True)
+    elif sort == "price":
+        out.sort(key=lambda r: r["price"] if r["price"] is not None else Decimal(-1), reverse=True)
+    elif sort == "onhand":
+        # Lowest first — the reason to sort by on-hand is to find what's short.
+        out.sort(key=lambda r: r["onhand"] if r["onhand"] is not None else 10 ** 9)
+    return out
+
+
+def _stock_report(request, kind):
+    conf = _STOCK_REPORT_KINDS[kind]
+    branches, branch, dfrom, dto, view, field, sort, q = _stock_report_filters(request)
+
+    docs = _stock_report_docs(branch, kind, dfrom, dto, field if view == "documents" else "all",
+                              q if view == "documents" else "")
+    totals = docs.aggregate(count=Count("id"), value=Sum("total"))
+    context = {
+        "active": conf["active"],
+        "kind": kind,
+        "title": conf["title"],
+        "party_label": conf["party"],
+        "branches": branches,
+        "branch": branch,
+        "date_from": dfrom.isoformat(),
+        "date_to": dto.isoformat(),
+        "view": view,
+        "field": field,
+        "fields": _STOCK_DOC_FIELDS,
+        "sort": sort,
+        "sorts": _STOCK_PRODUCT_SORTS,
+        "q": q,
+        "doc_count": totals["count"] or 0,
+        "doc_value": totals["value"] or Decimal(0),
+        "export_url": reverse(f"backoffice:{conf['active']}_export"),
+        "qs": _filter_qs(
+            request, view=view, q=q or None,
+            field=field if view == "documents" and field != "all" else None,
+            sort=sort if view == "products" and sort != "name" else None,
+        ),
+    }
+
+    if view == "documents":
+        paginator = Paginator(docs, 50)
+    else:
+        rows = _stock_report_products(branch, kind, dfrom, dto, sort, q)
+        context.update(
+            product_count=len(rows),
+            qty_total=sum((r["qty"] for r in rows), Decimal(0)),
+            discount_total=sum((r["discount"] for r in rows), Decimal(0)),
+            value_total=sum((r["total"] for r in rows), Decimal(0)),
+        )
+        paginator = Paginator(rows, 50)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    context.update(rows=page_obj.object_list, page_obj=page_obj, paginator=paginator)
+    return render(request, "backoffice/stock_report.html", context)
+
+
+def _stock_report_export(request, kind):
+    """CSV of whichever view is on screen, every row rather than one page."""
+    conf = _STOCK_REPORT_KINDS[kind]
+    _branches, branch, dfrom, dto, view, field, sort, q = _stock_report_filters(request)
+
+    fname_branch = branch.name.replace(" ", "_") if branch else "all"
+    response, writer = _csv_response(
+        f"stock_{kind}_{view}_{fname_branch}_{dfrom.isoformat()}_{dto.isoformat()}.csv"
+    )
+
+    if view == "documents":
+        _write_export_header(writer, f"{conf['title']} documents", branch, dfrom, dto)
+        header = ["Created", "Document No.", "Ref. No.", conf["party"]]
+        if kind == "out":
+            header.append("Reason")
+        writer.writerow(header + ["Lines", "Total", "Created by", "Note"])
+        for d in _stock_report_docs(branch, kind, dfrom, dto, field, q):
+            row = [
+                timezone.localtime(d.created_at).strftime("%d/%m/%Y %H:%M:%S"),
+                d.document_no, d.ref_no, d.vendor if kind == "in" else d.receiver,
+            ]
+            if kind == "out":
+                row.append(d.reason)
+            writer.writerow(row + [d.line_count, _csv_num(d.total), d.created_by, d.note])
+        return response
+
+    _write_export_header(writer, f"{conf['title']} by Product", branch, dfrom, dto)
+    writer.writerow(["#", "Barcode", "Product Name", "Unit", "Document Qty.",
+                     "Quantity", "Total Discount", "Total"])
+    qty = disc = value = Decimal(0)
+    for i, r in enumerate(_stock_report_products(branch, kind, dfrom, dto, sort, q), start=1):
+        writer.writerow([i, r["barcode"], r["name"], r["unit"], r["doc_count"],
+                         _stock_qty(r["qty"]), _csv_num(r["discount"]), _csv_num(r["total"])])
+        qty += r["qty"]
+        disc += r["discount"]
+        value += r["total"]
+    writer.writerow(["Total", "", "", "", "", _stock_qty(qty), _csv_num(disc), _csv_num(value)])
+    return response
+
+
+@login_required
+def stock_in_report(request):
+    return _stock_report(request, "in")
+
+
+@login_required
+def stock_in_export(request):
+    return _stock_report_export(request, "in")
+
+
+@login_required
+def stock_out_report(request):
+    return _stock_report(request, "out")
+
+
+@login_required
+def stock_out_export(request):
+    return _stock_report_export(request, "out")
+
+
 # ─── Products ───────────────────────────────────────────────────────────
 @login_required
 def product_list(request):
