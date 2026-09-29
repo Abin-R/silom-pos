@@ -109,6 +109,13 @@ export type DiscountLine = {
   real_product_id?: string;
   /** Set on a free-item line: the `product_id` of the line that earned it. */
   free_of?: string;
+  /** A free item given by a promotion (stored on the bill as such). */
+  is_free?: boolean;
+  /**
+   * How the promotion applied, in words — "combination (all of these) ·
+   * 2 sets · capped at ฿100". Stored on the bill line for audit.
+   */
+  discount_logic?: string;
 };
 
 export const isCombo = (p: DiscountPreset | undefined) =>
@@ -271,6 +278,7 @@ export function reconcileDiscounts<T extends DiscountLine>(
       discount: round2(fp.price * qty),
       discount_type_id: p!.id,
       discount_label: p!.name,
+      is_free: true,
     } as T);
   }
   // Drop free lines whose reason has gone; refresh and keep the rest in place.
@@ -291,9 +299,11 @@ export function reconcileDiscounts<T extends DiscountLine>(
       .map((l) => l.discount_type_id!)
       .filter((id) => isCombo(byId.get(id))),
   );
+  const setsBy = new Map<string, number>();
   for (const id of comboIds) {
     const combo = byId.get(id)!;
-    const perLine = matchCombo(lines, combo).perLine;
+    const { perLine, sets } = matchCombo(lines, combo);
+    setsBy.set(id, sets);
     lines = lines.map((l) => {
       if (!eligible(l, id)) return l;
       const d = perLine.get(l.product_id) || 0;
@@ -322,6 +332,7 @@ export function reconcileDiscounts<T extends DiscountLine>(
   // ── Maximum discount ─────────────────────────────────────────────
   // Everything one promotion takes off the bill, capped and shared across its
   // lines in proportion; the last line takes the rounding remainder.
+  const capped = new Set<string>();
   for (const p of presets) {
     if (!p.max_discount || isFree(p)) continue;
     const idx = lines
@@ -329,6 +340,7 @@ export function reconcileDiscounts<T extends DiscountLine>(
       .filter((i) => i >= 0);
     const total = idx.reduce((s, i) => s + (lines[i].discount || 0), 0);
     if (total <= p.max_discount + 1e-9) continue;
+    capped.add(p.id);
     const cap = p.max_discount;
     let given = 0;
     idx.forEach((i, k) => {
@@ -340,7 +352,38 @@ export function reconcileDiscounts<T extends DiscountLine>(
       lines[i] = { ...lines[i], discount: share };
     });
   }
-  return lines;
+
+  // ── What applied, in words (stored on the bill for audit) ────────
+  const baht = (n: number) => `฿${n % 1 === 0 ? n : n.toFixed(2)}`;
+  const names = new Map(lines.map((l) => [l.product_id, l.name]));
+  return lines.map((l) => {
+    const p = l.discount_type_id ? byId.get(l.discount_type_id) : undefined;
+    if (!p) {
+      const handTyped = l.discount_type_id && (l.discount || 0) > 0;
+      return { ...l, discount_logic: handTyped ? "hand-entered discount" : undefined };
+    }
+    const parts: string[] = [];
+    if (isFreeLine(l)) {
+      parts.push(`free item with ${names.get(l.free_of!) || "a product"}`);
+    } else if (isFree(p)) {
+      parts.push(`earned free ${p.free_product!.name} ×${p.free_qty || 1}`);
+    } else {
+      const v = p.kind === "percent" ? `${p.value}% off` : `${baht(p.value)} off`;
+      if (isCombo(p)) {
+        const n = setsBy.get(p.id) || 0;
+        parts.push(
+          `combination (${p.match === "any" ? "any one of these" : "all of these"})`,
+          `${v} per set`,
+          `${n} set${n === 1 ? "" : "s"}`,
+        );
+      } else {
+        parts.push(`one product`, v);
+      }
+    }
+    if (p.min_order_amount) parts.push(`bill ≥ ${baht(p.min_order_amount)}`);
+    if (capped.has(p.id)) parts.push(`capped at ${baht(p.max_discount!)} per bill`);
+    return { ...l, discount_logic: parts.join(" · ") };
+  });
 }
 
 /** How many complete sets of `combo` the cart holds, counting `pid`'s line as free to use. */

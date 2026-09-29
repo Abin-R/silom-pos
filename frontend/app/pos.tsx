@@ -119,6 +119,10 @@ type CartItem = {
   // that earned it. Mapped back to the real product before the order POST.
   real_product_id?: string;
   free_of?: string;
+  // Stored on the bill for audit (lib/discountRules): a promotion's free
+  // item, and how the promotion applied to this line in words.
+  is_free?: boolean;
+  discount_logic?: string;
   suggested?: boolean;
 };
 // A preset from the backoffice's Discounts page (GET /discount-types?v=2) —
@@ -598,6 +602,7 @@ export default function POS() {
                 discount_type_id: on ? choice.discount_type_id : undefined,
                 discount_label: on ? choice.discount_label : undefined,
                 discount_reason: on ? choice.discount_reason : undefined,
+                discount_logic: undefined,
               }
             : i
         )
