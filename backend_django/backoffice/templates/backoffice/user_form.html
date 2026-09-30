@@ -80,28 +80,6 @@
         <span class="hint">An inactive account cannot sign in anywhere — backoffice or till.</span>
       </div>
     </div>
-  </div>
-
-  <div class="panel" style="margin-top:16px">
-    <div class="panel-h">Branches <span class="sm">for the till login only</span></div>
-    <div style="padding:16px 20px">
-      <div class="hint" style="margin-bottom:12px">
-        Which shops this account's PIN login is listed under on the till. It does
-        not restrict what the backoffice shows — leave every box clear to keep the
-        account off the till entirely.
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-        {% for b in all_branches %}
-        <label class="check">
-          <input type="checkbox" name="branches" value="{{ b.id }}"
-                 {% if b.id|stringformat:'s' in selected_branches %}checked{% endif %}>
-          {{ b.name }}
-        </label>
-        {% empty %}
-        <span class="hint">No branches yet.</span>
-        {% endfor %}
-      </div>
-    </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-blue">
         <svg><use href="#i-check"/></svg>

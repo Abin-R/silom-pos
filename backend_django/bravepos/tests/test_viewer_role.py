@@ -87,6 +87,20 @@ class UsersPageRoleTests(TestCase):
         self.assertContains(response, ">Viewer<")
         self.assertNotContains(response, ">Cashier<")
 
+    def test_saving_a_user_keeps_their_till_branches(self):
+        # The Users form no longer shows branches; saving must not clear them.
+        branch = Branch.objects.create(name="Silom")
+        member = make_user(username="mgr", email="mgr@example.com", role="cashier")
+        member.branches.add(branch)
+        self.client.post(reverse("backoffice:user_detail", args=[member.id]), {
+            "name": "Mgr", "username": "mgr", "email": "mgr@example.com",
+            "role": "cashier", "active": "on",
+        })
+        self.assertEqual(list(member.branches.all()), [branch])
+        self.assertNotContains(
+            self.client.get(reverse("backoffice:user_detail", args=[member.id])),
+            'name="branches"')
+
 
 class ViewerNeverOpensATillTests(TestCase):
     def setUp(self):

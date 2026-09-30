@@ -5604,10 +5604,6 @@ def _user_context(request, member, mode, errors=()):
         "member": member,
         "mode": mode,
         "errors": list(errors),
-        "all_branches": list(Branch.objects.all().order_by("name")),
-        "selected_branches": (
-            [str(b.id) for b in member.branches.all()] if member.pk else []
-        ),
         "hide_dates": True,
         **_branch_topbar_context(request),
     }
@@ -5652,7 +5648,6 @@ def user_new(request):
 
         member, plaintext = _apply_user_form(Staff(), request.POST, is_new=True)
         member.save()
-        member.branches.set(request.POST.getlist("branches"))
         request.session["issued_credentials"] = {
             "name": member.name,
             "username": member.username or "",
@@ -5686,7 +5681,6 @@ def user_detail(request, staff_id):
 
         member, plaintext = _apply_user_form(member, request.POST, is_new=False)
         member.save()
-        member.branches.set(request.POST.getlist("branches"))
         if plaintext:
             request.session["issued_credentials"] = {
                 "name": member.name,
