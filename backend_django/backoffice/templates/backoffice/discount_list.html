@@ -72,7 +72,7 @@
           {% if d.also_at %}<div class="sub" title="{{ d.also_at|join:', ' }}">Also at {{ d.also_at|length }} other branch{{ d.also_at|length|pluralize:"es" }}</div>{% endif %}
         </td>
         <td>
-          {% if d.kind == 'free' %}Free: {{ d.free_product.name|default:"—" }} × {{ d.free_qty }}
+          {% if d.kind == 'free' %}Free: {% if d.free_category %}any {{ d.free_category.name }}{% else %}{{ d.free_product.name|default:"—" }}{% endif %} × {{ d.free_qty }}
           {% elif d.kind == 'percent' %}<span class="money">{{ d.value|floatformat:"-2" }}%</span>
           {% else %}<span class="money">฿{{ d.value|floatformat:2 }}</span>{% endif %}
           {% if d.applies_to == 'combo' and d.kind != 'free' %}<div class="sub">off the set</div>{% endif %}

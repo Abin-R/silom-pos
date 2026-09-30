@@ -1062,8 +1062,10 @@ class DiscountType(models.Model):
     """
     KIND_PERCENT = "percent"
     KIND_FIXED = "fixed"
-    # Free item: choosing the discount on a product adds ``free_qty`` pcs of
-    # ``free_product`` to the bill at ฿0.  One-product discounts only.
+    # Free item: choosing the discount on a product gives ``free_qty`` pcs of
+    # ``free_product`` — or of whichever ``free_category`` product the cashier
+    # picks at the till.  Not a bill line: the order only takes it out of
+    # stock (a "Free item" stock-out document).  One-product discounts only.
     KIND_FREE = "free"
     KIND_CHOICES = [
         (KIND_PERCENT, "Percentage"),
@@ -1102,6 +1104,10 @@ class DiscountType(models.Model):
     )
     free_product = models.ForeignKey(
         Product, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="free_with_discount_types",
+    )
+    free_category = models.ForeignKey(
+        Category, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="free_with_discount_types",
     )
     free_qty = models.PositiveIntegerField(default=1)

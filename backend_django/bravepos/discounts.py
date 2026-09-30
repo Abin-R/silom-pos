@@ -186,7 +186,8 @@ def _translate(dt, target):
     it is empty."""
     products = target.products.filter(active=True)
     categories = target.categories.all()
-    missing, plan = [], {"products": [], "categories": [], "rows": [], "free": None}
+    missing, plan = [], {"products": [], "categories": [], "rows": [], "free": None,
+                         "free_category": None}
 
     for p in dt.products.all():
         m = _by_name(products, p.name)
@@ -210,6 +211,11 @@ def _translate(dt, target):
         plan["free"] = m
         if m is None:
             missing.append(dt.free_product.name)
+    if dt.free_category_id:
+        m = _by_name(categories, dt.free_category.name)
+        plan["free_category"] = m
+        if m is None:
+            missing.append(dt.free_category.name)
     return plan, missing
 
 
@@ -284,6 +290,7 @@ def sync_promotion(dt, targets):
         for f in COPIED_FIELDS:
             setattr(copy, f, getattr(dt, f))
         copy.free_product = plan["free"]
+        copy.free_category = plan["free_category"]
         if created:
             copy.created_by = dt.updated_by or dt.created_by
         copy.updated_by = dt.updated_by or dt.created_by

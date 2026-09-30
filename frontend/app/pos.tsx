@@ -45,8 +45,11 @@ import {
 import { t as tr, useT } from "../lib/i18n";
 import {
   comboSetsWith,
+  freeProductFor,
   isCombo,
   isFree,
+  isFreeLine,
+  picksFree,
   billBeforeDiscounts,
   meetsMinimum as meetsPromoMinimum,
   presetDetails,
@@ -123,15 +126,22 @@ type CartItem = {
   // item, and how the promotion applied to this line in words.
   is_free?: boolean;
   discount_logic?: string;
+  // On a line earning a category free item: the product the cashier picked.
+  free_pick?: string;
   suggested?: boolean;
 };
-// A preset from the backoffice's Discounts page (GET /discount-types?v=2) —
+// A preset from the backoffice's Discounts page (GET /discount-types?v=3) —
 // see lib/discountRules for combinations and free items.
 // The dropdown's last entry: a hand-typed ฿/% discount that needs a reason.
 // The label is what the backend keys the SeaTalk alert on.
 const DISCOUNT_OTHER = "other";
 const DISCOUNT_OTHER_LABEL = "Other";
-type DiscountChoice = { discount_type_id?: string; discount_label?: string; discount_reason?: string };
+type DiscountChoice = {
+  discount_type_id?: string;
+  discount_label?: string;
+  discount_reason?: string;
+  free_pick?: string;
+};
 // `phone` is null, not "", for a customer with no number on file — that is what
 // the column stores, so it is what the API sends. Every read here goes through
 // `c.phone || ""` or a `!c.phone` guard, which treat null and undefined alike.
@@ -395,7 +405,8 @@ export default function POS() {
     try {
       // v=2: this build understands combinations and free items; an older
       // till asks without it and is never sent either.
-      const res = await apiFetch(`${API}/discount-types?v=2`);
+      // v3: also free items the cashier picks from a category.
+      const res = await apiFetch(`${API}/discount-types?v=3`);
       if (!res.ok) { setDiscountPresets(null); return; }
       const body = await safeJson<any>(res, null);
       setDiscountPresets(
@@ -489,12 +500,18 @@ export default function POS() {
 
   // Subtotal is the gross line value; discounts are per-product only (no
   // common/order-level discount). A line discount is clamped to its line total.
+  // A promotion's free item is not on the bill (it only leaves stock), so it
+  // counts toward neither figure.
   const subtotal = useMemo(
-    () => cart.reduce((s, i) => s + i.price * i.qty, 0),
+    () => cart.reduce((s, i) => (isFreeLine(i) ? s : s + i.price * i.qty), 0),
     [cart]
   );
   const discountAmount = useMemo(
-    () => cart.reduce((s, i) => s + Math.min(i.discount || 0, i.price * i.qty), 0),
+    () =>
+      cart.reduce(
+        (s, i) => (isFreeLine(i) ? s : s + Math.min(i.discount || 0, i.price * i.qty)),
+        0,
+      ),
     [cart]
   );
   // Rounding lives on the bill, not on the discount. Folding it into the
@@ -577,7 +594,13 @@ export default function POS() {
         .filter((i) => i.product_id !== pid)
         .map((i) =>
           gone?.free_of && i.product_id === gone.free_of
-            ? { ...i, discount: undefined, discount_type_id: undefined, discount_label: undefined }
+            ? {
+                ...i,
+                discount: undefined,
+                discount_type_id: undefined,
+                discount_label: undefined,
+                free_pick: undefined,
+              }
             : i,
         );
     });
@@ -603,6 +626,7 @@ export default function POS() {
                 discount_label: on ? choice.discount_label : undefined,
                 discount_reason: on ? choice.discount_reason : undefined,
                 discount_logic: undefined,
+                free_pick: on && isFree(preset) ? choice.free_pick : undefined,
               }
             : i
         )
@@ -659,11 +683,16 @@ export default function POS() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // A free-item line is keyed by a made-up id; the order records it
-          // (and takes its stock) under the real product.
-          items: cart.map(({ real_product_id, free_of, ...i }) =>
-            real_product_id ? { ...i, product_id: real_product_id } : i,
-          ),
+          items: cart.filter((i) => !isFreeLine(i)).map(({ free_pick, ...i }) => i),
+          // A promotion's free items: not on the bill, only taken out of stock.
+          // The line is keyed by a made-up id; the real product goes here.
+          free_items: cart.filter(isFreeLine).map((i) => ({
+            product_id: i.real_product_id,
+            name: i.name,
+            qty: i.qty,
+            discount_type_id: i.discount_type_id,
+            discount_label: i.discount_label,
+          })),
           subtotal,
           discount_type: discountAmount > 0 ? "item" : "none",
           discount_value: 0,
@@ -742,7 +771,9 @@ export default function POS() {
               queue_number: order.queue_number ?? undefined,
               // This branch's RD machine number; blank omits the POS ID line.
               branch_pos_id: order.branch_pos_id || "",
-              items: cart.map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
+              items: cart
+                .filter((c) => !isFreeLine(c))
+                .map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
               subtotal,
               discount_amount: discountAmount,
               vat_amount: Number(order.vat_amount) || 0,
@@ -2154,7 +2185,9 @@ function CartSidebar({
               {/* One secondary line, not two. A discount is the thing worth
                   saying; the unit price only earns the space when there is no
                   discount to report. */}
-              {item.discount && item.discount > 0 ? (
+              {isFreeLine(item) ? (
+                <Text style={styles.crowDisc}>{tr("pos.discount_free_not_billed")}</Text>
+              ) : item.discount && item.discount > 0 ? (
                 <Money style={styles.crowDisc}>
                   {`${THB(item.price)} · −${THB(item.discount)}`}
                 </Money>
@@ -2187,7 +2220,9 @@ function CartSidebar({
             {stacked && <View style={{ flex: 1 }} />}
 
             <Money style={[styles.crowLine, stacked && { width: "auto" }]}>
-              {THB(item.price * item.qty - (item.discount || 0))}
+              {isFreeLine(item)
+                ? tr("pos.discount_free")
+                : THB(item.price * item.qty - (item.discount || 0))}
             </Money>
 
             <TouchableOpacity
@@ -3454,9 +3489,12 @@ function CartItemModal({
   const [reason, setReason] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [presetQuery, setPresetQuery] = useState("");
+  // A free item from a category: which of its products the customer gets.
+  const [freePick, setFreePick] = useState("");
 
   useEffect(() => {
     if (item) {
+      setFreePick(item.free_pick || "");
       setQty(item.qty);
       setDisc(item.discount ? String(item.discount) : "");
       // Percent is what a cashier is normally given ("10% off"), so that is
@@ -3577,6 +3615,9 @@ function CartItemModal({
   const discPct = gross > 0 ? (discAmount / gross) * 100 : 0;
 
   const reasonMissing = usingPresets && isOther && discAmount > 0 && !reason.trim();
+  const pickMissing =
+    !!preset && picksFree(preset) && !preset.free_choices!.some((c) => c.id === freePick);
+  const cantSave = reasonMissing || pickMissing;
 
   const choiceLabel = !choiceId
     ? tr("pos.discount_none")
@@ -3585,13 +3626,17 @@ function CartItemModal({
       : preset?.name || item.discount_label || tr("pos.discount_other");
 
   const presetValue = (p: DiscountPreset) => {
-    if (isFree(p)) return `${tr("pos.discount_free")} ${p.free_product!.name} ×${p.free_qty || 1}`;
+    if (isFree(p)) {
+      const what =
+        p.free_product?.name || tr("pos.discount_free_any", { category: p.free_category_name || "" });
+      return `${tr("pos.discount_free")} ${what} ×${p.free_qty || 1}`;
+    }
     const v = p.kind === "percent" ? `${p.value % 1 === 0 ? p.value : p.value.toFixed(2)}%` : THB(p.value);
     return isCombo(p) ? `${v} ${tr("pos.discount_off_set")}` : v;
   };
 
   const save = () => {
-    if (reasonMissing) return;
+    if (cantSave) return;
     let choice: DiscountChoice = {};
     if (usingPresets) {
       if (choiceId === DISCOUNT_OTHER) {
@@ -3604,6 +3649,7 @@ function CartItemModal({
         choice = {
           discount_type_id: choiceId,
           discount_label: preset?.name || item.discount_label,
+          free_pick: preset && picksFree(preset) ? freePick : undefined,
         };
       }
     }
@@ -3611,6 +3657,7 @@ function CartItemModal({
   };
 
   const pick = (id: string) => {
+    if (id !== choiceId) setFreePick("");
     setChoiceId(id);
     setPickerOpen(false);
     setPresetQuery("");
@@ -3825,10 +3872,45 @@ function CartItemModal({
             </View>
           )}
 
-          {preset && isFree(preset) && (
+          {preset && picksFree(preset) && !pickerOpen && (
+            <>
+              <View style={styles.discReasonWrap}>
+                <Text style={styles.itemRowLabel}>
+                  {tr("pos.discount_free_pick", {
+                    qty: preset.free_qty || 1,
+                    category: preset.free_category_name || "",
+                  })}
+                </Text>
+              </View>
+              <View style={styles.discOptions}>
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  {preset.free_choices!.map((c) => {
+                    const on = c.id === freePick;
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={[styles.discOption, on && styles.discOptionOn]}
+                        onPress={() => setFreePick(c.id)}
+                        testID={`item-free-pick-${c.id}`}
+                      >
+                        <Text
+                          style={[styles.discOptionText, { flex: 1 }, on && { color: C.brand }]}
+                          numberOfLines={1}
+                        >
+                          {c.name}
+                        </Text>
+                        {on && <Ionicons name="checkmark" size={18} color={C.brand} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </>
+          )}
+          {preset && isFree(preset) && (freePick || preset.free_product) && (
             <View style={styles.itemDiscSummaryRow}>
               <Text style={styles.itemDiscSummaryText}>
-                {`+ ${preset.free_product!.name} ×${preset.free_qty || 1} ${tr("pos.discount_free")}`}
+                {`+ ${freeProductFor(preset, { free_pick: freePick })?.name || ""} ×${preset.free_qty || 1} ${tr("pos.discount_free")}`}
               </Text>
             </View>
           )}
@@ -3846,9 +3928,9 @@ function CartItemModal({
           </View>
 
           <TouchableOpacity
-            style={[styles.doneBtn, reasonMissing && { opacity: 0.45 }]}
+            style={[styles.doneBtn, cantSave && { opacity: 0.45 }]}
             onPress={save}
-            disabled={reasonMissing}
+            disabled={cantSave}
             testID="item-modal-save"
           >
             <Text style={styles.doneBtnText}>{tr("common.save")}</Text>

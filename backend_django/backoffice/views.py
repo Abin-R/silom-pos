@@ -3829,16 +3829,28 @@ def _apply_discount_form(dt, post, branch):
 
     # ── What the customer gets ─────────────────────────────────────────
     dt.free_product = None
+    dt.free_category = None
     if dt.kind == DiscountType.KIND_FREE:
         dt.value = Decimal(0)
         if dt.applies_to == DiscountType.APPLIES_COMBO:
             errors.append("A free item can only be given with a one-product discount for now — "
                           "pick a fixed or percentage discount for a combination.")
+        # One picker for both: a product id, or "cat:<id>" for "any product
+        # in this category — the cashier picks which one at the till".
         wanted = (post.get("free_product") or "").strip()
-        dt.free_product = next(
-            (p for p in _discount_products(branch) if str(p.id) == wanted), None)
-        if dt.free_product is None:
-            errors.append("Pick the product that is given free.")
+        if wanted.startswith("cat:"):
+            dt.free_category = next(
+                (c for c in _discount_categories(branch) if str(c.id) == wanted[4:]), None)
+            if dt.free_category is None:
+                errors.append("Pick the product or category that is given free.")
+            elif not dt.free_category.product_count:
+                errors.append(f"“{dt.free_category.name}” has no active products at this branch "
+                              "to give away.")
+        else:
+            dt.free_product = next(
+                (p for p in _discount_products(branch) if str(p.id) == wanted), None)
+            if dt.free_product is None:
+                errors.append("Pick the product or category that is given free.")
         try:
             dt.free_qty = int(post.get("free_qty") or 1)
         except ValueError:
@@ -3888,16 +3900,20 @@ def _discount_history(dt, limit=100):
     # The free product is stored by id; show it by name.
     ids = set()
     for e in entries:
-        for field in ("free_product",):
+        for field in ("free_product", "free_category"):
             ch = (e.changes or {}).get(field)
             vals = [ch.get("from"), ch.get("to")] if isinstance(ch, dict) else [ch]
             ids.update(str(v) for v in vals if v)
     names = {str(k): v for k, v in Product.objects.filter(pk__in=ids).values_list("pk", "name")} \
         if ids else {}
+    cat_names = {str(k): v for k, v in Category.objects.filter(pk__in=ids).values_list("pk", "name")} \
+        if ids else {}
 
     def show(field, value):
         if field == "free_product" and value:
             return names.get(str(value), "a removed product")
+        if field == "free_category" and value:
+            return cat_names.get(str(value), "a removed category")
         return value
 
     for e in entries:
@@ -4017,7 +4033,7 @@ def discount_list(request):
     qs = DiscountType.objects.filter(branch=branch) if branch else DiscountType.objects.none()
     qs = (qs.annotate(product_count=Count("products", distinct=True),
                       category_count=Count("categories", distinct=True))
-          .select_related("free_product")
+          .select_related("free_product", "free_category")
           .prefetch_related("categories", "conditions__product", "conditions__category")
           .order_by("name"))
 

@@ -22,7 +22,8 @@ from django.urls import reverse
 
 from bravepos import seatalk
 from bravepos.models import (
-    Branch, BranchSession, Category, DiscountCondition, DiscountType, OrderItem, Staff,
+    Branch, BranchSession, Category, DiscountCondition, DiscountType, Order, OrderItem,
+    Product, Staff, StockDocument,
 )
 from bravepos.tests.factories import make_branch, make_product, make_shop, open_shift
 
@@ -617,7 +618,7 @@ class MinMaxAndOrTests(ComboFormTests):
 class BillAuditTests(TillTestCase):
     """Section D: what a bill line records about the promotion."""
 
-    def test_line_records_promotion_id_logic_free_flag_and_sku(self):
+    def test_line_records_promotion_id_logic_and_sku(self):
         self.latte.sku = "LAT-001"
         self.latte.save()
         promo = DiscountType.objects.create(branch=self.branch, name="Free latte", kind="free",
@@ -628,24 +629,123 @@ class BillAuditTests(TillTestCase):
                 {"product_id": str(self.cake.id), "name": "Cake", "price": 200, "qty": 1,
                  "discount_type_id": str(promo.id), "discount_label": "Free latte",
                  "discount_logic": "earned free Latte ×1"},
-                {"product_id": str(self.latte.id), "name": "Latte", "price": 100, "qty": 1,
-                 "discount": 100, "discount_type_id": str(promo.id), "discount_label": "Free latte",
-                 "discount_logic": "free item with Cake", "is_free": True},
                 # An id from another branch is not trusted into the record.
                 {"product_id": str(self.latte.id), "name": "Latte", "price": 100, "qty": 1,
                  "discount": 5, "discount_type_id": str(other.id), "discount_label": "X"},
             ],
-            "subtotal": 400, "total": 295, "discount_amount": 105,
+            "subtotal": 300, "total": 295, "discount_amount": 5,
             "payment_method": "cash", "paid_amount": 295,
         }
         res = self.client.post("/api/orders", body, content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 201)
-        lines = {(i.name, i.is_free): i for i in OrderItem.objects.all()}
-        cake, free = lines[("Cake", False)], lines[("Latte", True)]
-        self.assertEqual((cake.discount_code, cake.discount_logic), (promo.code, "earned free Latte ×1"))
-        self.assertEqual((free.discount_code, free.is_free, free.sku), (promo.code, True, "LAT-001"))
-        self.assertEqual(lines[("Latte", False)].discount_code, "")
+        lines = {i.name: i for i in OrderItem.objects.all()}
+        self.assertEqual((lines["Cake"].discount_code, lines["Cake"].discount_logic),
+                         (promo.code, "earned free Latte ×1"))
+        self.assertEqual(lines["Latte"].discount_code, "")
 
+
+class FreeItemOffTheBillTests(TillTestCase):
+    """A promotion's free item is not a bill line — it only leaves stock."""
+
+    def setUp(self):
+        super().setUp()
+        self.promo = DiscountType.objects.create(
+            branch=self.branch, name="Free latte", kind="free", free_product=self.latte, free_qty=1)
+
+    def cake_line(self):
+        return {"product_id": str(self.cake.id), "name": "Cake", "price": 200, "qty": 1,
+                "discount_type_id": str(self.promo.id), "discount_label": "Free latte"}
+
+    def assert_stock_only(self, order):
+        self.assertEqual(list(order.items.values_list("name", flat=True)), ["Cake"])
+        self.assertEqual((order.subtotal, order.discount_amount, order.discount_type),
+                         (Decimal("200.00"), Decimal("0.00"), "none"))
+        self.latte.refresh_from_db()
+        self.assertEqual(self.latte.stock, 49)
+        doc = StockDocument.objects.get(type="out")
+        self.assertEqual((doc.reason, doc.ref_no), ("Free item", order.order_number))
+        self.assertIn(self.promo.code, doc.note)
+        item = doc.items.get()
+        self.assertEqual((item.product_id, item.qty), (self.latte.id, 1))
+
+    def test_current_till_sends_free_items_apart(self):
+        res = self.client.post("/api/orders", {
+            "items": [self.cake_line()],
+            "free_items": [{"product_id": str(self.latte.id), "name": "Latte", "qty": 1,
+                            "discount_type_id": str(self.promo.id), "discount_label": "Free latte"}],
+            "subtotal": 200, "total": 200, "discount_amount": 0, "discount_type": "none",
+            "payment_method": "cash", "paid_amount": 200,
+        }, content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 201)
+        self.assert_stock_only(Order.objects.get())
+
+    def test_older_till_line_is_taken_back_off_the_bill(self):
+        res = self.client.post("/api/orders", {
+            "items": [self.cake_line(),
+                      {"product_id": str(self.latte.id), "name": "Latte", "price": 100, "qty": 1,
+                       "discount": 100, "discount_type_id": str(self.promo.id),
+                       "discount_label": "Free latte", "is_free": True}],
+            "subtotal": 300, "total": 200, "discount_amount": 100, "discount_type": "item",
+            "payment_method": "cash", "paid_amount": 200,
+        }, content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 201)
+        self.assert_stock_only(Order.objects.get())
+
+    def test_no_document_without_free_items(self):
+        self.sell({})
+        self.assertFalse(StockDocument.objects.exists())
+
+
+class FreeFromCategoryTests(TillTestCase):
+    def setUp(self):
+        super().setUp()
+        self.cookies = Category.objects.create(name="Cookies", branch=self.branch)
+        self.choc = make_product(self.branch, name="Choc chip", price="95.00")
+        self.oat = make_product(self.branch, name="Oat", price="80.00")
+        for p in (self.choc, self.oat):
+            p.category = self.cookies
+            p.save()
+        self.promo = DiscountType.objects.create(
+            branch=self.branch, name="Free cookie", kind="free",
+            free_category=self.cookies, free_qty=1)
+
+    def feed(self, v):
+        return {d["id"]: d for d in self.client.get(
+            f"/api/discount-types?v={v}", **self.auth).json()["discount_types"]}
+
+    def test_v3_lists_the_category_products(self):
+        row = self.feed(3)[str(self.promo.id)]
+        self.assertIsNone(row["free_product"])
+        self.assertEqual(row["free_category_name"], "Cookies")
+        self.assertEqual({c["name"] for c in row["free_choices"]}, {"Choc chip", "Oat"})
+
+    def test_v2_till_is_not_offered_it(self):
+        self.assertNotIn(str(self.promo.id), self.feed(2))
+
+    def test_empty_category_is_not_offered(self):
+        Product.objects.filter(category=self.cookies).update(active=False)
+        self.assertNotIn(str(self.promo.id), self.feed(3))
+
+
+class FreeCategoryFormTests(ComboFormTests):
+    def test_saves_a_category(self):
+        res = self.client.post(self.url, {
+            "name": "Free cookie", "active": "on", "applies_to": "all", "kind": "free",
+            "free_product": f"cat:{self.cookies.id}", "free_qty": "1"})
+        self.assertEqual(res.status_code, 302)
+        dt = DiscountType.objects.get()
+        self.assertEqual((dt.free_category, dt.free_product), (self.cookies, None))
+
+    def test_category_with_no_products_is_refused(self):
+        empty = Category.objects.create(name="Empty", branch=self.branch)
+        res = self.client.post(self.url, {
+            "name": "Free", "active": "on", "applies_to": "all", "kind": "free",
+            "free_product": f"cat:{empty.id}", "free_qty": "1"})
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(DiscountType.objects.exists())
+
+
+class BillAuditTailTests(TillTestCase):
     def test_old_till_body_still_saves(self):
         body = {"items": [{"product_id": str(self.cake.id), "name": "Cake", "price": 200, "qty": 1,
                            "discount_type_id": "other", "discount": 10}],

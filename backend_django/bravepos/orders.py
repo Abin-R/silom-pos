@@ -22,7 +22,14 @@ from .gateways import (
     compute_order_charges,
     get_shop_settings,
 )
-from .models import Branch, DiscountType, Order, OrderItem, Product, Shift, StockMovement
+from .models import (
+    Branch, DiscountType, Order, OrderItem, Product, Shift, StockDocument,
+    StockDocumentItem, StockMovement,
+)
+
+# The reason a promotion's free item leaves stock under — what the Stock out
+# report shows and filters by.
+FREE_ITEM_REASON = 'Free item'
 
 # Sentinel so a caller can pass ``shift=None`` to mean "no shift" and be
 # distinguished from "caller didn't say — look up the currently-open one".
@@ -98,6 +105,7 @@ def create_order_from_items(
     delivery_status: str = '',
     trust_item_prices: bool = True,
     shift=_UNSET,
+    free_items: list[dict] | None = None,
 ) -> Order:
     """Create an Order + its items, decrement stock, log the movements.
 
@@ -118,9 +126,30 @@ def create_order_from_items(
     """
     gateway_ids = gateway_ids or {}
 
+    # Free items given by a promotion are not part of the bill: the order
+    # only takes them out of stock.  A current till sends them apart in
+    # ``free_items``; an older one still sends each as an ``is_free`` line
+    # inside ``items`` with its full price in the subtotal and the same amount
+    # as discount, so both are backed out here to leave the bill as if it
+    # never carried the line.
+    free_items = list(free_items or [])
+    kept = []
+    for it in items:
+        if it.get('is_free'):
+            free_items.append(it)
+            gross = Decimal(str(it.get('price', 0) or 0)) * int(it.get('qty', 1) or 1)
+            subtotal = Decimal(str(subtotal)) - gross
+            discount_amount = Decimal(str(discount_amount)) - Decimal(str(it.get('discount', 0) or 0))
+        else:
+            kept.append(it)
+    items = kept
+    if free_items and Decimal(str(discount_amount)) <= 0:
+        discount_amount = Decimal('0')
+        discount_type = 'none'
+
     # Resolve products once, scoped to the branch, so an order can only ever
     # reference products that live at that branch.
-    product_ids = [it.get('product_id') for it in items if it.get('product_id')]
+    product_ids = [it.get('product_id') for it in items + free_items if it.get('product_id')]
     products_by_id: dict[str, Product] = {}
     cats_by_pid: dict[str, tuple[str | None, str]] = {}
     if product_ids:
@@ -139,7 +168,7 @@ def create_order_from_items(
     # sends the discount's database id, and the code recorded on the bill is
     # read from this branch's own promotions, never taken from the request.
     promo_ids = set()
-    for it in items:
+    for it in items + free_items:
         try:
             promo_ids.add(uuid.UUID(str(it.get('discount_type_id'))))
         except (TypeError, ValueError):
@@ -278,6 +307,8 @@ def create_order_from_items(
                             note=f'Order {order.order_number}',
                             document_no=order.order_number,
                         )
+                _record_free_items(branch, order, free_items, products_by_id,
+                                   promo_codes, staff)
                 return order
         except IntegrityError as e:
             # Almost certainly the unique order_number. Re-derive and try again.
@@ -288,3 +319,46 @@ def create_order_from_items(
         f'Could not allocate a unique order number after '
         f'{ORDER_NUMBER_MAX_RETRIES} attempts: {last_error}'
     )
+
+
+def _record_free_items(branch, order, free_items, products_by_id, promo_codes, staff):
+    """Take a sale's free items out of stock as one "Free item" stock-out
+    document, referenced to the order, so the Stock out report shows what was
+    given away, with which promotion and on which bill."""
+    lines = []
+    for it in free_items:
+        prod = products_by_id.get(str(it.get('product_id') or ''))
+        qty = int(it.get('qty', 1) or 1)
+        if prod is None or qty <= 0:
+            continue  # a product from another branch, or retired since
+        label = str(it.get('discount_label') or '')
+        code = promo_codes.get(str(it.get('discount_type_id') or ''), '')
+        lines.append((prod, qty, ' '.join(filter(None, [code, label]))))
+    if not lines:
+        return
+
+    from .views import _next_stock_doc_no  # views imports this module
+    doc_no = _next_stock_doc_no(branch, 'out')
+    promos = ', '.join(sorted({promo for _, _, promo in lines if promo}))
+    total = sum((p.price * q for p, q, _ in lines), Decimal('0'))
+    doc = StockDocument.objects.create(
+        branch=branch, type='out', document_no=doc_no,
+        ref_no=order.order_number,
+        receiver=order.customer_name or '',
+        reason=FREE_ITEM_REASON,
+        note=f'{promos} · order {order.order_number}' if promos else f'Order {order.order_number}',
+        subtotal=total, total=total,
+        created_by=staff or '',
+    )
+    for prod, qty, promo in lines:
+        StockDocumentItem.objects.create(
+            document=doc, product=prod, barcode=prod.barcode or '',
+            product_name=prod.name, qty=qty, price=prod.price, total=prod.price * qty,
+        )
+        Product.objects.filter(pk=prod.pk).update(stock=F('stock') - qty)
+        StockMovement.objects.create(
+            branch=branch, product=prod, product_name=prod.name, type='out', qty=qty,
+            note=f'{FREE_ITEM_REASON} · {promo} · order {order.order_number}' if promo
+            else f'{FREE_ITEM_REASON} · order {order.order_number}',
+            document_no=doc_no,
+        )

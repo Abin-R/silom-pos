@@ -613,7 +613,12 @@ def discount_types(request):
     branch = request.session_obj.branch
     if branch is None or not branch.discount_types_enabled:
         return Response({'enabled': False, 'discount_types': []})
-    v2 = request.query_params.get('v') == '2'
+    # v2: combinations and free items.  v3 adds a free item picked from a
+    # category at the till — a v2 till can't show that picker, so it isn't
+    # offered those.
+    version = request.query_params.get('v')
+    v2 = version in ('2', '3')
+    v3 = version == '3'
     # Only promotions running today (shop-local date): outside its start/end
     # dates a promotion simply isn't offered.  Blank dates are open-ended.
     today = djtz.localdate()
@@ -623,7 +628,7 @@ def discount_types(request):
     if not v2:
         qs = (qs.exclude(applies_to=DiscountType.APPLIES_COMBO)
                 .exclude(kind=DiscountType.KIND_FREE))
-    rows = list(qs.select_related('free_product')
+    rows = list(qs.select_related('free_product', 'free_category')
                   .prefetch_related('products', 'categories', 'conditions__product',
                                     'conditions__category'))
 
@@ -631,6 +636,13 @@ def discount_types(request):
     cat_ids = {c.id for d in rows if d.applies_to == DiscountType.APPLIES_CATEGORIES
                for c in d.categories.all()}
     cat_ids |= {c.category_id for d in rows for c in d.conditions.all() if c.category_id}
+    free_cat_ids = {d.free_category_id for d in rows if d.free_category_id} if v3 else set()
+    free_by_cat: dict = {}
+    if free_cat_ids:
+        for p in (Product.objects.filter(branch=branch, active=True, category_id__in=free_cat_ids)
+                  .order_by('sort_order', 'name')):
+            free_by_cat.setdefault(p.category_id, []).append(
+                {'id': str(p.id), 'name': p.name, 'price': float(p.price)})
     by_cat: dict = {}
     if cat_ids:
         for pid, cid in (Product.objects
@@ -694,9 +706,13 @@ def discount_types(request):
             if d.kind == DiscountType.KIND_FREE:
                 row['free_product'] = free_product(d)
                 row['free_qty'] = d.free_qty
-                # A free item whose product has since been retired has
-                # nothing left to give away.
-                if row['free_product'] is None:
+                if d.free_category_id and v3:
+                    # The cashier picks one of these at the till.
+                    row['free_choices'] = free_by_cat.get(d.free_category_id, [])
+                    row['free_category_name'] = d.free_category.name
+                # A free item whose product has since been retired (or whose
+                # category is now empty) has nothing left to give away.
+                if row['free_product'] is None and not row.get('free_choices'):
                     continue
         payload.append(row)
 
@@ -1108,6 +1124,8 @@ def orders_list_create(request):
     order = create_order_from_items(
         branch=branch,
         items=items_data,
+        # A promotion's free items: taken out of stock, not put on the bill.
+        free_items=payload.get('free_items') or [],
         payment_method=payload.get('payment_method', '') or '',
         # The client sends ``total`` as the *goods* total (subtotal − discount);
         # VAT and the card fee are recomputed server-side so they can't be

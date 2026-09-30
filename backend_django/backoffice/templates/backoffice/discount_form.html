@@ -310,10 +310,17 @@
         <span class="hint">The most this promotion can take off one bill, all its items together.</span>
       </div>
       <div class="field" id="freeProductField">
-        <label for="f-free">Free product</label>
+        <label for="f-free">Free item</label>
         <select id="f-free" name="free_product" class="pickable"
-                data-placeholder="Pick the product given free…" data-search="Search products…">
-          <option value="">Pick the product given free…</option>
+                data-placeholder="Pick a product, or a category…" data-search="Search products or categories…">
+          <option value="">Pick a product, or a category…</option>
+          {# A category: the cashier picks which of its products at the till. #}
+          <optgroup label="Any product in a category · cashier picks">
+            {% for c in categories %}{% if c.product_count %}
+              <option value="cat:{{ c.id }}" data-meta="{{ c.product_count }} product{{ c.product_count|pluralize }}"
+                      {% if dt.free_category_id == c.id %}selected{% endif %}>Any {{ c.name }}</option>
+            {% endif %}{% endfor %}
+          </optgroup>
           {% regroup products by category as fgroups %}
           {% for g in fgroups %}
           <optgroup label="{{ g.grouper.name|default:'Uncategorised' }}">
@@ -328,7 +335,8 @@
       <div class="field" id="freeQtyField">
         <label for="f-freeqty">Pieces free</label>
         <input id="f-freeqty" type="number" name="free_qty" min="1" step="1" value="{{ dt.free_qty|default:1 }}">
-        <span class="hint">Added to the bill at ฿0 each time the cashier picks this discount.</span>
+        <span class="hint">Given each time the cashier picks this discount. It is not added to the bill —
+          only taken out of stock, as a “Free item” stock-out.</span>
       </div>
     </div>
 

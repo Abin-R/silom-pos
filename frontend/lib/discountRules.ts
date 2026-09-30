@@ -10,7 +10,11 @@
  *   Items beyond the set stay full price. It repeats for every complete set.
  *   Units are matched most-expensive first — the best result for the customer.
  * - **Free item**: choosing the discount on a product adds a separate line of
- *   the free product at ฿0, linked to the line that earned it.
+ *   the free product, linked to the line that earned it — either the preset's
+ *   `free_product`, or the one the cashier picked from `free_choices` (stored
+ *   on the earning line as `free_pick`). The free line is a reminder in the
+ *   cart only: it is kept out of the totals and the receipt, and the order
+ *   sends it apart as `free_items`, which the backend only takes out of stock.
  *
  * Two bill-level rules apply to every kind of promotion:
  *
@@ -44,6 +48,9 @@ export type DiscountPreset = {
   /** Most the promotion can take off one bill; null = no cap. */
   max_discount?: number | null;
   free_product?: { id: string; name: string; price: number } | null;
+  /** A free item from a category: the products the cashier picks from. */
+  free_choices?: { id: string; name: string; price: number }[];
+  free_category_name?: string;
   free_qty?: number;
   /** Promotion details shown under the dropdown entry. */
   code?: string;
@@ -109,8 +116,10 @@ export type DiscountLine = {
   real_product_id?: string;
   /** Set on a free-item line: the `product_id` of the line that earned it. */
   free_of?: string;
-  /** A free item given by a promotion (stored on the bill as such). */
+  /** A free item given by a promotion — kept off the bill, stock only. */
   is_free?: boolean;
+  /** On the earning line: the product picked from the preset's `free_choices`. */
+  free_pick?: string;
   /**
    * How the promotion applied, in words — "combination (all of these) ·
    * 2 sets · capped at ฿100". Stored on the bill line for audit.
@@ -122,15 +131,25 @@ export const isCombo = (p: DiscountPreset | undefined) =>
   !!p && p.applies_to === "combo" && !!p.conditions?.length;
 
 export const isFree = (p: DiscountPreset | undefined) =>
-  !!p && p.kind === "free" && !!p.free_product;
+  !!p && p.kind === "free" && (!!p.free_product || !!p.free_choices?.length);
+
+/** Does the cashier pick the free product (from a category)? */
+export const picksFree = (p: DiscountPreset | undefined) =>
+  isFree(p) && !p!.free_product;
+
+/** The product `l` earns free under `p`: fixed, or the cashier's pick. */
+export function freeProductFor(p: DiscountPreset, l: { free_pick?: string }) {
+  return p.free_product || p.free_choices?.find((c) => c.id === l.free_pick) || null;
+}
+
+/** A free-item line: a reminder in the cart, never part of the bill. */
+export const isFreeLine = (l: DiscountLine) => !!l.free_of;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export const freeLineKey = (presetId: string, triggerPid: string) =>
   `free:${presetId}:${triggerPid}`;
 
-/** A free-item line never counts toward anything else. */
-const isFreeLine = (l: DiscountLine) => !!l.free_of;
 
 /**
  * May this line's units be used by `combo`? Lines already carrying a
@@ -266,7 +285,8 @@ export function reconcileDiscounts<T extends DiscountLine>(
     if (isFreeLine(l) || !l.discount_type_id) continue;
     const p = byId.get(l.discount_type_id);
     if (!isFree(p)) continue;
-    const fp = p!.free_product!;
+    const fp = freeProductFor(p!, l);
+    if (!fp) continue; // a category preset whose pick has gone from the feed
     const qty = Math.max(1, p!.free_qty || 1);
     wanted.set(freeLineKey(p!.id, l.product_id), {
       product_id: freeLineKey(p!.id, l.product_id),
@@ -366,7 +386,7 @@ export function reconcileDiscounts<T extends DiscountLine>(
     if (isFreeLine(l)) {
       parts.push(`free item with ${names.get(l.free_of!) || "a product"}`);
     } else if (isFree(p)) {
-      parts.push(`earned free ${p.free_product!.name} ×${p.free_qty || 1}`);
+      parts.push(`earned free ${freeProductFor(p, l)?.name || "item"} ×${p.free_qty || 1}`);
     } else {
       const v = p.kind === "percent" ? `${p.value}% off` : `${baht(p.value)} off`;
       if (isCombo(p)) {
