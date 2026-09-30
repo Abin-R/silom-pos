@@ -4419,7 +4419,7 @@ function ProductEditModal({
     if (!name.trim() || !price || !catId) return;
     const body: Record<string, any> = {
       name, price: parseFloat(price), cost: parseFloat(cost || "0"),
-      stock: parseInt(stock || "0"), category_id: catId,
+      category_id: catId,
       image_url: img || "",
       image_base64: imgBase64 || "",
       is_favorite: fav, tax_type: "V", product_type: "P",
@@ -4429,6 +4429,10 @@ function ProductEditModal({
     if (!body.image_url && !body.image_base64) {
       body.image_url = "https://images.pexels.com/photos/36500580/pexels-photo-36500580.jpeg?w=400";
     }
+    // Opening stock only.  After that stock moves through Stock-In / Stock-Out
+    // / Adjust so every change leaves a movement behind — and a save from a
+    // form opened before a sale would otherwise put the sold units back.
+    if (isNew) body.stock = parseInt(stock || "0");
     if (isNew) {
       await apiFetch(`${API}/products`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -4465,7 +4469,14 @@ function ProductEditModal({
                 </View>
               </View>
               <Text style={styles.formLabel}>{tr("common.stock")}</Text>
-              <TextInput style={styles.formInput} value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" testID="prod-stock" />
+              {isNew ? (
+                <TextInput style={styles.formInput} value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" testID="prod-stock" />
+              ) : (
+                <>
+                  <TextInput style={[styles.formInput, { backgroundColor: C.bg, color: C.ink2 }]} value={stock} editable={false} testID="prod-stock" />
+                  <Text style={{ fontSize: 12, color: C.ink3 }}>{tr("admin.stock_edit_hint")}</Text>
+                </>
+              )}
               <Text style={styles.formLabel}>{tr("admin.image")}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                 <View style={styles.imgThumb}>

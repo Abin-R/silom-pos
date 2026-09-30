@@ -185,6 +185,7 @@ const th = {
     no_sales_yet_2: "ยังไม่มียอดขาย",
     no_shifts_in_this_range: "ไม่มีรอบขายในช่วงนี้",
     no_usb_printers_detected_plug_one: "ไม่พบเครื่องพิมพ์ USB — กรุณาเสียบเครื่องพิมพ์",
+    stock_edit_hint: "เปลี่ยนสต็อกผ่าน รับสินค้าเข้า, ตัดสินค้าออก หรือ ปรับปรุงสต็อก",
     non_stock_product: "สินค้าที่ไม่ตัดสต็อก",
     not_available_yet: "ยังไม่พร้อมใช้งาน",
     not_built_yet_this_section_is: "ยังไม่ได้พัฒนา — ส่วนนี้เป็นตัวอย่างเท่านั้น",

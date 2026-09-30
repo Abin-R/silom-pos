@@ -186,6 +186,7 @@ const en = {
     no_sales_yet_2: "No sales yet.",
     no_shifts_in_this_range: "No shifts in this range",
     no_usb_printers_detected_plug_one: "No USB printers detected — plug one in",
+    stock_edit_hint: "Change stock with Stock-In, Stock-Out or Adjust Stock.",
     non_stock_product: "Non-stock product",
     not_available_yet: "Not available yet",
     not_built_yet_this_section_is: "Not built yet — this section is a placeholder.",

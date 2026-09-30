@@ -112,6 +112,15 @@ class ProductSerializer(serializers.ModelSerializer):
     def validate_image_base64(self, value):
         return images.normalize(value)
 
+    # ``stock`` is the opening count on create and nothing after.  Stock moves
+    # through stock movements / documents so every change is on record; the
+    # till's Edit Product form used to send back the number it loaded, which
+    # silently undid any sale rung up while the form was open.  Dropped here
+    # rather than only in the app so installed builds stop doing it too.
+    def update(self, instance, validated_data):
+        validated_data.pop('stock', None)
+        return super().update(instance, validated_data)
+
 
 class CustomerSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=False, required=False)
