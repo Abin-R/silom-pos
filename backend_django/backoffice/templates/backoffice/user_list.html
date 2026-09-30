@@ -96,7 +96,8 @@
         <td class="money" style="color:var(--txt2);font-size:12.5px">{{ u.email }}</td>
         <td>
           {% if u.role == 'admin' %}<span class="tag t-info">Admin</span>
-          {% else %}<span class="tag t-out">Cashier</span>{% endif %}
+          {% elif u.role == 'viewer' %}<span class="tag t-out">Viewer</span>
+          {% else %}<span class="tag t-out">Manager</span>{% endif %}
         </td>
         <td style="color:var(--mut)">
           {% for b in u.branches.all %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% empty %}All branches{% endfor %}

@@ -40,6 +40,8 @@
         <select id="f-role" name="role">
           <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
           <option value="cashier" {% if member.role == 'cashier' %}selected{% endif %}>Cashier</option>
+          {# Offered only to keep a viewer a viewer — saving would otherwise make them a cashier. #}
+          {% if member.role == 'viewer' %}<option value="viewer" selected>Viewer (backoffice reports only)</option>{% endif %}
         </select>
         <span class="hint">Cashiers sell and refund. Only admins can change products or prices.</span>
       </div>

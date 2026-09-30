@@ -29,9 +29,15 @@ class Staff(models.Model):
     other apps in the same Postgres, and our role/branch model is custom.
     All Brave POS auth lives in this ``bravepos_staff`` table.
     """
+    # "cashier" is shown as *Manager* on the backoffice Users page: the same
+    # value is a till cashier on the Staff page, and the Android app reads it,
+    # so the label changed and the stored value did not. "viewer" is a
+    # backoffice-only, read-only reports account — never listed on the till's
+    # PIN picker and refused by both till login endpoints.
     ROLE_CHOICES = [
         ("admin", "Admin"),
         ("cashier", "Cashier"),
+        ("viewer", "Viewer"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)

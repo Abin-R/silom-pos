@@ -119,3 +119,53 @@ def _authenticated_or_none(request):
     if user is None or not getattr(user, "is_authenticated", False):
         return None
     return user
+
+
+# What a "viewer" account may open: the Overview and Reports sections of the
+# rail, their exports, and the pages those reports link into. An allowlist, not
+# a blocklist — a page added to the backoffice later stays closed to viewers
+# until someone decides it is a report.
+VIEWER_URL_NAMES = frozenset({
+    "login", "logout", "app_css", "product_image",
+    "home", "dashboard",
+    "transactions", "transactions_export", "receipt_print",
+    "report_daily", "report_daily_export",
+    "report_daily_detail", "report_daily_detail_export",
+    "report_sell", "report_sell_export",
+    "report_sku", "report_sku_export",
+    "report_tax", "report_tax_export",
+    "inventory", "inventory_export",
+    "stock_in", "stock_in_export", "stock_in_document",
+    "stock_out", "stock_out_export", "stock_out_document",
+})
+
+
+class ViewerAccessMiddleware:
+    """Keeps a ``role == "viewer"`` account to read-only reports.
+
+    Enforced here rather than per view because the backoffice has ~70 views
+    that only say ``@login_required``; one gate in front of all of them can't
+    be forgotten on the next one. Any non-GET is refused too (bar signing
+    out), so even an allowlisted page can't be used to change anything.
+
+    Must come after ``StaffAuthMiddleware``. Only backoffice URLs are touched —
+    the till API has its own token auth, and viewers are refused there at login.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        return self.get_response(request)
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        match = getattr(request, "resolver_match", None)
+        if match is None or match.namespace != "backoffice":
+            return None
+        if getattr(request.user, "role", "") != "viewer":
+            return None
+        read = request.method in ("GET", "HEAD")
+        if match.url_name in VIEWER_URL_NAMES and (read or match.url_name == "logout"):
+            return None
+        from .views import viewer_forbidden
+        return viewer_forbidden(request)

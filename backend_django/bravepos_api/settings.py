@@ -109,6 +109,9 @@ MIDDLEWARE = [
     # Must sit after StaffAuthMiddleware — it reads request.user to attribute
     # audit rows to the signed-in staff member.
     'backoffice.middleware.AuditContextMiddleware',
+    # Keeps "viewer" accounts to the report pages. After StaffAuthMiddleware
+    # for the same reason as the audit one above.
+    'backoffice.middleware.ViewerAccessMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

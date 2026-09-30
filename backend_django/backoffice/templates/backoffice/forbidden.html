@@ -4,17 +4,25 @@
   lands here needs to know what to ask for, not that they were refused.
 {% endcomment %}
 
-{% block title %}Admins only{% endblock %}
-{% block page_title %}Admins only{% endblock %}
+{% block title %}{% if reports_only %}Reports only{% else %}Admins only{% endif %}{% endblock %}
+{% block page_title %}{% if reports_only %}Reports only{% else %}Admins only{% endif %}{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width:560px">
   <div class="empty" style="padding:48px 32px">
     <svg><use href="#i-shield"/></svg>
+    {% if reports_only %}
+    <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
+      Your account can view reports only</b>
+    <div style="line-height:1.6">
+      Viewer accounts see the dashboard and the Reports section, and can export them.
+      Changing anything needs a Manager or Admin account.
+    {% else %}
     <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
       This page needs an admin account</b>
     <div style="line-height:1.6">
       User management and the audit log are limited to accounts with the Admin role.
+    {% endif %}
       You are signed in as <b style="color:var(--txt)">{{ user.get_username }}</b>.
     </div>
     <div style="margin-top:20px">

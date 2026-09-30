@@ -118,6 +118,7 @@
               </td>
               <td class="r">
                 {% if m.role == 'admin' %}<span class="tag t-ok">Admin</span>
+                {% elif m.role == 'viewer' %}<span class="tag t-out">Viewer</span>
                 {% else %}<span class="tag t-out">Cashier</span>{% endif %}
               </td>
             </tr>

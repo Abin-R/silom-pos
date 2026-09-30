@@ -37,10 +37,12 @@
       <div class="field">
         <label for="f-role">Role</label>
         <select id="f-role" name="role">
-          <option value="cashier" {% if member.role != 'admin' %}selected{% endif %}>Cashier</option>
+          <option value="cashier" {% if member.role != 'admin' and member.role != 'viewer' %}selected{% endif %}>Manager</option>
+          <option value="viewer" {% if member.role == 'viewer' %}selected{% endif %}>Viewer</option>
           <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
         </select>
-        <span class="hint">Admin is the only role that reaches Users and the audit log.</span>
+        <span class="hint">Viewer sees the dashboard and reports only, and can export them but not change anything.
+          Manager has the rest of the backoffice; only Admin reaches Users and the audit log.</span>
       </div>
     </div>
   </div>

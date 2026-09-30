@@ -67,6 +67,7 @@
       <a class="nv {% if active == 'report_tax' %}on{% endif %}" href="{% url 'backoffice:report_tax' %}">
         <svg><use href="#i-shield"/></svg>Tax &amp; VAT</a>
 
+      {% if user.role != 'viewer' %}
       <div class="grp">Manage</div>
       <a class="nv {% if active == 'products' or active == 'categories' or active == 'units' %}on{% endif %}"
          href="{% url 'backoffice:product_list' %}">
@@ -81,6 +82,7 @@
         <svg><use href="#i-heart"/></svg>Customers</a>
       <a class="nv {% if active == 'app_releases' %}on{% endif %}" href="{% url 'backoffice:app_release_list' %}">
         <svg><use href="#i-dl"/></svg>App releases</a>
+      {% endif %}
 
       {% comment %}
         Admin-only. The views enforce this too — hiding the links is just so
@@ -97,20 +99,22 @@
 
     <div class="side-foot">
       <div class="side-sep"></div>
+      {% if user.role != 'viewer' %}
       <a class="nv {% if active == 'shop_settings' %}on{% endif %}" href="{% url 'backoffice:shop_settings' %}">
         <svg><use href="#i-cog"/></svg>Settings</a>
+      {% endif %}
       <div class="menu" id="userMenu">
         <button class="side-card" type="button" aria-expanded="false" aria-haspopup="true">
           <span class="av">{{ user.name|slice:":1"|default:"?" }}</span>
           <span class="nm">
             <b>{{ user.name|default:user.get_username|default:"Guest" }}</b>
-            <u>{% if user.role == 'admin' %}Admin{% else %}{{ user.role|title|default:"Signed in" }}{% endif %}</u>
+            <u>{% if user.role == 'admin' %}Admin{% elif user.role == 'viewer' %}Viewer{% elif user.role == 'cashier' %}Manager{% else %}Signed in{% endif %}</u>
           </span>
           <svg><use href="#i-chev"/></svg>
         </button>
         <div class="menu-list">
           <div class="menu-head">{{ user.email|default:user.get_username }}</div>
-          <a href="{% url 'backoffice:shop_settings' %}">Shop settings</a>
+          {% if user.role != 'viewer' %}<a href="{% url 'backoffice:shop_settings' %}">Shop settings</a>{% endif %}
           <form method="post" action="{% url 'backoffice:logout' %}">
             {% csrf_token %}
             <button type="submit" class="danger">Sign out</button>

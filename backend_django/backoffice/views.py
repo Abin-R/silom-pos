@@ -110,6 +110,15 @@ def admin_required(view):
     return wrapped
 
 
+def viewer_forbidden(request):
+    """The page `ViewerAccessMiddleware` shows a viewer outside the reports."""
+    return render(request, "backoffice/forbidden.html", {
+        "reports_only": True,
+        "hide_dates": True,
+        **_branch_topbar_context(request),
+    }, status=403)
+
+
 # The branch picker sits in the header of every page, but each page is its own
 # GET request: leave Catalogue and the `?branch=` stays behind with it, so the
 # next tab fell back to whichever branch sorts first. Which branch you are
@@ -5552,6 +5561,11 @@ def _user_form_errors(post, instance=None) -> list[str]:
     return errors
 
 
+def _user_role(value) -> str:
+    """A submitted Users-page role, defaulting to Manager (stored "cashier")."""
+    return value if value in ("admin", "viewer") else "cashier"
+
+
 def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:
     """Copy a submitted user form onto a Staff instance.
 
@@ -5564,7 +5578,7 @@ def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:
     """
     member.name = (post.get("name") or "").strip()
     member.username = (post.get("username") or "").strip() or None
-    member.role = "admin" if post.get("role") == "admin" else "cashier"
+    member.role = _user_role(post.get("role"))
     member.active = post.get("active") == "on"
     member.backoffice_access = True
 
@@ -5630,7 +5644,7 @@ def user_new(request):
                 name=(request.POST.get("name") or "").strip(),
                 username=(request.POST.get("username") or "").strip() or None,
                 email=(request.POST.get("email") or "").strip(),
-                role=request.POST.get("role") or "cashier",
+                role=_user_role(request.POST.get("role")),
                 active=request.POST.get("active") == "on",
             )
             return render(request, "backoffice/user_form.html",
