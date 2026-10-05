@@ -23,18 +23,21 @@ class SetShelfLifeTests(TestCase):
         # Sheet says "Mini  Dot Cake" with two spaces; case differs too.
         self.b = make_product(self.bio, name='mini dot cake')
         self.other = make_product(self.bio, name='Latte')
+        # Till name differs from the sheet's "Large Cookies Redvelved".
+        self.c = make_product(self.silom, name='Red Velvet Cookie')
 
     def test_dry_run_writes_nothing(self):
         out = run()
         self.a.refresh_from_db()
         self.assertIsNone(self.a.shelf_life)
-        self.assertIn('2 product(s) would change', out)
+        self.assertIn('3 product(s) would change', out)
 
     def test_apply_sets_every_branch_and_leaves_others(self):
         run('--apply')
-        for p in (self.a, self.b, self.other):
+        for p in (self.a, self.b, self.c, self.other):
             p.refresh_from_db()
         self.assertEqual(self.a.shelf_life, 30)
         self.assertEqual(self.b.shelf_life, 6)
+        self.assertEqual(self.c.shelf_life, 6)
         self.assertIsNone(self.other.shelf_life)
         self.assertIn('Updated 0', run('--apply'))

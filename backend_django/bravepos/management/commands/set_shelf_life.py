@@ -1,7 +1,7 @@
 """Set Product.shelf_life (days from MFG) from the shop's FEFO sheet.
 
-Applies to every branch: products are matched by name, ignoring case and
-repeated spaces. Dry run by default; pass --apply to write.
+Applies to every branch: products are matched by name (or by ALIASES, for
+till names that differ from the sheet), ignoring case and repeated spaces. Dry run by default; pass --apply to write.
 
     python manage.py set_shelf_life
     python manage.py set_shelf_life --apply
@@ -42,6 +42,35 @@ SHELF_LIFE = {
     "Dubai Chewy Cookies": 9,
 }
 
+# The till names products differently from the sheet: till name -> sheet name.
+ALIASES = {
+    "Choco Gems pop": "Choco gems Pop Original",
+    "Chocogems Mommy Edition": "Choco gems Pop Mommy",
+    "Family Edition - Choco gems pop": "Choco gems Pop Family",
+    "Raspberry Mousse cake": "Raspberry Mousses Pop",
+    "Pistachio Chocolate Mousse cake": "Pistachio Mousses Pop",
+    "Mango Sticky Rice Mousse cake": "Mango Mousses Pop",
+    "Strawberry Mousse cake": "Strawberry Mousses Pop",
+    "Cherry Mousse Pop เชอร์รี่มูสสุดป๊อบ จาก The Rolling Pinn": "Cherry Mousses Pop",
+    "Cherry Mousse cake": "Cherry Mousses Pop",
+    "Breakfash Confetti Cookie": "Large Cookies Breakfast Confitti",
+    "Red Velvet Cookie": "Large Cookies Redvelved",
+    "Pink Birthday Cookies": "Large Cookies Pink Birthday",
+    "Oreo confetti": "Large Cookies Oreo Confetti",
+    "\u0e3aBiscoff Mochi": "Large Cookies Biscoff",
+    "Hella Nutella Cookie": "Large Cookies Hella Nutella",
+    "The Marching Ladies Cookie": "Small Cookies Marching Ladies",
+    "Mama OG": "Small Cookies Mama OG",
+    "Mama OG Dark Chocolate Walnut Cookie": "Small Cookies Mama OG",
+    "Breakfast confetti birthday cookie cake": "Cookies Cake Breakfast Confitti",
+    "Pink Birthday Cookie cake 1 lb": "Cookies Cake Pink Birthday",
+    "Pink Birthday Cookie Cake (1lb)": "Cookies Cake Pink Birthday",
+    "1lb Biscoff Mochi cookie cake": "Cookies Cake Biscoff",
+    "Dot Birthday Cake": "Mini Dot Cake",
+    "Mini Lily Princess Cake 0.4lb": "Mini Lily Princess Cake",
+    "Assorted Brownies Bites": "Mix Brownie",
+}
+
 
 def _key(name):
     return re.sub(r"\s+", " ", name or "").strip().lower()
@@ -56,11 +85,13 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         wanted = {_key(k): v for k, v in SHELF_LIFE.items()}
+        sheet_name = {_key(k): _key(k) for k in SHELF_LIFE}
+        sheet_name.update({_key(a): _key(s) for a, s in ALIASES.items()})
         matched_keys = set()
         changes = []
         for p in Product.objects.select_related("branch").order_by("name"):
-            k = _key(p.name)
-            if k not in wanted:
+            k = sheet_name.get(_key(p.name))
+            if k is None:
                 continue
             matched_keys.add(k)
             if p.shelf_life != wanted[k]:
