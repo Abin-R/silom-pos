@@ -501,3 +501,64 @@ class RefusedReceiptTests(ConsolidationTestCase):
         self.assertTrue(cr.peak_code.startswith("RT-"))
         self.assertIsNotNone(cr.response)
         self.assertFalse(cr.needs_reissue)
+
+
+class UnconfirmedReceiptTests(ConsolidationTestCase):
+    """A receipt Peak finished after the issuing poll gave up must still get
+    its code recorded, or a later reissue has nothing to void.
+
+    Between 2026-09-07 and 09-16 ten branch-days were left holding only a
+    queue id. Peak had filed every one of them (70,199 THB), but ``--issue``
+    only looks at yesterday, so nothing went back for the codes.
+    """
+
+    def run_issue(self, fake: FakePeak, *extra):
+        self.out, self.err = StringIO(), StringIO()
+        with fake.patch(), mock.patch.dict(
+            os.environ, {"PEAK_BRAVEPOS_CONTACT_ID": CONTACT_ID}
+        ):
+            call_command(
+                "consolidate_daily", "--issue", *extra,
+                stdout=self.out, stderr=self.err,
+            )
+
+    def test_a_late_document_is_recorded_on_the_next_run(self):
+        day = self.today - timedelta(days=30)
+        order = self.make_order(day, "PS000000290")
+        cr = self.make_consolidated(day, [order], queue_id="q5", confirmed=False)
+
+        fake = FakePeak()
+        self.run_issue(fake)
+
+        cr.refresh_from_db()
+        self.assertEqual(cr.peak_code, "RT-q5")
+        self.assertFalse(cr.needs_reissue)
+        # Recording it is all: nothing new filed, nothing voided.
+        self.assertEqual(fake.enqueued, [])
+        self.assertEqual(fake.voided, [])
+        self.assertIn("confirmed → RT-q5", self.out.getvalue())
+
+    def test_a_late_refusal_is_flagged_and_filed_the_same_run(self):
+        day = self.today - timedelta(days=30)
+        order = self.make_order(day, "PS000000291")
+        cr = self.make_consolidated(day, [order], queue_id="q5", confirmed=False)
+
+        fake = FakePeak()
+        fake.refused_ids.add("q5")
+        self.run_issue(fake)
+
+        cr.refresh_from_db()
+        self.assertEqual(len(fake.enqueued), 1)
+        self.assertEqual(fake.voided, [])
+        self.assertTrue(cr.peak_code)
+        self.assertFalse(cr.needs_reissue)
+
+    def test_a_confirmed_receipt_is_not_polled_again(self):
+        day = self.today - timedelta(days=30)
+        order = self.make_order(day, "PS000000292")
+        self.make_consolidated(day, [order], queue_id="q5")
+
+        fake = FakePeak()
+        self.run_issue(fake)
+
+        self.assertNotIn("q5", fake.queue_checks)

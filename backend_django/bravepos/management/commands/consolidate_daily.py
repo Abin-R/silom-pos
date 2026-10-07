@@ -70,6 +70,7 @@ from bravepos.peak import (
     consolidation_contact_id,
     create_consolidation_contact,
     issue_consolidated_receipt,
+    poll_consolidated_receipt,
     retire_consolidated_receipt,
 )
 
@@ -226,6 +227,9 @@ class Command(BaseCommand):
 
         if opts["issue"]:
             self._issue(payload, contact_id, reissue=opts["reissue"])
+            # Before the reissue sweep: a pending row Peak turns out to have
+            # refused gets flagged here, and the sweep then files it tonight.
+            self._confirm_sweep(branches)
             # After the ordinary billing, not before: a day billed tonight is
             # built from the orders as they stand, so it is never stale, and
             # doing it in this order keeps the flagged-day corrections at the
@@ -562,6 +566,56 @@ class Command(BaseCommand):
                 f"  {label}: {action} → queued {cr.peak_queue_id} "
                 f"(not yet materialised) {money}"
             )
+
+    # ── confirm sweep ────────────────────────────────────────────────────
+    def _confirm_sweep(self, branches: list[Branch] | None) -> None:
+        """Record the document for every receipt Peak hadn't finished yet.
+
+        The issuing poll waits about eight seconds. When Peak is slower than
+        that, the row is left holding only a queue id, and ``--issue`` never
+        looks at that date again, so the code was never stored. Peak still
+        creates the document. Ten branch-days from 2026-09-07 to 09-16 sat
+        like this, 70,199 THB billed at Peak with no code on our side. A later
+        reissue of one of those days would have had nothing to void and would
+        have billed the day twice.
+
+        So every pending row, whatever its date, is checked once per run. A
+        materialised document is stored. A refusal is flagged, and the reissue
+        sweep that follows files it. Rows already flagged are left to that
+        sweep, which polls before it replaces.
+        """
+        pending = [
+            cr for cr in (
+                ConsolidatedReceipt.objects
+                .filter(needs_reissue=False)
+                .exclude(peak_queue_id="")
+                .select_related("branch")
+                .order_by("date", "branch__name")
+            )
+            if not cr.peak_code
+            and (branches is None or cr.branch in branches)
+        ]
+        if not pending:
+            return
+
+        self.stdout.write(self.style.MIGRATE_HEADING(
+            f"confirming {len(pending)} unconfirmed receipt(s)"
+        ))
+        for cr in pending:
+            label = f"{cr.date} {cr.branch.name}"
+            try:
+                code = poll_consolidated_receipt(cr, attempts=1)
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(f"  {label}: {e}"))
+                continue
+            if code:
+                self.stdout.write(f"  {label}: confirmed → {code}")
+            elif cr.needs_reissue:
+                self.stderr.write(self.style.ERROR(
+                    f"  {label}: REFUSED by Peak — flagged for reissue"
+                ))
+            else:
+                self.stdout.write(f"  {label}: still queued {cr.peak_queue_id}")
 
     # ── reissue sweep ────────────────────────────────────────────────────
     def _reissue_sweep(self, contact_id: str, branches: list[Branch] | None) -> None:
