@@ -126,7 +126,7 @@ def _authenticated_or_none(request):
 # a blocklist — a page added to the backoffice later stays closed to viewers
 # until someone decides it is a report.
 VIEWER_URL_NAMES = frozenset({
-    "login", "logout", "app_css", "product_image",
+    "login", "logout", "app_css", "favicon", "apple_touch_icon", "product_image",
     "home", "dashboard",
     "transactions", "transactions_export", "receipt_print",
     "report_daily", "report_daily_export",

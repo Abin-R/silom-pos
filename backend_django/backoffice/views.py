@@ -4611,6 +4611,21 @@ def backoffice_css(request):
     return response
 
 
+_ICON_DIR = _CSS_PATH.parent
+_ICONS = {"favicon": "favicon.png", "apple_touch_icon": "apple-touch-icon.png"}
+
+
+def backoffice_icon(request, name):
+    """The Brave POS app icon as the tab favicon / home-screen icon.
+
+    Served like ``backoffice_css`` and for the same reason: no staticfiles
+    pipeline in production. Unauthenticated so the login page gets it too.
+    """
+    body = (_ICON_DIR / _ICONS[name]).read_bytes()
+    response = HttpResponse(body, content_type="image/png")
+    response["Cache-Control"] = "public, max-age=86400"
+    return response
+
 @login_required
 def product_image(request, product_id):
     """Serve one product's photo as its own cacheable resource.

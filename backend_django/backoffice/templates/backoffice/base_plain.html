@@ -18,6 +18,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Backoffice{% endblock %} — {{ shop_name|default:"Brave POS" }}</title>
+  <link rel="icon" type="image/png" href="{% url 'backoffice:favicon' %}">
+  <link rel="apple-touch-icon" href="{% url 'backoffice:apple_touch_icon' %}">
   <link href="{% url 'backoffice:app_css' %}?v={{ css_version }}" rel="stylesheet">
   {% block extra_head %}{% endblock %}
 </head>

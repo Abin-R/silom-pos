@@ -26,6 +26,9 @@ urlpatterns = [
     # see `views.backoffice_css` for why. Unauthenticated so the login page
     # can load it.
     path("app.css", views.backoffice_css, name="app_css"),
+    path("favicon.png", views.backoffice_icon, {"name": "favicon"}, name="favicon"),
+    path("apple-touch-icon.png", views.backoffice_icon, {"name": "apple_touch_icon"},
+         name="apple_touch_icon"),
 
     # Product photos as separate cacheable resources rather than base64
     # inlined into the catalogue markup — see `views.product_image`.
