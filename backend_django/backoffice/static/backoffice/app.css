@@ -178,6 +178,7 @@ body {
   stroke: #fff; fill: none;
   stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
 }
+.side-logo-img { width: 32px; height: 32px; border-radius: 9px; flex: none; }
 .side-logo b { font-size: 16px; font-weight: 660; letter-spacing: -.02em; line-height: 1.2; }
 .side-logo u {
   display: block;
