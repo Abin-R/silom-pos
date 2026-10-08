@@ -96,12 +96,6 @@ class CreatingWithTheToggleOnTests(FanoutTestCase):
         self.assertEqual(copy.price, Decimal("145.00"))
         self.assertEqual(copy.barcode, "39574")
 
-    def test_stock_does_not_travel(self):
-        # On-hand quantity is a fact about one shop's shelves.
-        self.create(stock="40")
-        self.assertEqual(self.at(self.branch).stock, 40)
-        self.assertEqual(self.at(self.silom).stock, 0)
-
     def test_the_copy_points_at_the_target_branch_own_category(self):
         cat = Category.objects.create(branch=self.branch, name="Pops")
         self.create(category=str(cat.id))

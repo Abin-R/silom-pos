@@ -215,15 +215,10 @@ class ProductNumberFieldTests(ProductFormTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(Product.objects.get().price, Decimal("99999999.99"))
 
-    def test_a_fractional_stock_count_is_refused(self):
-        response = self.post_new(stock="1.5")
-        self.assertNotSaved(response)
-        self.assertContains(response, "Stock on hand must be a whole number")
-
-    def test_a_stock_count_past_the_column_is_refused(self):
-        response = self.post_new(stock="99999999999")
-        self.assertNotSaved(response)
-        self.assertContains(response, "Stock on hand is too large")
+    def test_a_posted_stock_count_is_ignored(self):
+        response = self.post_new(stock="50")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Product.objects.get().stock, 0)
 
     def test_blank_numbers_stay_at_zero(self):
         response = self.post_new(price="", cost="", stock="", par_level="")

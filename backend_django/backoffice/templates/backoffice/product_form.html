@@ -125,11 +125,6 @@
           </div>
 
           <div class="field">
-            <label for="f-stock">Stock on hand</label>
-            <input id="f-stock" type="number" name="stock" value="{{ product.stock|default:'0' }}">
-            <span class="hint">At zero the product disappears from the Sale screen.</span>
-          </div>
-          <div class="field">
             <label for="f-par">Par level</label>
             <input id="f-par" type="number" name="par_level" value="{{ product.par_level|default:'0' }}">
             <span class="hint">Reorder point. Below this, Inventory flags it as low. Leave at 0 to track no level at all.</span>
@@ -141,7 +136,6 @@
                    value="{{ product.shelf_life|default_if_none:'' }}" placeholder="Not set">
             <span class="hint">How many days it stays sellable after it is made. 0 means sell the same day.</span>
           </div>
-          <div class="field"></div>
 
           <div class="field">
             <label for="f-unit">Unit</label>

@@ -3024,7 +3024,8 @@ def _apply_product_form(product, post, branch, errors):
     product.sku = _product_text(post, "sku", "SKU", errors)
     product.price = _product_decimal(post, "price", "Price", errors)
     product.cost = _product_decimal(post, "cost", "Cost", errors)
-    product.stock = _product_int(post, "stock", "Stock on hand", errors)
+    # Stock is not on this form: it moves through Inventory (counts, receipts,
+    # waste) and sales, so a POSTed "stock" is ignored rather than trusted.
     # 0 means "not tracked" — Inventory says so rather than flagging the
     # product against a threshold nobody set.
     product.par_level = _product_int(post, "par_level", "Par level", errors)
