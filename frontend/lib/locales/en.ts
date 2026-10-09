@@ -349,6 +349,8 @@ const en = {
     update: "Update",
     before_count: "Before Count",
     counted_qty: "Counted Qty",
+    on_hand: "On Hand",
+    check_stock_qty: "Check Stock",
     saving_customer: "Saving customer\u2026",
     updating: "Updating\u2026",
     required: "Required",

@@ -11,7 +11,7 @@ from bravepos.models import BranchSession, Settings, Staff, StockDocument
 from .factories import make_branch, make_product
 
 
-class CheckStockTests(TestCase):
+class _CheckStockBase(TestCase):
     def setUp(self):
         Settings.objects.get_or_create(id="shop")
         password = "correct-horse-battery"
@@ -38,6 +38,8 @@ class CheckStockTests(TestCase):
              "product_id": [str(p.id) for p, _ in lines],
              "qty": [str(q) for _, q in lines]})
 
+
+class CheckStockTests(_CheckStockBase):
     def test_create_saves_quantities_and_leaves_stock_alone(self):
         res = self._create([(self.mousse, 8), (self.pop, 2)])
         doc = StockDocument.objects.get(type="check")
@@ -112,3 +114,52 @@ class CheckStockTests(TestCase):
                          {"username": "vi", "password": "correct-horse-battery"})
         self.assertEqual(self.client.get(reverse("backoffice:check_stock")).status_code, 403)
         self.assertEqual(self._create([(self.mousse, 1)]).status_code, 403)
+
+
+class CheckStockApiEditTests(_CheckStockBase):
+    """The till edits a saved check document the way the backoffice does."""
+
+    def _put(self, doc_id, body, token=None):
+        return self.client.put(f"/api/stock-documents/{doc_id}", body,
+                               content_type="application/json",
+                               HTTP_AUTHORIZATION=f"Bearer {token or self.token}")
+
+    def test_till_edits_name_and_lines(self):
+        self._create([(self.mousse, 8), (self.pop, 2)])
+        doc = StockDocument.objects.get(type="check")
+        res = self._put(doc.id, {"document_name": "Edited on till", "items": [
+            {"product_id": str(self.pop.id), "reconcile_qty": 9}]})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["document_name"], "Edited on till")
+        [line] = res.json()["items"]
+        self.assertEqual((line["product_id"], line["reconcile_qty"], line["before_qty"]),
+                         (str(self.pop.id), 9, 74))
+        self.pop.refresh_from_db()
+        self.assertEqual(self.pop.stock, 74)
+
+    def test_rejects_bad_edits(self):
+        self._create([(self.mousse, 1)])
+        doc = StockDocument.objects.get(type="check")
+        self.assertEqual(self._put(doc.id, {"items": []}).status_code, 400)
+        self.assertEqual(self._put(doc.id, {"items": [
+            {"product_id": str(self.mousse.id), "reconcile_qty": -2}]}).status_code, 400)
+        self.assertEqual(doc.items.get().reconcile_qty, 1)
+
+    def test_stock_in_documents_are_not_editable(self):
+        res = self.client.post("/api/stock-documents", {
+            "type": "in", "items": [{"product_id": str(self.mousse.id), "qty": 5}],
+        }, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {self.token}")
+        res = self._put(res.json()["id"], {"items": [
+            {"product_id": str(self.mousse.id), "reconcile_qty": 1}]})
+        self.assertEqual(res.status_code, 400)
+
+    def test_other_branch_cannot_edit(self):
+        self._create([(self.mousse, 1)])
+        doc = StockDocument.objects.get(type="check")
+        other = make_branch(name="Paragon")
+        staff = Staff.objects.create(name="Oth", email="oth@test.local",
+                                     password_hash="x", role="admin")
+        staff.branches.add(other)
+        token = BranchSession.objects.create(token="tk5" * 12, branch=other, staff=staff).token
+        self.assertEqual(self._put(doc.id, {"items": [
+            {"product_id": str(self.mousse.id), "reconcile_qty": 3}]}, token=token).status_code, 404)

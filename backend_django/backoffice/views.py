@@ -51,7 +51,7 @@ from bravepos.models import (
 from bravepos import appdist, catalog, crm, discounts, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
-from bravepos.views import _next_stock_doc_no
+from bravepos.views import save_check_document
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -2840,39 +2840,11 @@ def _check_stock_post(request, branch, doc=None):
             return doc, "Quantities can't be negative."
         wanted[pid] = qty
 
-    products = {str(p.id): p for p in Product.objects.filter(branch=branch, id__in=list(wanted))}
-    # A line whose product row is gone can't be posted back by id; keep it
-    # as saved rather than silently dropping it on the next edit.
-    orphans = doc.items.filter(product__isnull=True).count() if doc else 0
-    if not products and not orphans:
+    created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
+    saved = save_check_document(branch, name, wanted, doc=doc, created_by=created_by)
+    if saved is None:
         return doc, "Add at least one product."
-
-    with transaction.atomic():
-        if doc is None:
-            doc = StockDocument.objects.create(
-                branch=branch, type="check",
-                document_no=_next_stock_doc_no(branch, "check"),
-                document_name=name,
-                created_by=getattr(request.user, "name", "") or getattr(request.user, "username", ""),
-            )
-            before = {}
-        else:
-            doc.document_name = name
-            doc.save(update_fields=["document_name"])
-            before = {str(it.product_id): it.before_qty
-                      for it in doc.items.filter(product__isnull=False)}
-            doc.items.filter(product__isnull=False).delete()
-        for pid, qty in wanted.items():
-            p = products.get(pid)
-            if p is None:
-                continue
-            on_hand = before.get(pid, Decimal(p.stock or 0))
-            StockDocumentItem.objects.create(
-                document=doc, product=p,
-                barcode=p.barcode or "", product_name=p.name,
-                before_qty=on_hand, reconcile_qty=qty, qty=qty - on_hand,
-            )
-    return doc, None
+    return saved, None
 
 
 @login_required

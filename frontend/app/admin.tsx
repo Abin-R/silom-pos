@@ -2553,8 +2553,11 @@ const DOC_CONFIG: Record<DocType, {
     mode: "reconcile",
     title: "admin.create_check_stock_document", refCol: "admin.document_name",
     hasParty: false, hasPrice: false, hasName: true, hasAdjustType: false, hasAvgCost: false,
-    addBarLabel: "admin.search_products", reasonLabel: "admin.note", mutates: false,
-    reconcileCols: { before: "admin.before_count", input: "admin.counted_qty", result: "admin.difference" },
+    // Same shape as the backoffice Check stock page: a named list of products
+    // with a quantity each, shown against on-hand.  No difference column —
+    // the quantity is a target (what Stock-In imports), not a recount.
+    addBarLabel: "admin.search_products", mutates: false,
+    reconcileCols: { before: "admin.on_hand", input: "admin.check_stock_qty", result: "" },
   },
 };
 
@@ -2582,6 +2585,10 @@ function StockDocuments({
   const compact = useDocCompact();
   const [docs, setDocs] = useState<StockDoc[] | null>(null);
   const [creating, setCreating] = useState(false);
+  // Check documents never move stock, so a saved one can be reopened and
+  // edited (like the backoffice); every other type is read-only once saved.
+  const [editing, setEditing] = useState<StockDoc | null>(null);
+  const editable = type === "check";
 
   const today = useMemo(() => new Date(), []);
   const weekAgo = useMemo(() => new Date(Date.now() - 7 * 86400000), []);
@@ -2642,7 +2649,7 @@ function StockDocuments({
             if (compact) {
               const outReason = type === "out" ? (item.reason || item.note || "") : "";
               return (
-                <View style={styles.docCard} testID={`doc-${item.id}`}>
+                <TouchableOpacity style={styles.docCard} testID={`doc-${item.id}`} disabled={!editable} onPress={() => setEditing(item)}>
                   <View style={styles.docCardLine}>
                     <Text style={styles.docCardNo} numberOfLines={1}>{item.document_no}</Text>
                     {cfg.hasPrice && <Text style={styles.docCardTotal}>{(item.total || 0).toFixed(2)}</Text>}
@@ -2657,11 +2664,11 @@ function StockDocuments({
                       {[refText, outReason].filter(Boolean).join(" · ")}
                     </Text>
                   )}
-                </View>
+                </TouchableOpacity>
               );
             }
             return (
-              <View style={styles.docRow} testID={`doc-${item.id}`}>
+              <TouchableOpacity style={styles.docRow} testID={`doc-${item.id}`} disabled={!editable} onPress={() => setEditing(item)}>
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
                 <Text style={[styles.docCell, { width: 150, color: C.ink }]}>{item.document_no}</Text>
                 <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
@@ -2675,19 +2682,20 @@ function StockDocuments({
                 {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(item.total || 0).toFixed(2)}</Text>}
                 {cfg.hasAdjustType && <Text style={[styles.docCell, { width: 110 }]}>{item.adjust_type || ""}</Text>}
                 <Text style={[styles.docCell, { width: 100, textAlign: "right" }]}>{item.created_by || ""}</Text>
-              </View>
+              </TouchableOpacity>
             );
           }}
         />
       )}
 
       <CreateStockDocModal
-        visible={creating}
+        visible={creating || !!editing}
         type={type}
+        editing={editing}
         products={products}
         categories={categories}
-        onClose={() => setCreating(false)}
-        onSaved={() => { setCreating(false); load(); onChanged(); }}
+        onClose={() => { setCreating(false); setEditing(null); }}
+        onSaved={() => { setCreating(false); setEditing(null); load(); onChanged(); }}
       />
     </View>
   );
@@ -2712,14 +2720,16 @@ type DraftLine = {
 // Two layouts: "purchase" (in/out — qty·price) and "reconcile" (adjust/check
 // — Before / counted / delta), driven by DOC_CONFIG[type].mode.
 function CreateStockDocModal({
-  visible, type, products, categories, onClose, onSaved,
+  visible, type, editing, products, categories, onClose, onSaved,
 }: {
-  visible: boolean; type: DocType; products: Product[]; categories: Category[];
+  visible: boolean; type: DocType; editing?: StockDoc | null;
+  products: Product[]; categories: Category[];
   onClose: () => void; onSaved: () => void;
 }) {
   useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
   const reconcile = cfg.mode === "reconcile";
+  const isCheck = type === "check";
   const compact = useDocCompact();
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [ref, setRef] = useState("");
@@ -2744,8 +2754,18 @@ function CreateStockDocModal({
     if (visible) {
       setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
       setTaxIncluded(false); setAvgCost(false); setOutReason("");
+      if (editing) {
+        // Reopening a saved check document: on-hand stays the figure from
+        // when each line was added, the quantity is what was saved.
+        setDocName(editing.document_name || editing.note || "");
+        setLines(editing.items.filter((it) => !!it.product_id).map((it) => ({
+          product_id: it.product_id as string, barcode: it.barcode || "", product_name: it.product_name,
+          qty: "0", price: "0", discount: "0",
+          before: String(it.before_qty ?? 0), reconcile: String(it.reconcile_qty ?? 0),
+        })));
+      }
     }
-  }, [visible]);
+  }, [visible, editing]);
 
   // Only the active list: a reason an admin deactivated should disappear from
   // the picker without disturbing the documents that already recorded it.
@@ -2834,7 +2854,16 @@ function CreateStockDocModal({
     if (!lines.length || saving) return;
     setSaving(true);
     const body: any = { type };
-    if (reconcile) {
+    if (isCheck) {
+      body.document_name = docName.trim();
+      body.note = "";
+      body.items = lines.map((l) => ({
+        product_id: l.product_id, barcode: l.barcode, product_name: l.product_name,
+        qty: updateDelta(l),
+        before_qty: parseFloat(l.before) || 0,
+        reconcile_qty: parseFloat(l.reconcile) || 0,
+      }));
+    } else if (reconcile) {
       body.document_name = reason || docName;
       body.note = reason || note;
       body.items = lines.map((l) => ({
@@ -2858,9 +2887,18 @@ function CreateStockDocModal({
       if (type === "out") { body.receiver = party; body.reason = outReason; }
     }
     try {
-      await apiFetch(`${API}/stock-documents`, { method: "POST", body: JSON.stringify(body) });
-      onSaved();
-    } catch {}
+      const res = editing
+        ? await apiFetch(`${API}/stock-documents/${editing.id}`, { method: "PUT", body: JSON.stringify(body) })
+        : await apiFetch(`${API}/stock-documents`, { method: "POST", body: JSON.stringify(body) });
+      if (res.ok) {
+        onSaved();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showAlert(tr("admin.save_failed"), err?.detail || tr("admin.please_try_again"));
+      }
+    } catch {
+      showAlert(tr("admin.save_failed"), tr("admin.please_try_again"));
+    }
     setSaving(false);
   };
 
@@ -2888,7 +2926,7 @@ function CreateStockDocModal({
             <Ionicons name="chevron-back" size={22} color={C.ink} />
             <Text style={styles.docBackText}>{tr("common.back")}</Text>
           </TouchableOpacity>
-          <Text style={[styles.docTopTitle, compact && styles.docTopTitleCompact]} numberOfLines={1}>{tr(cfg.title)}</Text>
+          <Text style={[styles.docTopTitle, compact && styles.docTopTitleCompact]} numberOfLines={1}>{editing ? `${tr("admin.check_stock")} · ${editing.document_no}` : tr(cfg.title)}</Text>
           <TouchableOpacity onPress={confirmSave} disabled={!canSave} testID="doc-save">
             <Text style={[styles.docSaveText, !canSave && { color: C.lineStrong }]}>{tr("common.save")}</Text>
           </TouchableOpacity>
@@ -2896,7 +2934,28 @@ function CreateStockDocModal({
 
         <ScrollView keyboardShouldPersistTaps="handled">
           {/* ── header fields ── */}
-          {reconcile ? (
+          {isCheck ? (
+            <View style={styles.docForm}>
+              <View style={styles.docFormRow}>
+                <View style={[styles.docField, { flex: 2 }]}>
+                  <Text style={styles.docFieldLabel}>{tr("admin.document_name")}</Text>
+                  <TextInput
+                    style={styles.docInput}
+                    value={docName}
+                    onChangeText={setDocName}
+                    placeholder={tr("admin.document_name")}
+                    placeholderTextColor={C.ink3}
+                    maxLength={200}
+                    testID="check-document-name"
+                  />
+                </View>
+                <TouchableOpacity style={[styles.docField, styles.importBtn, { alignSelf: "flex-end", paddingVertical: 9 }]} onPress={() => setImportOpen(true)} testID="import-documents">
+                  <Text style={styles.importBtnText}>{tr("admin.import_documents")}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={C.ink3} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : reconcile ? (
             <View style={styles.docForm}>
               <View style={styles.docFormRow}>
                 <TouchableOpacity style={[styles.docField, styles.importBtn]} onPress={() => setImportOpen(true)} testID="import-documents">
@@ -2978,7 +3037,7 @@ function CreateStockDocModal({
               <>
                 <Text style={[styles.itemsHeadCell, { width: 90, textAlign: "right" }]}>{rc ? tr(rc.before) : null}</Text>
                 <Text style={[styles.itemsHeadCell, { width: 90 }]}>{rc ? tr(rc.input) : null}</Text>
-                <Text style={[styles.itemsHeadCell, { width: 80, textAlign: "right" }]}>{rc ? tr(rc.result) : null}</Text>
+                {!isCheck && <Text style={[styles.itemsHeadCell, { width: 80, textAlign: "right" }]}>{rc ? tr(rc.result) : null}</Text>}
               </>
             ) : (
               <>
@@ -3020,12 +3079,14 @@ function CreateStockDocModal({
                             <Text style={styles.itemInputText}>{parseFloat(l.reconcile) || 0}</Text>
                           </TouchableOpacity>
                         </View>
-                        <View style={styles.itemCardField}>
-                          <Text style={styles.itemCardLabel} numberOfLines={1}>{rc ? tr(rc.result) : null}</Text>
-                          <Text style={[styles.itemCellRO, { textAlign: "center", color: deltaColour }]}>
-                            {d > 0 ? `+${d}` : `${d}`}
-                          </Text>
-                        </View>
+                        {!isCheck && (
+                          <View style={styles.itemCardField}>
+                            <Text style={styles.itemCardLabel} numberOfLines={1}>{rc ? tr(rc.result) : null}</Text>
+                            <Text style={[styles.itemCellRO, { textAlign: "center", color: deltaColour }]}>
+                              {d > 0 ? `+${d}` : `${d}`}
+                            </Text>
+                          </View>
+                        )}
                       </>
                     ) : (
                       <>
@@ -3068,9 +3129,11 @@ function CreateStockDocModal({
                     <TouchableOpacity style={[styles.itemInput, { width: 90 }]} onPress={() => setKeypad({ idx: i, field: "reconcile" })} testID={`reconcile-${i}`}>
                       <Text style={styles.itemInputText}>{parseFloat(l.reconcile) || 0}</Text>
                     </TouchableOpacity>
-                    <Text style={[styles.itemCellRO, { width: 80, textAlign: "right", color: d > 0 ? C.ok : d < 0 ? C.danger : C.ink2Soft }]}>
-                      {d > 0 ? `+${d}` : `${d}`}
-                    </Text>
+                    {!isCheck && (
+                      <Text style={[styles.itemCellRO, { width: 80, textAlign: "right", color: d > 0 ? C.ok : d < 0 ? C.danger : C.ink2Soft }]}>
+                        {d > 0 ? `+${d}` : `${d}`}
+                      </Text>
+                    )}
                   </>
                 ) : (
                   <>

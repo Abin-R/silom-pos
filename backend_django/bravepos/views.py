@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -1949,13 +1949,73 @@ def stock_documents(request):
     return Response(StockDocumentSerializer(doc).data, status=201)
 
 
-@api_view(['GET'])
+def save_check_document(branch, name, wanted, doc=None, created_by=''):
+    """Create or rewrite a check-stock document from ``{product_id: qty}``.
+
+    A check document never moves stock, so unlike in/out it may be edited
+    after saving — the backoffice and the till both edit through here.  The
+    quantity is stored in ``reconcile_qty``; ``before_qty`` is on-hand when the
+    line was first added (kept across edits) and ``qty`` the difference.
+    Lines whose product row is gone can't be named by id, so an edit leaves
+    them as saved.  Returns the document, or None when no line is valid.
+    """
+    products = {str(p.id): p for p in Product.objects.filter(branch=branch, id__in=list(wanted))}
+    orphans = doc.items.filter(product__isnull=True).exists() if doc else False
+    if not products and not orphans:
+        return None
+    with transaction.atomic():
+        if doc is None:
+            doc = StockDocument.objects.create(
+                branch=branch, type='check',
+                document_no=_next_stock_doc_no(branch, 'check'),
+                document_name=name, created_by=created_by,
+            )
+            before = {}
+        else:
+            doc.document_name = name
+            doc.save(update_fields=['document_name'])
+            before = {str(it.product_id): it.before_qty
+                      for it in doc.items.filter(product__isnull=False)}
+            doc.items.filter(product__isnull=False).delete()
+        for pid, qty in wanted.items():
+            p = products.get(pid)
+            if p is None:
+                continue
+            on_hand = before.get(pid, Decimal(p.stock or 0))
+            StockDocumentItem.objects.create(
+                document=doc, product=p,
+                barcode=p.barcode or '', product_name=p.name,
+                before_qty=on_hand, reconcile_qty=qty, qty=qty - on_hand,
+            )
+    return doc
+
+
+@api_view(['GET', 'PUT'])
 @require_session
 def stock_document_detail(request, doc_id):
     branch = request.session_obj.branch
     doc = StockDocument.objects.filter(id=doc_id, branch=branch).prefetch_related('items').first()
     if not doc:
         return Response({'detail': 'Not found'}, status=404)
+    if request.method == 'PUT':
+        # Only check documents are editable: every other type has already
+        # moved stock, and rewriting its lines would desync on-hand.
+        if doc.type != 'check':
+            return Response({'detail': 'Only check stock documents can be edited'}, status=400)
+        wanted = {}
+        for line in request.data.get('items') or []:
+            try:
+                qty = Decimal(str(line.get('reconcile_qty', 0) or 0))
+            except (InvalidOperation, ValueError):
+                return Response({'detail': 'Quantities must be numbers'}, status=400)
+            if qty < 0:
+                return Response({'detail': "Quantities can't be negative"}, status=400)
+            if line.get('product_id'):
+                wanted[str(line['product_id'])] = qty
+        name = (request.data.get('document_name') or '').strip()[:200]
+        if save_check_document(branch, name, wanted, doc=doc) is None:
+            return Response({'detail': 'At least one item is required'}, status=400)
+        doc = StockDocument.objects.prefetch_related('items').get(id=doc.id)
     return Response(StockDocumentSerializer(doc).data)
 
 
