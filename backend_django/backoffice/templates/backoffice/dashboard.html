@@ -18,8 +18,10 @@
 {% block page_sub %}<div class="tb-sub">{{ now|date:"l j F Y" }} · {{ now|date:"H:i" }}</div>{% endblock %}
 
 {% block topbar_end %}
+  {% if user.role != 'packer' %}
   <a class="btn" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">
     <svg><use href="#i-dl"/></svg> Export</a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}

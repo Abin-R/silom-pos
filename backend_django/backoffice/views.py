@@ -112,9 +112,11 @@ def admin_required(view):
 
 
 def viewer_forbidden(request):
-    """The page `ViewerAccessMiddleware` shows a viewer outside the reports."""
+    """The page `ViewerAccessMiddleware` shows a viewer outside the reports,
+    or a packer outside Check stock."""
     return render(request, "backoffice/forbidden.html", {
-        "reports_only": True,
+        "reports_only": getattr(request.user, "role", "") == "viewer",
+        "check_stock_only": getattr(request.user, "role", "") == "packer",
         "hide_dates": True,
         **_branch_topbar_context(request),
     }, status=403)
@@ -2916,6 +2918,17 @@ def check_stock_document(request, doc_id):
         "hide_branch": True,
         "hide_dates": True,
     })
+
+
+@login_required
+def check_stock_delete(request, doc_id):
+    """Delete a check stock document. Safe because a check document never
+    moved stock; the till's Stock-In import simply stops offering it."""
+    doc = get_object_or_404(StockDocument, id=doc_id, type="check")
+    if request.method == "POST":
+        doc.delete()
+        messages.success(request, f"{doc.document_no} was deleted.")
+    return redirect(reverse("backoffice:check_stock") + f"?branch={doc.branch_id}")
 
 
 # ─── Products ───────────────────────────────────────────────────────────
@@ -5726,7 +5739,7 @@ def _user_form_errors(post, instance=None) -> list[str]:
 
 def _user_role(value) -> str:
     """A submitted Users-page role, defaulting to Manager (stored "cashier")."""
-    return value if value in ("admin", "viewer") else "cashier"
+    return value if value in ("admin", "viewer", "packer") else "cashier"
 
 
 def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:

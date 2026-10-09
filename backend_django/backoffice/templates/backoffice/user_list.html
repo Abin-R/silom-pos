@@ -97,6 +97,7 @@
         <td>
           {% if u.role == 'admin' %}<span class="tag t-info">Admin</span>
           {% elif u.role == 'viewer' %}<span class="tag t-out">Viewer</span>
+          {% elif u.role == 'packer' %}<span class="tag t-out">Packer</span>
           {% else %}<span class="tag t-out">Manager</span>{% endif %}
         </td>
         <td style="color:var(--mut)">

@@ -139,17 +139,37 @@ VIEWER_URL_NAMES = frozenset({
     "stock_out", "stock_out_export", "stock_out_document",
 })
 
+# What a "packer" account may open: the dashboard and Check stock. Unlike a
+# viewer it may write, but only on the Check stock pages — a check document
+# never moves stock, so this can't change what the shop has on hand.
+PACKER_URL_NAMES = frozenset({
+    "login", "logout", "app_css", "favicon", "apple_touch_icon", "product_image",
+    "home", "dashboard",
+    "check_stock", "check_stock_new", "check_stock_document", "check_stock_delete",
+})
+PACKER_WRITE_URL_NAMES = frozenset({
+    "logout", "check_stock_new", "check_stock_document", "check_stock_delete",
+})
+
+# role -> (pages it may open, pages it may also POST to)
+LIMITED_ROLES = {
+    "viewer": (VIEWER_URL_NAMES, frozenset({"logout"})),
+    "packer": (PACKER_URL_NAMES, PACKER_WRITE_URL_NAMES),
+}
+
 
 class ViewerAccessMiddleware:
-    """Keeps a ``role == "viewer"`` account to read-only reports.
+    """Keeps a ``role == "viewer"`` account to read-only reports, and a
+    ``role == "packer"`` account to the dashboard and Check stock.
 
     Enforced here rather than per view because the backoffice has ~70 views
     that only say ``@login_required``; one gate in front of all of them can't
-    be forgotten on the next one. Any non-GET is refused too (bar signing
-    out), so even an allowlisted page can't be used to change anything.
+    be forgotten on the next one. A non-GET is refused unless the role may
+    write to that page (a viewer only to sign out), so an allowlisted page
+    can't be used to change anything else.
 
     Must come after ``StaffAuthMiddleware``. Only backoffice URLs are touched —
-    the till API has its own token auth, and viewers are refused there at login.
+    the till API has its own token auth, and both roles are refused there at login.
     """
 
     def __init__(self, get_response):
@@ -162,10 +182,12 @@ class ViewerAccessMiddleware:
         match = getattr(request, "resolver_match", None)
         if match is None or match.namespace != "backoffice":
             return None
-        if getattr(request.user, "role", "") != "viewer":
+        limits = LIMITED_ROLES.get(getattr(request.user, "role", ""))
+        if limits is None:
             return None
+        pages, writable = limits
         read = request.method in ("GET", "HEAD")
-        if match.url_name in VIEWER_URL_NAMES and (read or match.url_name == "logout"):
+        if match.url_name in pages and (read or match.url_name in writable):
             return None
         from .views import viewer_forbidden
         return viewer_forbidden(request)

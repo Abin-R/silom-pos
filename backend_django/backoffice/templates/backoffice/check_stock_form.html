@@ -16,6 +16,13 @@
 {% endblock %}
 
 {% block topbar_end %}
+  {% if doc %}
+  <form method="post" action="{% url 'backoffice:check_stock_delete' doc.id %}" style="display:inline"
+        onsubmit="return confirm('Delete {{ doc.document_no|escapejs }}? A till can no longer import it.');">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger"><svg><use href="#i-trash"/></svg> Delete</button>
+  </form>
+  {% endif %}
   <a class="btn" href="{{ back_url }}"><svg><use href="#i-back"/></svg> Back</a>
 {% endblock %}
 

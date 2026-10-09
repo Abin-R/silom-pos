@@ -4,8 +4,8 @@
   lands here needs to know what to ask for, not that they were refused.
 {% endcomment %}
 
-{% block title %}{% if reports_only %}Reports only{% else %}Admins only{% endif %}{% endblock %}
-{% block page_title %}{% if reports_only %}Reports only{% else %}Admins only{% endif %}{% endblock %}
+{% block title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% else %}Admins only{% endif %}{% endblock %}
+{% block page_title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% else %}Admins only{% endif %}{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width:560px">
@@ -17,6 +17,12 @@
     <div style="line-height:1.6">
       Viewer accounts see the dashboard and the Reports section, and can export them.
       Changing anything needs a Manager or Admin account.
+    {% elif check_stock_only %}
+    <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
+      Your account can use Check stock only</b>
+    <div style="line-height:1.6">
+      Packer accounts see the dashboard and Check stock, where they can create, edit and delete documents.
+      Anything else needs a Manager or Admin account.
     {% else %}
     <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
       This page needs an admin account</b>

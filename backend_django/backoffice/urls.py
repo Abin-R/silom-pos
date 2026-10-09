@@ -66,6 +66,7 @@ urlpatterns = [
     path("inventory/check-stock", views.check_stock_list, name="check_stock"),
     path("inventory/check-stock/new", views.check_stock_new, name="check_stock_new"),
     path("inventory/check-stock/<uuid:doc_id>", views.check_stock_document, name="check_stock_document"),
+    path("inventory/check-stock/<uuid:doc_id>/delete", views.check_stock_delete, name="check_stock_delete"),
 
     # Products
     path("products", views.product_list, name="product_list"),

@@ -37,11 +37,13 @@
       <div class="field">
         <label for="f-role">Role</label>
         <select id="f-role" name="role">
-          <option value="cashier" {% if member.role != 'admin' and member.role != 'viewer' %}selected{% endif %}>Manager</option>
+          <option value="cashier" {% if member.role != 'admin' and member.role != 'viewer' and member.role != 'packer' %}selected{% endif %}>Manager</option>
           <option value="viewer" {% if member.role == 'viewer' %}selected{% endif %}>Viewer</option>
+          <option value="packer" {% if member.role == 'packer' %}selected{% endif %}>Packer</option>
           <option value="admin" {% if member.role == 'admin' %}selected{% endif %}>Admin</option>
         </select>
         <span class="hint">Viewer sees the dashboard and reports only, and can export them but not change anything.
+          Packer sees the dashboard and Check stock only, and can create, edit and delete check documents.
           Manager has the rest of the backoffice; only Admin reaches Users and the audit log.</span>
       </div>
     </div>
