@@ -255,3 +255,24 @@ BRAVEPOS = {
         'PUBLIC_BASE_URL', 'https://pos.rollingpinn.com',
     ).rstrip('/'),
 }
+
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+# With DEBUG off, Django sends an unhandled request error only to mail_admins
+# (unconfigured here) and Sentry, so the gunicorn journal showed a bare "500"
+# with no traceback. Write django.request errors to stderr as well, which
+# gunicorn forwards to `journalctl -u bravepos`.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
+    },
+}
