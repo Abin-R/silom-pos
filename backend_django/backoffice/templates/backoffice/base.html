@@ -66,6 +66,10 @@
         <svg><use href="#i-inbox"/></svg>Stock in</a>
       <a class="nv {% if active == 'stock_out' %}on{% endif %}" href="{% url 'backoffice:stock_out' %}">
         <svg><use href="#i-truck"/></svg>Stock out</a>
+      {% if user.role != 'viewer' %}
+      <a class="nv {% if active == 'check_stock' %}on{% endif %}" href="{% url 'backoffice:check_stock' %}">
+        <svg><use href="#i-check"/></svg>Check stock</a>
+      {% endif %}
       <a class="nv {% if active == 'report_tax' %}on{% endif %}" href="{% url 'backoffice:report_tax' %}">
         <svg><use href="#i-shield"/></svg>Tax &amp; VAT</a>
 

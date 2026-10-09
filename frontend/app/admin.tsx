@@ -98,6 +98,7 @@ type Product = {
 type StockDocItem = {
   product_id?: string | null; barcode: string; product_name: string;
   qty: number; price: number; discount: number; total: number;
+  before_qty?: number; reconcile_qty?: number;
 };
 type StockDoc = {
   id: string; type: "in" | "out" | "adjust" | "check"; document_no: string;
@@ -2785,11 +2786,42 @@ function CreateStockDocModal({
     setPicker(false);
   };
 
-  // Import the product lines of previously-saved documents (reconcile flow).
+  // Import the product lines of previously-saved documents.  Adjust / check
+  // pull in their own type's products to count again; Stock-In pulls in
+  // check-stock documents *with* their quantities, so a delivery is received
+  // against the list made in the backoffice (or on a till) instead of re-keyed.
   const importDocs = (docs: StockDoc[]) => {
-    const picked = docs.flatMap((d) => d.items).map((it) => it.product_id).filter(Boolean) as string[];
-    const toAdd = products.filter((p) => picked.includes(p.id));
-    addProducts(toAdd);
+    const items = docs.flatMap((d) => d.items).filter((it) => !!it.product_id);
+    if (type !== "in") {
+      const picked = items.map((it) => it.product_id) as string[];
+      addProducts(products.filter((p) => picked.includes(p.id)));
+      setImportOpen(false);
+      return;
+    }
+    // A check line's quantity is its counted figure (reconcile_qty).  The
+    // same product across several documents adds up, and so does a product
+    // already on this form.
+    const qtyBy = new Map<string, number>();
+    for (const it of items) {
+      const q = Number(it.reconcile_qty ?? it.qty) || 0;
+      qtyBy.set(it.product_id as string, (qtyBy.get(it.product_id as string) || 0) + q);
+    }
+    setLines((prev) => {
+      const next = prev.map((l) =>
+        qtyBy.has(l.product_id)
+          ? { ...l, qty: String((parseFloat(l.qty) || 0) + (qtyBy.get(l.product_id) || 0)) }
+          : l);
+      const have = new Set(prev.map((l) => l.product_id));
+      for (const p of products) {
+        if (!qtyBy.has(p.id) || have.has(p.id)) continue;
+        next.push({
+          product_id: p.id, barcode: p.barcode || "", product_name: p.name,
+          qty: String(qtyBy.get(p.id) || 0), price: String(p.cost || 0), discount: "0",
+          before: String(p.stock ?? 0), reconcile: "0",
+        });
+      }
+      return next;
+    });
     setImportOpen(false);
   };
 
@@ -2894,6 +2926,13 @@ function CreateStockDocModal({
                   <Text style={styles.docFieldLabel}>{cfg.refLabel ? tr(cfg.refLabel) : null}</Text>
                   <TextInput style={styles.docInput} value={ref} onChangeText={setRef} placeholder="" />
                 </View>
+                {type === "in" && (
+                  // No label of its own, so it sits on the inputs' baseline.
+                  <TouchableOpacity style={[styles.docField, styles.importBtn, { alignSelf: "flex-end", paddingVertical: 9 }]} onPress={() => setImportOpen(true)} testID="import-documents">
+                    <Text style={styles.importBtnText}>{tr("admin.import_documents")}</Text>
+                    <Ionicons name="chevron-forward" size={16} color={C.ink3} />
+                  </TouchableOpacity>
+                )}
               </View>
               <View style={styles.docFormRow}>
                 <View style={styles.docField}>
@@ -3088,7 +3127,7 @@ function CreateStockDocModal({
         />
         <SelectDocumentsModal
           visible={importOpen}
-          type={type}
+          type={type === "in" ? "check" : type}
           onClose={() => setImportOpen(false)}
           onLoad={importDocs}
         />
@@ -3297,7 +3336,8 @@ function AmountKeypad({
 }
 
 // Import Documents → Select Documents popup (image 4). Lists previously-saved
-// documents of the same type; "Load Documents" pulls their product lines in.
+// documents of `type` — the form's own type for adjust / check, check-stock
+// documents for Stock-In; "Load Documents" pulls their product lines in.
 function SelectDocumentsModal({
   visible, type, onClose, onLoad,
 }: { visible: boolean; type: DocType; onClose: () => void; onLoad: (docs: StockDoc[]) => void }) {

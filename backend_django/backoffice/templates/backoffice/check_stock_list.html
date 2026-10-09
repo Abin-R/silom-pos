@@ -1,0 +1,52 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Check stock documents for the branch in the header — both the ones made
+  here and the ones counted on a till.  The till's Stock-In → Import
+  Documents offers these same documents.
+{% endcomment %}
+
+{% block title %}Check stock{% endblock %}
+{% block page_title %}Check stock{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ paginator.count }} document{{ paginator.count|pluralize }} · {{ date_from }} → {{ date_to }}{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if branch %}
+  <a class="btn btn-blue" href="{% url 'backoffice:check_stock_new' %}?branch={{ branch.id }}">
+    <svg><use href="#i-plus"/></svg> Create document</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="panel panel-grow">
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:170px">Date</th><th>Document No.</th><th style="width:40%">Document name</th>
+          <th class="r">Lines</th><th>Saved by</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in rows %}
+        <tr>
+          <td class="money" style="white-space:nowrap">{{ d.created_at|date:"d/m/Y H:i:s" }}</td>
+          <td class="money" style="font-weight:620">
+            <a href="{% url 'backoffice:check_stock_document' d.id %}">{{ d.document_no }}</a></td>
+          <td>{{ d.document_name|default:d.note|default:"—" }}</td>
+          <td class="r money">{{ d.line_count }}</td>
+          <td>{{ d.created_by|default:"—" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="empty">
+          <svg><use href="#i-inbox"/></svg>
+          No check stock documents between {{ date_from }} and {{ date_to }}.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "backoffice/_pagination.html" %}
+</div>
+{% endblock %}

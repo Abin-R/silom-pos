@@ -51,6 +51,7 @@ from bravepos.models import (
 from bravepos import appdist, catalog, crm, discounts, images
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
+from bravepos.views import _next_stock_doc_no
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -2785,6 +2786,164 @@ def stock_in_document(request, doc_id):
 @login_required
 def stock_out_document(request, doc_id):
     return _stock_document(request, "out", doc_id)
+
+
+# ─── Check stock ────────────────────────────────────────────────────────
+# A check-stock document is a named list of products and quantities — the
+# SilomPOS "ตรวจนับสินค้า" sheet.  It never moves stock, which is why, unlike
+# stock in/out, it stays editable after saving.  Its point is downstream: the
+# till's Stock-In → Import Documents loads one, quantities included, so a
+# delivery is received against the list instead of re-keyed line by line.
+#
+# The quantity lives in ``reconcile_qty`` — the same slot the till's own Check
+# Stock form writes its counted figure to — so documents from either side
+# import the same way.  ``before_qty`` is on-hand when the line was added and
+# ``qty`` the difference, again matching the till.
+
+def _check_stock_pickable(branch):
+    """The branch's sellable products as the Add Product dialog needs them."""
+    if branch is None:
+        return []
+    rows = (Product.objects
+            .filter(branch=branch, active=True)
+            .exclude(product_type="BOM")
+            .select_related("category")
+            .annotate(image_len=Length("image_url") + Length("image_base64"))
+            .order_by("name"))
+    return [{
+        "id": str(p.id),
+        "name": p.name,
+        "barcode": p.barcode or "",
+        "category": p.category.name if p.category_id else "",
+        "stock": p.stock or 0,
+        "img": reverse("backoffice:product_image", args=[p.id]) if p.image_len else "",
+    } for p in rows]
+
+
+def _check_stock_post(request, branch, doc=None):
+    """Save the posted name + lines onto ``doc`` (new when None).
+
+    Returns ``(doc, error)``.  Lines arrive as parallel ``product_id`` /
+    ``qty`` lists, one pair per table row.
+    """
+    name = (request.POST.get("document_name") or "").strip()[:200]
+    ids = request.POST.getlist("product_id")
+    qtys = request.POST.getlist("qty")
+
+    wanted: dict[str, Decimal] = {}
+    for pid, raw in zip(ids, qtys):
+        try:
+            qty = Decimal(str(raw).strip() or "0")
+        except InvalidOperation:
+            return doc, "Quantities must be numbers."
+        if qty < 0:
+            return doc, "Quantities can't be negative."
+        wanted[pid] = qty
+
+    products = {str(p.id): p for p in Product.objects.filter(branch=branch, id__in=list(wanted))}
+    # A line whose product row is gone can't be posted back by id; keep it
+    # as saved rather than silently dropping it on the next edit.
+    orphans = doc.items.filter(product__isnull=True).count() if doc else 0
+    if not products and not orphans:
+        return doc, "Add at least one product."
+
+    with transaction.atomic():
+        if doc is None:
+            doc = StockDocument.objects.create(
+                branch=branch, type="check",
+                document_no=_next_stock_doc_no(branch, "check"),
+                document_name=name,
+                created_by=getattr(request.user, "name", "") or getattr(request.user, "username", ""),
+            )
+            before = {}
+        else:
+            doc.document_name = name
+            doc.save(update_fields=["document_name"])
+            before = {str(it.product_id): it.before_qty
+                      for it in doc.items.filter(product__isnull=False)}
+            doc.items.filter(product__isnull=False).delete()
+        for pid, qty in wanted.items():
+            p = products.get(pid)
+            if p is None:
+                continue
+            on_hand = before.get(pid, Decimal(p.stock or 0))
+            StockDocumentItem.objects.create(
+                document=doc, product=p,
+                barcode=p.barcode or "", product_name=p.name,
+                before_qty=on_hand, reconcile_qty=qty, qty=qty - on_hand,
+            )
+    return doc, None
+
+
+@login_required
+def check_stock_list(request):
+    branches, branch, dfrom, dto = _common_filters(request)
+    start, end = _date_window(dfrom, dto)
+    docs = (StockDocument.objects
+            .filter(type="check", branch=branch, created_at__gte=start, created_at__lte=end)
+            .annotate(line_count=Count("items"))
+            .order_by("-created_at"))
+    page_obj = Paginator(docs, 50).get_page(request.GET.get("page"))
+    return render(request, "backoffice/check_stock_list.html", {
+        "active": "check_stock",
+        "branches": branches,
+        "branch": branch,
+        "date_from": dfrom.isoformat(),
+        "date_to": dto.isoformat(),
+        "rows": page_obj.object_list,
+        "page_obj": page_obj,
+        "paginator": page_obj.paginator,
+        "qs": _filter_qs(request),
+    })
+
+
+@login_required
+def check_stock_new(request):
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        doc, error = _check_stock_post(request, branch)
+        if error is None:
+            messages.success(request, f"{doc.document_no} was saved.")
+            return redirect("backoffice:check_stock_document", doc_id=doc.id)
+    return render(request, "backoffice/check_stock_form.html", {
+        "active": "check_stock",
+        "branches": branches,
+        "branch": branch,
+        "doc": None,
+        "lines": [],
+        "error": error,
+        "pickable": _check_stock_pickable(branch),
+        "back_url": reverse("backoffice:check_stock"),
+        "hide_dates": True,
+    })
+
+
+@login_required
+def check_stock_document(request, doc_id):
+    doc = get_object_or_404(StockDocument.objects.select_related("branch"), id=doc_id, type="check")
+    error = None
+    if request.method == "POST":
+        _doc, error = _check_stock_post(request, doc.branch, doc)
+        if error is None:
+            messages.success(request, f"{doc.document_no} was saved.")
+            return redirect("backoffice:check_stock_document", doc_id=doc.id)
+    lines = list(
+        doc.items.select_related("product__unit")
+        .annotate(image_len=Length("product__image_url") + Length("product__image_base64"))
+        .order_by("product_name")
+    )
+    return render(request, "backoffice/check_stock_form.html", {
+        "active": "check_stock",
+        "doc": doc,
+        "branch": doc.branch,
+        "lines": lines,
+        "error": error,
+        "pickable": _check_stock_pickable(doc.branch),
+        "back_url": reverse("backoffice:check_stock"),
+        "hide_branch": True,
+        "hide_dates": True,
+    })
 
 
 # ─── Products ───────────────────────────────────────────────────────────
