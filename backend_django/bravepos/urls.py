@@ -44,6 +44,9 @@ urlpatterns = [
     # Legacy PIN endpoint — keep for backwards compat until everyone migrates.
     path('auth/verify-pin', views.verify_pin),
 
+    # Product creation from Shopster — no session; the body names the branch.
+    path('shopster/create-product/', views.shopster_create_product),
+
     # Settings — single document, GET + PUT.
     path('settings', views.settings_view),
 

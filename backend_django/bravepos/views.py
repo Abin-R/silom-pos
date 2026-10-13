@@ -7,6 +7,8 @@ the migration.
 """
 from __future__ import annotations
 
+import base64
+import io
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,11 +20,12 @@ from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djtz
+from PIL import Image as PILImage
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, loyalty
+from . import audit, crm, discounts, gateways, images, loyalty
 from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
@@ -481,6 +484,86 @@ class ProductViewSet(BranchScopedMixin, viewsets.ModelViewSet):
             # row by id, so a removed product can still be read and restored.
             qs = qs.filter(active=True)
         return qs
+
+
+# Shopster only ever feeds this one shop.  Matched by name, case-insensitive,
+# because branch ids differ between prod and every local/test database.
+SHOPSTER_BRANCH_NAME = 'BIO HOUSE'
+
+
+def _shopster_image(value):
+    """The ``image`` field as an ``image_url`` value, or None if unusable.
+
+    Takes a hosted http(s) URL (stored as-is), a ``data:`` URI, or bare
+    base64.  Bare base64 has no MIME type, so Pillow reads the format off the
+    bytes.  Unlike the till's fields, junk is a 400 here rather than a quiet
+    blank: the caller is a program, and a product that silently lost its
+    picture is worse than an error it can log.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if value.startswith(('http://', 'https://')):
+        return value
+    if not images.is_data_uri(value):
+        try:
+            raw = base64.b64decode(value, validate=True)
+            fmt = PILImage.open(io.BytesIO(raw)).format
+        except Exception:
+            return None
+        if not fmt:
+            return None
+        value = f'data:image/{fmt.lower()};base64,{value}'
+    return images.normalize(value) or None
+
+
+@api_view(['POST'])
+def shopster_create_product(request):
+    """Create a BIO HOUSE product from Shopster.
+
+    No session, no key, and no branch in the body: every product lands at
+    ``SHOPSTER_BRANCH_NAME``.  The category is named by ``category_id`` or
+    ``category`` (a name within BIO HOUSE).  A category name that matches
+    nothing is a 400, not a new category: a typo from outside should not grow
+    the till's category bar.
+
+    ``image`` takes a hosted URL, a data URI or bare base64 and lands in
+    ``image_url``.  Every other field is the till's own product payload,
+    validated by the same serializer, so the image cap and field rules hold
+    here too.
+    """
+    data = dict(request.data or {})
+
+    branch = Branch.objects.filter(name__iexact=SHOPSTER_BRANCH_NAME).first()
+    if branch is None:
+        logger.error('shopster_create_product: no branch named %r', SHOPSTER_BRANCH_NAME)
+        return Response({'detail': f'Branch {SHOPSTER_BRANCH_NAME} is not set up.'}, status=503)
+
+    category_name = (data.pop('category', None) or '').strip()
+    if data.get('category_id'):
+        try:
+            Category.objects.get(id=data['category_id'], branch=branch)
+        except (Category.DoesNotExist, DjangoValidationError, ValueError):
+            return Response({'detail': 'Category not found in this branch.'}, status=400)
+    elif category_name:
+        cat = Category.objects.filter(branch=branch, name__iexact=category_name).first()
+        if cat is None:
+            return Response({'detail': f'Category "{category_name}" not found in this branch.'}, status=400)
+        data['category_id'] = cat.id
+
+    if data.get('image'):
+        image = _shopster_image(data.pop('image'))
+        if image is None:
+            return Response({'image': ['Not a valid image URL, data URI or base64 image.']}, status=400)
+        data['image_url'] = image
+    data.pop('image', None)
+
+    # The id is ours to mint; an outside id would collide or overwrite.
+    data.pop('id', None)
+    serializer = ProductSerializer(data=data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(branch=branch)
+    return Response(serializer.data, status=201)
 
 
 class CustomerViewSet(SessionRequiredMixin, viewsets.ModelViewSet):
