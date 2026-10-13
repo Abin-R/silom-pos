@@ -36,7 +36,7 @@ def build_alert(order, lines) -> str:
     branch = order.branch.name if order.branch else "—"
     when = timezone.localtime(order.created_at).strftime("%d %b %Y %H:%M")
     out = [
-        "Other discount applied at the till",
+        "BravePOS: Other discount applied at the till",
         f"Branch: {branch}",
         f"Order: {order.order_number}",
         f"Staff: {order.staff or '—'}",
