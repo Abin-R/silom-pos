@@ -255,7 +255,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'beam_charge_id', 'beam_link_id', 'omise_link_id', 'omise_charge_id',
             'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
-            'voided_by', 'voided_at',
+            'voided_by', 'voided_at', 'beam_refund_id',
             # Buyer details captured when a full tax invoice is issued for this
             # bill.  Exposed read-only so Transactions can tell which bills
             # already have one and prefill the form on a re-issue; writes go
@@ -264,7 +264,7 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'order_number', 'queue_number', 'created_at', 'voided_by', 'voided_at',
-            'pos_tax_invoice',
+            'beam_refund_id', 'pos_tax_invoice',
         ]
 
 

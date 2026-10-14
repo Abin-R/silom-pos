@@ -1329,28 +1329,53 @@ def order_tax_invoice(request, order_id):
 @api_view(['PUT'])
 @require_session
 def order_update_status(request, order_id):
-    order = get_object_or_404(Order, id=order_id, branch=request.session_obj.branch)
     new_status = (request.data or {}).get('status')
     if new_status not in dict(Order.STATUS_CHOICES):
         return Response({'detail': 'Invalid status'}, status=400)
-    # Only cancelled-ness decides whether this bill's money is part of the day.
-    # new/preparing/completed are kitchen flow and change nothing downstream.
-    void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
-    order.status = new_status
-    update_fields = ['status']
-    # Stamp the void audit the first time a bill is cancelled so the
-    # receipt detail can show "Voided by: <name>".  Leave any earlier
-    # stamp untouched on a re-cancel; clear it if a bill is un-cancelled.
-    if new_status == 'cancel':
-        if not order.voided_at:
-            order.voided_by = request.session_obj.staff.name
-            order.voided_at = djtz.now()
+    with transaction.atomic():
+        # Locked so two voids of the same bill (two tablets, a double tap)
+        # cannot both reach Beam and refund it twice.
+        order = get_object_or_404(
+            Order.objects.select_for_update(),
+            id=order_id, branch=request.session_obj.branch,
+        )
+        # Only cancelled-ness decides whether this bill's money is part of the day.
+        # new/preparing/completed are kitchen flow and change nothing downstream.
+        void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
+        update_fields = ['status']
+        # Voiding a Beam bill hands the money back through Beam.  The refund
+        # goes first and the void only lands if Beam accepted it, so a bill
+        # never reads "voided" while the customer is still out of pocket.
+        if new_status == 'cancel' and order.refund_on_void and not order.beam_refund_id:
+            refund_id, err = _gateway_response(
+                gateways.beam_refund_order, order,
+                reason=f'Bill {order.order_number} voided by {request.session_obj.staff.name}',
+            )
+            if err:
+                return err
+            order.beam_refund_id = refund_id
+            update_fields.append('beam_refund_id')
+        # The money has gone back to the customer; un-voiding would put a sale
+        # on the books that nobody paid for.
+        if new_status != 'cancel' and order.beam_refund_id:
+            return Response(
+                {'detail': 'This bill was refunded through Beam and cannot be un-voided.'},
+                status=409,
+            )
+        order.status = new_status
+        # Stamp the void audit the first time a bill is cancelled so the
+        # receipt detail can show "Voided by: <name>".  Leave any earlier
+        # stamp untouched on a re-cancel; clear it if a bill is un-cancelled.
+        if new_status == 'cancel':
+            if not order.voided_at:
+                order.voided_by = request.session_obj.staff.name
+                order.voided_at = djtz.now()
+                update_fields += ['voided_by', 'voided_at']
+        elif order.voided_at:
+            order.voided_by = ''
+            order.voided_at = None
             update_fields += ['voided_by', 'voided_at']
-    elif order.voided_at:
-        order.voided_by = ''
-        order.voided_at = None
-        update_fields += ['voided_by', 'voided_at']
-    order.save(update_fields=update_fields)
+        order.save(update_fields=update_fields)
     # Cancelling (or un-cancelling) a cash bill moves the drawer, so the shift's
     # cash totals have to be recomputed against the new status.
     refresh_shift_cash(order.shift)

@@ -18,6 +18,7 @@ from django.utils import timezone as djtz
 
 from .gateways import (
     BEAM_CARD_METHOD,
+    BEAM_METHODS,
     CARD_METHOD_PREFIX,
     compute_order_charges,
     get_shop_settings,
@@ -240,6 +241,7 @@ def create_order_from_items(
                     beam_link_id=gateway_ids.get('beam_link_id', '') or '',
                     omise_link_id=gateway_ids.get('omise_link_id', '') or '',
                     omise_charge_id=gateway_ids.get('omise_charge_id', '') or '',
+                    refund_on_void=payment_method in BEAM_METHODS,
                     delivery_provider=delivery_provider or '',
                     delivery_status=delivery_status or '',
                     created_time=datetime.now().strftime('%H:%M'),

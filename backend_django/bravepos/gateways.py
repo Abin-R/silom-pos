@@ -44,6 +44,7 @@ OMISE_GET_TIMEOUT_S = 10.0
 CARD_METHOD_PREFIX = 'Credit Card'
 BEAM_CARD_METHOD = 'Beam Card'
 BEAM_QR_METHOD = 'Beam QR'
+BEAM_METHODS = (BEAM_QR_METHOD, BEAM_CARD_METHOD)
 
 # Beam's *charge* endpoint reports raw lifecycle strings; its *payment-link*
 # endpoint reports a different vocabulary which we normalise.  The POS frontend
@@ -434,6 +435,38 @@ def beam_get_link(link_id: str, branch=None) -> dict:
         'currency': 'THB',
         'raw': data,
     }
+
+
+def beam_refund_order(order, reason: str = '') -> str:
+    """Refund a Beam-paid order in full and return Beam's refund id.
+
+    No ``amount`` is sent: Beam then refunds the charge's maximum refundable
+    amount, which is the whole charge (PromptPay can only be refunded in
+    full anyway).  The refund is created PENDING on Beam's side; accepting it
+    is the point of no return for us, so the caller voids on success.
+
+    A card link's charge id is only known if the till's last poll saw it, so
+    fall back to asking the link for it.
+    """
+    charge_id = order.beam_charge_id
+    if not charge_id and order.beam_link_id:
+        charge_id = beam_get_link(order.beam_link_id, branch=order.branch)['charge_id']
+    if not charge_id:
+        raise GatewayError(
+            'This bill has no Beam charge on record, so it cannot be refunded '
+            'automatically. Refund it in the Beam dashboard.', 409,
+        )
+    cfg = resolve_payment_config(order.branch)
+    payload = {'chargeId': charge_id}
+    if reason:
+        payload['reason'] = reason[:500]
+    data = _beam_request(
+        'POST', '/api/v1/refunds', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S,
+    )
+    refund_id = data.get('refundId') or data.get('id') or ''
+    if not refund_id:
+        raise GatewayError('Beam response did not include a refund id.', 502)
+    return refund_id
 
 
 # ─── Omise ───────────────────────────────────────────────────────────────────

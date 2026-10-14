@@ -682,6 +682,16 @@ class Order(models.Model):
     voided_by = models.CharField(max_length=120, blank=True, default="")
     voided_at = models.DateTimeField(null=True, blank=True)
 
+    # ── Beam refund on void ────────────────────────────────────────────
+    # Voiding a Beam-paid bill refunds the charge through Beam.  Only bills
+    # rung up after that shipped are refunded: ``refund_on_void`` is stamped
+    # at creation, so every older row reads False and voids exactly as it
+    # always did (the money for those was handled by hand, if at all).
+    # ``beam_refund_id`` is set once Beam accepts the refund; it is what stops
+    # a re-void refunding twice and an un-void reinstating a refunded sale.
+    refund_on_void = models.BooleanField(default=False)
+    beam_refund_id = models.CharField(max_length=128, blank=True, default="")
+
     # ── CRM loyalty ────────────────────────────────────────────────────
     # The id the CRM gave this sale when it was filed for points (see
     # ``bravepos.loyalty``).  Stored because it is the *only* handle for a
