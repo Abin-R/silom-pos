@@ -61,6 +61,8 @@ class BeamRefundOnVoidTests(TestCase):
         """Stub the Beam HTTP layer: record each call, answer from ``responses``."""
         def fake(method, path, *, cfg, json=None, timeout):
             self.calls.append((method, path, json))
+            if (method, path) not in responses and path.startswith('/api/v1/charges/'):
+                return {'status': 'SUCCEEDED', 'amount': 10000}  # paid, 100.00 THB
             res = responses[(method, path)]
             if isinstance(res, Exception):
                 raise res
@@ -74,8 +76,10 @@ class BeamRefundOnVoidTests(TestCase):
             res = self._set_status(order, 'cancel')
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.json()['beam_refund_id'], 'rf_1')
-        self.assertEqual(self.calls[0][2]['chargeId'], 'ch_1')
-        self.assertNotIn('amount', self.calls[0][2])  # full refund
+        refund = self.calls[-1]
+        self.assertEqual(refund[:2], ('POST', '/api/v1/refunds'))
+        self.assertEqual(refund[2]['chargeId'], 'ch_1')
+        self.assertEqual(refund[2]['amount'], 10000)  # the whole charge, in satang
         order.refresh_from_db()
         self.assertEqual(order.status, 'cancel')
 
@@ -106,10 +110,19 @@ class BeamRefundOnVoidTests(TestCase):
             self._set_status(order, 'cancel')
             self.assertEqual(self._set_status(order, 'cancel').status_code, 200)
             res = self._set_status(order, 'completed')
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(sum(1 for c in self.calls if c[1] == '/api/v1/refunds'), 1)
         self.assertEqual(res.status_code, 409)
         order.refresh_from_db()
         self.assertEqual(order.status, 'cancel')
+
+    def test_an_unpaid_charge_is_not_refunded_and_the_bill_stays(self):
+        order = self._sell(beam_charge_id='ch_1')
+        with self._beam({('GET', '/api/v1/charges/ch_1'): {'status': 'PENDING', 'amount': 10000}}):
+            res = self._set_status(order, 'cancel')
+        self.assertEqual(res.status_code, 409)
+        self.assertNotIn('/api/v1/refunds', [c[1] for c in self.calls])
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'completed')
 
     def test_older_beam_bills_void_without_a_refund(self):
         order = self._sell(beam_charge_id='ch_1')

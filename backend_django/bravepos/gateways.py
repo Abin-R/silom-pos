@@ -440,10 +440,13 @@ def beam_get_link(link_id: str, branch=None) -> dict:
 def beam_refund_order(order, reason: str = '') -> str:
     """Refund a Beam-paid order in full and return Beam's refund id.
 
-    No ``amount`` is sent: Beam then refunds the charge's maximum refundable
-    amount, which is the whole charge (PromptPay can only be refunded in
-    full anyway).  The refund is created PENDING on Beam's side; accepting it
-    is the point of no return for us, so the caller voids on success.
+    The amount is the charge's own captured amount, read back from Beam.  Its
+    docs say an omitted amount refunds the whole charge, but the live API
+    rejects that ("Amount must be 1 or greater"), so it has to be sent.
+    Reading it from the charge rather than ``order.total`` means the refund
+    can never exceed what Beam actually took.  The refund is created PENDING
+    on Beam's side; accepting it is the point of no return for us, so the
+    caller voids on success.
 
     A card link's charge id is only known if the till's last poll saw it, so
     fall back to asking the link for it.
@@ -456,8 +459,13 @@ def beam_refund_order(order, reason: str = '') -> str:
             'This bill has no Beam charge on record, so it cannot be refunded '
             'automatically. Refund it in the Beam dashboard.', 409,
         )
+    charge = beam_get_charge(charge_id, branch=order.branch)
+    if charge['status'] not in BEAM_CHARGE_SUCCESS:
+        raise GatewayError(
+            f"Beam charge is {charge['status']}, not paid, so there is nothing to refund.", 409,
+        )
     cfg = resolve_payment_config(order.branch)
-    payload = {'chargeId': charge_id}
+    payload = {'chargeId': charge_id, 'amount': to_satang(charge['amount'])}
     if reason:
         payload['reason'] = reason[:500]
     data = _beam_request(
