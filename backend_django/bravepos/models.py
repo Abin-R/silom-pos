@@ -1037,6 +1037,7 @@ DEFAULT_STOCK_OUT_REASONS = [
     ("Damaged (In-Store)", "สินค้าชำรุด (ในร้าน)"),
     ("Damaged (In-Transit)", "สินค้าชำรุด (ระหว่างขนส่ง)"),
     ("Stock Transfer", "โอนสต๊อก"),
+    ("Unit Split", "แยกหน่วย"),
 ]
 
 # The list this replaced.  Migration 0040 uses it to recognise a row no admin
