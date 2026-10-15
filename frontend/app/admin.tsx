@@ -49,6 +49,7 @@ import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api"
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert, confirmDialog } from "../lib/dialog";
+import { whileAway } from "../lib/appLock";
 import { phoneMatchKey } from "../lib/phone";
 import { methodLabel } from "../lib/payments";
 import {
@@ -493,7 +494,7 @@ function Reports({ isWide }: { isWide: boolean }) {
           label={tr("admin.back_office")}
           icon="desktop-outline"
           height={40}
-          onPress={() => Linking.openURL(BACKOFFICE_URL)}
+          onPress={() => whileAway(() => Linking.openURL(BACKOFFICE_URL))}
           testID="open-backoffice"
         />
       </ScrollView>
@@ -4514,17 +4515,19 @@ function ProductEditModal({
   const pickImage = async () => {
     setPickingImage(true);
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      // The permission prompt and the gallery both take the app to the
+      // background; neither should sign the admin out mid-edit.
+      const perm = await whileAway(() => ImagePicker.requestMediaLibraryPermissionsAsync());
       if (!perm.granted) {
         setPickingImage(false);
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
+      const result = await whileAway(() => ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 1,
-      });
+      }));
       if (result.canceled || !result.assets?.[0]) {
         setPickingImage(false);
         return;
@@ -5293,7 +5296,7 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
   const share = useCallback(async () => {
     if (!url) return;
     try {
-      await Share.share({ message: url });
+      await whileAway(() => Share.share({ message: url }));
     } catch {
       /* user dismissed the share sheet */
     }
@@ -5374,7 +5377,7 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
           <Text style={{ color: C.surface, fontWeight: "700" }}>{tr("admin.share_link")}</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => Linking.openURL(url)}
+          onPress={() => whileAway(() => Linking.openURL(url))}
           style={{
             flexDirection: "row", alignItems: "center", gap: 8,
             backgroundColor: C.surface, paddingVertical: 12, paddingHorizontal: 22,

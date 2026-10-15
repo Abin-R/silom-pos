@@ -39,6 +39,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as WebBrowser from "expo-web-browser";
 import { apiFetch, safeJson } from "./api";
 import { C } from "./theme";
+import { whileAway } from "./appLock";
 
 export type LoyaltyReward = {
   id: number;
@@ -261,13 +262,13 @@ export function useCrmViewer(customerId: string | null | undefined): {
       // An in-app browser, not an embedded WebView: the page is the CRM's, it
       // sets its own cookies, and a customer being shown their own account
       // should be able to see whose address bar it is.
-      await WebBrowser.openBrowserAsync(url, {
+      await whileAway(() => WebBrowser.openBrowserAsync(url, {
         showTitle: true,
         toolbarColor: C.surface,
         controlsColor: C.brand,
         enableBarCollapsing: false,
         dismissButtonStyle: "close",
-      });
+      }));
       return "opened";
     } catch {
       // No browser on the tablet to hand it to. Rare, and nothing anyone can

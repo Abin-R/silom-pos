@@ -10,6 +10,10 @@
  *      BranchSession on this branch and returns a token + role.
  *   5. Both roles land on /pos; admin reaches admin screens via the rail.
  *
+ * Every launch lands here signed out — a saved session is ended, not
+ * restored — and leaving the app mid-session comes back here too
+ * (lib/appLock).
+ *
  * Layout: this is the one screen with no navigation, so the rail's navy takes
  * the whole left panel and carries the identity. The clock is the largest
  * element on it because that is what someone opening a shift actually checks.
@@ -33,6 +37,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
+import { endSession } from "../lib/appLock";
 import { C, MONO, R } from "../lib/theme";
 import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
@@ -80,40 +85,24 @@ export default function Login() {
   // gesture-nav strip. Tested visually against ~640px-tall androids.
   const isShort = height < 760;
 
-  // ── Session restore ────────────────────────────────────────────────────
+  // ── No session restore ─────────────────────────────────────────────────
+  // Every launch starts at the PIN pad: a shared till must not reopen as
+  // whoever used it last. A session left on disk (app closed, crashed, or
+  // updated) is ended here rather than resumed. Leaving the app mid-session
+  // is handled by lib/appLock.
   const [checkingSession, setCheckingSession] = useState(true);
   useEffect(() => {
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(AUTH_KEY);
         const saved = raw ? JSON.parse(raw) : null;
-        if (saved?.token) {
-          const res = await fetch(`${API}/auth/me`, {
-            headers: { Authorization: `Bearer ${saved.token}` },
-          });
-          if (res.ok) {
-            const me = await res.json();
-            const role = me.staff?.role || "cashier";
-            setAuthToken(saved.token);
-            router.replace({
-              pathname: "/pos",
-              params: {
-                staff: me.staff?.name || "",
-                role,
-                branch_id: me.branch?.id || "",
-                branch_name: me.branch?.name || "",
-              },
-            });
-            return;
-          }
-          await AsyncStorage.removeItem(AUTH_KEY);
-        }
+        if (saved?.token) await endSession();
       } catch {
-        // network down / corrupt JSON — fall through to login form.
+        // corrupt JSON — nothing to end; fall through to the login form.
       }
       setCheckingSession(false);
     })();
-  }, [router]);
+  }, []);
 
   // ── Clock ──────────────────────────────────────────────────────────────
   const [now, setNow] = useState(new Date());

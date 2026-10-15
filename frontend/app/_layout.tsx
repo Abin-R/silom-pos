@@ -1,8 +1,8 @@
-import { router, Stack } from "expo-router";
+import { router, Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Text, TextInput } from "react-native";
 import * as Sentry from "@sentry/react-native";
 import { C } from "../lib/theme";
@@ -10,6 +10,7 @@ import { setUnauthorizedHandler } from "../lib/api";
 import { DialogHost, showAlert, ToastHost } from "../lib/dialog";
 import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
+import { endSession, startAppLock } from "../lib/appLock";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
 // .env.production, so it only lands in release bundles) *and* a non-dev build.
@@ -66,6 +67,23 @@ function RootLayout() {
     });
     return () => setUnauthorizedHandler(null);
   }, []);
+
+  // Leaving the app — another app, screen off — signs the till out, so the
+  // next person to pick it up starts at the PIN pad. See lib/appLock.
+  // Navigate first: the logout call can hang on wifi that is still waking up,
+  // and the screen must not sit on the sale while it does.
+  const pathname = usePathname();
+  const pathRef = useRef(pathname);
+  useEffect(() => { pathRef.current = pathname; }, [pathname]);
+  useEffect(
+    () =>
+      startAppLock(() => {
+        if (pathRef.current === "/") return;
+        router.replace("/");
+        endSession();
+      }),
+    [],
+  );
 
   const [fontsLoaded] = useFonts({
     Sarabun: require("../assets/fonts/Sarabun-Regular.ttf"),
