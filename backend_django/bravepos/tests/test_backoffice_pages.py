@@ -124,6 +124,31 @@ class BackofficePageSmokeTests(TestCase):
         lines = self.client.get(reverse("backoffice:report_sell_export"), scope)
         self.assertIn("Latte", lines.content.decode())
 
+    def test_transactions_flags_a_void_beam_did_not_refund(self):
+        """A voided bill Beam refused to refund reads "Not refunded" in the
+        list and carries Beam's reason in the bill panel; an ordinary void
+        keeps its plain "Voided" tag."""
+        refused = Order.objects.create(
+            branch=self.branch, order_number="SMK-0002", total=Decimal("20.00"),
+            payment_method="Beam QR", status="cancel", created_at=timezone.now(),
+            beam_refund_error="cannot refund more than max refundable amount (0)",
+        )
+        scope = {"branch": str(self.branch.id), "status": "all"}
+
+        page = self.client.get(reverse("backoffice:transactions"), scope).content.decode()
+        self.assertIn("Not refunded", page)
+
+        panel = self.client.get(
+            reverse("backoffice:transactions"), {**scope, "o": str(refused.id)},
+        ).content.decode()
+        self.assertIn("Refund failed.", panel)
+        self.assertIn("max refundable amount (0)", panel)
+
+        Order.objects.filter(id=refused.id).update(beam_refund_error="")
+        page = self.client.get(reverse("backoffice:transactions"), scope).content.decode()
+        self.assertNotIn("Not refunded", page)
+        self.assertIn("Voided", page)
+
     def test_bill_detail_reports_the_line_discount(self):
         """Bill Detail used to hardcode Discount to 0.00, so a bill that Sales
         by Date showed as discounted looked full-price line by line."""

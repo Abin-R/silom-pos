@@ -689,8 +689,11 @@ class Order(models.Model):
     # always did (the money for those was handled by hand, if at all).
     # ``beam_refund_id`` is set once Beam accepts the refund; it is what stops
     # a re-void refunding twice and an un-void reinstating a refunded sale.
+    # ``beam_refund_error`` is Beam's reason when it refused: the bill is voided
+    # anyway and the till flags it, so someone pays the customer back by hand.
     refund_on_void = models.BooleanField(default=False)
     beam_refund_id = models.CharField(max_length=128, blank=True, default="")
+    beam_refund_error = models.TextField(blank=True, default="")
 
     # ── CRM loyalty ────────────────────────────────────────────────────
     # The id the CRM gave this sale when it was filed for points (see

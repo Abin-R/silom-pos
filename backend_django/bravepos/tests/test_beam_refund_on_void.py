@@ -2,7 +2,8 @@
 
 Only bills rung up after the feature shipped carry ``refund_on_void``; older
 Beam bills void exactly as before, without touching the gateway.  The refund
-goes first and the void lands only if Beam accepts it.
+goes first; if Beam refuses, the bill is voided anyway and Beam's reason is
+kept on it so the till can flag the bill for a hand refund.
 """
 from __future__ import annotations
 
@@ -93,16 +94,41 @@ class BeamRefundOnVoidTests(TestCase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(self.calls[-1][2]['chargeId'], 'ch_9')
 
-    def test_a_rejected_refund_leaves_the_bill_unvoided(self):
+    def test_a_rejected_refund_still_voids_and_records_why(self):
         order = self._sell(beam_charge_id='ch_1')
-        err = gateways.GatewayError('Beam API error 422: REFUND_PENDING', 502)
+        err = gateways.GatewayError(
+            'Beam API error 400: cannot refund more than max refundable amount (0)', 502,
+        )
         with self._beam({('POST', '/api/v1/refunds'): err}):
             res = self._set_status(order, 'cancel')
-        self.assertEqual(res.status_code, 502)
-        self.assertIn('REFUND_PENDING', res.json()['detail'])
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body['status'], 'cancel')
+        self.assertEqual(body['beam_refund_id'], '')
+        self.assertIn('max refundable amount', body['beam_refund_error'])
         order.refresh_from_db()
-        self.assertEqual(order.status, 'completed')
-        self.assertEqual(order.beam_refund_id, '')
+        self.assertEqual(order.status, 'cancel')
+
+    def test_an_unexpected_beam_reply_still_voids(self):
+        order = self._sell(beam_charge_id='ch_1')
+        with self._beam({('POST', '/api/v1/refunds'): ValueError('not json')}):
+            res = self._set_status(order, 'cancel')
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()['status'], 'cancel')
+        self.assertIn('unexpected error', res.json()['beam_refund_error'])
+
+    def test_unvoiding_a_failed_refund_clears_the_flag_and_a_revoid_retries(self):
+        order = self._sell(beam_charge_id='ch_1')
+        err = gateways.GatewayError('Beam API error 400: max refundable amount (0)', 502)
+        with self._beam({('POST', '/api/v1/refunds'): err}):
+            self._set_status(order, 'cancel')
+        with self._beam({('POST', '/api/v1/refunds'): {'refundId': 'rf_2'}}):
+            res = self._set_status(order, 'completed')
+            self.assertEqual(res.status_code, 200, res.content)
+            self.assertEqual(res.json()['beam_refund_error'], '')
+            res = self._set_status(order, 'cancel')
+        self.assertEqual(res.json()['beam_refund_id'], 'rf_2')
+        self.assertEqual(res.json()['beam_refund_error'], '')
 
     def test_revoiding_does_not_refund_twice_and_unvoid_is_refused(self):
         order = self._sell(beam_charge_id='ch_1')
@@ -115,14 +141,13 @@ class BeamRefundOnVoidTests(TestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, 'cancel')
 
-    def test_an_unpaid_charge_is_not_refunded_and_the_bill_stays(self):
+    def test_an_unpaid_charge_is_not_refunded_but_the_bill_voids(self):
         order = self._sell(beam_charge_id='ch_1')
         with self._beam({('GET', '/api/v1/charges/ch_1'): {'status': 'PENDING', 'amount': 10000}}):
             res = self._set_status(order, 'cancel')
-        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.status_code, 200, res.content)
         self.assertNotIn('/api/v1/refunds', [c[1] for c in self.calls])
-        order.refresh_from_db()
-        self.assertEqual(order.status, 'completed')
+        self.assertIn('not paid', res.json()['beam_refund_error'])
 
     def test_older_beam_bills_void_without_a_refund(self):
         order = self._sell(beam_charge_id='ch_1')

@@ -150,6 +150,11 @@ type Order = {
   // Buyer of record, set once a full tax invoice has been issued for this
   // bill.  Present → the form prefills from it on a re-issue.
   pos_tax_invoice?: TaxInvoiceData | null;
+  // Beam refund made when the bill was voided.  ``beam_refund_error`` is
+  // Beam's reason when it refused: the bill is voided anyway, and the
+  // customer still has to be paid back by hand.
+  beam_refund_id?: string;
+  beam_refund_error?: string;
 };
 
 // What /orders/<id>/tax-invoice stores and returns.  ``issued_by`` /
@@ -1221,6 +1226,10 @@ function Transactions({ isWide, reprint, staff }: {
                   // Voided orders stay in the list, struck through. A missing
                   // order number is what makes staff distrust a till.
                   const voided = o.status === "cancel";
+                  // Voided, but Beam refused the refund: the customer is
+                  // still owed their money, so the row must stand out from
+                  // an ordinary void.
+                  const notRefunded = voided && !!o.beam_refund_error;
                   const active = selected?.id === o.id && isWide;
                   const qty = (o.items || []).reduce(
                     (n: number, it: any) => n + (Number(it.qty) || 0), 0,
@@ -1239,6 +1248,9 @@ function Transactions({ isWide, reprint, staff }: {
                           </Money>
                           <Text style={styles.billMeta} numberOfLines={1}>
                             {`${o.created_time} · ${voided ? tr("admin.voided") : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
+                            {notRefunded && (
+                              <Text style={styles.billNotRefunded}>{` · ${tr("admin.not_refunded")}`}</Text>
+                            )}
                           </Text>
                         </View>
                         <Money style={[styles.billAmount, voided && styles.txVoided]}>
@@ -1293,7 +1305,9 @@ function Transactions({ isWide, reprint, staff }: {
                         </TText>
                       </TCell>
                       <TCell col={ocol("status")}>
-                        {voided ? (
+                        {notRefunded ? (
+                          <Tag tone="low" icon="alert-circle">{tr("admin.not_refunded")}</Tag>
+                        ) : voided ? (
                           <Tag tone="red">{tr("admin.voided")}</Tag>
                         ) : o.pos_tax_invoice ? (
                           <Tag tone="purple">{tr("admin.tax_inv")}</Tag>
@@ -1532,6 +1546,11 @@ function TransactionDetail({
       }
       const updated: Order = await res.json();
       onOrderUpdated(updated);
+      // The void stands even when Beam refused the refund, so say so before
+      // the print overlay takes the screen.
+      if (updated.beam_refund_error) {
+        showAlert(tr("admin.refund_failed"), `${tr("admin.refund_failed_body")}\n\n${updated.beam_refund_error}`);
+      }
       // Auto-print the void receipt (fires the "Printing…" overlay).
       await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
@@ -1593,6 +1612,17 @@ function TransactionDetail({
             </TouchableOpacity>
           </View>
         </View>
+
+        {isVoided && !!order.beam_refund_error && (
+          <View style={styles.tdRefundFailed} testID={`refund-failed-${order.order_number}`}>
+            <Ionicons name="alert-circle" size={18} color={C.dangerDark} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tdRefundFailedTitle}>{tr("admin.refund_failed")}</Text>
+              <Text style={styles.tdRefundFailedBody}>{tr("admin.refund_failed_body")}</Text>
+              <Text style={styles.tdRefundFailedDetail}>{order.beam_refund_error}</Text>
+            </View>
+          </View>
+        )}
 
         {/* Meta reads as labelled facts, not a stack of grey sentences. */}
         <View style={styles.tdMetaGrid}>
@@ -7272,6 +7302,14 @@ const styles = StyleSheet.create({
   },
   tdCancelBtnDisabled: { opacity: 0.4 },
   tdCancelText: { fontSize: 13, fontWeight: "700", color: C.danger },
+  billNotRefunded: { color: C.warnDark, fontWeight: "700" },
+  tdRefundFailed: {
+    flexDirection: "row", gap: 10, marginTop: 16, padding: 12,
+    borderRadius: 8, backgroundColor: C.dangerTint, borderWidth: 1, borderColor: C.danger,
+  },
+  tdRefundFailedTitle: { fontSize: 14, fontWeight: "800", color: C.dangerDark },
+  tdRefundFailedBody: { fontSize: 13, color: C.dangerDark, marginTop: 2 },
+  tdRefundFailedDetail: { fontSize: 12, color: C.ink3, marginTop: 6 },
   tdTaxIssued: { fontSize: 13, color: C.okDark, fontWeight: "600", marginTop: 4 },
 
   // ── Reprint document menu (reference POS's พิมพ์ซ้ำ popup) ──

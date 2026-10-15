@@ -1343,18 +1343,26 @@ def order_update_status(request, order_id):
         # new/preparing/completed are kitchen flow and change nothing downstream.
         void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
         update_fields = ['status']
-        # Voiding a Beam bill hands the money back through Beam.  The refund
-        # goes first and the void only lands if Beam accepted it, so a bill
-        # never reads "voided" while the customer is still out of pocket.
+        # Voiding a Beam bill hands the money back through Beam.  Beam can
+        # refuse — a charge it has already paid out refunds only from the
+        # account balance — and the void must not hang on that: the bill is
+        # voided either way and Beam's reason is kept, so the till can flag
+        # the bill for a hand refund.
         if new_status == 'cancel' and order.refund_on_void and not order.beam_refund_id:
-            refund_id, err = _gateway_response(
-                gateways.beam_refund_order, order,
-                reason=f'Bill {order.order_number} voided by {request.session_obj.staff.name}',
-            )
-            if err:
-                return err
-            order.beam_refund_id = refund_id
-            update_fields.append('beam_refund_id')
+            try:
+                order.beam_refund_id = gateways.beam_refund_order(
+                    order,
+                    reason=f'Bill {order.order_number} voided by {request.session_obj.staff.name}',
+                )
+                order.beam_refund_error = ''
+            except GatewayConfigError as e:
+                order.beam_refund_error = str(e)
+            except GatewayError as e:
+                order.beam_refund_error = e.detail
+            except Exception:  # noqa: BLE001 — a malformed Beam reply must not block the void
+                logger.exception('Beam refund for order %s crashed', order.order_number)
+                order.beam_refund_error = 'Beam refund could not be completed (unexpected error).'
+            update_fields += ['beam_refund_id', 'beam_refund_error']
         # The money has gone back to the customer; un-voiding would put a sale
         # on the books that nobody paid for.
         if new_status != 'cancel' and order.beam_refund_id:
@@ -1375,6 +1383,11 @@ def order_update_status(request, order_id):
             order.voided_by = ''
             order.voided_at = None
             update_fields += ['voided_by', 'voided_at']
+        # Un-voided: the sale stands again, so there is no refund owed.  A
+        # later void asks Beam afresh.
+        if new_status != 'cancel' and order.beam_refund_error:
+            order.beam_refund_error = ''
+            update_fields.append('beam_refund_error')
         order.save(update_fields=update_fields)
     # Cancelling (or un-cancelling) a cash bill moves the drawer, so the shift's
     # cash totals have to be recomputed against the new status.

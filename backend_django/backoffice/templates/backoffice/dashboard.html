@@ -130,7 +130,9 @@
               <td class="money" style="color:var(--mut)">{{ o.created_at|date:"H:i" }}</td>
               <td class="r money" style="font-weight:640">฿{{ o.total|floatformat:2|intcomma }}</td>
               <td class="r">
-                {% if o.status == 'cancel' %}
+                {% if o.status == 'cancel' and o.beam_refund_error %}
+                  <span class="tag t-low">Not refunded</span>
+                {% elif o.status == 'cancel' %}
                   <span class="tag t-red">Voided</span>
                 {% else %}
                   {% include "backoffice/_payment_tag.html" with method=o.payment_method %}

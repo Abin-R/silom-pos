@@ -91,7 +91,8 @@
             <td class="r money" {% if o.status == 'cancel' %}style="color:var(--mut)"{% endif %}>฿{{ row.tax_amount|floatformat:2|intcomma }}</td>
             <td class="r money" style="font-weight:660;{% if o.status == 'cancel' %}color:var(--mut);text-decoration:line-through{% endif %}">฿{{ o.total|floatformat:2|intcomma }}</td>
             <td class="r">
-              {% if o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+              {% if o.status == 'cancel' and o.beam_refund_error %}<span class="tag t-low" title="Beam refused the refund: {{ o.beam_refund_error }}">Not refunded</span>
+              {% elif o.status == 'cancel' %}<span class="tag t-red">Voided</span>
               {% else %}<span class="tag t-ok">Paid</span>{% endif %}
             </td>
           </tr>
@@ -127,9 +128,19 @@
       <div class="panel-h">
         Bill #{{ o.order_number }}
         <div class="spacer"></div>
-        {% if o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+        {% if o.status == 'cancel' and o.beam_refund_error %}<span class="tag t-low">Not refunded</span>
+        {% elif o.status == 'cancel' %}<span class="tag t-red">Voided</span>
         {% else %}<span class="tag t-ok">Paid</span>{% endif %}
       </div>
+
+      {# Voided, but Beam refused the refund: the customer is still owed. #}
+      {% if o.status == 'cancel' and o.beam_refund_error %}
+      <div class="banner b-red" style="margin:12px 20px 0;align-items:flex-start">
+        <svg><use href="#i-alert"/></svg>
+        <span><b>Refund failed.</b> The bill is voided, but Beam did not refund the customer. Refund them by hand.
+          <span style="display:block;margin-top:4px;color:var(--mut);font-size:12.5px">{{ o.beam_refund_error }}</span></span>
+      </div>
+      {% endif %}
 
       <div class="dsec">
         <div class="dkv"><span>Date &amp; time</span><b class="money">{{ o.created_at|date:"d M Y, H:i" }}</b></div>
