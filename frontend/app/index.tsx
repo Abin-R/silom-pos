@@ -1,6 +1,9 @@
 /**
  * Login screen — PIN-pad style:
- *   1. Fetch active branches; user picks one (default: first / last-used).
+ *   1. Resolve this tablet's branch (last-used, else the first active one).
+ *      There is no picker here — moving a tablet to another branch is an
+ *      admin action under Settings → Branch, so a cashier can't sign in to
+ *      the wrong shop's till by tapping the wrong row.
  *   2. Fetch the staff list for that branch (admin + the branch's cashier).
  *   3. Tap a user, enter a 4-digit PIN on the keypad → auto-submits.
  *   4. POST /api/auth/pin-login → backend replaces any existing
@@ -22,8 +25,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  FlatList,
-  Modal,
   ScrollView,
   useWindowDimensions,
 } from "react-native";
@@ -33,7 +34,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { C, MONO, R } from "../lib/theme";
-import { Btn, Tag } from "../lib/ui";
+import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
 import { t as tr, useT, formatLongDate, formatClock } from "../lib/i18n";
 
@@ -122,9 +123,7 @@ export default function Login() {
   }, []);
 
   // ── Branches ───────────────────────────────────────────────────────────
-  const [branches, setBranches] = useState<Branch[]>([]);
   const [branch, setBranch] = useState<Branch | null>(null);
-  const [showBranchPicker, setShowBranchPicker] = useState(false);
   const [showStaffPicker, setShowStaffPicker] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState<string>("");
   const [branchLoading, setBranchLoading] = useState(true);
@@ -140,7 +139,6 @@ export default function Login() {
         return;
       }
       const list: Branch[] = await r.json();
-      setBranches(list);
       const saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
       const initialBranch =
         (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
@@ -280,25 +278,17 @@ export default function Login() {
 
   // ── Pieces ─────────────────────────────────────────────────────────────
 
-  // The branch chip doubles as the picker — on the navy panel it reads as a
-  // fact about this terminal, and taps through when a shop has more than one.
+  // On the navy panel the branch reads as a fact about this terminal. It is
+  // display-only: changing it lives in Settings → Branch, behind admin.
   const BranchChip = () => (
     <View>
-      <TouchableOpacity
-        style={s.branchChip}
-        onPress={() => setShowBranchPicker(true)}
-        disabled={branches.length <= 1}
-        testID="branch-picker-btn"
-      >
+      <View style={s.branchChip} testID="branch-label">
         <Ionicons name="location-outline" size={17} color={C.navMuted} />
         <Text style={s.branchChipText} numberOfLines={1}>
           {branch?.name
             || (branchLoading ? tr("login.loading_branches") : branchLoadError ? tr("login.couldnt_load_branches") : tr("login.select_branch"))}
         </Text>
-        {branches.length > 1 && (
-          <Ionicons name="chevron-down" size={15} color={C.navMuted} />
-        )}
-      </TouchableOpacity>
+      </View>
       {!!branchLoadError && (
         <View style={{ marginTop: 10, gap: 8, alignItems: "flex-start" }}>
           <Text style={s.branchErr}>{branchLoadError}</Text>
@@ -501,52 +491,6 @@ export default function Login() {
       <View style={{ height: 20 }} />
     );
 
-  const BranchPickerModal = () => (
-    <Modal
-      visible={showBranchPicker}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowBranchPicker(false)}
-    >
-      <TouchableOpacity
-        style={s.modalOverlay}
-        activeOpacity={1}
-        onPress={() => setShowBranchPicker(false)}
-      >
-        <View style={s.modalSheet}>
-          <Text style={s.modalTitle}>{tr("login.choose_branch")}</Text>
-          <FlatList
-            data={branches}
-            keyExtractor={(b) => b.id}
-            renderItem={({ item }) => {
-              const on = branch?.id === item.id;
-              return (
-                <TouchableOpacity
-                  style={[s.branchRow, on && { backgroundColor: C.brandTintSoft }]}
-                  onPress={() => {
-                    setBranch(item);
-                    setShowBranchPicker(false);
-                  }}
-                  testID={`branch-pick-${item.id}`}
-                >
-                  <Ionicons
-                    name="storefront-outline"
-                    size={18}
-                    color={on ? C.brand : C.ink2}
-                  />
-                  <Text style={[s.branchRowName, on && { color: C.brand }]}>
-                    {item.name}
-                  </Text>
-                  {on && <Tag tone="info">{tr("login.current")}</Tag>}
-                </TouchableOpacity>
-              );
-            }}
-          />
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-
   // ── Tablet: navy identity panel + sign-in half ─────────────────────────
   if (isWide) {
     return (
@@ -592,7 +536,6 @@ export default function Login() {
             <Pad />
           </View>
         </View>
-        <BranchPickerModal />
       </SafeAreaView>
     );
   }
@@ -660,7 +603,6 @@ export default function Login() {
           </>
         )}
       </ScrollView>
-      <BranchPickerModal />
     </SafeAreaView>
   );
 }
@@ -946,39 +888,4 @@ const s = StyleSheet.create({
     alignSelf: "flex-start",
   },
   backText: { fontSize: 13.5, fontWeight: "600", color: C.ink2 },
-
-  // ── Branch picker ──
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: C.scrim,
-    justifyContent: "center",
-    padding: 24,
-  },
-  modalSheet: {
-    backgroundColor: C.surface,
-    borderRadius: R.modal,
-    maxHeight: "70%",
-    overflow: "hidden",
-    maxWidth: 440,
-    alignSelf: "center",
-    width: "100%",
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: C.ink,
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line2,
-  },
-  branchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: C.line2,
-  },
-  branchRowName: { flex: 1, fontSize: 15, color: C.ink, fontWeight: "600" },
 });

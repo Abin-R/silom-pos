@@ -63,6 +63,8 @@ const BACKOFFICE_URL = `${process.env.EXPO_PUBLIC_BACKEND_URL}/backoffice/`;
 // The customer self-ordering site is served at the host root: /order/<branchId>/.
 const SELF_ORDER_BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/order`;
 const AUTH_KEY = "bravepos:auth:v1";
+// Which branch this tablet signs in to. Read by the login screen (app/index.tsx).
+const BRANCH_KEY = "bravepos:selected-branch:v1";
 const RAIL_KEY = "bravepos:rail-collapsed:v1";
 
 // Render a string as a QR-code PNG data URI for <Image>. Mirrors pos.tsx's
@@ -374,8 +376,13 @@ export default function Admin() {
         {section === "settings" && (
           <SettingsView
             isWide={isWide}
+            isAdmin={isAdmin}
             branchId={activeBranchId}
             branchName={activeBranchName}
+            onBranchChanged={async () => {
+              await doLogout();
+              router.replace("/");
+            }}
           />
         )}
       </View>
@@ -5386,7 +5393,15 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
   );
 }
 
-function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branchId: string; branchName: string }) {
+function SettingsView({
+  isWide, isAdmin, branchId, branchName, onBranchChanged,
+}: {
+  isWide: boolean;
+  isAdmin: boolean;
+  branchId: string;
+  branchName: string;
+  onBranchChanged: () => Promise<void>;
+}) {
   useT(); // re-render this screen when the language changes
   // `key` is the contract, `labelKey` the presentation. The detail pane below
   // dispatches on `key`, so it must stay a stable English identifier — putting
@@ -5395,6 +5410,7 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
   const sections: { key: string; labelKey: string; icon: any; color: string }[] = [
     { key: "Store profile", labelKey: "admin.store_profile", icon: "home", color: C.danger },
     { key: "Tables & zones", labelKey: "admin.tables_and_zones", icon: "grid", color: "#3B82F6" },
+    { key: "Branch", labelKey: "admin.branch", icon: "storefront", color: "#0F766E" },
     { key: "Language", labelKey: "admin.language", icon: "language", color: "#8B5CF6" },
     { key: "Receipt", labelKey: "admin.receipt_2", icon: "receipt", color: C.danger },
     // No Payment section: gateway credentials and the test/live lane are
@@ -5441,8 +5457,11 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
       .catch(() => {});
     return () => { cancelled = true; };
   }, [branchId]);
+  // Moving the tablet to another branch is admin-only; a cashier never sees it.
   const visibleSections = sections.filter(
-    (sec) => sec.key !== "Self-Order QR" || selfOrderOn,
+    (sec) =>
+      (sec.key !== "Self-Order QR" || selfOrderOn) &&
+      (sec.key !== "Branch" || isAdmin),
   );
   // Narrow phones can't show the list + the detail side by side (leftNav is
   // 280px wide, leaving ~95px for the detail pane).  Use a master-detail
@@ -5641,6 +5660,8 @@ function SettingsView({ isWide, branchId, branchName }: { isWide: boolean; branc
           <DrawerCategoriesSection />
         ) : active === "Stock-out reasons" ? (
           <StockOutReasonsSection />
+        ) : active === "Branch" && isAdmin ? (
+          <BranchSection currentId={branchId} onChanged={onBranchChanged} />
         ) : active === "Language" ? (
           <LanguageSection />
         ) : active === "Advanced" ? (
@@ -5723,6 +5744,97 @@ function AdvancedSection() {
           <KV k="Sent — event ID" v={eventId} mono />
         </Panel>
       ) : null}
+    </ScrollView>
+  );
+}
+
+// ── Settings → Branch: which branch this tablet belongs to ──
+//
+// Device-scoped, like Language. Sessions are per-branch on the server, so a
+// switch can't happen in place: we record the new branch for the login screen,
+// sign out, and the next PIN entry is against the new branch's staff list.
+// Admin-only — the login screen no longer offers a picker, so this is the one
+// place a tablet changes shop.
+function BranchSection({
+  currentId,
+  onChanged,
+}: {
+  currentId: string;
+  onChanged: () => Promise<void>;
+}) {
+  useT(); // re-render this screen when the language changes
+  const [branches, setBranches] = useState<{ id: string; name: string; code?: string; active: boolean }[] | null>(null);
+  const [error, setError] = useState("");
+  const [switching, setSwitching] = useState(false);
+
+  const load = useCallback(() => {
+    setError("");
+    apiFetch(`${API}/branches?active=true`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const list = await r.json();
+        setBranches(Array.isArray(list) ? list : []);
+      })
+      .catch((e) => {
+        setBranches([]);
+        setError(e?.message || tr("admin.could_not_reach_the_server"));
+      });
+  }, []);
+  useEffect(load, [load]);
+
+  const pick = async (b: { id: string; name: string; code?: string; active: boolean }) => {
+    if (switching || String(b.id) === String(currentId)) return;
+    const ok = await confirmDialog(
+      tr("branch.confirm_title"),
+      tr("branch.confirm_body").replace("{name}", b.name),
+      tr("branch.confirm_cta"),
+      false,
+    );
+    if (!ok) return;
+    setSwitching(true);
+    try {
+      await AsyncStorage.setItem(BRANCH_KEY, JSON.stringify(b));
+      await onChanged();
+    } catch (e: any) {
+      showAlert(tr("admin.save_failed"), e?.message || "");
+      setSwitching(false);
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} testID="branch-settings">
+      <Text style={styles.h2}>{tr("branch.title")}</Text>
+      {branches === null ? (
+        <ActivityIndicator color={C.brand} />
+      ) : (
+        <View style={{ gap: 10 }}>
+          {branches.map((b) => {
+            const on = String(b.id) === String(currentId);
+            return (
+              <TouchableOpacity
+                key={b.id}
+                style={[styles.langRow, on && styles.langRowOn, switching && !on && { opacity: 0.5 }]}
+                onPress={() => pick(b)}
+                disabled={switching}
+                testID={`branch-pick-${b.id}`}
+              >
+                <Ionicons
+                  name={on ? "checkmark-circle" : "ellipse-outline"}
+                  size={22}
+                  color={on ? C.brand : C.lineStrong}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.langNative}>{b.name}</Text>
+                  {!!b.code && <Text style={styles.langSub}>{b.code}</Text>}
+                </View>
+                {on && <Tag tone="info">{tr("language.current")}</Tag>}
+              </TouchableOpacity>
+            );
+          })}
+          {!!error && <Text style={{ color: C.danger }}>{error}</Text>}
+        </View>
+      )}
+      <Text style={styles.langNote}>{tr("branch.note")}</Text>
     </ScrollView>
   );
 }

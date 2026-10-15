@@ -505,6 +505,13 @@ const en = {
     confirm: "Confirm",
     ok: "OK",
   },
+  branch: {
+    confirm_body: "This tablet will sign out and move to {name}. Staff there sign in with their own PINs.",
+    confirm_cta: "Switch branch",
+    confirm_title: "Switch branch?",
+    note: "Applies to this tablet only. Switching signs you out; the login screen then lists that branch's staff.",
+    title: "Branch for this tablet",
+  },
   language: {
     current: "Current",
     english: "English",
