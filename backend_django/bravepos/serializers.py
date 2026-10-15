@@ -122,6 +122,23 @@ class ProductSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class SaleWindowSerializer(serializers.Serializer):
+    """One launch → discontinue period, as Shopster sends it.
+
+    Same rules as the backoffice form: either end may be blank, both are
+    inclusive, and a discontinue date before its launch is refused.
+    """
+    launch_date = serializers.DateField(required=False, allow_null=True)
+    discontinue_date = serializers.DateField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        start, end = attrs.get('launch_date'), attrs.get('discontinue_date')
+        if start and end and end < start:
+            raise serializers.ValidationError(
+                f'Discontinue date {end} is before its launch date {start}.')
+        return attrs
+
+
 class CustomerSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=False, required=False)
     # The Add-Customer form leaves the date of birth empty most of the time and

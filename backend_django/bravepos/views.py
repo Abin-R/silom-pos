@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, images, loyalty
+from . import audit, crm, discounts, gateways, images, loyalty, sale_windows
 from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
@@ -40,7 +40,8 @@ from .models import (
 from .serializers import (
     BranchSerializer,
     CategorySerializer, CustomerSerializer, DrawerCategorySerializer,
-    OrderSerializer, ParkedOrderSerializer, ProductSerializer, SettingsSerializer,
+    OrderSerializer, ParkedOrderSerializer, ProductSerializer, SaleWindowSerializer,
+    SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
     StockDocumentSerializer, StockOutReasonSerializer,
     SuggestionOverrideSerializer,
@@ -528,9 +529,12 @@ def shopster_create_product(request):
     the till's category bar.
 
     ``image`` takes a hosted URL, a data URI or bare base64 and lands in
-    ``image_url``.  Every other field is the till's own product payload,
-    validated by the same serializer, so the image cap and field rules hold
-    here too.
+    ``image_url``.  ``sale_windows`` is a list of ``{launch_date,
+    discontinue_date}`` periods (ISO dates, either end may be null), applied
+    the moment the product exists — one whose first launch is still ahead is
+    created off sale and comes on by itself on that date.  Every other field
+    is the till's own product payload, validated by the same serializer, so
+    the image cap and field rules hold here too.
     """
     data = dict(request.data or {})
 
@@ -558,12 +562,24 @@ def shopster_create_product(request):
         data['image_url'] = image
     data.pop('image', None)
 
+    windows = SaleWindowSerializer(data=data.pop('sale_windows', None) or [], many=True)
+    if not windows.is_valid():
+        return Response({'sale_windows': windows.errors}, status=400)
+
     # The id is ours to mint; an outside id would collide or overwrite.
     data.pop('id', None)
     serializer = ProductSerializer(data=data)
     serializer.is_valid(raise_exception=True)
-    serializer.save(branch=branch)
-    return Response(serializer.data, status=201)
+    with transaction.atomic():
+        product = serializer.save(branch=branch)
+        sale_windows.replace(product, [
+            (w.get('launch_date'), w.get('discontinue_date'))
+            for w in windows.validated_data
+        ])
+        sale_windows.apply(product)
+    body = ProductSerializer(product).data
+    body['sale_windows'] = SaleWindowSerializer(product.sale_windows.all(), many=True).data
+    return Response(body, status=201)
 
 
 class CustomerViewSet(SessionRequiredMixin, viewsets.ModelViewSet):

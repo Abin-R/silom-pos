@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import io
+from datetime import date
+from unittest import mock
 
 from django.test import TestCase
 from PIL import Image
@@ -110,3 +112,48 @@ class ShopsterCreateProductTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("image", res.json())
         self.assertFalse(Product.objects.filter(name="Croissant").exists())
+
+    # ── sale windows ─────────────────────────────────────────────────────
+    def test_sale_windows_are_stored(self):
+        with mock.patch("bravepos.sale_windows.today", return_value=date(2026, 10, 15)):
+            res = self._post({"name": "Mooncake", "sale_windows": [
+                {"launch_date": "2026-10-01", "discontinue_date": "2026-10-31"},
+                {"launch_date": "2026-12-01", "discontinue_date": None},
+            ]})
+        self.assertEqual(res.status_code, 201, res.content)
+        p = Product.objects.get(name="Mooncake")
+        self.assertEqual(
+            [(w.launch_date, w.discontinue_date) for w in p.sale_windows.all()],
+            [(date(2026, 10, 1), date(2026, 10, 31)), (date(2026, 12, 1), None)])
+        self.assertTrue(p.active)
+        self.assertEqual(len(res.json()["sale_windows"]), 2)
+
+    def test_future_launch_is_created_off_sale_until_then(self):
+        with mock.patch("bravepos.sale_windows.today", return_value=date(2026, 10, 15)):
+            res = self._post({"name": "Stollen", "sale_windows": [
+                {"launch_date": "2026-12-01", "discontinue_date": "2026-12-31"},
+            ]})
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertFalse(res.json()["active"])
+        p = Product.objects.get(name="Stollen")
+        self.assertEqual((p.active, p.removed_by_schedule), (False, True))
+
+    def test_no_sale_windows_means_always_on_sale(self):
+        res = self._post({"name": "Baguette"})
+        self.assertEqual(res.status_code, 201, res.content)
+        p = Product.objects.get(name="Baguette")
+        self.assertEqual((p.active, p.sale_windows.count()), (True, 0))
+        self.assertEqual(res.json()["sale_windows"], [])
+
+    def test_discontinue_before_launch_is_rejected(self):
+        res = self._post({"name": "Backwards", "sale_windows": [
+            {"launch_date": "2026-12-31", "discontinue_date": "2026-12-01"},
+        ]})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("sale_windows", res.json())
+        self.assertFalse(Product.objects.filter(name="Backwards").exists())
+
+    def test_bad_date_is_rejected(self):
+        res = self._post({"name": "Junk", "sale_windows": [{"launch_date": "soon"}]})
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(Product.objects.filter(name="Junk").exists())
