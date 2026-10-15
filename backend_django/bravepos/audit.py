@@ -38,7 +38,8 @@ _local = threading.local()
 # Model names as they appear in ``Model.__name__``.
 AUDITED = {
     "Staff", "Branch", "Settings",
-    "Product", "Category", "Unit", "DrawerCategory", "StockOutReason",
+    "Product", "ProductSaleWindow", "Category", "Unit", "DrawerCategory",
+    "StockOutReason",
     "StockMovement", "StockDocument", "StockDocumentItem",
     "Shift", "ShiftMovement",
     "Customer", "PeakProductMap", "SuggestionOverride", "AppRelease",

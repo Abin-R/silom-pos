@@ -371,6 +371,11 @@ class Product(models.Model):
     tax_type = models.CharField(max_length=4, default="V")  # V=VAT, N=None
     product_type = models.CharField(max_length=4, default="P")  # P=Product, S=Service, BOM=Bundle
     active = models.BooleanField(default=True)
+    # True when ``active`` was turned off by the product's sale dates rather
+    # than by someone pressing Remove.  Only these come back on their own when
+    # a later launch date arrives — a product an admin removed by hand stays
+    # removed whatever its dates say.  See bravepos.sale_windows.
+    removed_by_schedule = models.BooleanField(default=False)
     sort_order = models.IntegerField(default=0)
 
     class Meta:
@@ -382,6 +387,29 @@ class Product(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class ProductSaleWindow(models.Model):
+    """One stretch of dates a product is on sale: launch → discontinue.
+
+    A product may have several (1–15 Jan, then 25–30 Jan); with none at all it
+    is on sale indefinitely, which is every product made before these existed.
+    Either end may be blank — no launch date means "from now", no discontinue
+    date means "until further notice".  Both ends are inclusive: a window
+    ending on the 15th still sells on the 15th.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="sale_windows",
+    )
+    launch_date = models.DateField(null=True, blank=True)
+    discontinue_date = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["launch_date", "discontinue_date"]
+
+    def __str__(self) -> str:
+        return f"{self.product_id}: {self.launch_date} → {self.discontinue_date}"
 
 
 class StockMovement(models.Model):

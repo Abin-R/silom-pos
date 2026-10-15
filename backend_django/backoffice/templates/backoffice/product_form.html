@@ -191,6 +191,47 @@
           </div>
 
           {% comment %}
+            Sale dates — optional, and as many periods as needed (1–15 Jan,
+            then 25–30 Jan). Outside every period the product is off sale:
+            it moves to Removed, and comes back by itself on its next launch
+            date. One empty row is always offered; left empty it means "no
+            dates", which is how every product sold before this existed.
+            See bravepos.sale_windows.
+          {% endcomment %}
+          <div class="field wide">
+            <label>Sale dates {% if schedule %}<span class="tag t-low" style="margin-left:6px">{{ schedule }}</span>{% endif %}</label>
+            <div style="display:flex;gap:8px;font-size:12.5px;color:var(--mut)" aria-hidden="true">
+              <span style="flex:1;min-width:150px">Launch date</span>
+              <span style="visibility:hidden">to</span>
+              <span style="flex:1;min-width:150px">Discontinue date</span>
+              <span style="width:38px"></span>
+            </div>
+            <div id="windowRows" style="display:flex;flex-direction:column;gap:8px">
+              {% for w in window_rows %}
+              <div class="window-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="date" name="launch_date" value="{{ w.launch }}" aria-label="Launch date" style="flex:1;min-width:150px">
+                <span style="color:var(--mut)">to</span>
+                <input type="date" name="discontinue_date" value="{{ w.discontinue }}" aria-label="Discontinue date" style="flex:1;min-width:150px">
+                <button type="button" class="btn btn-sm window-del" title="Remove these dates">✕</button>
+              </div>
+              {% empty %}
+              <div class="window-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="date" name="launch_date" aria-label="Launch date" style="flex:1;min-width:150px">
+                <span style="color:var(--mut)">to</span>
+                <input type="date" name="discontinue_date" aria-label="Discontinue date" style="flex:1;min-width:150px">
+                <button type="button" class="btn btn-sm window-del" title="Remove these dates">✕</button>
+              </div>
+              {% endfor %}
+            </div>
+            <div><button type="button" class="btn btn-sm" id="addWindowBtn" style="margin-top:4px">
+              <svg><use href="#i-plus"/></svg> Add another period</button></div>
+            <span class="hint">Launch date → discontinue date, both included. Optional — leave
+              empty to sell it with no end. Outside these dates the product moves to
+              <b>Removed</b> and comes back on its own on the next launch date. Either
+              end can be left blank.</span>
+          </div>
+
+          {% comment %}
             Sync to all branches — hidden entirely when there is no other
             branch, because a switch that cannot do anything still reads as a
             promise that something happened.
@@ -289,10 +330,12 @@
       <div class="srow">
         <span class="si"><svg><use href="#i-box"/></svg></span>
         <span class="sm">
-          <b>Not on sale</b>
-          <u>No till or self-order menu is showing this product. Its sales
+          <b>Not on sale{% if product.removed_by_schedule %} — {{ schedule }}{% endif %}</b>
+          <u>{% if product.removed_by_schedule %}Its sale dates took it off sale{% if schedule_returns %}, and
+            it comes back by itself on that date{% endif %}. Restoring puts it on sale from today.
+            {% else %}No till or self-order menu is showing this product. Its sales
             history is intact — restoring puts it straight back on the Sale
-            screen with everything below unchanged.</u>
+            screen with everything below unchanged.{% endif %}</u>
         </span>
         <form method="post" action="{% url 'backoffice:product_restore' product.id %}?{{ qs }}"
               style="margin:0;display:flex;align-items:center;flex-shrink:0">
@@ -371,6 +414,27 @@
 
 {% block extra_scripts %}
 <script>
+  // Sale dates: add another launch → discontinue row, or drop one. The last
+  // row is emptied rather than removed, so there is always one to type into.
+  (function () {
+    const rows = document.getElementById('windowRows');
+    const add = document.getElementById('addWindowBtn');
+    if (!rows || !add) return;
+    add.addEventListener('click', function () {
+      const row = rows.querySelector('.window-row').cloneNode(true);
+      row.querySelectorAll('input').forEach(function (i) { i.value = ''; });
+      rows.appendChild(row);
+      row.querySelector('input').focus();
+    });
+    rows.addEventListener('click', function (e) {
+      const del = e.target.closest('.window-del');
+      if (!del) return;
+      const row = del.closest('.window-row');
+      if (rows.querySelectorAll('.window-row').length > 1) row.remove();
+      else row.querySelectorAll('input').forEach(function (i) { i.value = ''; });
+    });
+  })();
+
   (function () {
     // Product image — browse a local file, downscale it to a thumbnail, and
     // stash a compact data URL in the hidden image_url field so the existing

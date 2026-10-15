@@ -34,6 +34,7 @@ mean what an admin means by it: the name is what they read on the till.
 """
 from __future__ import annotations
 
+from . import sale_windows
 from .models import Branch, Category, Product, Unit
 
 # Copied verbatim from source to target.  Everything absent from this list is
@@ -329,6 +330,10 @@ def fanout_product(product, *, previous_name=None, branches=None):
     """
     report = {"created": [], "updated": [], "unchanged": []}
     targets = other_branches(product.branch) if branches is None else branches
+    # Launch and discontinue dates travel with the rest of the form, and each
+    # copy is then taken on or off sale by them exactly as this one is.
+    windows = [(w.launch_date, w.discontinue_date)
+               for w in product.sale_windows.all()]
 
     for target in targets:
         dest = _fanout_match(target, product, previous_name)
@@ -341,7 +346,10 @@ def fanout_product(product, *, previous_name=None, branches=None):
                 category, _, _ = upsert_category(
                     target, product.category, update_existing=False,
                 )
-            upsert_product(target, product, category, update_existing=False)
+            dest, _, _ = upsert_product(target, product, category,
+                                        update_existing=False)
+            sale_windows.replace(dest, windows)
+            sale_windows.apply(dest)
             report["created"].append(target.name)
             continue
 
@@ -361,12 +369,17 @@ def fanout_product(product, *, previous_name=None, branches=None):
         if dest.unit_id != (unit.pk if unit else None):
             dest.unit = unit
             changed.append("unit")
+        if changed:
+            # update_fields, so this cannot clobber a column it was not asked
+            # to touch — stock above all, which a cashier may be moving now.
+            dest.save(update_fields=changed)
+        if sale_windows.replace(dest, windows):
+            changed.append("sale_windows")
+        if sale_windows.apply(dest):
+            changed.append("active")
         if not changed:
             report["unchanged"].append(target.name)
             continue
-        # update_fields, so this cannot clobber a column it was not asked to
-        # touch — stock above all, which a cashier may be moving right now.
-        dest.save(update_fields=changed)
         report["updated"].append(target.name)
 
     return report
@@ -389,7 +402,13 @@ def fanout_active(product, *, branches=None):
         if dest.active == product.active:
             report["unchanged"].append(target.name)
             continue
-        dest.active = product.active
-        dest.save(update_fields=["active"])
+        if product.active:
+            # Restored the way the original was, so the copy's own dates do
+            # not take it straight back off sale.
+            sale_windows.restore(dest)
+        else:
+            dest.active = False
+            dest.removed_by_schedule = False
+        dest.save(update_fields=["active", "removed_by_schedule"])
         report["updated"].append(target.name)
     return report

@@ -40,6 +40,7 @@ from bravepos.models import (
     Order,
     OrderItem,
     Product,
+    ProductSaleWindow,
     Settings,
     Shift,
     Staff,
@@ -48,7 +49,7 @@ from bravepos.models import (
     StockMovement,
     Unit,
 )
-from bravepos import appdist, catalog, crm, discounts, images
+from bravepos import appdist, catalog, crm, discounts, images, sale_windows
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import save_check_document
@@ -3022,9 +3023,14 @@ def product_list(request):
             product__in=products, order__created_at__range=(month_start, month_end),
         ).exclude(order__status="cancel").values("product_id").annotate(qty=Sum("qty"))
     }
+    windows = {}
+    for w in ProductSaleWindow.objects.filter(product__in=products):
+        windows.setdefault(w.product_id, []).append(w)
+    today = sale_windows.today()
     for p in products:
         p.sold_30d = sold.get(p.id, 0)
         p.margin = float((p.price - p.cost) / p.price * 100) if p.price else 0
+        p.schedule = sale_windows.status(windows.get(p.id, []), today)
 
     view = request.GET.get("view", "grid")  # grid | list
 
@@ -3196,6 +3202,60 @@ def _apply_product_form(product, post, branch, errors):
     return product
 
 
+def _sale_windows_from_post(post, errors):
+    """The form's launch/discontinue rows, as ``(rows, windows)``.
+
+    ``rows`` is every row as typed, strings intact, for re-rendering the form
+    when the save is refused; ``windows`` is the parsed ``(launch,
+    discontinue)`` dates to store.  Rows with both dates blank are dropped —
+    the form always offers one empty row, and leaving it empty means "no
+    dates", not an error.
+    """
+    launches = post.getlist("launch_date")
+    ends = post.getlist("discontinue_date")
+    rows, windows = [], []
+    for i in range(max(len(launches), len(ends))):
+        raw = [(launches[i] if i < len(launches) else "").strip(),
+               (ends[i] if i < len(ends) else "").strip()]
+        if not any(raw):
+            continue
+        rows.append({"launch": raw[0], "discontinue": raw[1]})
+        parsed = []
+        for label, value in zip(("Launch date", "Discontinue date"), raw):
+            if not value:
+                parsed.append(None)
+                continue
+            try:
+                parsed.append(date.fromisoformat(value))
+            except ValueError:
+                errors.append(f"{label} “{value}” isn't a date.")
+                parsed.append(None)
+        if parsed[0] and parsed[1] and parsed[1] < parsed[0]:
+            errors.append(
+                f"Discontinue date {raw[1]} is before its launch date {raw[0]}.")
+        windows.append(tuple(parsed))
+    return rows, windows
+
+
+def _sale_window_rows(product):
+    """The saved windows in the shape `_sale_windows_from_post` returns rows."""
+    return [{"launch": w.launch_date.isoformat() if w.launch_date else "",
+             "discontinue": w.discontinue_date.isoformat() if w.discontinue_date else ""}
+            for w in product.sale_windows.all()]
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:]
+
+
+def _schedule_message(product, change) -> str:
+    """What the dates just did, for the save banner."""
+    if change != "removed":
+        return ""
+    return (f" Its dates have it off sale today, so it is under Removed for "
+            f"now — {_lower_first(sale_windows.status(product.sale_windows.all()))}.")
+
+
 def product_errors(product) -> list[str]:
     """Blocking problems with the assembled product.
 
@@ -3309,21 +3369,26 @@ def product_detail(request, product_id):
     # branches' copies under the name they still hold.
     previous_name = product.name
 
+    window_rows = _sale_window_rows(product)
     if request.method == "POST":
         _apply_product_form(product, request.POST, product.branch or branch,
                             form_errors)
+        window_rows, windows = _sale_windows_from_post(request.POST, form_errors)
         form_errors += product_errors(product)
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
             with transaction.atomic():
                 product.save()
+                sale_windows.replace(product, windows)
                 fanout = (
                     catalog.fanout_product(product, previous_name=previous_name)
                     if sync_all else None
                 )
+                change = sale_windows.apply(product)
             messages.success(
                 request,
-                f"{product.name} was saved." + _fanout_message(fanout))
+                f"{product.name} was saved." + _fanout_message(fanout)
+                + _schedule_message(product, change))
             return redirect("backoffice:product_detail", product_id=product.id)
         # Nothing was saved; `product` still carries what was typed, so the
         # form below comes back filled in rather than reverting to the row in
@@ -3337,6 +3402,10 @@ def product_detail(request, product_id):
         "categories": _product_form_categories(product.branch or branch),
         "units": _product_form_units(product.branch or branch),
         "mode": "edit",
+        "window_rows": window_rows,
+        "schedule": sale_windows.status(product.sale_windows.all()),
+        "schedule_returns": bool(sale_windows.next_launch(
+            product.sale_windows.all(), sale_windows.today())),
         "form_errors": form_errors,
         "duplicate": duplicate,
         "sync_all": sync_all,
@@ -3372,8 +3441,10 @@ def product_archive(request, product_id):
         return redirect("backoffice:product_detail", product_id=product.id)
 
     product.active = False
+    # Removed by hand, so no launch date can bring it back on its own.
+    product.removed_by_schedule = False
     with transaction.atomic():
-        product.save(update_fields=["active"])
+        product.save(update_fields=["active", "removed_by_schedule"])
         fanout = (catalog.fanout_active(product)
                   if request.POST.get("sync_all") else None)
     messages.success(
@@ -3387,19 +3458,27 @@ def product_archive(request, product_id):
 
 @login_required
 def product_restore(request, product_id):
-    """Put a removed product back on sale."""
+    """Put a removed product back on sale.
+
+    Including one its discontinue date removed: `sale_windows.restore` adds a
+    window from today so the dates do not take it straight back off.
+    """
     product = get_object_or_404(Product, id=product_id)
     if request.method != "POST":
         return redirect("backoffice:product_detail", product_id=product.id)
 
-    product.active = True
     with transaction.atomic():
-        product.save(update_fields=["active"])
+        extended = sale_windows.restore(product)
+        product.save(update_fields=["active", "removed_by_schedule"])
         fanout = (catalog.fanout_active(product)
                   if request.POST.get("sync_all") else None)
+    note = ""
+    if extended:
+        note = (f" Its sale dates now run from today — "
+                f"{_lower_first(sale_windows.status(product.sale_windows.all()))}.")
     messages.success(
         request,
-        f"\u201c{product.name}\u201d is back in the catalogue."
+        f"\u201c{product.name}\u201d is back in the catalogue." + note
         + _active_fanout_message(fanout, "restored"))
     return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
 
@@ -3420,18 +3499,22 @@ def product_new(request):
     form_errors, duplicate = [], None
     sync_all = bool(request.POST.get("sync_all"))
 
+    window_rows = []
     if request.method == "POST":
         _apply_product_form(product, request.POST, branch, form_errors)
+        window_rows, windows = _sale_windows_from_post(request.POST, form_errors)
         form_errors += product_errors(product)
         duplicate = product_duplicate(product)
         if not _product_save_blocked(request, form_errors, duplicate):
             with transaction.atomic():
                 product.save()
+                sale_windows.replace(product, windows)
                 fanout = catalog.fanout_product(product) if sync_all else None
+                change = sale_windows.apply(product)
             messages.success(
                 request,
                 f"{product.name} was added to the catalogue."
-                + _fanout_message(fanout))
+                + _fanout_message(fanout) + _schedule_message(product, change))
             return redirect("backoffice:product_detail", product_id=product.id)
 
     context = {
@@ -3442,6 +3525,7 @@ def product_new(request):
         "categories": _product_form_categories(branch),
         "units": _product_form_units(branch),
         "mode": "new",
+        "window_rows": window_rows,
         "form_errors": form_errors,
         "duplicate": duplicate,
         "sync_all": sync_all,

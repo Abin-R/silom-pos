@@ -132,6 +132,7 @@
                   <a href="{% url 'backoffice:product_detail' p.id %}?{{ qs }}">
                     <b style="font-weight:620">{{ p.name }}</b></a>
                   <div class="sub">{{ p.name_th }}{% if p.name_th and p.sku %} · {% endif %}{{ p.sku|default:p.barcode }}</div>
+                  {% if p.schedule %}<div class="sub" style="color:var(--amber)">{{ p.schedule }}</div>{% endif %}
                 </div>
               </div>
             </td>
