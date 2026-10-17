@@ -86,7 +86,14 @@ class PinResetEndsTheSessionTests(PinResetMixin, TestCase):
         return self.client.post(self.form_url(member), data)
 
     def test_the_new_pin_works_on_a_different_device(self):
+        """The whole point. Without the session going too, the reset hands
+        someone a PIN that is refused everywhere, for the same reason the old
+        one was."""
         self.sign_in_on_a_till(self.cashier)
+
+        blocked = self.pin_login(self.cashier, "0000", self.other_branch)
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json().get("code"), "user_already_signed_in")
 
         self.edit(self.cashier, pin="4321")
 
@@ -171,42 +178,73 @@ class PinResetEndsTheSessionTests(PinResetMixin, TestCase):
         self.assertTrue(self.cashier.check_pin("4321"))
 
 
-class OrphanedSessionTests(PinResetMixin, TestCase):
-    """A till's logout is fire-and-forget: when it fails (wifi still waking,
-    tablet offline) the app forgets its token but the row stays. The next
-    correct PIN must take over, not be refused with "already signed in"."""
+
+class OneTabletPerAccountTests(PinResetMixin, TestCase):
+    """An account is signed in on one tablet at a time — a second tablet is
+    refused. But a till's logout is fire-and-forget: when it fails (wifi
+    still waking, tablet offline) the app forgets its token while the row
+    stays, so the *same* tablet must be able to sign straight back in."""
 
     @classmethod
     def setUpTestData(cls):
         cls.build()
 
-    def test_a_correct_pin_replaces_a_leftover_session_on_the_same_branch(self):
-        old = self.sign_in_on_a_till(self.cashier)
+    def login(self, member, pin, branch, device_id):
+        return Client().post(
+            "/api/auth/pin-login",
+            {"staff_id": str(member.id), "pin": pin,
+             "branch_id": str(branch.id), "device_id": device_id},
+            content_type="application/json",
+        )
 
-        res = self.pin_login(self.cashier, "0000", self.branch)
+    def test_another_tablet_is_refused(self):
+        first = self.login(self.cashier, "0000", self.branch, "tablet-a")
+        self.assertEqual(first.status_code, 200, first.content)
 
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertFalse(BranchSession.objects.filter(pk=old.pk).exists())
+        second = self.login(self.cashier, "0000", self.branch, "tablet-b")
+
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json().get("code"), "user_already_signed_in")
+        self.assertIn(self.branch.name, second.json()["detail"])
+        till = Client(HTTP_AUTHORIZATION=f"Bearer {first.json()['token']}")
+        self.assertEqual(till.get("/api/auth/me").status_code, 200,
+                         "the refused login knocked the first tablet off")
+
+    def test_another_branch_is_refused_too(self):
+        self.login(self.cashier, "0000", self.branch, "tablet-a")
+        res = self.login(self.cashier, "0000", self.other_branch, "tablet-b")
+        self.assertEqual(res.status_code, 409)
+
+    def test_the_same_tablet_reclaims_a_session_it_failed_to_log_out_of(self):
+        """The screenshots: same till, same branch, "already signed in at"
+        its own branch."""
+        old = self.login(self.cashier, "0000", self.branch, "tablet-a").json()
+
+        again = self.login(self.cashier, "0000", self.branch, "tablet-a")
+
+        self.assertEqual(again.status_code, 200, again.content)
         self.assertEqual(BranchSession.objects.filter(staff=self.cashier).count(), 1)
-
-    def test_it_works_from_another_branch_too(self):
-        self.sign_in_on_a_till(self.cashier)
-        res = self.pin_login(self.cashier, "0000", self.other_branch)
-        self.assertEqual(res.status_code, 200, res.content)
-
-    def test_the_replaced_token_stops_working(self):
-        old = self.sign_in_on_a_till(self.cashier)
-        self.pin_login(self.cashier, "0000", self.branch)
-        till = Client(HTTP_AUTHORIZATION=f"Bearer {old.token}")
+        till = Client(HTTP_AUTHORIZATION=f"Bearer {old['token']}")
         self.assertEqual(till.get("/api/auth/me").status_code, 401)
 
-    def test_a_wrong_pin_leaves_the_session_alone(self):
-        old = self.sign_in_on_a_till(self.cashier)
-        res = self.pin_login(self.cashier, "9999", self.branch)
-        self.assertEqual(res.status_code, 401)
-        self.assertTrue(BranchSession.objects.filter(pk=old.pk).exists())
+    def test_a_login_without_a_device_id_is_refused_like_before(self):
+        """Apps from before device ids can't prove they are the same tablet."""
+        self.login(self.cashier, "0000", self.branch, "tablet-a")
+        res = self.pin_login(self.cashier, "0000", self.branch)
+        self.assertEqual(res.status_code, 409)
 
-    def test_it_does_not_touch_a_colleague(self):
-        self.sign_in_on_a_till(self.colleague)
-        self.pin_login(self.cashier, "0000", self.branch)
+    def test_a_blank_device_id_does_not_match_an_old_blank_session(self):
+        self.sign_in_on_a_till(self.cashier)  # pre-device-id row
+        res = self.login(self.cashier, "0000", self.branch, "")
+        self.assertEqual(res.status_code, 409)
+
+    def test_a_wrong_pin_leaves_the_session_alone(self):
+        self.login(self.cashier, "0000", self.branch, "tablet-a")
+        res = self.login(self.cashier, "9999", self.branch, "tablet-a")
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(BranchSession.objects.filter(staff=self.cashier).count(), 1)
+
+    def test_a_colleague_on_the_same_tablet_is_untouched(self):
+        self.login(self.colleague, "1111", self.branch, "tablet-a")
+        self.login(self.cashier, "0000", self.branch, "tablet-a")
         self.assertTrue(BranchSession.objects.filter(staff=self.colleague).exists())

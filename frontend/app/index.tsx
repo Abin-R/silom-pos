@@ -6,8 +6,9 @@
  *      the wrong shop's till by tapping the wrong row.
  *   2. Fetch the staff list for that branch (admin + the branch's cashier).
  *   3. Tap a user, enter a 4-digit PIN on the keypad → auto-submits.
- *   4. POST /api/auth/pin-login → backend replaces any existing
- *      BranchSession on this branch and returns a token + role.
+ *   4. POST /api/auth/pin-login with this tablet's device id → token + role.
+ *      Refused if the account is signed in on another tablet; this tablet's
+ *      own leftover session is replaced (lib/deviceId).
  *   5. Both roles land on /pos; admin reaches admin screens via the rail.
  *
  * Every launch lands here signed out — a saved session is ended, not
@@ -38,6 +39,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { endSession } from "../lib/appLock";
+import { getDeviceId } from "../lib/deviceId";
 import { C, MONO, R } from "../lib/theme";
 import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
@@ -191,6 +193,7 @@ export default function Login() {
           branch_id: branch.id,
           staff_id: selectedUser.id,
           pin: pinToSubmit,
+          device_id: await getDeviceId(),
         }),
       });
       const body = await res.json().catch(() => ({} as any));

@@ -169,12 +169,44 @@ def api_root(_request):
 
 
 # ─── Auth (email + password, branch-scoped session) ──────────────────────────
+def _open_session(staff, branch, request):
+    """Start ``staff``'s session, or refuse because they hold one elsewhere.
+
+    One active session per staff account: a second tablet is refused with
+    "already signed in at X". The exception is the *same* tablet. Its logout
+    is fire-and-forget (frontend lib/appLock): if that call fails — wifi still
+    waking, tablet offline — the app forgets its token but the row stays, and
+    without this the account is locked out of its own till. So a session
+    opened on the device asking now is replaced rather than counted against
+    it. Returns ``(session, None)`` or ``(None, 409 response)``.
+    """
+    device_id = str((request.data or {}).get('device_id') or '').strip()[:64]
+    held = BranchSession.objects.select_related('branch').filter(staff=staff)
+    if device_id:
+        held.filter(device_id=device_id).delete()
+    existing = held.first()
+    if existing:
+        return None, Response({
+            'detail': (
+                f'This account is already signed in at '
+                f'{existing.branch.name}. Sign out there first.'
+            ),
+            'code': 'user_already_signed_in',
+            'occupied_branch': existing.branch.name,
+        }, status=409)
+    sess = BranchSession.objects.create(
+        branch=branch, staff=staff, token=BranchSession.new_token(),
+        device_id=device_id,
+    )
+    return sess, None
+
+
 @api_view(['POST'])
 def auth_login(request):
-    """Body: { email, password, branch_id }.
+    """Body: { email, password, branch_id, device_id? }.
 
-    Branch-scoped login.  If the requested branch already has an active
-    session, that one is replaced (the previous user's token stops working).
+    Branch-scoped login. Refused if this account is signed in on another
+    device (see _open_session).
     Returns: { token, staff: { id, name, role, email } }
     """
     email = (request.data or {}).get('email', '').strip().lower()
@@ -207,16 +239,9 @@ def auth_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
-    # One session per account; the newest login replaces any older one (see
-    # auth_pin_login for why refusing it locked tills out). Multiple staff may
-    # still be signed in to one branch at once.
-    BranchSession.objects.filter(staff=staff).delete()
-
-    sess = BranchSession.objects.create(
-        branch=branch,
-        staff=staff,
-        token=BranchSession.new_token(),
-    )
+    sess, refused = _open_session(staff, branch, request)
+    if refused:
+        return refused
 
     return Response({
         'token': sess.token,
@@ -367,11 +392,11 @@ def auth_branch_users(request):
 
 @api_view(['POST'])
 def auth_pin_login(request):
-    """Body: { branch_id, staff_id, pin }.
+    """Body: { branch_id, staff_id, pin, device_id? }.
 
     PIN-pad equivalent of /auth/login. Same session semantics: multiple staff
     may be signed in to one branch at once, but a single staff account holds
-    one active session — a new login replaces the old one.
+    one active session (see _open_session).
     """
     branch_id = (request.data or {}).get('branch_id')
     staff_id = (request.data or {}).get('staff_id')
@@ -399,17 +424,9 @@ def auth_pin_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
-    # One active session per staff account, and the newest login wins. A
-    # till's logout is fire-and-forget (lib/appLock): if it fails — wifi still
-    # waking, tablet offline — the app drops its token anyway and the row is
-    # orphaned. Refusing the next login would then lock the account out of
-    # every till, so a correct PIN takes over instead; any other device still
-    # holding the old token gets a 401 and is sent back to the PIN pad.
-    BranchSession.objects.filter(staff=staff).delete()
-
-    sess = BranchSession.objects.create(
-        branch=branch, staff=staff, token=BranchSession.new_token(),
-    )
+    sess, refused = _open_session(staff, branch, request)
+    if refused:
+        return refused
     return Response({
         'token': sess.token,
         'staff': {

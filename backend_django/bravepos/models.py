@@ -147,6 +147,10 @@ class BranchSession(models.Model):
         Staff, on_delete=models.CASCADE, related_name="sessions",
     )
     token = models.CharField(max_length=64, unique=True, db_index=True)
+    # Random id the tablet keeps for its lifetime (frontend lib/deviceId).
+    # Lets the same tablet reclaim a session it failed to log out of, while a
+    # different tablet is still refused. Blank on logins from older apps.
+    device_id = models.CharField(max_length=64, blank=True, default="")
     opened_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
 
