@@ -207,29 +207,11 @@ def auth_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
-    # Block concurrent logins with the same account.  If this staff is already
-    # signed in anywhere (any branch, any browser), reject — the human can
-    # still switch branches via /auth/switch-branch, but two browsers can't
-    # both hold the same identity at once.
-    existing_user_session = (
-        BranchSession.objects
-        .select_related('branch')
-        .filter(staff=staff)
-        .first()
-    )
-    if existing_user_session:
-        return Response({
-            'detail': (
-                f'This account is already signed in at '
-                f'{existing_user_session.branch.name}. Sign out there first.'
-            ),
-            'code': 'user_already_signed_in',
-            'occupied_branch': existing_user_session.branch.name,
-        }, status=409)
+    # One session per account; the newest login replaces any older one (see
+    # auth_pin_login for why refusing it locked tills out). Multiple staff may
+    # still be signed in to one branch at once.
+    BranchSession.objects.filter(staff=staff).delete()
 
-    # Multiple staff may be signed in to one branch at once (e.g. admin phone
-    # + cashier phone). The per-staff guard above already prevents the same
-    # account from holding two sessions, so just create this one.
     sess = BranchSession.objects.create(
         branch=branch,
         staff=staff,
@@ -388,8 +370,8 @@ def auth_pin_login(request):
     """Body: { branch_id, staff_id, pin }.
 
     PIN-pad equivalent of /auth/login. Same session semantics: multiple staff
-    may be signed in to one branch at once, but a single staff account is
-    limited to one active session (reject if already signed in elsewhere).
+    may be signed in to one branch at once, but a single staff account holds
+    one active session — a new login replaces the old one.
     """
     branch_id = (request.data or {}).get('branch_id')
     staff_id = (request.data or {}).get('staff_id')
@@ -417,23 +399,13 @@ def auth_pin_login(request):
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
 
-    # One active session per staff account — including the same branch.
-    # Two devices can share a branch, but not the same identity.
-    existing = (
-        BranchSession.objects
-        .select_related('branch')
-        .filter(staff=staff)
-        .first()
-    )
-    if existing:
-        return Response({
-            'detail': (
-                f'This account is already signed in at '
-                f'{existing.branch.name}. Sign out there first.'
-            ),
-            'code': 'user_already_signed_in',
-            'occupied_branch': existing.branch.name,
-        }, status=409)
+    # One active session per staff account, and the newest login wins. A
+    # till's logout is fire-and-forget (lib/appLock): if it fails — wifi still
+    # waking, tablet offline — the app drops its token anyway and the row is
+    # orphaned. Refusing the next login would then lock the account out of
+    # every till, so a correct PIN takes over instead; any other device still
+    # holding the old token gets a 401 and is sent back to the PIN pad.
+    BranchSession.objects.filter(staff=staff).delete()
 
     sess = BranchSession.objects.create(
         branch=branch, staff=staff, token=BranchSession.new_token(),
