@@ -48,9 +48,21 @@
       </div>
       <div class="field">
         <label for="f-pin">{% if mode == 'new' %}PIN{% else %}Reset PIN{% endif %}</label>
-        <input id="f-pin" type="text" name="pin" inputmode="numeric" pattern="[0-9]{4}"
-               maxlength="4" autocomplete="off"
-               placeholder="{% if mode == 'new' %}Blank = default (1234 / 0000){% else %}Blank = keep current{% endif %}">
+        {% comment %}
+          Masked by default; only a backoffice admin gets the Show toggle. It
+          reveals what is typed here, never the current PIN — that is stored
+          as a one-way hash and cannot be shown to anyone.
+        {% endcomment %}
+        <div style="display:flex;gap:8px">
+          <input id="f-pin" type="password" name="pin" inputmode="numeric" pattern="[0-9]{4}"
+                 maxlength="4" autocomplete="new-password"
+                 placeholder="{% if mode == 'new' %}Blank = default (1234 / 0000){% else %}Blank = keep current{% endif %}">
+          {% if user.role == 'admin' %}
+          <button type="button" class="btn" id="pinToggle" style="height:40px;flex:none"
+                  aria-controls="f-pin" aria-pressed="false">
+            <svg><use href="#i-eye"/></svg> <span>Show</span></button>
+          {% endif %}
+        </div>
         <span class="hint">Exactly 4 digits — that is all the till's PIN pad accepts.
           {% if mode != 'new' %}Leaving this blank keeps the current PIN. Changing it also
           signs {{ member.name }} out of the till, so the new PIN works on any device.{% endif %}</span>
@@ -88,6 +100,22 @@
     </div>
   </div>
 </form>
+
+{% if user.role == 'admin' %}
+<script>
+  (function () {
+    const field = document.getElementById('f-pin');
+    const button = document.getElementById('pinToggle');
+    if (!field || !button) return;
+    button.addEventListener('click', function () {
+      const shown = field.type === 'text';
+      field.type = shown ? 'password' : 'text';
+      button.querySelector('span').textContent = shown ? 'Show' : 'Hide';
+      button.setAttribute('aria-pressed', shown ? 'false' : 'true');
+    });
+  })();
+</script>
+{% endif %}
 
 {% comment %}
   Deleting is separated from the edit form on purpose — its own panel, its own
