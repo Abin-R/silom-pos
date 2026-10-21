@@ -106,6 +106,7 @@ urlpatterns = [
     path("staff/new", views.staff_new, name="staff_new"),
     path("staff/<uuid:staff_id>", views.staff_detail, name="staff_detail"),
     path("staff/<uuid:staff_id>/delete", views.staff_delete, name="staff_delete"),
+    path("staff/<uuid:staff_id>/pin", views.staff_pin_reveal, name="staff_pin_reveal"),
 
     # Backoffice users (web logins — username or email + password)
     path("users", views.user_list, name="user_list"),

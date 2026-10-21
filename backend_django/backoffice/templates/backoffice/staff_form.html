@@ -85,6 +85,22 @@
     </div>
     {% endif %}
 
+    {% comment %}
+      Admins only, and the till PIN only. The digits are fetched on click (and
+      the look is written to the audit log), so they are never in the page
+      source. PINs set before this existed have no readable copy.
+    {% endcomment %}
+    {% if mode != 'new' and user.role == 'admin' %}
+    <div class="srow">
+      <span class="si" style="background:var(--blue-soft);color:var(--blue)"><svg><use href="#i-key"/></svg></span>
+      <span class="sm"><b>Current till PIN: <span id="curPin" style="font-family:var(--mono);letter-spacing:2px">••••</span></b>
+        <u id="curPinNote">Admins only. Viewing it is recorded in the audit log.</u></span>
+      <button type="button" class="btn btn-sm" id="curPinBtn"
+              data-url="{% url 'backoffice:staff_pin_reveal' member.id %}">
+        <svg><use href="#i-eye"/></svg> <span>Show</span></button>
+    </div>
+    {% endif %}
+
     <div class="srow">
       <span class="si" style="background:var(--amber-soft);color:var(--amber)"><svg><use href="#i-userlock"/></svg></span>
       <span class="sm"><b>This PIN does not open the backoffice</b>
@@ -112,6 +128,38 @@
       field.type = shown ? 'password' : 'text';
       button.querySelector('span').textContent = shown ? 'Show' : 'Hide';
       button.setAttribute('aria-pressed', shown ? 'false' : 'true');
+    });
+  })();
+
+  (function () {
+    const button = document.getElementById('curPinBtn');
+    const out = document.getElementById('curPin');
+    const note = document.getElementById('curPinNote');
+    if (!button || !out) return;
+    let shown = false;
+    button.addEventListener('click', function () {
+      if (shown) {
+        out.textContent = '••••';
+        button.querySelector('span').textContent = 'Show';
+        shown = false;
+        return;
+      }
+      const token = document.querySelector('input[name=csrfmiddlewaretoken]').value;
+      fetch(button.dataset.url, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'X-CSRFToken': token },
+      }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (data) {
+          if (data.pin) {
+            out.textContent = data.pin;
+            button.querySelector('span').textContent = 'Hide';
+            shown = true;
+          } else {
+            out.textContent = 'Unknown';
+            note.textContent = 'Set before PINs could be shown. Reset it above to see it from now on.';
+          }
+        })
+        .catch(function () { note.textContent = 'Could not load the PIN. Reload and try again.'; });
     });
   })();
 </script>

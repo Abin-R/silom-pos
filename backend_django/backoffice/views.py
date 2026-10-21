@@ -4883,6 +4883,29 @@ def _last_admin(member) -> bool:
     )
 
 
+@admin_required
+def staff_pin_reveal(request, staff_id):
+    """Return a staff member's current till PIN to an admin, and log that
+    they looked. POST so it is never prefetched or cached; JSON so the PIN
+    only reaches the page when the admin clicks Show. Till PIN only — the
+    backoffice password is a one-way hash with no readable copy."""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+    member = get_object_or_404(Staff, id=staff_id)
+    pin = member.current_pin()
+
+    from bravepos import audit as _audit
+    _audit.record(
+        "reveal",
+        instance=member,
+        note="viewed till PIN" if pin else "viewed till PIN (not on record)",
+        actor=request.user,
+    )
+    response = JsonResponse({"pin": pin})
+    response["Cache-Control"] = "no-store"
+    return response
+
+
 @login_required
 def staff_delete(request, staff_id):
     """Delete a till login for good.

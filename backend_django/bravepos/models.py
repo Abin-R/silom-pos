@@ -56,6 +56,9 @@ class Staff(models.Model):
     # in the schema so a Django-admin/script-driven flow can still seed staff,
     # but the cashier-facing PIN pad never touches them.
     pin_hash = models.CharField(max_length=256, blank=True, default="")
+    # Encrypted copy of the till PIN so an admin can read it back on the
+    # staff page (see pin_vault). Blank for PINs set before it existed.
+    pin_encrypted = models.TextField(blank=True, default="")
     name = models.CharField(max_length=120)
     role = models.CharField(max_length=16, choices=ROLE_CHOICES, default="cashier")
     branches = models.ManyToManyField(
@@ -121,9 +124,17 @@ class Staff(models.Model):
             self.password_hash or "",
         ).hexdigest()
 
-    # ── PIN helpers (4-digit numeric, hashed at rest) ──
+    # ── PIN helpers (4-digit numeric; hashed for checking, encrypted for display) ──
     def set_pin(self, plain: str) -> None:
+        from .pin_vault import seal
         self.pin_hash = make_password(plain)
+        self.pin_encrypted = seal(plain)
+
+    def current_pin(self):
+        """The till PIN in plain digits, or None if it was set before PINs
+        were stored reversibly."""
+        from .pin_vault import unseal
+        return unseal(self.pin_encrypted)
 
     def check_pin(self, plain: str) -> bool:
         if not self.pin_hash:
@@ -1625,6 +1636,7 @@ class AuditLog(models.Model):
         ("login_failed", "Sign-in failed"),
         ("logout", "Signed out"),
         ("export", "Exported"),
+        ("reveal", "Viewed PIN"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
