@@ -1,0 +1,70 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Stock-out types for the branch in the header — the Type dropdown on Create
+  stock out and the reason picker on a till's Stock-Out.  A saved document
+  keeps its type as text, so deleting one here leaves history as it was.
+{% endcomment %}
+
+{% block title %}Stock out types{% endblock %}
+{% block page_title %}Manage stock out types{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ types|length }} type{{ types|length|pluralize }}{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if branch %}
+  <a class="btn" href="{% url 'backoffice:stock_out_new' %}?branch={{ branch.id }}"><svg><use href="#i-back"/></svg> Create stock out</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not branch %}
+  <div class="panel"><div class="empty">Add a branch first — stock out types belong to one.</div></div>
+{% else %}
+<form method="post" class="panel" style="flex:none">
+  {% csrf_token %}
+  <div class="panel-h">Add type</div>
+  {% if error %}<div class="banner b-red" role="alert" style="margin:0 20px 6px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
+  <div class="form-grid">
+    <div class="field">
+      <label for="f-name">Type name</label>
+      <input id="f-name" type="text" name="name" maxlength="120" required value="{{ posted.name|default:'' }}" placeholder="e.g. Borrow">
+    </div>
+    <div class="field">
+      <label for="f-name-th">Name (TH)</label>
+      <input id="f-name-th" type="text" name="name_th" maxlength="120" value="{{ posted.name_th|default:'' }}" placeholder="เช่น ยืม">
+    </div>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-blue"><svg><use href="#i-plus"/></svg> Add type</button>
+  </div>
+</form>
+
+<div class="panel panel-grow" style="margin-top:14px">
+  <div class="panel-h">All types</div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead><tr><th style="width:50px">#</th><th>Type name</th><th>Name (TH)</th><th style="width:60px"></th></tr></thead>
+      <tbody>
+        {% for t in types %}
+        <tr>
+          <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
+          <td><b style="font-weight:620">{{ t.name }}</b>{% if not t.active %} <span class="sub">· hidden</span>{% endif %}</td>
+          <td>{{ t.name_th|default:"—" }}</td>
+          <td class="r">
+            <form method="post" action="{% url 'backoffice:stock_out_type_delete' t.id %}" style="display:inline"
+                  onsubmit="return confirm('Delete “{{ t.name|escapejs }}”? Documents already saved keep it.');">
+              {% csrf_token %}
+              <button type="submit" class="ico-btn" aria-label="Delete {{ t.name }}"><svg><use href="#i-trash"/></svg></button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="empty">No types yet — add one above.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

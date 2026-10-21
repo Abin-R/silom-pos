@@ -2116,6 +2116,44 @@ def save_check_document(branch, name, wanted, doc=None, created_by=''):
     return doc
 
 
+def save_stock_out_document(branch, lines, reason, receiver='', ref_no='',
+                            note='', created_by=''):
+    """Create a stock-out document from ``[(product, qty, price, discount)]``.
+
+    The backoffice's Create stock out page saves through here; it does what
+    ``stock_documents`` does for a till's ``type=out`` POST — deduct each
+    line from on-hand and write the matching StockMovement — so a document
+    reads the same whichever side filed it.  Returns the document.
+    """
+    doc_no = _next_stock_doc_no(branch, 'out')
+    with transaction.atomic():
+        doc = StockDocument.objects.create(
+            branch=branch, type='out', document_no=doc_no,
+            ref_no=ref_no, receiver=receiver, reason=reason, note=note,
+            created_by=created_by,
+        )
+        total = Decimal(0)
+        for product, qty, price, discount in lines:
+            line_total = max(Decimal(0), qty * price - discount)
+            total += line_total
+            StockDocumentItem.objects.create(
+                document=doc, product=product,
+                barcode=product.barcode or '', product_name=product.name,
+                qty=qty, price=price, discount=discount, total=line_total,
+            )
+            product.stock = (product.stock or 0) - int(qty)
+            product.save(update_fields=['stock'])
+            StockMovement.objects.create(
+                branch=branch, product=product, product_name=product.name,
+                type='out', qty=int(qty), note=reason or note,
+                document_no=doc_no,
+            )
+        doc.subtotal = doc.total = total
+        doc.discount = sum((d for _p, _q, _pr, d in lines), Decimal(0))
+        doc.save(update_fields=['subtotal', 'total', 'discount'])
+    return doc
+
+
 @api_view(['GET', 'PUT'])
 @require_session
 def stock_document_detail(request, doc_id):

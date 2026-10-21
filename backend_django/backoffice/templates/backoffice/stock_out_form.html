@@ -1,0 +1,320 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Create one stock-out document: a type (the branch's stock-out reasons), who
+  received it, and the products that left with a quantity each.  Saving
+  deducts stock at once — the same as a till's Stock-Out — so a saved
+  document is read-only; a mistake is corrected with Stock in or Adjust.
+
+  The price column starts at the product's cost, like the till's form.
+{% endcomment %}
+
+{% block title %}Create stock out{% endblock %}
+{% block page_title %}Create stock out{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ branch.name|default:"No branch" }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{{ back_url }}"><svg><use href="#i-back"/></svg> Back</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  .ck-qty { width: 100px; height: 36px; text-align: right; font-family: var(--mono); }
+  .ck-empty { padding: 48px 20px; text-align: center; color: var(--mut2); font-size: 15px; }
+  .so-manage { font-size: 12.5px; font-weight: 600; margin-top: 6px; display: inline-flex; gap: 5px;
+               align-items: center; color: var(--blue); text-decoration: none; }
+  .so-manage:hover { color: var(--blue-d); }
+  .so-manage svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8;
+                   stroke-linecap: round; stroke-linejoin: round; }
+  dialog.ck-dlg {
+    border: 0; border-radius: 14px; padding: 0;
+    width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
+    box-shadow: 0 24px 60px rgba(16, 42, 99, .25);
+    background: var(--card); color: var(--txt);
+  }
+  dialog.ck-dlg[open] { display: flex; flex-direction: column; }
+  dialog.ck-dlg::backdrop { background: rgba(17, 24, 39, .45); }
+  .ck-dlg-h { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .ck-dlg-h b { font-size: 16px; flex: 1; }
+  .ck-dlg-s { display: flex; gap: 10px; padding: 14px 20px; }
+  .ck-dlg-s .inp { flex: 1; }
+  .ck-dlg-list { overflow: auto; flex: 1; min-height: 200px; border-top: 1px solid var(--line2); }
+  .ck-dlg-list tr { cursor: pointer; }
+  .ck-dlg-list tr.dis { cursor: default; opacity: .5; }
+  .ck-dlg-f { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+  .ck-dlg-f .sub { margin-right: auto; }
+  @media (max-width: 640px) {
+    .ck-hide-sm { display: none; }
+    .ck-qty { width: 72px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not branch %}
+  <div class="panel"><div class="ck-empty">Add a branch first — a stock-out belongs to one.</div></div>
+{% else %}
+<form method="post" id="ckForm">
+  {% csrf_token %}
+  {% if error %}<div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
+
+  <div class="panel" style="flex:none">
+    <div class="panel-h">Information</div>
+    <div class="form-grid">
+      <div class="field"><label>Shop</label><b>{{ branch.name }}</b></div>
+      <div class="field">
+        <label for="f-reason">Type</label>
+        <select id="f-reason" name="reason" required>
+          <option value="">Choose a type…</option>
+          {% for r in reasons %}
+            <option value="{{ r.name }}" {% if posted.reason == r.name %}selected{% endif %}>{{ r.name }}{% if r.name_th %} · {{ r.name_th }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <a class="so-manage" href="{% url 'backoffice:stock_out_types' %}?branch={{ branch.id }}"><svg><use href="#i-cog"/></svg> Manage types</a>
+      </div>
+      <div class="field">
+        <label for="f-receiver">Receiver</label>
+        <input id="f-receiver" type="text" name="receiver" maxlength="200" value="{{ posted.receiver|default:'' }}" placeholder="Who took the stock">
+      </div>
+      <div class="field">
+        <label for="f-ref">Ref. No.</label>
+        <input id="f-ref" type="text" name="ref_no" maxlength="120" value="{{ posted.ref_no|default:'' }}" placeholder="Bill or reference no.">
+      </div>
+      <div class="field wide">
+        <label for="f-note">Note</label>
+        <textarea id="f-note" name="note" rows="2" placeholder="Optional">{{ posted.note|default:'' }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="flex:none;margin-top:14px">
+    <div class="panel-h">
+      Stock out products
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-sm" id="ckAdd"><svg><use href="#i-plus"/></svg> Add product</button>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:44px">#</th><th class="ck-hide-sm">Barcode</th><th>Product</th>
+          <th class="r ck-hide-sm">On hand</th><th class="r" style="width:120px">Quantity</th>
+          <th class="r" style="width:120px">Price</th><th class="r ck-hide-sm">Total</th><th style="width:48px"></th>
+        </tr>
+      </thead>
+      <tbody id="ckRows"></tbody>
+      <tfoot id="ckFoot" hidden>
+        <tr><td colspan="6" class="r ck-hide-sm">Total</td><td class="r money ck-hide-sm" id="ckTotal" style="font-weight:660"></td><td class="ck-hide-sm"></td></tr>
+      </tfoot>
+    </table>
+    <div class="ck-empty" id="ckEmpty">No item — use Add product.</div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue" id="ckSave"><svg><use href="#i-check"/></svg> Save</button>
+      <a class="btn" href="{{ back_url }}">Cancel</a>
+    </div>
+  </div>
+</form>
+
+<dialog class="ck-dlg" id="ckDlg" aria-labelledby="ckDlgTitle">
+  <div class="ck-dlg-h">
+    <b id="ckDlgTitle">Select product</b>
+    <button type="button" class="ico-btn" id="ckDlgX" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div class="ck-dlg-s">
+    <input class="inp" type="search" id="ckSearch" placeholder="Product, barcode or category" autocomplete="off">
+  </div>
+  <div class="ck-dlg-list">
+    <table class="tbl">
+      <thead><tr><th style="width:40px"><input type="checkbox" id="ckAll" aria-label="Select all shown"></th>
+        <th>Product</th><th class="ck-hide-sm">Barcode</th><th class="ck-hide-sm">Category</th><th class="r">Balance</th></tr></thead>
+      <tbody id="ckList"></tbody>
+    </table>
+  </div>
+  <div class="ck-dlg-f">
+    <span class="sub" id="ckPicked">0 selected</span>
+    <button type="button" class="btn" id="ckCancel">Cancel</button>
+    <button type="button" class="btn btn-blue" id="ckConfirm">Confirm</button>
+  </div>
+</dialog>
+
+{{ pickable|json_script:"ckProducts" }}
+{{ posted_lines|json_script:"ckPosted" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var form = document.getElementById("ckForm");
+  if (!form) return;
+  var products = JSON.parse(document.getElementById("ckProducts").textContent);
+  var posted = JSON.parse(document.getElementById("ckPosted").textContent);
+  var byId = {};
+  products.forEach(function (p) { byId[p.id] = p; });
+  var rows = document.getElementById("ckRows");
+  var empty = document.getElementById("ckEmpty");
+  var foot = document.getElementById("ckFoot");
+  var totalCell = document.getElementById("ckTotal");
+  var dlg = document.getElementById("ckDlg");
+  var list = document.getElementById("ckList");
+  var search = document.getElementById("ckSearch");
+  var all = document.getElementById("ckAll");
+  var pickedLabel = document.getElementById("ckPicked");
+  var picked = new Set();
+  var money = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function el(tag, attrs, text) {
+    var n = document.createElement(tag);
+    for (var k in (attrs || {})) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function icon(id) {
+    var ns = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(ns, "svg");
+    var use = document.createElementNS(ns, "use");
+    use.setAttribute("href", "#" + id);
+    svg.appendChild(use);
+    return svg;
+  }
+  function inDoc() {
+    var s = new Set();
+    rows.querySelectorAll("tr[data-pid]").forEach(function (tr) { s.add(tr.dataset.pid); });
+    return s;
+  }
+  function recalc() {
+    var trs = rows.querySelectorAll("tr");
+    var sum = 0;
+    trs.forEach(function (tr, i) {
+      tr.querySelector(".ck-n").textContent = i + 1;
+      var q = parseFloat(tr.querySelector("[name=qty]").value) || 0;
+      var pr = parseFloat(tr.querySelector("[name=price]").value) || 0;
+      tr.querySelector(".ck-line").textContent = "฿" + money.format(q * pr);
+      sum += q * pr;
+    });
+    totalCell.textContent = "฿" + money.format(sum);
+    empty.hidden = trs.length > 0;
+    foot.hidden = trs.length === 0;
+  }
+
+  function addRow(p, qty, price) {
+    var tr = el("tr", { "data-pid": p.id });
+    tr.appendChild(el("td", { "class": "money ck-n", style: "color:var(--mut)" }));
+    tr.appendChild(el("td", { "class": "money ck-hide-sm", style: "color:var(--mut)" }, p.barcode || "—"));
+    var name = el("td");
+    var wrap = el("div", { style: "display:flex;align-items:center;gap:12px" });
+    var th = el("span", { "class": "thumb" });
+    if (p.img) th.appendChild(el("img", { src: p.img, alt: "", loading: "lazy", width: "38", height: "38" }));
+    else th.textContent = (p.name || "?").charAt(0);
+    wrap.appendChild(th);
+    wrap.appendChild(el("b", { style: "font-weight:620" }, p.name));
+    name.appendChild(wrap);
+    tr.appendChild(name);
+    tr.appendChild(el("td", { "class": "r money ck-hide-sm" }, String(p.stock)));
+    var q = el("td", { "class": "r" });
+    q.appendChild(el("input", { type: "hidden", name: "product_id", value: p.id }));
+    q.appendChild(el("input", { "class": "inp ck-qty", type: "number", name: "qty", min: "1", step: "1",
+                                required: "", value: qty || "1", "aria-label": "Quantity of " + p.name }));
+    tr.appendChild(q);
+    var pr = el("td", { "class": "r" });
+    pr.appendChild(el("input", { "class": "inp ck-qty", type: "number", name: "price", min: "0", step: "any",
+                                 value: price != null ? price : p.cost, "aria-label": "Price of " + p.name }));
+    tr.appendChild(pr);
+    tr.appendChild(el("td", { "class": "r money ck-hide-sm ck-line" }));
+    var d = el("td");
+    var del = el("button", { type: "button", "class": "ico-btn ck-del", "aria-label": "Remove " + p.name });
+    del.appendChild(icon("i-trash"));
+    d.appendChild(del);
+    tr.appendChild(d);
+    rows.appendChild(tr);
+  }
+
+  rows.addEventListener("click", function (e) {
+    var b = e.target.closest(".ck-del");
+    if (!b) return;
+    b.closest("tr").remove();
+    recalc();
+  });
+  rows.addEventListener("input", recalc);
+
+  function shown() {
+    var q = search.value.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(function (p) {
+      return (p.name + " " + p.barcode + " " + p.category).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  function drawList() {
+    var have = inDoc();
+    var items = shown();
+    list.textContent = "";
+    if (!items.length) {
+      var tr = el("tr");
+      tr.appendChild(el("td", { colspan: "5", "class": "empty" }, products.length ? "No product matches." : "This branch has no products."));
+      list.appendChild(tr);
+    }
+    items.slice(0, 400).forEach(function (p) {
+      var already = have.has(p.id);
+      var tr = el("tr", { "data-pid": p.id, "class": already ? "dis" : "" });
+      var c = el("td");
+      var box = el("input", { type: "checkbox", "aria-label": p.name });
+      box.checked = already || picked.has(p.id);
+      box.disabled = already;
+      c.appendChild(box);
+      tr.appendChild(c);
+      var n = el("td");
+      n.appendChild(el("b", { style: "font-weight:600" }, p.name));
+      tr.appendChild(n);
+      tr.appendChild(el("td", { "class": "money ck-hide-sm", style: "color:var(--mut)" }, p.barcode || "—"));
+      tr.appendChild(el("td", { "class": "sub ck-hide-sm" }, p.category || "—"));
+      tr.appendChild(el("td", { "class": "r money" }, String(p.stock)));
+      list.appendChild(tr);
+    });
+    pickedLabel.textContent = picked.size + " selected";
+  }
+
+  list.addEventListener("click", function (e) {
+    var tr = e.target.closest("tr[data-pid]");
+    if (!tr || tr.classList.contains("dis")) return;
+    var id = tr.dataset.pid;
+    if (picked.has(id)) picked.delete(id); else picked.add(id);
+    tr.querySelector("input").checked = picked.has(id);
+    pickedLabel.textContent = picked.size + " selected";
+  });
+  all.addEventListener("change", function () {
+    var have = inDoc();
+    shown().forEach(function (p) {
+      if (have.has(p.id)) return;
+      if (all.checked) picked.add(p.id); else picked.delete(p.id);
+    });
+    drawList();
+  });
+  search.addEventListener("input", drawList);
+
+  document.getElementById("ckAdd").addEventListener("click", function () {
+    picked = new Set(); search.value = ""; all.checked = false;
+    drawList();
+    dlg.showModal();
+    search.focus();
+  });
+  function close() { dlg.close(); }
+  document.getElementById("ckDlgX").addEventListener("click", close);
+  document.getElementById("ckCancel").addEventListener("click", close);
+  document.getElementById("ckConfirm").addEventListener("click", function () {
+    products.forEach(function (p) { if (picked.has(p.id)) addRow(p); });
+    recalc();
+    close();
+  });
+
+  form.addEventListener("submit", function (e) {
+    if (!rows.querySelector("tr")) {
+      e.preventDefault();
+      empty.textContent = "Add at least one product before saving.";
+    }
+  });
+
+  posted.forEach(function (l) { if (byId[l.id]) addRow(byId[l.id], l.qty, l.price); });
+  recalc();
+})();
+</script>
+{% endblock %}

@@ -47,12 +47,13 @@ from bravepos.models import (
     StockDocument,
     StockDocumentItem,
     StockMovement,
+    StockOutReason,
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, sale_windows
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
-from bravepos.views import save_check_document
+from bravepos.views import save_check_document, save_stock_out_document
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -2789,6 +2790,137 @@ def stock_in_document(request, doc_id):
 @login_required
 def stock_out_document(request, doc_id):
     return _stock_document(request, "out", doc_id)
+
+
+# ─── Create stock out / stock-out types ─────────────────────────────────
+# The backoffice side of the till's Stock-Out form: pick a reason (the
+# branch's StockOutReason list — "Manage types" edits it), add products and
+# the quantity that left, save.  Saving deducts stock straight away, so unlike
+# a check document a stock-out can't be edited afterwards.
+
+def _stock_out_reasons(branch):
+    return list(StockOutReason.objects.filter(branch=branch, active=True))
+
+
+def _stock_out_post(request, branch):
+    """Validate the posted form and save it.  Returns ``(doc, error)``.
+
+    Lines arrive as parallel ``product_id`` / ``qty`` / ``price`` lists, one
+    triple per table row.  Quantities are whole numbers because on-hand is.
+    """
+    reason = (request.POST.get("reason") or "").strip()
+    if reason not in {r.name for r in _stock_out_reasons(branch)}:
+        return None, "Choose a type."
+
+    products = {str(p.id): p for p in Product.objects.filter(
+        branch=branch, id__in=request.POST.getlist("product_id"))}
+    lines, seen = [], set()
+    for pid, raw_qty, raw_price in zip(request.POST.getlist("product_id"),
+                                       request.POST.getlist("qty"),
+                                       request.POST.getlist("price")):
+        p = products.get(pid)
+        if p is None or pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            qty = Decimal(str(raw_qty).strip() or "0")
+            price = Decimal(str(raw_price).strip() or "0")
+        except InvalidOperation:
+            return None, "Quantities and prices must be numbers."
+        if qty <= 0 or qty != qty.to_integral_value():
+            return None, f"{p.name}: quantity must be a whole number above 0."
+        if price < 0:
+            return None, f"{p.name}: price can't be negative."
+        lines.append((p, qty, price, Decimal(0)))
+    if not lines:
+        return None, "Add at least one product."
+
+    created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
+    doc = save_stock_out_document(
+        branch, lines, reason,
+        receiver=(request.POST.get("receiver") or "").strip()[:200],
+        ref_no=(request.POST.get("ref_no") or "").strip()[:120],
+        note=(request.POST.get("note") or "").strip(),
+        created_by=created_by,
+    )
+    return doc, None
+
+
+@login_required
+def stock_out_new(request):
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        doc, error = _stock_out_post(request, branch)
+        if error is None:
+            messages.success(request, f"{doc.document_no} was saved and stock deducted.")
+            return redirect("backoffice:stock_out_document", doc_id=doc.id)
+    pickable = _check_stock_pickable(branch)
+    if pickable:
+        costs = {str(pid): cost for pid, cost in Product.objects
+                 .filter(id__in=[p["id"] for p in pickable]).values_list("id", "cost")}
+        for p in pickable:
+            p["cost"] = str(costs.get(p["id"]) or 0)
+    return render(request, "backoffice/stock_out_form.html", {
+        "active": "stock_out",
+        "branches": branches,
+        "branch": branch,
+        "reasons": _stock_out_reasons(branch),
+        "posted": request.POST if error else None,
+        # Re-drawn by the page's script, so a rejected save keeps its lines.
+        "posted_lines": [
+            {"id": pid, "qty": q, "price": pr} for pid, q, pr in zip(
+                request.POST.getlist("product_id"), request.POST.getlist("qty"),
+                request.POST.getlist("price"))
+        ] if error else [],
+        "error": error,
+        "pickable": pickable,
+        "back_url": reverse("backoffice:stock_out"),
+        "hide_dates": True,
+    })
+
+
+@login_required
+def stock_out_types(request):
+    """The branch's stock-out reasons — what the Type dropdown offers here and
+    on the till.  Saved documents keep the reason as text, so deleting one
+    never rewrites history."""
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        name = (request.POST.get("name") or "").strip()[:120]
+        name_th = (request.POST.get("name_th") or "").strip()[:120]
+        existing = StockOutReason.objects.filter(branch=branch)
+        if not name:
+            error = "Enter a type name."
+        elif existing.filter(name__iexact=name).exists():
+            error = f"“{name}” is already a type."
+        else:
+            last = existing.order_by("-sort_order").first()
+            StockOutReason.objects.create(
+                branch=branch, name=name, name_th=name_th,
+                sort_order=(last.sort_order + 1) if last else 0,
+            )
+            messages.success(request, f"Added “{name}”.")
+            return redirect(reverse("backoffice:stock_out_types") + f"?branch={branch.id}")
+    return render(request, "backoffice/stock_out_types.html", {
+        "active": "stock_out",
+        "branches": branches,
+        "branch": branch,
+        "types": StockOutReason.objects.filter(branch=branch) if branch else [],
+        "error": error,
+        "posted": request.POST if error else None,
+        "hide_dates": True,
+    })
+
+
+@login_required
+def stock_out_type_delete(request, type_id):
+    row = get_object_or_404(StockOutReason, id=type_id)
+    if request.method == "POST":
+        row.delete()
+        messages.success(request, f"Deleted “{row.name}”.")
+    return redirect(reverse("backoffice:stock_out_types") + f"?branch={row.branch_id}")
 
 
 # ─── Check stock ────────────────────────────────────────────────────────
