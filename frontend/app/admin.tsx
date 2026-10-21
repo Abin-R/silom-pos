@@ -4829,9 +4829,13 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
         fetchShop(),
       ]);
       if (!summary) throw new Error("Shift summary response was not valid JSON");
-      await printShiftSummary(summary, shop);
-    } catch (e) {
+      // printShiftSummary reports failure in its result rather than throwing,
+      // so check it — otherwise a till with no printer set up just did nothing.
+      const res = await printShiftSummary(summary, shop);
+      if (!res.ok) throw new Error(res.error);
+    } catch (e: any) {
       console.error(tr("admin.reprint_summary_failed"), e);
+      showAlert(tr("admin.print_failed"), e?.message || String(e));
     } finally {
       setPrinting(false);
     }
@@ -4903,6 +4907,7 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
           shifts={history}
           isWide={isWide}
           onReprint={reprintSummary}
+          printing={printing}
           fmtDT={fmtDT}
         />
       )}
@@ -5087,6 +5092,12 @@ const fmtRangeLabel = (r: DateRange) => {
   if (!r.start) return tr("admin.select_date");
   const s = isoToDate(r.start);
   const e = isoToDate(r.end || r.start);
+  if (r.start === (r.end || r.start)) {
+    const today = fmtISO(new Date());
+    if (r.start === today) return tr("admin.today");
+    if (r.start === shiftIsoDays(today, -1)) return tr("admin.yesterday");
+    return `${s.getDate()} ${monthShort(s.getMonth())} ${s.getFullYear() + BE_OFFSET}`;
+  }
   return `${s.getDate()} ${monthShort(s.getMonth())} ${s.getFullYear() + BE_OFFSET} - ` +
     `${e.getDate()} ${monthShort(e.getMonth())} ${e.getFullYear() + BE_OFFSET}`;
 };
@@ -5100,19 +5111,21 @@ function ShiftHistory({
   shifts,
   isWide,
   onReprint,
+  printing,
   fmtDT,
 }: {
   shifts: ShiftType[];
   isWide: boolean;
   onReprint: (id: string) => void;
+  printing: boolean;
   fmtDT: (iso?: string) => string;
 }) {
   useT(); // re-render this screen when the language changes
+  // Opens on Today like the reference POS; the arrows step a day at a time,
+  // and the calendar still picks a wider range.
   const initialRange = useMemo<DateRange>(() => {
-    const today = new Date();
-    const start = new Date(today);
-    start.setDate(start.getDate() - 9);
-    return { start: fmtISO(start), end: fmtISO(today) };
+    const today = fmtISO(new Date());
+    return { start: today, end: today };
   }, []);
   const [range, setRange] = useState<DateRange>(initialRange);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -5150,11 +5163,13 @@ function ShiftHistory({
     [flat, selectedId],
   );
 
-  const shiftRange = (delta: number) => {
-    setRange((r) => ({
-      start: shiftIsoDays(r.start, delta),
-      end: shiftIsoDays(r.end || r.start, delta),
-    }));
+  // Step by the range's own length: a day for a single day, a week for a week.
+  const shiftRange = (dir: 1 | -1) => {
+    setRange((r) => {
+      const end = r.end || r.start;
+      const span = Math.round((isoToDate(end).getTime() - isoToDate(r.start).getTime()) / 86400000) + 1;
+      return { start: shiftIsoDays(r.start, dir * span), end: shiftIsoDays(end, dir * span) };
+    });
   };
 
   const detailCard = selected ? (
@@ -5192,12 +5207,13 @@ function ShiftHistory({
       </View>
       {selected.status !== "open" && (
         <TouchableOpacity
-          style={styles.histReprintBtn}
+          style={[styles.histReprintBtn, printing && { opacity: 0.6 }]}
           onPress={() => onReprint(selected.id)}
+          disabled={printing}
           testID={`shift-reprint-${selected.id}`}
         >
-          <Ionicons name="print-outline" size={18} color={C.brand} />
-          <Text style={styles.histReprintText}>{tr("admin.reprint_summary")}</Text>
+          <Ionicons name="receipt-outline" size={18} color={C.ink} />
+          <Text style={styles.histReprintText}>{printing ? tr("admin.printing") : tr("admin.re_print")}</Text>
         </TouchableOpacity>
       )}
     </ScrollView>
@@ -5211,7 +5227,7 @@ function ShiftHistory({
   const listPanel = (
     <View style={styles.histListPanel}>
       <View style={styles.histRangeRow}>
-        <TouchableOpacity onPress={() => shiftRange(-10)} testID="hist-range-prev">
+        <TouchableOpacity onPress={() => shiftRange(-1)} testID="hist-range-prev">
           <Ionicons name="chevron-back" size={20} color={C.brand} />
         </TouchableOpacity>
         <TouchableOpacity
@@ -5221,7 +5237,7 @@ function ShiftHistory({
         >
           <Text style={styles.histRangeLabel}>{fmtRangeLabel(range)}</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => shiftRange(10)} testID="hist-range-next">
+        <TouchableOpacity onPress={() => shiftRange(1)} testID="hist-range-next">
           <Ionicons name="chevron-forward" size={20} color={C.brand} />
         </TouchableOpacity>
       </View>
@@ -7644,11 +7660,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 4,
   },
   histReprintBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 10, borderRadius: 10,
-    borderWidth: 1, borderColor: C.brand, backgroundColor: C.brandTintSoft,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 16, borderRadius: 12,
+    borderWidth: 1, borderColor: C.bg, backgroundColor: C.surface,
   },
-  histReprintText: { fontSize: 13, fontWeight: "700", color: C.brand },
+  histReprintText: { fontSize: 15, fontWeight: "700", color: C.ink },
 
   catPick: {
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
