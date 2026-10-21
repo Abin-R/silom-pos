@@ -36,6 +36,17 @@
                placeholder="ชื่อหมวดหมู่">
       </div>
       <div class="field">
+        <label for="f-parent">Parent category</label>
+        <select id="f-parent" name="parent_category">
+          <option value="">— None —</option>
+          {% for p in parent_categories %}
+          <option value="{{ p.id }}" {% if category.parent_category_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="hint">The group this category belongs to ·
+          <a href="{% url 'backoffice:parent_category_list' %}?{{ qs }}">Manage</a></span>
+      </div>
+      <div class="field">
         <label for="f-color">Tile colour</label>
         <input id="f-color" type="color" name="color"
                value="{{ category.color|default:'#2563EB' }}"

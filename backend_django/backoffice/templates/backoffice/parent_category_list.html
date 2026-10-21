@@ -1,0 +1,65 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Parent categories — the level above Category ("Bakery" over "Croissants",
+  "Cookies").  Backoffice-only grouping: the till still shows categories.
+{% endcomment %}
+
+{% block title %}Parent categories{% endblock %}
+{% block page_title %}Parent categories{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ parents|length }} parent categor{{ parents|length|pluralize:"y,ies" }}{% if branch %} at {{ branch.name }}{% endif %} · each groups several categories</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:category_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Categories</a>
+  <a class="btn btn-blue" href="{% url 'backoffice:parent_category_new' %}?{{ qs }}">
+    <svg><use href="#i-plus"/></svg> Add parent category</a>
+{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width:70px">Order</th><th>Parent category</th>
+        <th style="width:140px">Categories</th>
+        <th class="r" style="width:110px">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in parents %}
+      <tr>
+        <td class="money" style="color:var(--mut)">{{ p.order }}</td>
+        <td>
+          <a href="{% url 'backoffice:parent_category_detail' parent_id=p.id %}?{{ qs }}">
+            <b style="font-weight:620;color:var(--txt)">{{ p.name }}</b></a>
+          {% if p.name_th %}<span style="color:var(--mut2);margin-left:6px">{{ p.name_th }}</span>{% endif %}
+        </td>
+        <td class="money">{{ p.n_categories }}</td>
+        <td class="r">
+          <span style="display:inline-flex;gap:6px">
+            <a class="ico-btn" title="Edit" href="{% url 'backoffice:parent_category_detail' parent_id=p.id %}?{{ qs }}">
+              <svg><use href="#i-pencil"/></svg></a>
+            <form method="post" action="{% url 'backoffice:parent_category_delete' parent_id=p.id %}?{{ qs }}"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete parent category “{{ p.name|escapejs }}”? Its categories stay, just ungrouped.');">
+              {% csrf_token %}
+              <button type="submit" class="ico-btn danger" title="Delete"><svg><use href="#i-trash"/></svg></button>
+            </form>
+          </span>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="empty">
+        <svg><use href="#i-folder"/></svg>
+        No parent categories yet. Categories work fine without one — a parent only groups them.
+        <div style="margin-top:16px">
+          <a class="btn btn-blue" href="{% url 'backoffice:parent_category_new' %}?{{ qs }}">
+            <svg><use href="#i-plus"/></svg> Create the first parent category</a></div>
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

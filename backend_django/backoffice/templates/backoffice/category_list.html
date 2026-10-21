@@ -15,6 +15,8 @@
 {% block topbar_end %}
   <a class="btn" href="{% url 'backoffice:product_list' %}?{{ qs }}">
     <svg><use href="#i-back"/></svg> Catalogue</a>
+  <a class="btn" href="{% url 'backoffice:parent_category_list' %}?{{ qs }}">
+    <svg><use href="#i-folder"/></svg> Parent categories</a>
   <a class="btn btn-blue" href="{% url 'backoffice:category_new' %}?{{ qs }}">
     <svg><use href="#i-plus"/></svg> Add category</a>
 {% endblock %}
@@ -25,6 +27,7 @@
     <thead>
       <tr>
         <th style="width:70px">Order</th><th>Category</th>
+        <th style="width:180px">Parent category</th>
         <th style="width:150px">Colour on the till</th>
         <th style="width:110px">Status</th><th class="r" style="width:110px">Actions</th>
       </tr>
@@ -37,6 +40,10 @@
           <a href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}">
             <b style="font-weight:620;color:var(--txt)">{{ c.name }}</b></a>
           {% if c.name_th %}<span style="color:var(--mut2);margin-left:6px">{{ c.name_th }}</span>{% endif %}
+        </td>
+        <td>
+          {% if c.parent_category %}{{ c.parent_category.name }}
+          {% else %}<span style="color:var(--mut2)">—</span>{% endif %}
         </td>
         <td>
           <span style="display:inline-flex;align-items:center;gap:9px">
@@ -62,7 +69,7 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="5" class="empty">
+      <tr><td colspan="6" class="empty">
         <svg><use href="#i-folder"/></svg>
         No categories yet. Products without one still sell — they just land in a single ungrouped tab on the till.
         <div style="margin-top:16px">

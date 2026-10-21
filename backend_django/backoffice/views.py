@@ -39,6 +39,7 @@ from bravepos.models import (
     DiscountType,
     Order,
     OrderItem,
+    ParentCategory,
     Product,
     ProductSaleWindow,
     Settings,
@@ -3917,10 +3918,25 @@ def product_bulk_edit(request):
 
 
 # ─── Categories ─────────────────────────────────────────────────────────
+def _parent_category_choices(branch):
+    """The parents a category at ``branch`` may sit under — its own branch's
+    only, so a category can never be filed under another branch's group."""
+    if branch is None:
+        return ParentCategory.objects.none()
+    return ParentCategory.objects.filter(branch=branch).order_by("order", "name")
+
+
 def _apply_category_form(category, post, branch):
     """Pull fields out of a POSTed category form onto a Category instance.
     Shared by `category_new` and `category_detail`."""
     category.branch = branch
+    # An id that is not one of this branch's parents (stale tab, hand-edited
+    # POST) is treated as "no parent" rather than trusted.
+    parent_id = (post.get("parent_category") or "").strip()
+    category.parent_category = (
+        _parent_category_choices(branch).filter(id=parent_id).first()
+        if parent_id else None
+    )
     category.name = (post.get("name") or "").strip()
     category.name_th = (post.get("name_th") or "").strip()
     category.color = (post.get("color") or "#00B14F").strip() or "#00B14F"
@@ -3939,7 +3955,7 @@ def category_list(request):
     Grab/icon/cooking-priority columns."""
     branches, branch, _, _ = _common_filters(request)
 
-    qs = Category.objects.all()
+    qs = Category.objects.select_related("parent_category")
     if branch:
         qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
     qs = qs.order_by("order", "name")
@@ -3971,6 +3987,7 @@ def category_detail(request, category_id):
         "branches": branches,
         "branch": branch,
         "category": category,
+        "parent_categories": _parent_category_choices(category.branch or branch),
         "mode": "edit",
         "hide_dates": True,
         "qs": _filter_qs(request),
@@ -3994,6 +4011,7 @@ def category_new(request):
         "branches": branches,
         "branch": branch,
         "category": Category(branch=branch, active=True),
+        "parent_categories": _parent_category_choices(branch),
         "mode": "new",
         "hide_dates": True,
         "qs": _filter_qs(request),
@@ -4009,6 +4027,99 @@ def category_delete(request, category_id):
     if request.method == "POST":
         category.delete()
     return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
+
+
+# ─── Parent categories ──────────────────────────────────────────────────
+# The level above Category.  Branch-scoped like categories; a parent is only
+# ever reached through its own branch, so every view below 404s on another
+# branch's row rather than letting the header picker and the URL disagree.
+def _apply_parent_category_form(parent, post):
+    parent.name = (post.get("name") or "").strip()
+    parent.name_th = (post.get("name_th") or "").strip()
+    try:
+        parent.order = int(post.get("order") or 0)
+    except ValueError:
+        parent.order = 0
+    return parent
+
+
+@login_required
+def parent_category_list(request):
+    """The branch's parent categories, each with the categories under it."""
+    branches, branch, _, _ = _common_filters(request)
+    parents = (_parent_category_choices(branch)
+               .annotate(n_categories=Count("categories")))
+
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "parents": parents,
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/parent_category_list.html", context)
+
+
+@login_required
+def parent_category_detail(request, parent_id):
+    """Edit a parent category; also lists the categories filed under it."""
+    branches, branch, _, _ = _common_filters(request)
+    parent = get_object_or_404(ParentCategory, id=parent_id, branch=branch)
+
+    if request.method == "POST":
+        _apply_parent_category_form(parent, request.POST)
+        parent.save()
+        return redirect(reverse("backoffice:parent_category_list") + f"?{_filter_qs(request)}")
+
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "parent": parent,
+        "children": parent.categories.order_by("order", "name"),
+        "mode": "edit",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/parent_category_form.html", context)
+
+
+@login_required
+def parent_category_new(request):
+    """Add a parent category at the selected branch, last in the order."""
+    branches, branch, _, _ = _common_filters(request)
+    if branch is None:
+        raise Http404("No branch selected")
+
+    if request.method == "POST":
+        parent = ParentCategory(branch=branch)
+        _apply_parent_category_form(parent, request.POST)
+        parent.save()
+        return redirect(reverse("backoffice:parent_category_list") + f"?{_filter_qs(request)}")
+
+    last = branch.parent_categories.aggregate(m=Max("order"))["m"]
+    context = {
+        "active": "categories",
+        "branches": branches,
+        "branch": branch,
+        "parent": ParentCategory(branch=branch, order=(last or 0) + 1),
+        "mode": "new",
+        "hide_dates": True,
+        "qs": _filter_qs(request),
+    }
+    return render(request, "backoffice/parent_category_form.html", context)
+
+
+@login_required
+def parent_category_delete(request, parent_id):
+    """Delete a parent category.  Its categories stay — the FK is SET_NULL,
+    so they just become ungrouped."""
+    _, branch, _, _ = _common_filters(request)
+    parent = get_object_or_404(ParentCategory, id=parent_id, branch=branch)
+    if request.method == "POST":
+        parent.delete()
+    return redirect(reverse("backoffice:parent_category_list") + f"?{_filter_qs(request)}")
 
 
 # ─── Discount types ─────────────────────────────────────────────────────

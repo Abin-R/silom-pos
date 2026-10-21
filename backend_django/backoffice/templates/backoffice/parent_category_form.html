@@ -1,0 +1,66 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Add / edit a parent category.  Categories are filed under it from the
+  category form; this page only lists them.
+{% endcomment %}
+
+{% block title %}{% if mode == 'new' %}Add parent category{% else %}{{ parent.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'new' %}Add parent category{% else %}{{ parent.name }}{% endif %}{% endblock %}
+{% block page_sub %}<div class="tb-sub">A parent category groups several categories</div>{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{% url 'backoffice:parent_category_list' %}?{{ qs }}">
+    <svg><use href="#i-back"/></svg> Back to parent categories</a>
+{% endblock %}
+
+{% block content %}
+<form method="post" style="max-width:720px">
+  {% csrf_token %}
+  <div class="panel">
+    <div class="panel-h">Parent category</div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" name="name" required value="{{ parent.name }}"
+               placeholder="e.g. Bakery">
+      </div>
+      <div class="field">
+        <label for="f-order">Order</label>
+        <input id="f-order" type="number" name="order" value="{{ parent.order }}">
+        <span class="hint">Lower numbers show first.</span>
+      </div>
+      <div class="field">
+        <label for="f-nameth">Name in Thai</label>
+        <input id="f-nameth" type="text" name="name_th" value="{{ parent.name_th }}"
+               placeholder="ชื่อหมวดหมู่หลัก">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue">
+        <svg><use href="#i-check"/></svg>
+        {% if mode == 'new' %}Create parent category{% else %}Save changes{% endif %}</button>
+      <a class="btn" href="{% url 'backoffice:parent_category_list' %}?{{ qs }}">Cancel</a>
+    </div>
+  </div>
+</form>
+
+{% if mode == 'edit' %}
+<div class="panel" style="max-width:720px;margin-top:16px">
+  <div class="panel-h">Categories in {{ parent.name }}</div>
+  <table class="tbl">
+    <tbody>
+      {% for c in children %}
+      <tr>
+        <td>
+          <span class="dot" style="background:{{ c.color|default:'#9AA3B2' }};margin-right:8px"></span>
+          <a href="{% url 'backoffice:category_detail' category_id=c.id %}?{{ qs }}">{{ c.name }}</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td class="empty">No categories yet — pick this parent on a category's edit page.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

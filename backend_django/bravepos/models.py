@@ -306,11 +306,38 @@ class Branch(models.Model):
 
 
 # ─── Shop directory ──────────────────────────────────────────────────────────
+class ParentCategory(models.Model):
+    """The top level of the two-level catalogue: a group of categories (e.g.
+    "Bakery" over "Croissants" and "Cookies").  Products still point only at
+    a Category; their group is ``product.category.parent_category``.
+    Backoffice-only for now — the till's category API does not carry it."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="parent_categories",
+    )
+    name = models.CharField(max_length=120)
+    name_th = models.CharField(max_length=120, blank=True, default="")
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "name"]
+        indexes = [models.Index(fields=["branch"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Category(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
         "Branch", on_delete=models.CASCADE, related_name="categories",
         null=True, blank=True,  # nullable for migration backfill; enforced at app level
+    )
+    # SET_NULL: deleting a parent leaves its categories (and their products)
+    # in place, just ungrouped.
+    parent_category = models.ForeignKey(
+        ParentCategory, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="categories",
     )
     name = models.CharField(max_length=120)
     name_th = models.CharField(max_length=120, blank=True, default="")
