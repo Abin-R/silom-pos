@@ -35,6 +35,7 @@
 
 {% block filter_extra %}
   <input type="hidden" name="cat" value="{{ selected_category }}">
+  <input type="hidden" name="pcat" value="{{ selected_parent }}">
 {% endblock %}
 
 {% block content %}
@@ -50,16 +51,36 @@
   <div style="width:212px;flex:none;display:flex;flex-direction:column;gap:2px;min-height:0">
     <div class="lbl" style="padding:4px 12px 8px">Categories</div>
     <div style="overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:2px">
-      <a class="nv {% if not selected_category %}on{% endif %}"
-         style="height:40px;{% if not selected_category %}background:var(--blue-soft);color:var(--blue){% else %}color:var(--txt2){% endif %}"
-         href="?{% qs_replace request cat=None page=None %}">
+      <a class="nv {% if not selected_category and not selected_parent %}on{% endif %}"
+         style="height:40px;{% if not selected_category and not selected_parent %}background:var(--blue-soft);color:var(--blue){% else %}color:var(--txt2){% endif %}"
+         href="?{% qs_replace request cat=None pcat=None page=None %}">
         <span style="width:18px;text-align:center">▦</span>All
-        <u style="{% if not selected_category %}color:var(--blue){% else %}color:var(--mut2){% endif %}">{{ total_products }}</u>
+        <u style="{% if not selected_category and not selected_parent %}color:var(--blue){% else %}color:var(--mut2){% endif %}">{{ total_products }}</u>
       </a>
-      {% for c in categories %}
+      {# Parent categories, each followed by its own categories, indented. #}
+      {% for g in category_groups %}
+      <a class="nv {% if selected_parent == g.parent.id|stringformat:'s' %}on{% endif %}"
+         style="height:40px;font-weight:620;{% if selected_parent == g.parent.id|stringformat:'s' %}background:var(--blue-soft);color:var(--blue){% else %}color:var(--txt){% endif %}"
+         href="?{% qs_replace request pcat=g.parent.id cat=None page=None %}">
+        <span style="width:18px;text-align:center"><svg style="width:14px;height:14px"><use href="#i-folder"/></svg></span>{{ g.parent.name }}
+        <u style="color:var(--mut2)">{{ g.count }}</u>
+      </a>
+      {% for c in g.children %}
+      <a class="nv {% if selected_category == c.obj.id|stringformat:'s' %}on{% endif %}"
+         style="height:36px;padding-left:30px;{% if selected_category == c.obj.id|stringformat:'s' %}background:var(--blue-soft);color:var(--blue){% else %}color:var(--txt2){% endif %}"
+         href="?{% qs_replace request cat=c.obj.id pcat=None page=None %}">
+        <span class="dot" style="background:{{ c.obj.color|default:'#9AA3B2' }};margin-right:2px"></span>{{ c.obj.name }}
+        <u style="color:var(--mut2)">{{ c.count }}</u>
+      </a>
+      {% endfor %}
+      {% endfor %}
+      {% if category_groups and ungrouped_categories %}
+      <div class="lbl" style="padding:10px 12px 4px">No parent</div>
+      {% endif %}
+      {% for c in ungrouped_categories %}
       <a class="nv {% if selected_category == c.obj.id|stringformat:'s' %}on{% endif %}"
          style="height:40px;{% if selected_category == c.obj.id|stringformat:'s' %}background:var(--blue-soft);color:var(--blue){% else %}color:var(--txt2){% endif %}"
-         href="?{% qs_replace request cat=c.obj.id page=None %}">
+         href="?{% qs_replace request cat=c.obj.id pcat=None page=None %}">
         <span class="dot" style="background:{{ c.obj.color|default:'#9AA3B2' }};margin-right:2px"></span>{{ c.obj.name }}
         <u style="color:var(--mut2)">{{ c.count }}</u>
       </a>
@@ -68,6 +89,8 @@
         <span style="width:18px;text-align:center">+</span>Add category</a>
       <a class="nv" style="height:40px;color:var(--mut2)" href="{% url 'backoffice:category_list' %}?{{ qs }}">
         <span style="width:18px;text-align:center">⋯</span>Manage categories</a>
+      <a class="nv" style="height:40px;color:var(--mut2)" href="{% url 'backoffice:parent_category_list' %}?{{ qs }}">
+        <span style="width:18px;text-align:center">⋯</span>Manage parent categories</a>
     </div>
 
     <div style="margin-top:auto;padding:14px;border-radius:12px;background:var(--card);border:1px solid var(--line2);font-size:12.5px;color:var(--mut);line-height:1.55">

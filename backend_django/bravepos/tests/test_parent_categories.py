@@ -100,3 +100,27 @@ class ParentCategoryTests(TestCase):
         self.assertFalse(ParentCategory.objects.filter(id=self.bakery.id).exists())
         self.croissants.refresh_from_db()
         self.assertIsNone(self.croissants.parent_category)
+
+    def test_catalogue_rail_groups_categories_under_parents(self):
+        from bravepos.models import Product
+        Product.objects.create(branch=self.branch, name="Butter", category=self.croissants)
+        loose = Category.objects.create(branch=self.branch, name="Loose")
+        Product.objects.create(branch=self.branch, name="Odd", category=loose)
+
+        url = reverse("backoffice:product_list") + self.scope
+        page = self.client.get(url)
+        group = page.context["category_groups"][0]
+        self.assertEqual(group["parent"], self.bakery)
+        self.assertEqual(group["count"], 1)
+        self.assertEqual([c["obj"] for c in group["children"]], [self.croissants])
+        self.assertEqual([c["obj"] for c in page.context["ungrouped_categories"]], [loose])
+        self.assertContains(page, "Manage parent categories")
+
+        page = self.client.get(url + f"&pcat={self.bakery.id}")
+        self.assertEqual([p.name for p in page.context["products"]], ["Butter"])
+
+        for junk in ["not-a-uuid", str(self.foreign.id)]:
+            with self.subTest(pcat=junk):
+                page = self.client.get(url + f"&pcat={junk}")
+                self.assertEqual(page.status_code, 200)
+                self.assertEqual(len(page.context["products"]), 2)

@@ -3139,9 +3139,31 @@ def product_list(request):
     ]
     total_products = sum(counts.values())
 
+    # The same categories grouped under their parents, parents in their own
+    # order, with ungrouped categories last.  A parent's count is the sum of
+    # its children's.
+    groups = {
+        p.id: {"parent": p, "count": 0, "children": []}
+        for p in _parent_category_choices(branch)
+    }
+    ungrouped = []
+    for c in categories:
+        group = groups.get(c["obj"].parent_category_id)
+        if group is None:
+            ungrouped.append(c)
+        else:
+            group["children"].append(c)
+            group["count"] += c["count"]
+    category_groups = list(groups.values())
+
     selected_category = request.GET.get("cat") or ""
+    selected_parent = "" if selected_category else (request.GET.get("pcat") or "")
+    if selected_parent not in {str(pid) for pid in groups}:
+        selected_parent = ""  # stale or malformed: show everything, not a 500
     if selected_category:
         qs = qs.filter(category_id=selected_category)
+    elif selected_parent:
+        qs = qs.filter(category__parent_category_id=selected_parent)
 
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -3176,7 +3198,10 @@ def product_list(request):
         "q": q,
         "products": products,
         "categories": categories,
+        "category_groups": category_groups,
+        "ungrouped_categories": ungrouped,
         "selected_category": selected_category,
+        "selected_parent": selected_parent,
         "total_products": total_products,
         "page_obj": page_obj,
         "paginator": paginator,
@@ -3197,6 +3222,7 @@ def product_list(request):
             q=q or None,
             view=view,
             cat=selected_category or None,
+            pcat=selected_parent or None,
             archived="1" if archived else None,
         ),
     }
