@@ -5422,7 +5422,6 @@ function SettingsView({
     // payment fields in both directions, so there is nothing here to edit.
     { key: "Self-Order QR", labelKey: "admin.self_order_qr", icon: "qr-code", color: C.brand },
     { key: "Cash drawer", labelKey: "admin.cash_drawer", icon: "calculator", color: "#06B6D4" },
-    { key: "Stock-out reasons", labelKey: "admin.stock_out_reasons", icon: "arrow-undo", color: "#F59E0B" },
     { key: "Delivery partners", labelKey: "admin.delivery_partners", icon: "link", color: "#EC4899" },
     { key: "Printers", labelKey: "admin.printers", icon: "print", color: C.ok },
     { key: "Second screen", labelKey: "admin.second_screen", icon: "tv", color: "#3B82F6" },
@@ -5661,8 +5660,6 @@ function SettingsView({
           <PrintersSection s={s} update={update} save={save} saving={saving} />
         ) : active === "Cash drawer" ? (
           <DrawerCategoriesSection />
-        ) : active === "Stock-out reasons" ? (
-          <StockOutReasonsSection />
         ) : active === "Branch" && isAdmin ? (
           <BranchSection currentId={branchId} onChanged={onBranchChanged} />
         ) : active === "Language" ? (
@@ -5995,10 +5992,6 @@ function DrawerCategoriesSection() {
   );
 }
 
-// ── Settings → Stock-out reasons: manage the reason codes staff pick from ──
-// Same shape as DrawerCategoriesSection: the two solve the same problem (a
-// free-text box producing six spellings of one reason) and should not drift
-// into two different interaction models.
 type SuggestionOverride = {
   id: string;
   mode: "pin" | "block";
@@ -6276,146 +6269,6 @@ function SuggestionsSection() {
   );
 }
 
-
-function StockOutReasonsSection() {
-  useT(); // re-render this screen when the language changes
-  const [rows, setRows] = useState<StockOutReason[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<StockOutReason | null>(null);
-  const [name, setName] = useState("");
-  const [nameTh, setNameTh] = useState("");
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const r = await apiFetch(`${API}/stock-out-reasons`);
-      const data = await r.json();
-      setRows(Array.isArray(data) ? data : []);
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => { load(); }, []);
-
-  const openNew = () => { setEditing({ id: "", name: "" }); setName(""); setNameTh(""); };
-  const openEdit = (r: StockOutReason) => {
-    setEditing(r); setName(r.name); setNameTh(r.name_th || "");
-  };
-
-  const submit = async () => {
-    const trimmed = name.trim();
-    if (!editing || !trimmed) return;
-    const payload = { name: trimmed, name_th: nameTh.trim() || trimmed };
-    if (editing.id) {
-      await apiFetch(`${API}/stock-out-reasons/${editing.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } else {
-      await apiFetch(`${API}/stock-out-reasons`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, sort_order: rows.length }),
-      });
-    }
-    setEditing(null); setName(""); setNameTh(""); load();
-  };
-
-  // Deactivate rather than delete is the safer default, but keep delete for a
-  // reason added by mistake.  Either way the documents that already recorded
-  // it keep their text — the document stores the name, not a foreign key.
-  const toggleActive = async (r: StockOutReason) => {
-    await apiFetch(`${API}/stock-out-reasons/${r.id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: !(r.active ?? true) }),
-    });
-    load();
-  };
-
-  const remove = async (r: StockOutReason) => {
-    await apiFetch(`${API}/stock-out-reasons/${r.id}`, { method: "DELETE" });
-    load();
-  };
-
-  return (
-    <View style={{ flex: 1 }} testID="stock-out-reason-settings">
-      <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
-        <Text style={styles.h2}>{tr("admin.stock_out_reasons")}</Text>
-        <Text style={{ color: C.ink3, fontSize: 13 }}>
-          {tr("admin.staff_pick_one_of_these_when")}
-        </Text>
-
-        {loading ? (
-          <ActivityIndicator color={C.brand} style={{ marginTop: 20 }} />
-        ) : (
-          rows.map((r) => {
-            const on = r.active ?? true;
-            return (
-              <View key={r.id} style={styles.moveRow} testID={`stock-reason-row-${r.id}`}>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[styles.moveRowValue, !on && { color: C.ink3 }]}>
-                    {r.name}{on ? "" : tr("admin.hidden")}
-                  </Text>
-                  {!!r.name_th && r.name_th !== r.name && (
-                    <Text style={styles.catRowSub}>{r.name_th}</Text>
-                  )}
-                </View>
-                <View style={{ flexDirection: "row", gap: 16 }}>
-                  <TouchableOpacity onPress={() => toggleActive(r)} testID={`stock-reason-toggle-${r.id}`}>
-                    <Ionicons
-                      name={on ? "eye-outline" : "eye-off-outline"}
-                      size={20}
-                      color={on ? C.ok : C.ink3}
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => openEdit(r)} testID={`stock-reason-edit-${r.id}`}>
-                    <Ionicons name="create-outline" size={20} color="#3B82F6" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => remove(r)} testID={`stock-reason-del-${r.id}`}>
-                    <Ionicons name="trash-outline" size={20} color={C.danger} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          })
-        )}
-
-        <TouchableOpacity style={[styles.primaryBtn, { marginTop: 6 }]} onPress={openNew} testID="stock-reason-add">
-          <Ionicons name="add" size={18} color={C.surface} style={{ marginRight: 4 }} />
-          <Text style={styles.primaryBtnText}>{tr("admin.add_reason")}</Text>
-        </TouchableOpacity>
-      </ScrollView>
-
-      <Modal visible={!!editing} transparent animationType="fade" onRequestClose={() => setEditing(null)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.smallModal}>
-            <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setEditing(null)}>
-                <Ionicons name="close" size={24} color={C.ink2} />
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>{editing?.id ? tr("admin.edit_reason") : tr("admin.new_reason")}</Text>
-              <View style={{ width: 24 }} />
-            </View>
-            <View style={{ padding: 20, gap: 14 }}>
-              <Text style={styles.formLabel}>{tr("admin.reason_english")}</Text>
-              <TextInput
-                style={styles.formInput} value={name} onChangeText={setName}
-                autoFocus testID="stock-reason-name"
-              />
-              <Text style={styles.formLabel}>{tr("admin.thai_name_optional")}</Text>
-              <TextInput
-                style={styles.formInput} value={nameTh} onChangeText={setNameTh}
-                testID="stock-reason-name-th"
-              />
-              <TouchableOpacity style={styles.primaryBtn} onPress={submit} testID="stock-reason-save">
-                <Text style={styles.primaryBtnText}>{tr("common.save")}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
-  );
-}
 
 function PrintersSection({
   s,
