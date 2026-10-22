@@ -5278,7 +5278,10 @@ function ShiftHistory({
 
   return (
     <View style={{ flex: 1, flexDirection: isWide ? "row" : "column" }}>
-      <View style={isWide ? styles.histLeftWide : { maxHeight: 280 }}>
+      {/* A fixed height, not maxHeight: the panel inside is flex:1, which
+          collapses to nothing under a parent that has no height of its own —
+          on phones that hid the date range and the whole list. */}
+      <View style={isWide ? styles.histLeftWide : styles.histLeftNarrow}>
         {listPanel}
       </View>
       <View style={isWide ? styles.histRightWide : { flex: 1 }}>
@@ -7628,6 +7631,7 @@ const styles = StyleSheet.create({
   // Shift History — split list + detail
   histLeftWide: { width: 340, borderRightWidth: 1, borderRightColor: C.line },
   histRightWide: { flex: 1 },
+  histLeftNarrow: { height: 280, borderBottomWidth: 1, borderBottomColor: C.line },
   histListPanel: { flex: 1 },
   histRangeRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
