@@ -2626,20 +2626,35 @@ function StockDocuments({
   // Check documents never move stock, so a saved one can be reopened and
   // edited (like the backoffice); every other type is read-only once saved.
   const [editing, setEditing] = useState<StockDoc | null>(null);
+  // Anything else opens read-only: its stock has already moved.
+  const [viewing, setViewing] = useState<StockDoc | null>(null);
   const editable = type === "check";
 
-  const today = useMemo(() => new Date(), []);
-  const weekAgo = useMemo(() => new Date(Date.now() - 7 * 86400000), []);
-  const rangeLabel = `${thaiDate(weekAgo)} - ${thaiDate(today)}`;
+  // Opens on the last 7 days; the arrows step by the range's own length and
+  // the label opens the calendar for any other range.
+  const [range, setRange] = useState<DateRange>(() => {
+    const today = fmtISO(new Date());
+    return { start: shiftIsoDays(today, -6), end: today };
+  });
+  const [showCalendar, setShowCalendar] = useState(false);
+  const shiftRange = (dir: 1 | -1) => {
+    setRange((r) => {
+      const end = r.end || r.start;
+      const span = Math.round((isoToDate(end).getTime() - isoToDate(r.start).getTime()) / 86400000) + 1;
+      return { start: shiftIsoDays(r.start, dir * span), end: shiftIsoDays(end, dir * span) };
+    });
+  };
 
   const load = useCallback(async () => {
     setDocs(null);
     try {
-      const res = await apiFetch(`${API}/stock-documents?type=${type}`);
+      const res = await apiFetch(
+        `${API}/stock-documents?type=${type}&start=${range.start}&end=${range.end || range.start}`);
       setDocs(await res.json());
     } catch { setDocs([]); }
-  }, [type]);
+  }, [type, range]);
   useEffect(() => { load(); }, [load]);
+  const open = (d: StockDoc) => (editable ? setEditing(d) : setViewing(d));
 
   const total = (docs || []).reduce((s, d) => s + (d.total || 0), 0);
 
@@ -2647,9 +2662,15 @@ function StockDocuments({
     <View style={{ flex: 1 }} testID={`stockdoc-${type}`}>
       <View style={[styles.docListBar, compact && styles.docListBarCompact]}>
         <View style={[styles.docDateRange, compact && styles.docDateRangeCompact]}>
-          <Ionicons name="chevron-back" size={16} color={C.lineStrong} />
-          <Text style={styles.docDateRangeText}>{rangeLabel}</Text>
-          <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
+          <TouchableOpacity onPress={() => shiftRange(-1)} hitSlop={8} testID="doc-range-prev">
+            <Ionicons name="chevron-back" size={18} color={C.brand} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowCalendar(true)} testID="doc-range-open">
+            <Text style={styles.docDateRangeText}>{fmtRangeLabel(range)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => shiftRange(1)} hitSlop={8} testID="doc-range-next">
+            <Ionicons name="chevron-forward" size={18} color={C.brand} />
+          </TouchableOpacity>
         </View>
         {cfg.hasPrice && (
           <Text style={styles.docListTotal}>{tr("common.total")} <Text style={{ fontWeight: "700", color: C.ink }}>{total.toFixed(2)}</Text></Text>
@@ -2687,7 +2708,7 @@ function StockDocuments({
             if (compact) {
               const outReason = type === "out" ? (item.reason || item.note || "") : "";
               return (
-                <TouchableOpacity style={styles.docCard} testID={`doc-${item.id}`} disabled={!editable} onPress={() => setEditing(item)}>
+                <TouchableOpacity style={styles.docCard} testID={`doc-${item.id}`} onPress={() => open(item)}>
                   <View style={styles.docCardLine}>
                     <Text style={styles.docCardNo} numberOfLines={1}>{item.document_no}</Text>
                     {cfg.hasPrice && <Text style={styles.docCardTotal}>{(item.total || 0).toFixed(2)}</Text>}
@@ -2706,7 +2727,7 @@ function StockDocuments({
               );
             }
             return (
-              <TouchableOpacity style={styles.docRow} testID={`doc-${item.id}`} disabled={!editable} onPress={() => setEditing(item)}>
+              <TouchableOpacity style={styles.docRow} testID={`doc-${item.id}`} onPress={() => open(item)}>
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
                 <Text style={[styles.docCell, { width: 150, color: C.ink }]}>{item.document_no}</Text>
                 <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
@@ -2735,7 +2756,95 @@ function StockDocuments({
         onClose={() => { setCreating(false); setEditing(null); }}
         onSaved={() => { setCreating(false); setEditing(null); load(); onChanged(); }}
       />
+      <StockDocViewModal doc={viewing} type={type} onClose={() => setViewing(null)} />
+      <DateRangeModal
+        visible={showCalendar}
+        initial={range}
+        onClose={() => setShowCalendar(false)}
+        onApply={(r) => { setRange(r); setShowCalendar(false); }}
+      />
     </View>
+  );
+}
+
+// A saved stock-in / stock-out / adjust document, read-only: its header and
+// every line as it was filed.  These have already moved stock, so a mistake is
+// corrected with a new document rather than by editing this one.
+function StockDocViewModal({
+  doc, type, onClose,
+}: { doc: StockDoc | null; type: DocType; onClose: () => void }) {
+  useT(); // re-render this screen when the language changes
+  const cfg = DOC_CONFIG[type];
+  const reconcile = cfg.mode === "reconcile";
+  if (!doc) return null;
+  const dt = new Date(doc.created_at);
+  const num = (v?: number) => {
+    const n = Number(v) || 0;
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  };
+  const fields: [string, string][] = [
+    [tr("admin.date"), `${thaiDate(dt)} ${dt.toTimeString().slice(0, 5)}`],
+    [tr("admin.created_by"), doc.created_by],
+  ];
+  if (cfg.partyLabel) fields.push([tr(cfg.partyLabel), type === "in" ? doc.vendor : doc.receiver]);
+  if (cfg.refLabel) fields.push([tr(cfg.refLabel), doc.ref_no]);
+  if (type === "out") fields.push([tr("admin.reason"), doc.reason]);
+  if (cfg.hasName) fields.push([tr("admin.document_name"), doc.document_name]);
+  if (cfg.hasAdjustType) fields.push([tr("admin.document_type"), doc.adjust_type]);
+  if (doc.note) fields.push([tr("admin.note"), doc.note]);
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.pickerOverlay}>
+        <View style={[styles.pickerCard, { maxWidth: 720 }]} testID="stockdoc-view">
+          <View style={styles.pickerHead}>
+            <Text style={styles.pickerTitle}>{doc.document_no}</Text>
+            <TouchableOpacity onPress={onClose} testID="stockdoc-view-close">
+              <Ionicons name="close" size={24} color={C.ink} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+            <View style={[styles.docForm, styles.docFormRow]}>
+              {fields.map(([label, value]) => (
+                <View key={label} style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>{label}</Text>
+                  <Text style={styles.docCell}>{value || "-"}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.docColHead}>
+              <Text style={[styles.docColCell, { flex: 1 }]}>{tr("admin.product_name_2")}</Text>
+              {reconcile && <Text style={[styles.docColCell, { width: 80, textAlign: "right" }]}>{tr(cfg.reconcileCols!.before)}</Text>}
+              {reconcile && <Text style={[styles.docColCell, { width: 80, textAlign: "right" }]}>{tr(cfg.reconcileCols!.input)}</Text>}
+              {reconcile && !!cfg.reconcileCols!.result && <Text style={[styles.docColCell, { width: 80, textAlign: "right" }]}>{tr(cfg.reconcileCols!.result)}</Text>}
+              {!reconcile && <Text style={[styles.docColCell, { width: 70, textAlign: "right" }]}>{tr("common.quantity")}</Text>}
+              {cfg.hasPrice && <Text style={[styles.docColCell, { width: 80, textAlign: "right" }]}>{tr("admin.price")}</Text>}
+              {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>{tr("common.total")}</Text>}
+            </View>
+            {doc.items.map((it, i) => (
+              <View key={i} style={styles.docRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.docCell, { color: C.ink }]} numberOfLines={2}>{it.product_name}</Text>
+                  {!!it.barcode && <Text style={[styles.docCell, { fontSize: 12, color: C.ink3 }]}>{it.barcode}</Text>}
+                </View>
+                {reconcile && <Text style={[styles.docCell, { width: 80, textAlign: "right" }]}>{num(it.before_qty)}</Text>}
+                {reconcile && <Text style={[styles.docCell, { width: 80, textAlign: "right" }]}>{num(it.reconcile_qty)}</Text>}
+                {reconcile && !!cfg.reconcileCols!.result && <Text style={[styles.docCell, { width: 80, textAlign: "right" }]}>{num(it.qty)}</Text>}
+                {!reconcile && <Text style={[styles.docCell, { width: 70, textAlign: "right" }]}>{num(it.qty)}</Text>}
+                {cfg.hasPrice && <Text style={[styles.docCell, { width: 80, textAlign: "right" }]}>{(Number(it.price) || 0).toFixed(2)}</Text>}
+                {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(Number(it.total) || 0).toFixed(2)}</Text>}
+              </View>
+            ))}
+            {cfg.hasPrice && (
+              <View style={[styles.docRow, { justifyContent: "flex-end", gap: 12 }]}>
+                <Text style={styles.docListTotal}>{tr("common.total")}</Text>
+                <Text style={[styles.docCell, { fontWeight: "700", color: C.ink }]}>{(Number(doc.total) || 0).toFixed(2)}</Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
