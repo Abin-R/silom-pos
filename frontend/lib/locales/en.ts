@@ -363,6 +363,7 @@ const en = {
     image_pick_failed: "Image pick failed",
     shift_summary_print_failed: "Shift summary print failed",
     reprint_summary_failed: "Reprint summary failed",
+    shift_closed_summary_not_printed: "The shift is closed, but its summary didn't print. Re-print it from the History tab.",
     could_not_reach_the_server: "Could not reach the server.",
     no_printers_found_hint: "No printers found. Make sure the Epson TM-T82X is powered on and either connected to the same Wi-Fi/router as this tablet, or plugged in via USB-C.",
     invalid_ipv4: "Please enter a valid IPv4 address like 192.168.1.100",

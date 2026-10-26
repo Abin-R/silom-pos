@@ -4906,16 +4906,20 @@ function Drawer({ isWide, staff }: { isWide: boolean; staff: string }) {
     setCloseDlg(false); setActualCash("");
     // Print the close-shift summary (ใบสรุปปิดรอบการขาย) the moment the round
     // is closed, matching the reference POS. Print failures don't block the
-    // close — the slip can be reprinted from History.
+    // close — the slip can be reprinted from History.  They do get said out
+    // loud, though: printShiftSummary returns {ok:false} instead of throwing,
+    // and ignoring it left a jammed printer looking like a printed slip.
     try {
       const body = await res.json().catch(() => ({}));
       if (body?.summary) {
         setPrinting(true);
         const shop = await fetchShop();
-        await printShiftSummary(body.summary, shop);
+        const printed = await printShiftSummary(body.summary, shop);
+        if (!printed.ok) throw new Error(printed.error);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(tr("admin.shift_summary_print_failed"), e);
+      showAlert(tr("admin.shift_summary_print_failed"), tr("admin.shift_closed_summary_not_printed"));
     } finally {
       setPrinting(false);
       load();
