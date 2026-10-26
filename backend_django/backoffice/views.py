@@ -54,7 +54,7 @@ from bravepos.models import (
 from bravepos import appdist, catalog, crm, discounts, images, sale_windows
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
-from bravepos.views import save_check_document, save_stock_out_document
+from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -2803,16 +2803,13 @@ def _stock_out_reasons(branch):
     return list(StockOutReason.objects.filter(branch=branch, active=True))
 
 
-def _stock_out_post(request, branch):
-    """Validate the posted form and save it.  Returns ``(doc, error)``.
+def _stock_lines_post(request, branch):
+    """The posted product lines of a stock in / out form.
 
     Lines arrive as parallel ``product_id`` / ``qty`` / ``price`` lists, one
     triple per table row.  Quantities are whole numbers because on-hand is.
+    Returns ``(lines, error)``, lines as ``[(product, qty, price, discount)]``.
     """
-    reason = (request.POST.get("reason") or "").strip()
-    if reason not in {r.name for r in _stock_out_reasons(branch)}:
-        return None, "Choose a type."
-
     products = {str(p.id): p for p in Product.objects.filter(
         branch=branch, id__in=request.POST.getlist("product_id"))}
     lines, seen = [], set()
@@ -2835,6 +2832,17 @@ def _stock_out_post(request, branch):
         lines.append((p, qty, price, Decimal(0)))
     if not lines:
         return None, "Add at least one product."
+    return lines, None
+
+
+def _stock_out_post(request, branch):
+    """Validate the posted form and save it.  Returns ``(doc, error)``."""
+    reason = (request.POST.get("reason") or "").strip()
+    if reason not in {r.name for r in _stock_out_reasons(branch)}:
+        return None, "Choose a type."
+    lines, error = _stock_lines_post(request, branch)
+    if error:
+        return None, error
 
     created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
     doc = save_stock_out_document(
@@ -2856,14 +2864,8 @@ def stock_out_new(request):
         if error is None:
             messages.success(request, f"{doc.document_no} was saved and stock deducted.")
             return redirect("backoffice:stock_out_document", doc_id=doc.id)
-    pickable = _check_stock_pickable(branch)
-    if pickable:
-        costs = {str(pid): cost for pid, cost in Product.objects
-                 .filter(id__in=[p["id"] for p in pickable]).values_list("id", "cost")}
-        for p in pickable:
-            p["cost"] = str(costs.get(p["id"]) or 0)
     return render(request, "backoffice/stock_out_form.html", {
-        "active": "stock_out",
+        "active": "stock_out_new",
         "branches": branches,
         "branch": branch,
         "reasons": _stock_out_reasons(branch),
@@ -2875,8 +2877,82 @@ def stock_out_new(request):
                 request.POST.getlist("price"))
         ] if error else [],
         "error": error,
-        "pickable": pickable,
+        "pickable": _stock_pickable_with_cost(branch),
         "back_url": reverse("backoffice:stock_out"),
+        "hide_dates": True,
+    })
+
+
+def _stock_pickable_with_cost(branch):
+    """The Add Product list, each with its cost — where the price column starts."""
+    pickable = _check_stock_pickable(branch)
+    if pickable:
+        costs = {str(pid): cost for pid, cost in Product.objects
+                 .filter(id__in=[p["id"] for p in pickable]).values_list("id", "cost")}
+        for p in pickable:
+            p["cost"] = str(costs.get(p["id"]) or 0)
+    return pickable
+
+
+# ─── Create stock in ────────────────────────────────────────────────────
+# The backoffice side of the till's Stock-In form: who supplied it, their bill
+# no., and the products received.  "Import documents" loads check-stock
+# documents' quantities, as the till's Import Documents does.  Saving adds to
+# stock at once, so a saved stock-in is read-only.
+
+def _stock_in_importable(branch):
+    """The branch's check-stock documents with their lines, newest first."""
+    if branch is None:
+        return []
+    docs = (StockDocument.objects.filter(branch=branch, type="check")
+            .prefetch_related("items").order_by("-created_at")[:300])
+    return [{
+        "id": str(d.id),
+        "no": d.document_no,
+        "name": d.document_name,
+        "created": timezone.localtime(d.created_at).strftime("%d/%m/%Y %H:%M"),
+        "by": d.created_by,
+        "lines": [{"id": str(it.product_id), "qty": str(it.reconcile_qty)}
+                  for it in d.items.all() if it.product_id],
+    } for d in docs]
+
+
+@login_required
+def stock_in_new(request):
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        lines, error = _stock_lines_post(request, branch)
+        if error is None:
+            doc = save_stock_in_document(
+                branch, lines,
+                vendor=(request.POST.get("vendor") or "").strip()[:200],
+                ref_no=(request.POST.get("ref_no") or "").strip()[:120],
+                note=(request.POST.get("note") or "").strip(),
+                created_by=getattr(request.user, "name", "") or getattr(request.user, "username", ""),
+            )
+            messages.success(request, f"{doc.document_no} was saved and stock added.")
+            return redirect("backoffice:stock_in_document", doc_id=doc.id)
+    vendors = []
+    if branch is not None:
+        vendors = list(StockDocument.objects.filter(branch=branch, type="in")
+                       .exclude(vendor="").values_list("vendor", flat=True)
+                       .distinct().order_by("vendor")[:200])
+    return render(request, "backoffice/stock_in_form.html", {
+        "active": "stock_in_new",
+        "branches": branches,
+        "branch": branch,
+        "vendors": vendors,
+        "posted": request.POST if error else None,
+        "posted_lines": [
+            {"id": pid, "qty": q, "price": pr} for pid, q, pr in zip(
+                request.POST.getlist("product_id"), request.POST.getlist("qty"),
+                request.POST.getlist("price"))
+        ] if error else [],
+        "error": error,
+        "pickable": _stock_pickable_with_cost(branch),
+        "importable": _stock_in_importable(branch),
+        "back_url": reverse("backoffice:stock_in"),
         "hide_dates": True,
     })
 
@@ -2905,7 +2981,7 @@ def stock_out_types(request):
             messages.success(request, f"Added “{name}”.")
             return redirect(reverse("backoffice:stock_out_types") + f"?branch={branch.id}")
     return render(request, "backoffice/stock_out_types.html", {
-        "active": "stock_out",
+        "active": "stock_out_new",
         "branches": branches,
         "branch": branch,
         "types": StockOutReason.objects.filter(branch=branch) if branch else [],
@@ -3015,7 +3091,7 @@ def check_stock_new(request):
             messages.success(request, f"{doc.document_no} was saved.")
             return redirect("backoffice:check_stock_document", doc_id=doc.id)
     return render(request, "backoffice/check_stock_form.html", {
-        "active": "check_stock",
+        "active": "check_stock_new",
         "branches": branches,
         "branch": branch,
         "doc": None,

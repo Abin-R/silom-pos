@@ -15,9 +15,9 @@
 {% endblock %}
 
 {% block topbar_end %}
-  {% if kind == 'out' and branch and user.role != 'viewer' %}
-  <a class="btn btn-blue" href="{% url 'backoffice:stock_out_new' %}?branch={{ branch.id }}">
-    <svg><use href="#i-plus"/></svg> Stock out</a>
+  {% if branch and user.role != 'viewer' %}
+  <a class="btn btn-blue" href="{% if kind == 'in' %}{% url 'backoffice:stock_in_new' %}{% else %}{% url 'backoffice:stock_out_new' %}{% endif %}?branch={{ branch.id }}">
+    <svg><use href="#i-plus"/></svg> {{ title }}</a>
   {% endif %}
   <a class="btn" href="{{ export_url }}?{{ qs }}">
     <svg><use href="#i-dl"/></svg> Export</a>

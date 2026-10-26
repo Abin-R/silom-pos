@@ -2154,6 +2154,41 @@ def save_stock_out_document(branch, lines, reason, receiver='', ref_no='',
     return doc
 
 
+def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
+                           created_by=''):
+    """Create a stock-in document from ``[(product, qty, price, discount)]``.
+
+    The backoffice's Create stock in page saves through here — the mirror of
+    ``save_stock_out_document``: add each line to on-hand and write the
+    matching StockMovement, as a till's ``type=in`` POST does.
+    """
+    doc_no = _next_stock_doc_no(branch, 'in')
+    with transaction.atomic():
+        doc = StockDocument.objects.create(
+            branch=branch, type='in', document_no=doc_no,
+            ref_no=ref_no, vendor=vendor, note=note, created_by=created_by,
+        )
+        total = Decimal(0)
+        for product, qty, price, discount in lines:
+            line_total = max(Decimal(0), qty * price - discount)
+            total += line_total
+            StockDocumentItem.objects.create(
+                document=doc, product=product,
+                barcode=product.barcode or '', product_name=product.name,
+                qty=qty, price=price, discount=discount, total=line_total,
+            )
+            product.stock = (product.stock or 0) + int(qty)
+            product.save(update_fields=['stock'])
+            StockMovement.objects.create(
+                branch=branch, product=product, product_name=product.name,
+                type='in', qty=int(qty), note=note, document_no=doc_no,
+            )
+        doc.subtotal = doc.total = total
+        doc.discount = sum((d for _p, _q, _pr, d in lines), Decimal(0))
+        doc.save(update_fields=['subtotal', 'total', 'discount'])
+    return doc
+
+
 @api_view(['GET', 'PUT'])
 @require_session
 def stock_document_detail(request, doc_id):

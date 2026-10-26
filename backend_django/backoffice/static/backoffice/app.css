@@ -1075,3 +1075,13 @@ body {
 .bpick-list .bpick-all { border-bottom: 1px solid var(--line2); border-radius: 8px 8px 0 0; margin-bottom: 2px; }
 .bpick-list .btn { margin: 6px 4px 2px; justify-content: center; }
 
+
+/* A collapsible group in the rail (Reports → Inventory reports). Open on
+   load when one of its pages is the current one. */
+.nv-grp { flex: none; }
+.nv-grp > summary { list-style: none; cursor: pointer; user-select: none; }
+.nv-grp > summary::-webkit-details-marker { display: none; }
+.nv-grp > summary .nv-caret { margin-left: auto; width: 15px; height: 15px; transition: transform .15s; }
+.nv-grp[open] > summary .nv-caret { transform: rotate(180deg); }
+.nv-grp > a.nv { padding-left: 42px; height: 38px; margin-top: 2px; }
+.nv-grp > a.nv svg { width: 16px; height: 16px; }

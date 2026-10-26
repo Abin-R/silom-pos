@@ -1,0 +1,408 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Create one stock-in document: the supplier, their bill no., and the products
+  received with a quantity each.  Saving adds to stock at once — the same as a
+  till's Stock-In — so a saved document is read-only; a mistake is corrected
+  with Stock out or Adjust.
+
+  Import documents loads check-stock documents' quantities: the same product
+  across several documents adds up, and so does one already on the form.
+  The price column starts at the product's cost, like the till's form.
+{% endcomment %}
+
+{% block title %}Create stock in{% endblock %}
+{% block page_title %}Create stock in{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ branch.name|default:"No branch" }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <a class="btn" href="{{ back_url }}"><svg><use href="#i-back"/></svg> Back</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  .ck-qty { width: 100px; height: 36px; text-align: right; font-family: var(--mono); }
+  .ck-empty { padding: 48px 20px; text-align: center; color: var(--mut2); font-size: 15px; }
+  dialog.ck-dlg {
+    border: 0; border-radius: 14px; padding: 0;
+    width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px);
+    box-shadow: 0 24px 60px rgba(16, 42, 99, .25);
+    background: var(--card); color: var(--txt);
+  }
+  dialog.ck-dlg[open] { display: flex; flex-direction: column; }
+  dialog.ck-dlg::backdrop { background: rgba(17, 24, 39, .45); }
+  .ck-dlg-h { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .ck-dlg-h b { font-size: 16px; flex: 1; }
+  .ck-dlg-s { display: flex; gap: 10px; padding: 14px 20px; }
+  .ck-dlg-s .inp { flex: 1; }
+  .ck-dlg-list { overflow: auto; flex: 1; min-height: 200px; border-top: 1px solid var(--line2); }
+  .ck-dlg-list tr { cursor: pointer; }
+  .ck-dlg-list tr.dis { cursor: default; opacity: .5; }
+  .ck-dlg-f { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+  .ck-dlg-f .sub { margin-right: auto; }
+  @media (max-width: 640px) {
+    .ck-hide-sm { display: none; }
+    .ck-qty { width: 72px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not branch %}
+  <div class="panel"><div class="ck-empty">Add a branch first — a stock-in belongs to one.</div></div>
+{% else %}
+<form method="post" id="ckForm">
+  {% csrf_token %}
+  {% if error %}<div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
+
+  <div class="panel" style="flex:none">
+    <div class="panel-h">Information</div>
+    <div class="form-grid">
+      <div class="field"><label>Shop</label><b>{{ branch.name }}</b></div>
+      <div class="field">
+        <label for="f-vendor">Supplier</label>
+        <input id="f-vendor" type="text" name="vendor" maxlength="200" list="vendorList" value="{{ posted.vendor|default:'' }}" placeholder="Who delivered the stock">
+        <datalist id="vendorList">{% for v in vendors %}<option value="{{ v }}">{% endfor %}</datalist>
+      </div>
+      <div class="field">
+        <label for="f-ref">Bill No.</label>
+        <input id="f-ref" type="text" name="ref_no" maxlength="120" value="{{ posted.ref_no|default:'' }}" placeholder="Supplier's bill or reference no.">
+      </div>
+      <div class="field wide">
+        <label for="f-note">Reason</label>
+        <textarea id="f-note" name="note" rows="2" placeholder="Optional">{{ posted.note|default:'' }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="flex:none;margin-top:14px">
+    <div class="panel-h">
+      Stock in products
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-sm" id="imOpen"><svg><use href="#i-dl"/></svg> Import documents</button>
+      <button type="button" class="btn btn-sm" id="ckAdd"><svg><use href="#i-plus"/></svg> Add product</button>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th style="width:44px">#</th><th class="ck-hide-sm">Barcode</th><th>Product</th>
+          <th class="r ck-hide-sm">On hand</th><th class="r" style="width:120px">Quantity</th>
+          <th class="r" style="width:120px">Price</th><th class="r ck-hide-sm">Total</th><th style="width:48px"></th>
+        </tr>
+      </thead>
+      <tbody id="ckRows"></tbody>
+      <tfoot id="ckFoot" hidden>
+        <tr><td colspan="6" class="r ck-hide-sm">Total</td><td class="r money ck-hide-sm" id="ckTotal" style="font-weight:660"></td><td class="ck-hide-sm"></td></tr>
+      </tfoot>
+    </table>
+    <div class="ck-empty" id="ckEmpty">No item — use Add product or Import documents.</div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue" id="ckSave"><svg><use href="#i-check"/></svg> Save</button>
+      <a class="btn" href="{{ back_url }}">Cancel</a>
+    </div>
+  </div>
+</form>
+
+<dialog class="ck-dlg" id="ckDlg" aria-labelledby="ckDlgTitle">
+  <div class="ck-dlg-h">
+    <b id="ckDlgTitle">Select product</b>
+    <button type="button" class="ico-btn" id="ckDlgX" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div class="ck-dlg-s">
+    <input class="inp" type="search" id="ckSearch" placeholder="Product, barcode or category" autocomplete="off">
+  </div>
+  <div class="ck-dlg-list">
+    <table class="tbl">
+      <thead><tr><th style="width:40px"><input type="checkbox" id="ckAll" aria-label="Select all shown"></th>
+        <th>Product</th><th class="ck-hide-sm">Barcode</th><th class="ck-hide-sm">Category</th><th class="r">Balance</th></tr></thead>
+      <tbody id="ckList"></tbody>
+    </table>
+  </div>
+  <div class="ck-dlg-f">
+    <span class="sub" id="ckPicked">0 selected</span>
+    <button type="button" class="btn" id="ckCancel">Cancel</button>
+    <button type="button" class="btn btn-blue" id="ckConfirm">Confirm</button>
+  </div>
+</dialog>
+
+<dialog class="ck-dlg" id="imDlg" aria-labelledby="imDlgTitle">
+  <div class="ck-dlg-h">
+    <b id="imDlgTitle">Select check stock documents</b>
+    <button type="button" class="ico-btn" id="imDlgX" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div class="ck-dlg-s">
+    <input class="inp" type="search" id="imSearch" placeholder="Document no., name or saved by" autocomplete="off">
+  </div>
+  <div class="ck-dlg-list">
+    <table class="tbl">
+      <thead><tr><th style="width:40px"></th><th>Created</th><th class="ck-hide-sm">Document No.</th>
+        <th>Document name</th><th class="ck-hide-sm">Saved by</th><th class="r">Lines</th></tr></thead>
+      <tbody id="imList"></tbody>
+    </table>
+  </div>
+  <div class="ck-dlg-f">
+    <span class="sub" id="imPicked">0 selected</span>
+    <button type="button" class="btn" id="imCancel">Cancel</button>
+    <button type="button" class="btn btn-blue" id="imConfirm">Confirm</button>
+  </div>
+</dialog>
+
+{{ pickable|json_script:"ckProducts" }}
+{{ importable|json_script:"imDocs" }}
+{{ posted_lines|json_script:"ckPosted" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var form = document.getElementById("ckForm");
+  if (!form) return;
+  var products = JSON.parse(document.getElementById("ckProducts").textContent);
+  var posted = JSON.parse(document.getElementById("ckPosted").textContent);
+  var byId = {};
+  products.forEach(function (p) { byId[p.id] = p; });
+  var rows = document.getElementById("ckRows");
+  var empty = document.getElementById("ckEmpty");
+  var foot = document.getElementById("ckFoot");
+  var totalCell = document.getElementById("ckTotal");
+  var dlg = document.getElementById("ckDlg");
+  var list = document.getElementById("ckList");
+  var search = document.getElementById("ckSearch");
+  var all = document.getElementById("ckAll");
+  var pickedLabel = document.getElementById("ckPicked");
+  var picked = new Set();
+  var money = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function el(tag, attrs, text) {
+    var n = document.createElement(tag);
+    for (var k in (attrs || {})) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function icon(id) {
+    var ns = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(ns, "svg");
+    var use = document.createElementNS(ns, "use");
+    use.setAttribute("href", "#" + id);
+    svg.appendChild(use);
+    return svg;
+  }
+  function inDoc() {
+    var s = new Set();
+    rows.querySelectorAll("tr[data-pid]").forEach(function (tr) { s.add(tr.dataset.pid); });
+    return s;
+  }
+  function recalc() {
+    var trs = rows.querySelectorAll("tr");
+    var sum = 0;
+    trs.forEach(function (tr, i) {
+      tr.querySelector(".ck-n").textContent = i + 1;
+      var q = parseFloat(tr.querySelector("[name=qty]").value) || 0;
+      var pr = parseFloat(tr.querySelector("[name=price]").value) || 0;
+      tr.querySelector(".ck-line").textContent = "฿" + money.format(q * pr);
+      sum += q * pr;
+    });
+    totalCell.textContent = "฿" + money.format(sum);
+    empty.hidden = trs.length > 0;
+    foot.hidden = trs.length === 0;
+  }
+
+  function addRow(p, qty, price) {
+    var tr = el("tr", { "data-pid": p.id });
+    tr.appendChild(el("td", { "class": "money ck-n", style: "color:var(--mut)" }));
+    tr.appendChild(el("td", { "class": "money ck-hide-sm", style: "color:var(--mut)" }, p.barcode || "—"));
+    var name = el("td");
+    var wrap = el("div", { style: "display:flex;align-items:center;gap:12px" });
+    var th = el("span", { "class": "thumb" });
+    if (p.img) th.appendChild(el("img", { src: p.img, alt: "", loading: "lazy", width: "38", height: "38" }));
+    else th.textContent = (p.name || "?").charAt(0);
+    wrap.appendChild(th);
+    wrap.appendChild(el("b", { style: "font-weight:620" }, p.name));
+    name.appendChild(wrap);
+    tr.appendChild(name);
+    tr.appendChild(el("td", { "class": "r money ck-hide-sm" }, String(p.stock)));
+    var q = el("td", { "class": "r" });
+    q.appendChild(el("input", { type: "hidden", name: "product_id", value: p.id }));
+    q.appendChild(el("input", { "class": "inp ck-qty", type: "number", name: "qty", min: "1", step: "1",
+                                required: "", value: qty || "1", "aria-label": "Quantity of " + p.name }));
+    tr.appendChild(q);
+    var pr = el("td", { "class": "r" });
+    pr.appendChild(el("input", { "class": "inp ck-qty", type: "number", name: "price", min: "0", step: "any",
+                                 value: price != null ? price : p.cost, "aria-label": "Price of " + p.name }));
+    tr.appendChild(pr);
+    tr.appendChild(el("td", { "class": "r money ck-hide-sm ck-line" }));
+    var d = el("td");
+    var del = el("button", { type: "button", "class": "ico-btn ck-del", "aria-label": "Remove " + p.name });
+    del.appendChild(icon("i-trash"));
+    d.appendChild(del);
+    tr.appendChild(d);
+    rows.appendChild(tr);
+  }
+
+  rows.addEventListener("click", function (e) {
+    var b = e.target.closest(".ck-del");
+    if (!b) return;
+    b.closest("tr").remove();
+    recalc();
+  });
+  rows.addEventListener("input", recalc);
+
+  function shown() {
+    var q = search.value.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(function (p) {
+      return (p.name + " " + p.barcode + " " + p.category).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  function drawList() {
+    var have = inDoc();
+    var items = shown();
+    list.textContent = "";
+    if (!items.length) {
+      var tr = el("tr");
+      tr.appendChild(el("td", { colspan: "5", "class": "empty" }, products.length ? "No product matches." : "This branch has no products."));
+      list.appendChild(tr);
+    }
+    items.slice(0, 400).forEach(function (p) {
+      var already = have.has(p.id);
+      var tr = el("tr", { "data-pid": p.id, "class": already ? "dis" : "" });
+      var c = el("td");
+      var box = el("input", { type: "checkbox", "aria-label": p.name });
+      box.checked = already || picked.has(p.id);
+      box.disabled = already;
+      c.appendChild(box);
+      tr.appendChild(c);
+      var n = el("td");
+      n.appendChild(el("b", { style: "font-weight:600" }, p.name));
+      tr.appendChild(n);
+      tr.appendChild(el("td", { "class": "money ck-hide-sm", style: "color:var(--mut)" }, p.barcode || "—"));
+      tr.appendChild(el("td", { "class": "sub ck-hide-sm" }, p.category || "—"));
+      tr.appendChild(el("td", { "class": "r money" }, String(p.stock)));
+      list.appendChild(tr);
+    });
+    pickedLabel.textContent = picked.size + " selected";
+  }
+
+  list.addEventListener("click", function (e) {
+    var tr = e.target.closest("tr[data-pid]");
+    if (!tr || tr.classList.contains("dis")) return;
+    var id = tr.dataset.pid;
+    if (picked.has(id)) picked.delete(id); else picked.add(id);
+    tr.querySelector("input").checked = picked.has(id);
+    pickedLabel.textContent = picked.size + " selected";
+  });
+  all.addEventListener("change", function () {
+    var have = inDoc();
+    shown().forEach(function (p) {
+      if (have.has(p.id)) return;
+      if (all.checked) picked.add(p.id); else picked.delete(p.id);
+    });
+    drawList();
+  });
+  search.addEventListener("input", drawList);
+
+  document.getElementById("ckAdd").addEventListener("click", function () {
+    picked = new Set(); search.value = ""; all.checked = false;
+    drawList();
+    dlg.showModal();
+    search.focus();
+  });
+  function close() { dlg.close(); }
+  document.getElementById("ckDlgX").addEventListener("click", close);
+  document.getElementById("ckCancel").addEventListener("click", close);
+  document.getElementById("ckConfirm").addEventListener("click", function () {
+    products.forEach(function (p) { if (picked.has(p.id)) addRow(p); });
+    recalc();
+    close();
+  });
+
+  // ── Import documents ──
+  var docs = JSON.parse(document.getElementById("imDocs").textContent);
+  var imDlg = document.getElementById("imDlg");
+  var imList = document.getElementById("imList");
+  var imSearch = document.getElementById("imSearch");
+  var imPickedLabel = document.getElementById("imPicked");
+  var imPicked = new Set();
+
+  function drawDocs() {
+    var q = imSearch.value.trim().toLowerCase();
+    var items = !q ? docs : docs.filter(function (d) {
+      return (d.no + " " + d.name + " " + d.by).toLowerCase().indexOf(q) !== -1;
+    });
+    imList.textContent = "";
+    if (!items.length) {
+      var tr = el("tr");
+      tr.appendChild(el("td", { colspan: "6", "class": "empty" }, docs.length ? "No document matches." : "This branch has no check stock documents."));
+      imList.appendChild(tr);
+    }
+    items.forEach(function (d) {
+      var tr = el("tr", { "data-did": d.id });
+      var c = el("td");
+      var box = el("input", { type: "checkbox", "aria-label": d.no });
+      box.checked = imPicked.has(d.id);
+      c.appendChild(box);
+      tr.appendChild(c);
+      tr.appendChild(el("td", { "class": "money" }, d.created));
+      tr.appendChild(el("td", { "class": "money ck-hide-sm", style: "color:var(--mut)" }, d.no));
+      tr.appendChild(el("td", null, d.name || "—"));
+      tr.appendChild(el("td", { "class": "sub ck-hide-sm" }, d.by || "—"));
+      tr.appendChild(el("td", { "class": "r money" }, String(d.lines.length)));
+      imList.appendChild(tr);
+    });
+    imPickedLabel.textContent = imPicked.size + " selected";
+  }
+  imList.addEventListener("click", function (e) {
+    var tr = e.target.closest("tr[data-did]");
+    if (!tr) return;
+    var id = tr.dataset.did;
+    if (imPicked.has(id)) imPicked.delete(id); else imPicked.add(id);
+    tr.querySelector("input").checked = imPicked.has(id);
+    imPickedLabel.textContent = imPicked.size + " selected";
+  });
+  imSearch.addEventListener("input", drawDocs);
+  document.getElementById("imOpen").addEventListener("click", function () {
+    imPicked = new Set(); imSearch.value = "";
+    drawDocs();
+    imDlg.showModal();
+    imSearch.focus();
+  });
+  function imClose() { imDlg.close(); }
+  document.getElementById("imDlgX").addEventListener("click", imClose);
+  document.getElementById("imCancel").addEventListener("click", imClose);
+  document.getElementById("imConfirm").addEventListener("click", function () {
+    var qtyBy = {};
+    docs.forEach(function (d) {
+      if (!imPicked.has(d.id)) return;
+      d.lines.forEach(function (l) {
+        var q = parseFloat(l.qty) || 0;
+        if (!byId[l.id] || q <= 0) return;  // product since retired, or nothing to receive
+        qtyBy[l.id] = (qtyBy[l.id] || 0) + q;
+      });
+    });
+    Object.keys(qtyBy).forEach(function (pid) {
+      var tr = rows.querySelector('tr[data-pid="' + pid + '"]');
+      if (tr) {
+        var inp = tr.querySelector("[name=qty]");
+        inp.value = (parseFloat(inp.value) || 0) + qtyBy[pid];
+      } else {
+        addRow(byId[pid], qtyBy[pid]);
+      }
+    });
+    recalc();
+    imClose();
+  });
+
+  form.addEventListener("submit", function (e) {
+    if (!rows.querySelector("tr")) {
+      e.preventDefault();
+      empty.textContent = "Add at least one product before saving.";
+    }
+  });
+
+  posted.forEach(function (l) { if (byId[l.id]) addRow(byId[l.id], l.qty, l.price); });
+  recalc();
+})();
+</script>
+{% endblock %}

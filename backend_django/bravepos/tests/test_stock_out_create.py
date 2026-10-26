@@ -120,9 +120,19 @@ class StockOutRoleTests(TestCase):
         for name in ("stock_out_new", "stock_out_types"):
             self.assertEqual(self.client.get(reverse(f"backoffice:{name}")).status_code, 403)
 
-    def test_rail_groups_stock_out_and_check_stock(self):
+    def test_rail_splits_reports_from_management(self):
+        # Reports → Inventory reports lists the saved documents; Inventory
+        # management opens the create forms.
         sign_in(self.client, make_user(username="mgr", email="mgr@example.com", role="cashier"))
         html = self.client.get(reverse("backoffice:dashboard")).content.decode()
-        grp = html.index("Inventory management")
-        self.assertLess(grp, html.index(reverse("backoffice:stock_out") + '"'))
-        self.assertLess(grp, html.index(reverse("backoffice:check_stock") + '"'))
+        reports, grp = html.index("Inventory reports"), html.index("Inventory management")
+        for name in ("stock_in", "stock_out", "check_stock"):
+            with self.subTest(name=name):
+                self.assertTrue(reports < html.index(reverse(f"backoffice:{name}") + '"') < grp)
+                self.assertLess(grp, html.index(reverse(f"backoffice:{name}_new") + '"'))
+
+    def test_viewer_rail_has_reports_only(self):
+        sign_in(self.client, make_user(username="acc", email="acc@example.com", role="viewer"))
+        html = self.client.get(reverse("backoffice:dashboard")).content.decode()
+        self.assertIn(reverse("backoffice:stock_in") + '"', html)
+        self.assertNotIn("Inventory management", html)
