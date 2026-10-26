@@ -51,6 +51,7 @@ import { C, MONO, R } from "../lib/theme";
 import { showAlert, confirmDialog } from "../lib/dialog";
 import { whileAway } from "../lib/appLock";
 import { phoneMatchKey } from "../lib/phone";
+import { permissionsOf, type Permission } from "../lib/permissions";
 import { methodLabel } from "../lib/payments";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
@@ -214,7 +215,9 @@ export default function Admin() {
   const [activeBranchId, setActiveBranchId] = useState<string>("");
   const [activeBranchName, setActiveBranchName] = useState<string>("");
   const [authLoaded, setAuthLoaded] = useState(false);
+  const [perms, setPerms] = useState<Set<Permission>>(new Set());
   const isAdmin = role === "admin";
+  const can = (p: Permission) => perms.has(p);
 
   useEffect(() => {
     (async () => {
@@ -227,6 +230,7 @@ export default function Admin() {
         }
         setStaff(parsed.staff?.name || "");
         setRole(parsed.staff?.role || "");
+        setPerms(permissionsOf(parsed.staff));
         setActiveBranchId(parsed.branch?.id || "");
         setActiveBranchName(parsed.branch?.name || "");
         setAuthLoaded(true);
@@ -368,16 +372,22 @@ export default function Admin() {
             staff={staff || "Admin"}
           />
         )}
-        {section === "inventory" && <Inventory isWide={isWide} />}
-        {section === "customers" && (
-          <Customers isWide={isWide} branchId={activeBranchId} />
+        {section === "inventory" && (
+          <Inventory
+            isWide={isWide}
+            canManage={can("manage_inventory")}
+            canAdjust={can("manage_inventory") && can("adjust_stock")}
+          />
         )}
-        {section === "products" && <Products isWide={isWide} isAdmin={isAdmin} />}
+        {section === "customers" && (
+          <Customers isWide={isWide} branchId={activeBranchId} canManage={can("manage_customers")} />
+        )}
+        {section === "products" && <Products isWide={isWide} canManage={can("manage_products")} />}
         {section === "drawer" && <Drawer isWide={isWide} staff={staff || "Admin"} />}
         {section === "settings" && (
           <SettingsView
             isWide={isWide}
-            isAdmin={isAdmin}
+            canManage={can("manage_settings")}
             branchId={activeBranchId}
             branchName={activeBranchName}
             onBranchChanged={async () => {
@@ -2345,7 +2355,9 @@ const INV_TABS = [
 ] as const;
 type InvTab = (typeof INV_TABS)[number]["k"];
 
-function Inventory({ isWide }: { isWide: boolean }) {
+function Inventory({ isWide, canManage, canAdjust }: {
+  isWide: boolean; canManage: boolean; canAdjust: boolean;
+}) {
   useT(); // re-render this screen when the language changes
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -2382,13 +2394,22 @@ function Inventory({ isWide }: { isWide: boolean }) {
   }, [products, activeCat, sortBy, search]);
   const curCat = categories.find((c) => c.id === activeCat);
 
+  // Without inventory only the read-only movement list is left; without
+  // adjust, its tab and the modal's Adjust button go.
+  const tabs = INV_TABS.filter((t) =>
+    t.k === "movement" || (canManage && (t.k !== "adjust" || canAdjust)));
+
   const doMovement = async (type: "in" | "out" | "adjust", qty: number) => {
     if (!stockModal) return;
-    await apiFetch(`${API}/stock-movements`, {
+    const res = await apiFetch(`${API}/stock-movements`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ product_id: stockModal.id, type, qty, note: `Admin ${type}` }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showAlert(tr("admin.save_failed"), err?.detail || tr("admin.please_try_again"));
+    }
     setStockModal(null);
     load();
   };
@@ -2404,7 +2425,7 @@ function Inventory({ isWide }: { isWide: boolean }) {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ alignItems: "center", paddingHorizontal: 12, gap: 6 }}
         >
-          {INV_TABS.map((t) => (
+          {tabs.map((t) => (
             <TouchableOpacity
               key={t.k}
               style={[styles.invTopTab, tab === t.k && styles.invTopTabActive]}
@@ -2502,7 +2523,8 @@ function Inventory({ isWide }: { isWide: boolean }) {
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.invRow}
-                  onPress={() => setStockModal(item)}
+                  onPress={canManage ? () => setStockModal(item) : undefined}
+                  disabled={!canManage}
                   testID={`inv-prod-${item.id}`}
                 >
                   <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
@@ -2539,7 +2561,8 @@ function Inventory({ isWide }: { isWide: boolean }) {
 
       <StockMovementModal
         product={stockModal}
-        defaultType={tab === "adjust" ? "adjust" : "in"}
+        defaultType={tab === "adjust" && canAdjust ? "adjust" : "in"}
+        canAdjust={canAdjust}
         onClose={() => setStockModal(null)}
         onSave={doMovement}
       />
@@ -3657,10 +3680,11 @@ function SelectDocumentsModal({
 }
 
 function StockMovementModal({
-  product, defaultType, onClose, onSave,
+  product, defaultType, canAdjust, onClose, onSave,
 }: {
   product: Product | null;
   defaultType: "in" | "out" | "adjust";
+  canAdjust: boolean;
   onClose: () => void;
   onSave: (t: "in" | "out" | "adjust", qty: number) => void;
 }) {
@@ -3683,7 +3707,7 @@ function StockMovementModal({
             </View>
             <View style={{ padding: 20, gap: 14 }}>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                {(["in", "out", "adjust"] as const).map((t) => (
+                {(canAdjust ? (["in", "out", "adjust"] as const) : (["in", "out"] as const)).map((t) => (
                   <TouchableOpacity
                     key={t}
                     style={[styles.typeBtn, type === t && styles.typeBtnActive]}
@@ -3727,7 +3751,9 @@ function StockMovementModal({
 // the server.
 const CUSTOMER_PAGE = 200;
 
-function Customers({ isWide, branchId }: { isWide: boolean; branchId: string }) {
+function Customers({ isWide, branchId, canManage }: {
+  isWide: boolean; branchId: string; canManage: boolean;
+}) {
   useT(); // re-render this screen when the language changes
   const [list, setList] = useState<Customer[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
@@ -3924,14 +3950,16 @@ function Customers({ isWide, branchId }: { isWide: boolean; branchId: string }) 
             testID="cust-admin-search"
           />
           <Spacer />
-          <Btn
-            label={tr("admin.add_customer")}
-            icon="add"
-            variant="blue"
-            height={40}
-            onPress={() => setAddOpen(true)}
-            testID="add-customer-admin"
-          />
+          {canManage && (
+            <Btn
+              label={tr("admin.add_customer")}
+              icon="add"
+              variant="blue"
+              height={40}
+              onPress={() => setAddOpen(true)}
+              testID="add-customer-admin"
+            />
+          )}
         </View>
       )}
 
@@ -4216,7 +4244,7 @@ const CUST_COLS: Col[] = [
 const ALL = "__all";
 const NONE = "__none";
 
-function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
+function Products({ isWide, canManage }: { isWide: boolean; canManage: boolean }) {
   useT(); // re-render this screen when the language changes
   const [cats, setCats] = useState<Category[]>([]);
   const [prods, setProds] = useState<Product[]>([]);
@@ -4340,7 +4368,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
           onPress={() => setSort(sort === "name" ? "custom" : "name")}
           testID="sort-name"
         />
-        {isAdmin && (
+        {canManage && (
           <Btn
             label={tr("admin.add_product")}
             icon="add"
@@ -4449,8 +4477,8 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                 return (
                   <TouchableOpacity
                     style={styles.prodMgmtRow}
-                    onPress={() => isAdmin && setEdit(item)}
-                    disabled={!isAdmin}
+                    onPress={() => canManage && setEdit(item)}
+                    disabled={!canManage}
                     testID={`prod-${item.id}`}
                   >
                     {img ? (
@@ -4477,7 +4505,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
 
               return (
                 <TRow
-                  onPress={isAdmin ? () => setEdit(item) : undefined}
+                  onPress={canManage ? () => setEdit(item) : undefined}
                   testID={`prod-${item.id}`}
                 >
                   <TCell col={col("name")}>
@@ -4538,7 +4566,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
                     <Toggle
                       on={item.is_favorite}
                       onPress={() => toggleFav(item)}
-                      disabled={!isAdmin}
+                      disabled={!canManage}
                       testID={`fav-${item.id}`}
                     />
                   </TCell>
@@ -4546,7 +4574,7 @@ function Products({ isWide, isAdmin }: { isWide: boolean; isAdmin: boolean }) {
               );
             }}
           />
-          {!isAdmin && (
+          {!canManage && (
             <View style={styles.prodFootNote}>
               <Ionicons name="shield-outline" size={16} color={C.ink2Soft} />
               <Text style={styles.prodFootText}>
@@ -5529,10 +5557,10 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
 }
 
 function SettingsView({
-  isWide, isAdmin, branchId, branchName, onBranchChanged,
+  isWide, canManage, branchId, branchName, onBranchChanged,
 }: {
   isWide: boolean;
-  isAdmin: boolean;
+  canManage: boolean;
   branchId: string;
   branchName: string;
   onBranchChanged: () => Promise<void>;
@@ -5591,11 +5619,11 @@ function SettingsView({
       .catch(() => {});
     return () => { cancelled = true; };
   }, [branchId]);
-  // Moving the tablet to another branch is admin-only; a cashier never sees it.
+  // Moving the tablet to another branch needs "Manage settings".
   const visibleSections = sections.filter(
     (sec) =>
       (sec.key !== "Self-Order QR" || selfOrderOn) &&
-      (sec.key !== "Branch" || isAdmin),
+      (sec.key !== "Branch" || canManage),
   );
   // Narrow phones can't show the list + the detail side by side (leftNav is
   // 280px wide, leaving ~95px for the detail pane).  Use a master-detail
@@ -5792,7 +5820,7 @@ function SettingsView({
           <PrintersSection s={s} update={update} save={save} saving={saving} />
         ) : active === "Cash drawer" ? (
           <DrawerCategoriesSection />
-        ) : active === "Branch" && isAdmin ? (
+        ) : active === "Branch" && canManage ? (
           <BranchSection currentId={branchId} onChanged={onBranchChanged} />
         ) : active === "Language" ? (
           <LanguageSection />

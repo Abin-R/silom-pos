@@ -121,6 +121,11 @@
                 {% elif m.role == 'viewer' %}<span class="tag t-out">Viewer</span>
                 {% elif m.role == 'packer' %}<span class="tag t-out">Packer</span>
                 {% else %}<span class="tag t-out">Cashier</span>{% endif %}
+                {# Taken away from the role's usual till permissions. #}
+                {% if m.perm_missing %}
+                <div style="margin-top:4px"><span class="tag t-low" title="No {{ m.perm_missing|join:', '|lower }}">
+                  {% if m.perm_missing|length == 1 %}No {{ m.perm_missing.0|lower }}{% else %}{{ m.perm_missing|length }} restricted{% endif %}</span></div>
+                {% endif %}
               </td>
             </tr>
             {% empty %}

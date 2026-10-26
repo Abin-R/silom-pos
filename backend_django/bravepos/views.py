@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, images, loyalty, sale_windows
+from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows
 from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
@@ -113,9 +113,29 @@ def require_admin(view):
     return wrapped
 
 
+def perm_denied(staff, key):
+    """403 if ``staff`` lacks till permission ``key`` (see bravepos.permissions),
+    else None. ``code`` lets the till tell this apart from other 403s."""
+    if staff.can(key):
+        return None
+    return Response({
+        'detail': f"You don't have permission to {permissions.LABELS[key].lower()}.",
+        'code': 'perm_denied',
+        'permission': key,
+    }, status=403)
+
+
 class _Unauthenticated(Exception):
     """Raised by BranchScopedMixin.initial when no valid session exists.
     Mapped to a 401 by the ViewSet's ``handle_exception`` override below."""
+
+
+class _PermissionMissing(Exception):
+    """Raised by TillPermissionMixin.initial; mapped to ``perm_denied``."""
+
+    def __init__(self, staff, key):
+        super().__init__(key)
+        self.staff, self.key = staff, key
 
 
 class SessionRequiredMixin:
@@ -141,6 +161,8 @@ class SessionRequiredMixin:
                 {'detail': 'Session expired or replaced by another login.'},
                 status=401,
             )
+        if isinstance(exc, _PermissionMissing):
+            return perm_denied(exc.staff, exc.key)
         return super().handle_exception(exc)
 
 
@@ -160,6 +182,20 @@ class BranchScopedMixin(SessionRequiredMixin):
     def perform_create(self, serializer):
         sess = self.request.session_obj
         serializer.save(**{self.branch_field: sess.branch})
+
+
+class TillPermissionMixin:
+    """ViewSet mixin: ``write_actions`` need till permission ``write_permission``;
+    reads stay open to any session. List it before the session mixin so the
+    session is resolved first."""
+    write_permission = None
+    write_actions = ('create', 'update', 'partial_update', 'destroy')
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        staff = request.session_obj.staff
+        if self.action in self.write_actions and not staff.can(self.write_permission):
+            raise _PermissionMissing(staff, self.write_permission)
 
 
 # ─── Healthcheck ─────────────────────────────────────────────────────────────
@@ -250,6 +286,7 @@ def auth_login(request):
             'email': staff.email,
             'name': staff.name,
             'role': staff.role,
+            'permissions': staff.effective_permissions(),
         },
         'branch': {
             'id': str(branch.id),
@@ -289,7 +326,8 @@ def auth_switch_branch(request):
         return Response({
             'token': sess.token,
             'staff': {'id': str(sess.staff.id), 'email': sess.staff.email,
-                      'name': sess.staff.name, 'role': sess.staff.role},
+                      'name': sess.staff.name, 'role': sess.staff.role,
+                      'permissions': sess.staff.effective_permissions()},
             'branch': {'id': str(branch.id), 'name': branch.name},
         })
 
@@ -304,7 +342,8 @@ def auth_switch_branch(request):
     return Response({
         'token': new_sess.token,
         'staff': {'id': str(staff.id), 'email': staff.email,
-                  'name': staff.name, 'role': staff.role},
+                  'name': staff.name, 'role': staff.role,
+                  'permissions': staff.effective_permissions()},
         'branch': {'id': str(branch.id), 'name': branch.name},
     })
 
@@ -343,6 +382,7 @@ def auth_me(request):
             'email': sess.staff.email,
             'name': sess.staff.name,
             'role': sess.staff.role,
+            'permissions': sess.staff.effective_permissions(),
         },
         'branch': {
             'id': str(sess.branch.id),
@@ -434,6 +474,7 @@ def auth_pin_login(request):
             'email': staff.email,
             'name': staff.name,
             'role': staff.role,
+            'permissions': staff.effective_permissions(),
         },
         'branch': {'id': str(branch.id), 'name': branch.name},
         'role': staff.role,
@@ -447,9 +488,10 @@ class CategoryViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     serializer_class = CategorySerializer
 
 
-class ProductViewSet(BranchScopedMixin, viewsets.ModelViewSet):
+class ProductViewSet(TillPermissionMixin, BranchScopedMixin, viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
+    write_permission = 'manage_products'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -571,7 +613,7 @@ def shopster_create_product(request):
     return Response(body, status=201)
 
 
-class CustomerViewSet(SessionRequiredMixin, viewsets.ModelViewSet):
+class CustomerViewSet(TillPermissionMixin, SessionRequiredMixin, viewsets.ModelViewSet):
     """The customer book is shop-wide.
 
     Deliberately *not* ``BranchScopedMixin``.  A regular who registered at
@@ -585,6 +627,10 @@ class CustomerViewSet(SessionRequiredMixin, viewsets.ModelViewSet):
     """
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
+    # Registering a customer at checkout is part of making a sale, so create
+    # stays open; changing or removing an existing one is the permission.
+    write_permission = 'manage_customers'
+    write_actions = ('update', 'partial_update', 'destroy')
 
     # A caller that asks for a page without saying how big gets this many, and
     # cannot ask for more than MAX in one go.  Going shop-wide multiplied the
@@ -811,7 +857,7 @@ class BranchViewSet(viewsets.ModelViewSet):
     """Branches (physical shop locations).
 
     Reads are unauthenticated so the login screen can populate the branch
-    dropdown.  Mutations require an admin session.
+    dropdown.  Mutations need the "manage_settings" till permission.
     """
     queryset = Branch.objects.all()
     serializer_class = BranchSerializer
@@ -822,14 +868,14 @@ class BranchViewSet(viewsets.ModelViewSet):
             qs = qs.filter(active=True)
         return qs
 
-    def _require_admin(self):
+    def _require_settings_perm(self):
         sess = get_session(self.request)
         if sess is None:
             from rest_framework.exceptions import NotAuthenticated
             raise NotAuthenticated('Session required.')
-        if sess.staff.role != 'admin':
+        if not sess.staff.can('manage_settings'):
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied('Admin role required to edit branches.')
+            raise PermissionDenied("You don't have permission to manage settings.")
 
     def create(self, request, *args, **kwargs):
         """Admin-only branch create.
@@ -839,7 +885,7 @@ class BranchViewSet(viewsets.ModelViewSet):
         transaction and attached to the new branch.  Either both must be
         provided or both omitted.
         """
-        self._require_admin()
+        self._require_settings_perm()
         data = request.data or {}
         cashier_email = (data.get('cashier_email') or '').strip().lower()
         cashier_password = data.get('cashier_password') or ''
@@ -880,11 +926,11 @@ class BranchViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
-        self._require_admin()
+        self._require_settings_perm()
         return self._update_with_cashier(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
-        self._require_admin()
+        self._require_settings_perm()
         return self._update_with_cashier(request, *args, partial=True, **kwargs)
 
     def _update_with_cashier(self, request, *args, **kwargs):
@@ -947,7 +993,7 @@ class BranchViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(instance).data)
 
     def destroy(self, request, *args, **kwargs):
-        self._require_admin()
+        self._require_settings_perm()
         return super().destroy(request, *args, **kwargs)
 
 
@@ -1463,6 +1509,12 @@ def stock_movements(request):
     note = payload.get('note', '') or ''
     if type_ not in ('in', 'out', 'adjust', 'check'):
         return Response({'detail': 'Invalid type'}, status=400)
+    staff = request.session_obj.staff
+    denied = perm_denied(staff, 'manage_inventory')
+    if denied is None and type_ == 'adjust':
+        denied = perm_denied(staff, 'adjust_stock')
+    if denied is not None:
+        return denied
     try:
         product = Product.objects.get(id=product_id, branch=branch)
     except Product.DoesNotExist:
@@ -1486,6 +1538,8 @@ def stock_movements(request):
         qty=qty,
         note=note,
         document_no=doc_no,
+        staff=staff,
+        created_by=staff.name or '',
     )
     return Response(StockMovementSerializer(mv).data, status=201)
 
@@ -1986,6 +2040,12 @@ def stock_documents(request):
     doc_type = payload.get('type')
     if doc_type not in ('in', 'out', 'adjust', 'check'):
         return Response({'detail': 'Invalid type'}, status=400)
+    staff = request.session_obj.staff
+    denied = perm_denied(staff, 'manage_inventory')
+    if denied is None and doc_type == 'adjust':
+        denied = perm_denied(staff, 'adjust_stock')
+    if denied is not None:
+        return denied
     items = payload.get('items') or []
     if not items:
         return Response({'detail': 'At least one item is required'}, status=400)
@@ -2001,7 +2061,7 @@ def stock_documents(request):
         adjust_type = 'A+' if net_delta >= 0 else 'A-'
     else:
         adjust_type = payload.get('adjust_type', '') or ''
-    staff_name = getattr(request.session_obj.staff, 'name', '') or ''
+    staff_name = staff.name or ''
     doc_no = _next_stock_doc_no(branch, doc_type, adjust_type)
 
     with transaction.atomic():
@@ -2070,6 +2130,8 @@ def stock_documents(request):
                     # screen shows when you tap a product's history.
                     note=doc.reason or doc.note or doc.document_name,
                     document_no=doc_no,
+                    staff=staff,
+                    created_by=staff_name,
                 )
 
     return Response(StockDocumentSerializer(doc).data, status=201)
@@ -2146,7 +2208,7 @@ def save_stock_out_document(branch, lines, reason, receiver='', ref_no='',
             StockMovement.objects.create(
                 branch=branch, product=product, product_name=product.name,
                 type='out', qty=int(qty), note=reason or note,
-                document_no=doc_no,
+                document_no=doc_no, created_by=created_by,
             )
         doc.subtotal = doc.total = total
         doc.discount = sum((d for _p, _q, _pr, d in lines), Decimal(0))
@@ -2182,6 +2244,7 @@ def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
             StockMovement.objects.create(
                 branch=branch, product=product, product_name=product.name,
                 type='in', qty=int(qty), note=note, document_no=doc_no,
+                created_by=created_by,
             )
         doc.subtotal = doc.total = total
         doc.discount = sum((d for _p, _q, _pr, d in lines), Decimal(0))
@@ -2197,6 +2260,9 @@ def stock_document_detail(request, doc_id):
     if not doc:
         return Response({'detail': 'Not found'}, status=404)
     if request.method == 'PUT':
+        denied = perm_denied(request.session_obj.staff, 'manage_inventory')
+        if denied is not None:
+            return denied
         # Only check documents are editable: every other type has already
         # moved stock, and rewriting its lines would desync on-hand.
         if doc.type != 'check':

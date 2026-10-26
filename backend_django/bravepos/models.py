@@ -69,6 +69,9 @@ class Staff(models.Model):
     # Migration 0028 backfills True for every pre-existing row so nobody is
     # locked out; new PIN staff added from the Staff page default to False.
     backoffice_access = models.BooleanField(default=False)
+    # Till permissions ticked on the Staff page — see bravepos.permissions.
+    # NULL = never customised, so the role's defaults apply.
+    permissions = models.JSONField(null=True, blank=True, default=None)
     last_login_at = models.DateTimeField(null=True, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -140,6 +143,16 @@ class Staff(models.Model):
         if not self.pin_hash:
             return False
         return check_password(plain, self.pin_hash)
+
+    # ── Till permissions ──
+    def effective_permissions(self):
+        from .permissions import effective
+        return effective(self)
+
+    # Not ``has_perm`` — that name belongs to Django's auth duck-typing above.
+    def can(self, key: str) -> bool:
+        from .permissions import has_perm
+        return has_perm(self, key)
 
 
 class BranchSession(models.Model):
@@ -474,6 +487,13 @@ class StockMovement(models.Model):
     qty = models.IntegerField()
     note = models.TextField(blank=True, default="")
     document_no = models.CharField(max_length=64, blank=True, default="")
+    # Who moved the stock. FK for lookups, name snapshot so the record still
+    # reads right after the staff member is renamed or removed.
+    staff = models.ForeignKey(
+        Staff, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="stock_movements",
+    )
+    created_by = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

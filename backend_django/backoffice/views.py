@@ -51,7 +51,7 @@ from bravepos.models import (
     StockOutReason,
     Unit,
 )
-from bravepos import appdist, catalog, crm, discounts, images, sale_windows
+from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
 from bravepos.gateways import seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
@@ -4921,7 +4921,9 @@ def staff_list(request):
     staff = Staff.objects.prefetch_related("branches")
     if branch:
         staff = staff.filter(branches=branch)
-    staff = staff.order_by("role", "name")
+    staff = list(staff.order_by("role", "name"))
+    for m in staff:
+        m.perm_missing = [permissions.LABELS[k] for k in permissions.missing_defaults(m)]
 
     days = int(request.GET.get("days") or 7)
     since = timezone.now() - timedelta(days=days)
@@ -4969,7 +4971,7 @@ def staff_list(request):
         "branches": branches,
         "branch": branch,
         "staff_members": staff,
-        "staff_count": staff.count(),
+        "staff_count": len(staff),
         "shifts": shifts,
         "stale_shifts": stale,
         "stale_cash": sum((s.total_sales_cash for s in stale), Decimal(0)),
@@ -4982,6 +4984,83 @@ def staff_list(request):
     return render(request, "backoffice/staff_list.html", context)
 
 
+TILL_ROLES = ("admin", "cashier")
+
+
+def _perm_rows(member):
+    """The Till permissions boxes, ticked as ``member`` has them now."""
+    granted = set(member.effective_permissions())
+    return [
+        {"key": key, "label": label, "help": help_text,
+         "checked": key in granted, "parent": permissions.PARENT.get(key, "")}
+        for key, label, help_text in permissions.PERMISSIONS
+    ]
+
+
+def _posted_permissions(request, member, role_changed):
+    """What to store in ``member.permissions`` from this POST.
+
+    Only a backoffice admin may set the boxes; anyone else leaves them alone —
+    except on a role change, where the old role's set would be wrong for the
+    new one, so it falls back to the new role's defaults.
+    """
+    if member.role not in TILL_ROLES:
+        return member.permissions
+    # An unticked checkbox sends nothing, so "no perm fields" can't tell
+    # "everything unticked" from "the panel wasn't on the page". The marker
+    # says it was; without it the boxes are left as they are.
+    if request.user.role == "admin" and request.POST.get("perms_form"):
+        return permissions.clean(request.POST.getlist("perm"))
+    return None if role_changed else member.permissions
+
+
+def _apply_permissions_elsewhere(request, member):
+    """"Apply to other branches": copy ``member``'s boxes onto everyone with
+    the same role at the branches ticked. Returns how many changed.
+
+    Saved one by one, not ``.update()``, so each change lands in the audit
+    log, and each person changed is signed out so the till picks it up.
+    """
+    branch_ids = request.POST.getlist("apply_branch")
+    if request.user.role != "admin" or not branch_ids or member.role not in TILL_ROLES:
+        return 0
+    wanted = member.effective_permissions()
+    others = (Staff.objects.filter(role=member.role, branches__id__in=branch_ids)
+              .exclude(id=member.id).distinct())
+    changed = 0
+    for other in others:
+        if other.effective_permissions() == wanted and other.permissions is not None:
+            continue
+        other.permissions = wanted
+        other.save(update_fields=["permissions"])
+        _end_till_sessions(other, reason="till permissions changed", actor=request.user)
+        changed += 1
+    return changed
+
+
+def _apply_branch_options(member):
+    """Branches offered under "Apply to other branches", with how many people
+    of ``member``'s role each would touch (for the confirm dialog)."""
+    counts = dict(
+        Staff.objects.filter(role=member.role).exclude(id=member.id)
+        .order_by().values_list("branches").annotate(n=Count("id", distinct=True))
+    )
+    return [
+        {"id": str(b.id), "name": b.name, "count": counts.get(b.id, 0)}
+        for b in Branch.objects.filter(active=True).order_by("name")
+    ]
+
+
+def _perm_context(request, member):
+    return {
+        "show_perms": member.role in TILL_ROLES,
+        "can_edit_perms": request.user.role == "admin",
+        "perm_rows": _perm_rows(member),
+        "role_defaults": permissions.ROLE_DEFAULTS,
+        "apply_branches": _apply_branch_options(member) if member.pk else [],
+    }
+
+
 @login_required
 def staff_detail(request, staff_id):
     """View + edit a single staff member. A blank PIN field keeps the
@@ -4991,9 +5070,15 @@ def staff_detail(request, staff_id):
 
     form_errors = []
     if request.method == "POST":
+        before_perms = member.effective_permissions()
+        old_role = member.role
         member.name = (request.POST.get("name") or "").strip() or member.name
         member.role = request.POST.get("role") or member.role
         member.active = request.POST.get("active") == "on"
+        member.permissions = _posted_permissions(
+            request, member, role_changed=member.role != old_role,
+        )
+        perms_changed = member.effective_permissions() != before_perms
         pin, pin_error = _clean_pin(request.POST.get("pin"))
         if pin_error:
             form_errors.append(pin_error)
@@ -5012,14 +5097,26 @@ def staff_detail(request, staff_id):
             # Only this account's. A colleague signed in on another till at
             # the same branch is mid-sale and has nothing to do with whose
             # PIN was just changed.
+            #
+            # A permission change ends it as well: the till only reads
+            # permissions at sign-in, and the API already enforces the new
+            # set, so a till left signed in would show buttons that now 403.
             signed_out = _end_till_sessions(
-                member, reason="till PIN reset", actor=request.user,
-            ) if pin else []
-            where = (
-                f" They were signed out of the till at {', '.join(signed_out)}, "
-                f"so the new PIN works on any device."
-                if signed_out else ""
-            )
+                member,
+                reason="till PIN reset" if pin else "till permissions changed",
+                actor=request.user,
+            ) if pin or perms_changed else []
+            where = ""
+            if signed_out:
+                why = ("the new PIN works on any device" if pin
+                       else "the new permissions apply from their next sign-in")
+                where = (f" They were signed out of the till at "
+                         f"{', '.join(signed_out)}, so {why}.")
+            elsewhere = _apply_permissions_elsewhere(request, member)
+            if elsewhere:
+                where += (f" The same permissions were applied to {elsewhere} other "
+                          f"{member.get_role_display().lower()}"
+                          f"{'' if elsewhere == 1 else 's'}.")
             messages.success(request, f"{member.name}'s till login was saved.{where}")
             return redirect(reverse("backoffice:staff_list") + f"?{_filter_qs(request)}")
 
@@ -5035,6 +5132,7 @@ def staff_detail(request, staff_id):
         "is_last_admin": _last_admin(member),
         "hide_dates": True,
         "qs": _filter_qs(request),
+        **_perm_context(request, member),
     }
     return render(request, "backoffice/staff_form.html", context)
 
@@ -5058,6 +5156,7 @@ def staff_new(request):
             role=role,
             active=request.POST.get("active") == "on",
         )
+        member.permissions = _posted_permissions(request, member, role_changed=True)
         if pin_error:
             form_errors.append(pin_error)
         else:
@@ -5079,6 +5178,7 @@ def staff_new(request):
         "form_errors": form_errors,
         "hide_dates": True,
         "qs": _filter_qs(request),
+        **_perm_context(request, member),
     }
     return render(request, "backoffice/staff_form.html", context)
 

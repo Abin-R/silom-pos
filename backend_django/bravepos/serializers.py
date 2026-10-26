@@ -299,9 +299,9 @@ class StockMovementSerializer(serializers.ModelSerializer):
         model = StockMovement
         fields = [
             'id', 'product_id', 'product_name', 'type', 'qty',
-            'note', 'document_no', 'created_at',
+            'note', 'document_no', 'created_by', 'created_at',
         ]
-        read_only_fields = ['created_at', 'product_name', 'document_no']
+        read_only_fields = ['created_at', 'product_name', 'document_no', 'created_by']
 
 
 class ShiftSerializer(serializers.ModelSerializer):

@@ -18,7 +18,7 @@
 {% endblock %}
 
 {% block content %}
-<form method="post" style="max-width:760px">
+<form method="post" style="max-width:760px" id="staffForm">
   {% csrf_token %}
   {% if form_errors %}
   <div class="banner b-red" style="margin-bottom:16px">
@@ -44,7 +44,7 @@
           {% if member.role == 'viewer' %}<option value="viewer" selected>Viewer (backoffice reports only)</option>{% endif %}
           {% if member.role == 'packer' %}<option value="packer" selected>Packer (backoffice check stock only)</option>{% endif %}
         </select>
-        <span class="hint">Cashiers sell and refund. Only admins can change products or prices.</span>
+        <span class="hint">Sets the starting ticks under Till permissions below. Changing it resets them to that role's defaults.</span>
       </div>
       <div class="field">
         <label for="f-pin">{% if mode == 'new' %}PIN{% else %}Reset PIN{% endif %}</label>
@@ -76,6 +76,46 @@
         <span class="hint">Turning it off keeps the record and its history.</span>
       </div>
     </div>
+
+    {% comment %}
+      What this person may do on the till. The API enforces these, so an
+      unticked box is a refusal on every till, not just a hidden button.
+      Only a backoffice admin may change them; others see them read-only.
+    {% endcomment %}
+    {% if show_perms %}
+    <div class="panel-h" id="perms" style="border-top:1px solid var(--line2)">Till permissions
+      <span class="sm">{% if can_edit_perms %}Untick what {{ member.name|default:"this person" }} shouldn't do on the till.{% else %}Only an admin can change these.{% endif %}</span>
+    </div>
+    {% if can_edit_perms %}<input type="hidden" name="perms_form" value="1">{% endif %}
+    {% for p in perm_rows %}
+    <label class="srow" style="cursor:{% if can_edit_perms %}pointer{% else %}default{% endif %};{% if p.parent %}padding-left:56px{% endif %}">
+      <span class="sm"><b>{{ p.label }}</b><u>{{ p.help }}{% if p.parent %} Needs Manage inventory.{% endif %}</u></span>
+      <span class="check">
+        <input type="checkbox" name="perm" value="{{ p.key }}" data-parent="{{ p.parent }}"
+               {% if p.checked %}checked{% endif %} {% if not can_edit_perms %}disabled{% endif %}>
+      </span>
+    </label>
+    {% endfor %}
+
+    {% if can_edit_perms and apply_branches %}
+    <details class="srow" style="display:block" id="applyWrap">
+      <summary style="cursor:pointer;font-size:14px;font-weight:600">
+        Also apply to other branches</summary>
+      <p class="hint" style="margin:8px 0 10px;font-size:12.5px;color:var(--mut)">
+        Every {{ member.get_role_display|lower }} at the branches ticked gets exactly the
+        permissions above when you save, and is signed out of the till so it applies straight away.</p>
+      <label class="check" style="margin-bottom:8px">
+        <input type="checkbox" id="applyAll"> <b>All branches</b></label>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 16px">
+        {% for b in apply_branches %}
+        <label class="check">
+          <input type="checkbox" name="apply_branch" value="{{ b.id }}" data-count="{{ b.count }}">
+          {{ b.name }} <span class="hint" style="font-size:12px;color:var(--mut)">· {{ b.count }}</span></label>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+    {% endif %}
 
     {% if mode == 'new' and branch %}
     <div class="srow" style="border-top:1px solid var(--line2)">
@@ -160,6 +200,53 @@
           }
         })
         .catch(function () { note.textContent = 'Could not load the PIN. Reload and try again.'; });
+    });
+  })();
+</script>
+{% endif %}
+
+{% if show_perms and can_edit_perms %}
+{{ role_defaults|json_script:"roleDefaults" }}
+<script>
+  (function () {
+    const defaults = JSON.parse(document.getElementById('roleDefaults').textContent);
+    const boxes = Array.from(document.querySelectorAll('input[name=perm]'));
+    const role = document.getElementById('f-role');
+
+    // A child box (Adjust stock) means nothing without its parent.
+    function sync() {
+      boxes.forEach(function (b) {
+        if (!b.dataset.parent) return;
+        const parent = boxes.find(function (p) { return p.value === b.dataset.parent; });
+        b.disabled = !parent.checked;
+        if (!parent.checked) b.checked = false;
+      });
+    }
+    boxes.forEach(function (b) { b.addEventListener('change', sync); });
+    role.addEventListener('change', function () {
+      const keys = defaults[role.value];
+      if (!keys) return;
+      boxes.forEach(function (b) { b.checked = keys.indexOf(b.value) !== -1; });
+      sync();
+    });
+    sync();
+
+    const all = document.getElementById('applyAll');
+    const targets = Array.from(document.querySelectorAll('input[name=apply_branch]'));
+    if (all) all.addEventListener('change', function () {
+      targets.forEach(function (t) { t.checked = all.checked; });
+    });
+
+    document.getElementById('staffForm').addEventListener('submit', function (e) {
+      const picked = targets.filter(function (t) { return t.checked; });
+      if (!picked.length) return;
+      const people = picked.reduce(function (n, t) { return n + Number(t.dataset.count); }, 0);
+      const label = role.options[role.selectedIndex].text.toLowerCase();
+      if (!confirm('Apply these till permissions to ' + people + ' other ' + label +
+                   (people === 1 ? '' : 's') + ' at ' + picked.length + ' branch' +
+                   (picked.length === 1 ? '' : 'es') + '?\n\nThey will be signed out of the till.')) {
+        e.preventDefault();
+      }
     });
   })();
 </script>
