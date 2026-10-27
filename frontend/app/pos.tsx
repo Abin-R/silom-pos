@@ -2515,18 +2515,29 @@ function PaymentModal({
   // Poll Beam charge status until completed/failed
   useEffect(() => {
     if (beamStatus !== "pending" || !beamChargeId) return;
+    // Only the first "paid" answer acts. A check starts every few seconds
+    // whether or not the last one has answered, so a tablet off wifi queues a
+    // pile of them; back online they all said "paid" together and each saved
+    // the sale (PS000010938/39: two bills, one Beam charge). clearInterval
+    // stops new checks, not the ones already waiting, so each answer has to
+    // look at `settled` after its await. Same for the two card polls below.
+    let settled = false;
     const interval = setInterval(async () => {
+      if (settled) return;
       try {
         const res = await apiFetch(`${API}/beam/charge/${beamChargeId}`);
         if (!res.ok) return;
         const data = await res.json();
+        if (settled) return;
         // Beam reports a paid charge as "SUCCEEDED" (the charge.succeeded webhook /
         // GET /charges/{id} status). Accept "COMPLETED" too for forward-compat.
         if (data.status === "SUCCEEDED" || data.status === "COMPLETED") {
+          settled = true;
           setBeamStatus("completed");
           clearInterval(interval);
           onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
         } else if (data.status === "FAILED" || data.status === "EXPIRED") {
+          settled = true;
           setBeamStatus("failed");
           setBeamError(tr("pos.payment_status_try_again", { status: data.status.toLowerCase() }));
           clearInterval(interval);
@@ -2576,12 +2587,16 @@ function PaymentModal({
   useEffect(() => { omiseBreakdownRef.current = omiseBreakdown; }, [omiseBreakdown]);
   useEffect(() => {
     if (omiseStatus !== "pending" || !omiseLinkId) return;
+    let settled = false;
     const interval = setInterval(async () => {
+      if (settled) return;
       try {
         const res = await apiFetch(`${API}/omise/link/${omiseLinkId}`);
         if (!res.ok) return;
         const data = await res.json();
+        if (settled) return;
         if (data.status === "successful") {
+          settled = true;
           setOmiseStatus("completed");
           clearInterval(interval);
           const charged = omiseBreakdownRef.current?.total ?? totalRef.current;
@@ -2590,6 +2605,7 @@ function PaymentModal({
             omiseChargeId: data.charge_id,
           });
         } else if (data.status === "failed") {
+          settled = true;
           setOmiseStatus("failed");
           setOmiseError(tr("pos.card_payment_failed_try_again"));
           clearInterval(interval);
@@ -2638,12 +2654,16 @@ function PaymentModal({
   useEffect(() => { beamCardBreakdownRef.current = beamCardBreakdown; }, [beamCardBreakdown]);
   useEffect(() => {
     if (beamCardStatus !== "pending" || !beamCardLinkId) return;
+    let settled = false;
     const interval = setInterval(async () => {
+      if (settled) return;
       try {
         const res = await apiFetch(`${API}/beam/payment-link/${beamCardLinkId}`);
         if (!res.ok) return;
         const data = await res.json();
+        if (settled) return;
         if (data.status === "successful") {
+          settled = true;
           setBeamCardStatus("completed");
           clearInterval(interval);
           const charged = beamCardBreakdownRef.current?.total ?? totalRef.current;
@@ -2652,6 +2672,7 @@ function PaymentModal({
             beamChargeId: data.charge_id,
           });
         } else if (data.status === "failed") {
+          settled = true;
           setBeamCardStatus("failed");
           setBeamCardError(tr("pos.card_payment_failed_try_again"));
           clearInterval(interval);

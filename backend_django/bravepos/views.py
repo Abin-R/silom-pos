@@ -1292,7 +1292,16 @@ def orders_list_create(request):
         },
         delivery_provider=payload.get('delivery_provider', '') or '',
         delivery_status=payload.get('delivery_status', '') or '',
+        reuse_paid_bill=True,
     )
+    # This payment already has its bill: hand that back and skip everything
+    # below, which ran when the bill was made.
+    if getattr(order, 'replayed', False):
+        logger.warning(
+            'Repeat save for paid bill %s at %s ignored',
+            order.order_number, branch.name if branch else '-',
+        )
+        return Response(OrderSerializer(order).data, status=status.HTTP_200_OK)
     # A cash sale just changed what is in the drawer.  Update the shift's cached
     # totals now so any reader — the Cash Drawer screen, the backoffice
     # unreconciled-cash tile — sees the sale without waiting for the round to close.

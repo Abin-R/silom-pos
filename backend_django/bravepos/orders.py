@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import F, Max
+from django.db.models import F, Max, Q
 from django.utils import timezone as djtz
 
 from .gateways import (
@@ -107,6 +107,7 @@ def create_order_from_items(
     trust_item_prices: bool = True,
     shift=_UNSET,
     free_items: list[dict] | None = None,
+    reuse_paid_bill: bool = False,
 ) -> Order:
     """Create an Order + its items, decrement stock, log the movements.
 
@@ -124,6 +125,11 @@ def create_order_from_items(
 
     ``trust_item_prices``: the till sends prices from its own product cache and
     is trusted.  Public callers must pass items already re-priced from the DB.
+
+    ``reuse_paid_bill``: if the branch already has a bill for any gateway id in
+    ``gateway_ids``, return that bill — with ``replayed = True`` set on it —
+    instead of making another.  The till asks for this; see the comment at the
+    check below.
     """
     gateway_ids = gateway_ids or {}
 
@@ -216,6 +222,19 @@ def create_order_from_items(
                 # read-then-insert of queue_number safe; order_number is global
                 # so it can still collide across branches — the retry covers that.
                 Branch.objects.select_for_update().filter(pk=branch.pk).first()
+
+                # One payment is one bill.  The till's paid-yet? poll does not
+                # wait for one check to answer before starting the next, so a
+                # tablet that drops off wifi queues several, and when it comes
+                # back they all answer "paid" together.  Each one saved the sale:
+                # PS000010938/39 were two bills for one Beam charge, 0.2 s apart,
+                # double the takings and double the stock out.  Checked under the
+                # branch lock, so copies arriving together cannot both get past.
+                if reuse_paid_bill:
+                    existing = _bill_for_payment(branch, gateway_ids)
+                    if existing is not None:
+                        existing.replayed = True
+                        return existing
 
                 order = Order.objects.create(
                     branch=branch,
@@ -321,6 +340,19 @@ def create_order_from_items(
         f'Could not allocate a unique order number after '
         f'{ORDER_NUMBER_MAX_RETRIES} attempts: {last_error}'
     )
+
+
+def _bill_for_payment(branch, gateway_ids):
+    """The branch's bill already carrying any of these gateway ids, or None.
+    A sale with no gateway id (cash, a manual QR) never matches."""
+    match = Q()
+    for field in ('beam_charge_id', 'beam_link_id', 'omise_link_id', 'omise_charge_id'):
+        value = gateway_ids.get(field)
+        if value:
+            match |= Q(**{field: value})
+    if not match:
+        return None
+    return Order.objects.filter(match, branch=branch).order_by('created_at').first()
 
 
 def _record_free_items(branch, order, free_items, products_by_id, promo_codes, staff):
