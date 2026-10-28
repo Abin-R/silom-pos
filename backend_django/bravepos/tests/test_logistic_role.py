@@ -32,7 +32,7 @@ class LogisticBackofficeTests(TestCase):
     @mock.patch("backoffice.views.httpx.post", return_value=_resp(201, {"location": {}}))
     def test_can_save_a_window(self, post, _get):
         response = self.client.post(reverse("backoffice:ninja_windows"), {
-            "location_name": "Ari", "window_start": "09:00", "window_end": "10:00"})
+            "location_2": "Ari", "start_2": "09:00", "end_2": "10:00"})
         self.assertEqual(response.status_code, 302)
         post.assert_called_once()
 

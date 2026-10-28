@@ -6873,13 +6873,43 @@ def _ninja_windows_error(resp):
 NINJA_WINDOW_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
 
 
+def _ninja_saved_windows(loc):
+    """A location's saved windows as sorted (start, end) pairs.
+
+    Reads the list shape (``windows``) and, until every Shopify server has
+    moved to it, the single-window one (``window_start`` / ``window_end``).
+    """
+    if "windows" in loc:
+        pairs = [(w.get("start") or "", w.get("end") or "") for w in loc.get("windows") or []]
+    elif loc.get("window_start"):
+        pairs = [(loc["window_start"], loc.get("window_end") or "")]
+    else:
+        pairs = []
+    return sorted(p for p in pairs if p[0] and p[1])
+
+
+def _ninja_windows_problem(pairs):
+    """Why a location's submitted windows can't be saved, or None."""
+    for start, end in pairs:
+        if not start or not end:
+            return "Pick both a start and an end time for every window."
+        if start >= end:
+            return f"{start}–{end} must end after it starts."
+    for (s1, e1), (s2, e2) in zip(pairs, pairs[1:]):
+        if s2 < e1:
+            return f"{s1}–{e1} and {s2}–{e2} overlap."
+    return None
+
+
 @login_required
 def ninja_windows(request):
-    """Every distinct Ninja stop location with a 09:00–10:00-style window.
+    """Every distinct Ninja stop location with its delivery windows.
 
-    One form for the whole list: Save sends only the rows whose window
-    changed, one API call each, and a row that fails keeps what was typed
-    with its own error so the rest still save.
+    A location can have several windows (09:00–10:00 and 14:00–15:00). The
+    whole table is one form: Save sends only the locations whose windows
+    changed, one API call each carrying that location's full list, which
+    replaces what was stored — so removing every window clears it. A location
+    that fails keeps what was typed with its own error; the rest still save.
     """
     locations, load_error = [], None
     try:
@@ -6892,61 +6922,65 @@ def ninja_windows(request):
     except (RuntimeError, httpx.HTTPError, ValueError) as exc:
         load_error = str(exc)
 
-    rows = [{
-        "name": loc.get("location_name") or "",
-        "saved_start": loc.get("window_start") or "",
-        "saved_end": loc.get("window_end") or "",
-        "start": loc.get("window_start") or "",
-        "end": loc.get("window_end") or "",
-        "error": None,
-    } for loc in locations]
+    rows = []
+    for loc in locations:
+        saved = _ninja_saved_windows(loc)
+        rows.append({"name": loc.get("location_name") or "", "saved": saved,
+                     "windows": list(saved), "error": None})
 
     if request.method == "POST" and not load_error:
         by_name = {r["name"]: r for r in rows}
-        posted = zip(request.POST.getlist("location_name"),
-                     request.POST.getlist("window_start"),
-                     request.POST.getlist("window_end"))
-        saved, failed = 0, 0
-        for name, start, end in posted:
-            row = by_name.get(name.strip())
-            start, end = start.strip(), end.strip()
-            if row is None or (start, end) == (row["saved_start"], row["saved_end"]):
+        saved_count, failed = 0, 0
+        for key in request.POST:
+            if not key.startswith("location_"):
                 continue
-            row["start"], row["end"] = start, end
-            if not start or not end:
-                row["error"] = "Pick both a start and an end time."
-            elif start >= end:
-                row["error"] = "The window must end after it starts."
-            else:
+            n = key[len("location_"):]
+            row = by_name.get(request.POST[key].strip())
+            if row is None:
+                continue
+            pairs = [(s.strip(), e.strip()) for s, e in zip(request.POST.getlist(f"start_{n}"),
+                                                             request.POST.getlist(f"end_{n}"))]
+            pairs = sorted(p for p in pairs if p[0] or p[1])
+            if pairs == row["saved"]:
+                continue
+            row["windows"] = pairs
+            row["error"] = _ninja_windows_problem(pairs)
+            if row["error"] is None:
                 try:
-                    resp = httpx.post(url, json={"location_name": row["name"], "window_start": start,
-                                                 "window_end": end}, headers=headers, timeout=15)
+                    resp = httpx.post(url, json={
+                        "location_name": row["name"],
+                        "windows": [{"start": s, "end": e} for s, e in pairs],
+                    }, headers=headers, timeout=15)
                 except httpx.HTTPError as exc:
                     row["error"] = f"Couldn't save: {exc}"
                 else:
                     if resp.status_code in (200, 201):
-                        row["saved_start"], row["saved_end"] = start, end
-                        saved += 1
+                        row["saved"] = pairs
+                        saved_count += 1
                         continue
                     row["error"] = f"Couldn't save: {_ninja_windows_error(resp)}"
             failed += 1
+        if saved_count:
+            messages.success(request, f"Saved {saved_count} location{'s' if saved_count != 1 else ''}.")
         if not failed:
-            if saved:
-                messages.success(request, f"Saved {saved} window{'s' if saved != 1 else ''}.")
             return redirect(reverse("backoffice:ninja_windows"))
-        if saved:
-            messages.success(request, f"Saved {saved} window{'s' if saved != 1 else ''}.")
         messages.error(request, f"{failed} location{'s' if failed != 1 else ''} not saved — see below.")
 
     for row in rows:
-        # A value already saved off the half-hour grid still shows in its picker.
-        row["start_slots"] = sorted(set(NINJA_WINDOW_SLOTS) | ({row["start"]} - {""}))
-        row["end_slots"] = sorted(set(NINJA_WINDOW_SLOTS) | ({row["end"]} - {""}))
+        # A blank pair to type into when a location has none yet.
+        shown = row["windows"] or [("", "")]
+        extra = {t for pair in shown for t in pair if t}
+        # A value saved off the half-hour grid still shows in its picker.
+        slots = sorted(set(NINJA_WINDOW_SLOTS) | extra)
+        row["shown"] = [{"start": s, "end": e} for s, e in shown]
+        row["slots"] = slots
+        row["saved_key"] = ",".join(f"{s}-{e}" for s, e in row["saved"])
 
     return render(request, "backoffice/ninja_windows.html", {
         "active": "ninja_windows",
         "rows": rows,
-        "unset_count": sum(1 for r in rows if not r["saved_start"]),
+        "slots": NINJA_WINDOW_SLOTS,
+        "unset_count": sum(1 for r in rows if not r["saved"]),
         "load_error": load_error,
         "hide_dates": True,
         "hide_branch": True,

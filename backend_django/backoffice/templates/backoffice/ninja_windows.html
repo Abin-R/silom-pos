@@ -1,10 +1,14 @@
 {% extends "backoffice/base.html" %}
 {% comment %}
-  Delivery windows for each Ninja stop location.  The list of locations and
-  the saved windows both come from the Shopify Django app's API.  The whole
-  table is one form: edit any rows, then one Save sends only those that
-  changed.  Picking a start fills the end an hour later if it is empty or
-  would end first.
+  Delivery windows for each Ninja stop location — as many as a location
+  needs.  The locations and saved windows come from the Shopify Django app's
+  API.  The whole table is one form: edit any rows, then one Save sends each
+  changed location's full list, which replaces what was stored.  Picking a
+  start fills the end an hour later if it is empty or would end first; Add
+  window starts where the last one ended.
+
+  Fields are numbered per row (location_N, start_N, end_N) so a row's windows
+  arrive together however many it has.
 {% endcomment %}
 
 {% block title %}Ninja windows{% endblock %}
@@ -26,13 +30,19 @@
 
 {% block extra_head %}
 <style>
+  .nw-tbl td { vertical-align: top; }
   .nw-tbl select.inp { width: 108px; padding-right: 6px; }
   .nw-tbl tr.nw-dirty td { background: var(--blue-soft); }
   .nw-tbl tr.nw-bad td { background: var(--red-soft); }
   .nw-tbl .nw-err { color: var(--red-dd); font-size: 12px; margin-top: 3px; }
-  .nw-tbl .nw-dash { color: var(--mut2); padding: 0 2px; }
-  .nw-tbl .nw-clear { visibility: hidden; }
-  .nw-tbl tr.nw-dirty .nw-clear { visibility: visible; }
+  .nw-wins { display: flex; flex-direction: column; gap: 6px; }
+  .nw-win { display: flex; align-items: center; gap: 6px; }
+  .nw-dash { color: var(--mut2); }
+  .nw-add { align-self: flex-start; font-size: 12.5px; font-weight: 600; color: var(--blue); background: none;
+            border: 0; padding: 2px 0; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .nw-add svg { width: 14px; height: 14px; }
+  .nw-undo { visibility: hidden; }
+  .nw-tbl tr.nw-dirty .nw-undo { visibility: visible; }
   .nw-filter { display: flex; gap: 6px; margin-left: auto; font-size: 13px; font-weight: 500; }
   .nw-filter label { display: flex; align-items: center; gap: 6px; color: var(--mut); cursor: pointer; }
 </style>
@@ -49,37 +59,46 @@
     Locations
     {% if rows %}
     <div class="nw-filter">
-      <label><input type="checkbox" id="nwUnset"> Only without a window</label>
+      <label title="Show only locations with no saved window yet"><input type="checkbox" id="nwUnset"> Only without a window</label>
     </div>
     {% endif %}
   </div>
   <div class="panel-scroll">
     <table class="tbl nw-tbl">
-      <thead><tr><th style="width:50px">#</th><th>Location</th><th style="width:270px">Window (24-hour)</th><th style="width:44px"></th></tr></thead>
+      <thead><tr><th style="width:50px">#</th><th>Location</th><th style="width:300px">Windows (24-hour)</th><th style="width:44px"></th></tr></thead>
       <tbody>
         {% for row in rows %}
-        <tr class="{% if row.error %}nw-bad{% endif %}"
-            data-name="{{ row.name|lower }}" data-start="{{ row.saved_start }}" data-end="{{ row.saved_end }}">
+        <tr class="{% if row.error %}nw-bad{% endif %}" data-n="{{ forloop.counter }}"
+            data-name="{{ row.name|lower }}" data-saved="{{ row.saved_key }}">
           <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
           <td>
             <b style="font-weight:620">{{ row.name }}</b>
             {% if row.error %}<div class="nw-err">{{ row.error }}</div>
-            {% elif not row.saved_start %}<div class="sub">No window set</div>{% endif %}
-            <input type="hidden" name="location_name" value="{{ row.name }}">
+            {% elif not row.saved %}<div class="sub">No window set</div>
+            {% else %}<div class="sub">{{ row.saved|length }} window{{ row.saved|length|pluralize }}</div>{% endif %}
+            <input type="hidden" name="location_{{ forloop.counter }}" value="{{ row.name }}">
           </td>
           <td>
-            <select class="inp" name="window_start" aria-label="Start for {{ row.name }}">
-              <option value="">Start</option>
-              {% for t in row.start_slots %}<option value="{{ t }}"{% if t == row.start %} selected{% endif %}>{{ t }}</option>{% endfor %}
-            </select>
-            <span class="nw-dash">–</span>
-            <select class="inp" name="window_end" aria-label="End for {{ row.name }}">
-              <option value="">End</option>
-              {% for t in row.end_slots %}<option value="{{ t }}"{% if t == row.end %} selected{% endif %}>{{ t }}</option>{% endfor %}
-            </select>
+            <div class="nw-wins">
+              {% for w in row.shown %}
+              <div class="nw-win">
+                <select class="inp" name="start_{{ forloop.parentloop.counter }}" aria-label="Start">
+                  <option value="">Start</option>
+                  {% for t in row.slots %}<option value="{{ t }}"{% if t == w.start %} selected{% endif %}>{{ t }}</option>{% endfor %}
+                </select>
+                <span class="nw-dash">–</span>
+                <select class="inp" name="end_{{ forloop.parentloop.counter }}" aria-label="End">
+                  <option value="">End</option>
+                  {% for t in row.slots %}<option value="{{ t }}"{% if t == w.end %} selected{% endif %}>{{ t }}</option>{% endfor %}
+                </select>
+                <button type="button" class="ico-btn nw-del" aria-label="Remove this window" title="Remove"><svg><use href="#i-x"/></svg></button>
+              </div>
+              {% endfor %}
+              <button type="button" class="nw-add"><svg><use href="#i-plus"/></svg> Add window</button>
+            </div>
           </td>
           <td class="r">
-            <button type="button" class="ico-btn nw-clear" aria-label="Undo changes to {{ row.name }}" title="Undo"><svg><use href="#i-back"/></svg></button>
+            <button type="button" class="ico-btn nw-undo" aria-label="Undo changes to {{ row.name }}" title="Undo"><svg><use href="#i-back"/></svg></button>
           </td>
         </tr>
         {% empty %}
@@ -90,6 +109,21 @@
     </table>
   </div>
 </form>
+
+<template id="nwWin">
+  <div class="nw-win">
+    <select class="inp" data-part="start" aria-label="Start">
+      <option value="">Start</option>
+      {% for t in slots %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+    </select>
+    <span class="nw-dash">–</span>
+    <select class="inp" data-part="end" aria-label="End">
+      <option value="">End</option>
+      {% for t in slots %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+    </select>
+    <button type="button" class="ico-btn nw-del" aria-label="Remove this window" title="Remove"><svg><use href="#i-x"/></svg></button>
+  </div>
+</template>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -98,25 +132,28 @@
   var form = document.getElementById("nwForm");
   if (!form) return;
   var rows = Array.prototype.slice.call(form.querySelectorAll("tr[data-name]"));
+  var tpl = document.getElementById("nwWin");
   var save = document.getElementById("nwSave");
   var search = document.getElementById("nwSearch");
   var unset = document.getElementById("nwUnset");
   var noMatch = document.getElementById("nwNoMatch");
   var submitting = false;
+  var original = new Map(rows.map(function (r) { return [r, r.querySelector(".nw-wins").innerHTML]; }));
 
-  function sel(row, name) { return row.querySelector('select[name="' + name + '"]'); }
-  function isDirty(row) {
-    return sel(row, "window_start").value !== row.dataset.start
-        || sel(row, "window_end").value !== row.dataset.end;
+  // The row's windows as the server would compare them: filled pairs, sorted.
+  function key(row) {
+    return Array.prototype.map.call(row.querySelectorAll(".nw-win"), function (w) {
+      var s = w.querySelectorAll("select");
+      return s[0].value || s[1].value ? s[0].value + "-" + s[1].value : "";
+    }).filter(Boolean).sort().join(",");
   }
+  function isDirty(row) { return key(row) !== row.dataset.saved; }
   function plusHour(t) {
     var h = Math.min(parseInt(t.slice(0, 2), 10) + 1, 23);
     return (h < 10 ? "0" : "") + h + t.slice(2);
   }
-  function setEnd(select, value) {
-    if (!select.querySelector('option[value="' + value + '"]')) {
-      select.add(new Option(value, value));
-    }
+  function setValue(select, value) {
+    if (!select.querySelector('option[value="' + value + '"]')) select.add(new Option(value, value));
     select.value = value;
   }
   function refresh() {
@@ -127,7 +164,7 @@
     }).length;
     if (save) {
       save.disabled = n === 0;
-      save.querySelector("span").textContent = n ? "Save " + n + " change" + (n === 1 ? "" : "s") : "Save";
+      save.querySelector("span").textContent = n ? "Save " + n + " location" + (n === 1 ? "" : "s") : "Save";
     }
   }
   function filter() {
@@ -135,30 +172,48 @@
     var onlyUnset = unset && unset.checked;
     var shown = 0;
     rows.forEach(function (r) {
-      var show = (!q || r.dataset.name.indexOf(q) !== -1) && (!onlyUnset || !r.dataset.start);
+      var show = (!q || r.dataset.name.indexOf(q) !== -1) && (!onlyUnset || !r.dataset.saved);
       r.hidden = !show;
       if (show) shown++;
     });
     noMatch.hidden = shown !== 0 || rows.length === 0;
   }
 
-  rows.forEach(function (r) {
-    var start = sel(r, "window_start"), end = sel(r, "window_end");
-    start.addEventListener("change", function () {
-      if (start.value && (!end.value || end.value <= start.value)) setEnd(end, plusHour(start.value));
-      refresh();
-    });
-    end.addEventListener("change", refresh);
-    r.querySelector(".nw-clear").addEventListener("click", function () {
-      start.value = r.dataset.start;
-      end.value = r.dataset.end;
-      refresh();
-    });
+  form.addEventListener("change", function (e) {
+    var el = e.target;
+    if (el.tagName === "SELECT" && /^start_/.test(el.name) && el.value) {
+      var end = el.closest(".nw-win").querySelectorAll("select")[1];
+      if (!end.value || end.value <= el.value) setValue(end, plusHour(el.value));
+    }
+    refresh();
+  });
+  form.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    var row = btn.closest("tr[data-name]");
+    if (btn.classList.contains("nw-del")) {
+      btn.closest(".nw-win").remove();
+    } else if (btn.classList.contains("nw-add")) {
+      var win = tpl.content.firstElementChild.cloneNode(true);
+      var sel = win.querySelectorAll("select");
+      sel[0].name = "start_" + row.dataset.n;
+      sel[1].name = "end_" + row.dataset.n;
+      var last = row.querySelectorAll(".nw-win");
+      var prevEnd = last.length ? last[last.length - 1].querySelectorAll("select")[1].value : "";
+      if (prevEnd) { setValue(sel[0], prevEnd); setValue(sel[1], plusHour(prevEnd)); }
+      btn.before(win);
+      sel[0].focus();
+    } else if (btn.classList.contains("nw-undo")) {
+      row.querySelector(".nw-wins").innerHTML = original.get(row);
+    } else {
+      return;
+    }
+    refresh();
   });
   if (search) search.addEventListener("input", filter);
   if (unset) unset.addEventListener("change", filter);
 
-  // Only changed rows are sent, so a 42-row page is a handful of API calls.
+  // Only changed locations are sent, so a 42-row page is a handful of API calls.
   form.addEventListener("submit", function () {
     submitting = true;
     rows.forEach(function (r) {
