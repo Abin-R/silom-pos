@@ -111,6 +111,8 @@
         <svg><use href="#i-heart"/></svg>Customers</a>
       <a class="nv {% if active == 'app_releases' %}on{% endif %}" href="{% url 'backoffice:app_release_list' %}">
         <svg><use href="#i-dl"/></svg>App releases</a>
+      <a class="nv {% if active == 'ninja_windows' %}on{% endif %}" href="{% url 'backoffice:ninja_windows' %}">
+        <svg><use href="#i-truck"/></svg>Ninja windows</a>
       {% endif %}
 
       {% comment %}

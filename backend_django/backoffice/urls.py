@@ -141,6 +141,9 @@ urlpatterns = [
     path("app-releases/<uuid:release_id>/delete", views.app_release_delete,
          name="app_release_delete"),
 
+    # Ninja delivery windows — stored in the Shopify Django app
+    path("ninja-windows", views.ninja_windows, name="ninja_windows"),
+
     # Shop-level settings (singleton)
     path("setting/shop", views.shop_settings, name="shop_settings"),
 ]

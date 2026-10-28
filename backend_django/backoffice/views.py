@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -15,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
+import httpx
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -6844,3 +6846,75 @@ def app_release_delete(request, release_id):
         release.delete()
         messages.success(request, f"Version {version} removed from the list.")
     return redirect(reverse("backoffice:app_release_list"))
+
+
+# ─── Ninja delivery windows ─────────────────────────────────────────────
+# The locations and their windows live in the Shopify Django app, which is
+# where the Ninja webhook stores stops.  This page only reads and writes them
+# through its API, server-side, so the token never reaches the browser.
+
+def _ninja_windows_api():
+    url = os.environ.get("NINJA_WINDOWS_API_URL", "").strip()
+    token = os.environ.get("NINJA_WINDOWS_API_TOKEN", "").strip()
+    if not url or not token:
+        raise RuntimeError("NINJA_WINDOWS_API_URL / NINJA_WINDOWS_API_TOKEN are not set.")
+    return url, {"X-Api-Token": token}
+
+
+def _ninja_windows_error(resp):
+    try:
+        return resp.json().get("error") or f"HTTP {resp.status_code}"
+    except ValueError:
+        return f"HTTP {resp.status_code}"
+
+
+@login_required
+def ninja_windows(request):
+    """Every distinct Ninja stop location with a 09:00–10:00-style window."""
+    error = None
+    posted = None
+    if request.method == "POST":
+        posted = {
+            "location_name": (request.POST.get("location_name") or "").strip(),
+            "window_start": (request.POST.get("window_start") or "").strip(),
+            "window_end": (request.POST.get("window_end") or "").strip(),
+        }
+        if not all(posted.values()):
+            error = "Pick both a start and an end time."
+        elif posted["window_start"] >= posted["window_end"]:
+            error = "The window must end after it starts."
+        else:
+            try:
+                url, headers = _ninja_windows_api()
+                resp = httpx.post(url, json=posted, headers=headers, timeout=15)
+            except (RuntimeError, httpx.HTTPError) as exc:
+                error = f"Couldn't save: {exc}"
+            else:
+                if resp.status_code in (200, 201):
+                    messages.success(
+                        request, f"Saved {posted['location_name']}: "
+                                 f"{posted['window_start']}–{posted['window_end']}.")
+                    return redirect(reverse("backoffice:ninja_windows"))
+                error = f"Couldn't save: {_ninja_windows_error(resp)}"
+
+    locations, load_error = [], None
+    try:
+        url, headers = _ninja_windows_api()
+        resp = httpx.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            locations = resp.json().get("locations", [])
+        else:
+            load_error = _ninja_windows_error(resp)
+    except (RuntimeError, httpx.HTTPError, ValueError) as exc:
+        load_error = str(exc)
+
+    return render(request, "backoffice/ninja_windows.html", {
+        "active": "ninja_windows",
+        "locations": locations,
+        "load_error": load_error,
+        "error": error,
+        "posted": posted if error else None,
+        "hide_dates": True,
+        "hide_branch": True,
+        **_branch_topbar_context(request),
+    })

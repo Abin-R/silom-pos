@@ -1,0 +1,57 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Delivery windows for each Ninja stop location.  The list of locations and
+  the saved windows both come from the Shopify Django app's API; Save posts
+  one location's window back to it.
+{% endcomment %}
+
+{% block title %}Ninja windows{% endblock %}
+{% block page_title %}Ninja delivery windows{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{{ locations|length }} location{{ locations|length|pluralize }}</div>
+{% endblock %}
+
+{% block content %}
+{% if load_error %}
+  <div class="banner b-red" role="alert"><svg><use href="#i-alert"/></svg><span>Couldn't load locations: {{ load_error }}</span></div>
+{% endif %}
+{% if error %}
+  <div class="banner b-red" role="alert" style="margin-top:10px"><svg><use href="#i-alert"/></svg><span>{{ posted.location_name }} — {{ error }}</span></div>
+{% endif %}
+
+<div class="panel panel-grow" style="margin-top:14px">
+  <div class="panel-h">Locations</div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead><tr><th style="width:50px">#</th><th>Location</th><th style="width:140px">Start</th><th style="width:140px">End</th><th style="width:110px"></th></tr></thead>
+      <tbody>
+        {% for loc in locations %}
+        <tr>
+          <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
+          <td>
+            <b style="font-weight:620">{{ loc.location_name }}</b>
+            {% if not loc.window_start %}<div class="sub">No window set</div>{% endif %}
+          </td>
+          {% if posted and posted.location_name == loc.location_name %}
+          <td><input class="inp" type="time" name="window_start" form="nw-{{ forloop.counter }}" required value="{{ posted.window_start }}"></td>
+          <td><input class="inp" type="time" name="window_end" form="nw-{{ forloop.counter }}" required value="{{ posted.window_end }}"></td>
+          {% else %}
+          <td><input class="inp" type="time" name="window_start" form="nw-{{ forloop.counter }}" required value="{{ loc.window_start|default:'' }}"></td>
+          <td><input class="inp" type="time" name="window_end" form="nw-{{ forloop.counter }}" required value="{{ loc.window_end|default:'' }}"></td>
+          {% endif %}
+          <td class="r">
+            <form id="nw-{{ forloop.counter }}" method="post">
+              {% csrf_token %}
+              <input type="hidden" name="location_name" value="{{ loc.location_name }}">
+              <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="empty">{% if load_error %}Nothing to show.{% else %}No Ninja locations yet.{% endif %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
