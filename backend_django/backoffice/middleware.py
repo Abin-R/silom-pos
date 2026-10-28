@@ -151,16 +151,30 @@ PACKER_WRITE_URL_NAMES = frozenset({
     "logout", "check_stock_new", "check_stock_document", "check_stock_delete",
 })
 
+# What a "logistic" account may open: the Ninja delivery windows page, which
+# it may also save. No dashboard — "home" and "dashboard" send it to the page.
+LOGISTIC_URL_NAMES = frozenset({
+    "login", "logout", "app_css", "favicon", "apple_touch_icon",
+    "ninja_windows",
+})
+LOGISTIC_WRITE_URL_NAMES = frozenset({"logout", "ninja_windows"})
+
 # role -> (pages it may open, pages it may also POST to)
 LIMITED_ROLES = {
     "viewer": (VIEWER_URL_NAMES, frozenset({"logout"})),
     "packer": (PACKER_URL_NAMES, PACKER_WRITE_URL_NAMES),
+    "logistic": (LOGISTIC_URL_NAMES, LOGISTIC_WRITE_URL_NAMES),
 }
+
+# role -> where signing in (or opening the dashboard) lands, for a role that
+# may not see the dashboard.
+LANDING_URL_NAMES = {"logistic": "ninja_windows"}
 
 
 class ViewerAccessMiddleware:
-    """Keeps a ``role == "viewer"`` account to read-only reports, and a
-    ``role == "packer"`` account to the dashboard and Check stock.
+    """Keeps a ``role == "viewer"`` account to read-only reports, a
+    ``role == "packer"`` account to the dashboard and Check stock, and a
+    ``role == "logistic"`` account to the Ninja delivery windows page.
 
     Enforced here rather than per view because the backoffice has ~70 views
     that only say ``@login_required``; one gate in front of all of them can't
@@ -187,6 +201,10 @@ class ViewerAccessMiddleware:
             return None
         pages, writable = limits
         read = request.method in ("GET", "HEAD")
+        landing = LANDING_URL_NAMES.get(request.user.role)
+        if landing and read and match.url_name in ("home", "dashboard"):
+            from django.shortcuts import redirect
+            return redirect(f"backoffice:{landing}")
         if match.url_name in pages and (read or match.url_name in writable):
             return None
         from .views import viewer_forbidden

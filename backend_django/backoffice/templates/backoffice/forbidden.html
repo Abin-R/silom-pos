@@ -4,8 +4,8 @@
   lands here needs to know what to ask for, not that they were refused.
 {% endcomment %}
 
-{% block title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% else %}Admins only{% endif %}{% endblock %}
-{% block page_title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% else %}Admins only{% endif %}{% endblock %}
+{% block title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% elif ninja_only %}Ninja windows only{% else %}Admins only{% endif %}{% endblock %}
+{% block page_title %}{% if reports_only %}Reports only{% elif check_stock_only %}Check stock only{% elif ninja_only %}Ninja windows only{% else %}Admins only{% endif %}{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width:560px">
@@ -23,6 +23,12 @@
     <div style="line-height:1.6">
       Packer accounts see the dashboard and Check stock, where they can create, edit and delete documents.
       Anything else needs a Manager or Admin account.
+    {% elif ninja_only %}
+    <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
+      Your account can use Ninja windows only</b>
+    <div style="line-height:1.6">
+      Logistic accounts see the Ninja delivery windows page, where they can set each location's window.
+      Anything else needs a Manager or Admin account.
     {% else %}
     <b style="display:block;font-size:17px;font-weight:660;color:var(--txt);margin-bottom:10px">
       This page needs an admin account</b>
@@ -32,8 +38,13 @@
       You are signed in as <b style="color:var(--txt)">{{ user.get_username }}</b>.
     </div>
     <div style="margin-top:20px">
+      {% if ninja_only %}
+      <a class="btn btn-blue" href="{% url 'backoffice:ninja_windows' %}">
+        <svg><use href="#i-back"/></svg> Back to Ninja windows</a>
+      {% else %}
       <a class="btn btn-blue" href="{% url 'backoffice:dashboard' %}">
         <svg><use href="#i-back"/></svg> Back to the dashboard</a>
+      {% endif %}
     </div>
   </div>
 </div>

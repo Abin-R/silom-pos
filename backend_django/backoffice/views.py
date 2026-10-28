@@ -118,10 +118,11 @@ def admin_required(view):
 
 def viewer_forbidden(request):
     """The page `ViewerAccessMiddleware` shows a viewer outside the reports,
-    or a packer outside Check stock."""
+    a packer outside Check stock, or a logistic outside Ninja windows."""
     return render(request, "backoffice/forbidden.html", {
         "reports_only": getattr(request.user, "role", "") == "viewer",
         "check_stock_only": getattr(request.user, "role", "") == "packer",
+        "ninja_only": getattr(request.user, "role", "") == "logistic",
         "hide_dates": True,
         **_branch_topbar_context(request),
     }, status=403)
@@ -6293,7 +6294,7 @@ def _user_form_errors(post, instance=None) -> list[str]:
 
 def _user_role(value) -> str:
     """A submitted Users-page role, defaulting to Manager (stored "cashier")."""
-    return value if value in ("admin", "viewer", "packer") else "cashier"
+    return value if value in ("admin", "viewer", "packer", "logistic") else "cashier"
 
 
 def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:
@@ -6868,35 +6869,18 @@ def _ninja_windows_error(resp):
         return f"HTTP {resp.status_code}"
 
 
+# Half-hour steps for the Start / End pickers: 24-hour, no AM/PM to misread.
+NINJA_WINDOW_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+
+
 @login_required
 def ninja_windows(request):
-    """Every distinct Ninja stop location with a 09:00–10:00-style window."""
-    error = None
-    posted = None
-    if request.method == "POST":
-        posted = {
-            "location_name": (request.POST.get("location_name") or "").strip(),
-            "window_start": (request.POST.get("window_start") or "").strip(),
-            "window_end": (request.POST.get("window_end") or "").strip(),
-        }
-        if not all(posted.values()):
-            error = "Pick both a start and an end time."
-        elif posted["window_start"] >= posted["window_end"]:
-            error = "The window must end after it starts."
-        else:
-            try:
-                url, headers = _ninja_windows_api()
-                resp = httpx.post(url, json=posted, headers=headers, timeout=15)
-            except (RuntimeError, httpx.HTTPError) as exc:
-                error = f"Couldn't save: {exc}"
-            else:
-                if resp.status_code in (200, 201):
-                    messages.success(
-                        request, f"Saved {posted['location_name']}: "
-                                 f"{posted['window_start']}–{posted['window_end']}.")
-                    return redirect(reverse("backoffice:ninja_windows"))
-                error = f"Couldn't save: {_ninja_windows_error(resp)}"
+    """Every distinct Ninja stop location with a 09:00–10:00-style window.
 
+    One form for the whole list: Save sends only the rows whose window
+    changed, one API call each, and a row that fails keeps what was typed
+    with its own error so the rest still save.
+    """
     locations, load_error = [], None
     try:
         url, headers = _ninja_windows_api()
@@ -6908,12 +6892,62 @@ def ninja_windows(request):
     except (RuntimeError, httpx.HTTPError, ValueError) as exc:
         load_error = str(exc)
 
+    rows = [{
+        "name": loc.get("location_name") or "",
+        "saved_start": loc.get("window_start") or "",
+        "saved_end": loc.get("window_end") or "",
+        "start": loc.get("window_start") or "",
+        "end": loc.get("window_end") or "",
+        "error": None,
+    } for loc in locations]
+
+    if request.method == "POST" and not load_error:
+        by_name = {r["name"]: r for r in rows}
+        posted = zip(request.POST.getlist("location_name"),
+                     request.POST.getlist("window_start"),
+                     request.POST.getlist("window_end"))
+        saved, failed = 0, 0
+        for name, start, end in posted:
+            row = by_name.get(name.strip())
+            start, end = start.strip(), end.strip()
+            if row is None or (start, end) == (row["saved_start"], row["saved_end"]):
+                continue
+            row["start"], row["end"] = start, end
+            if not start or not end:
+                row["error"] = "Pick both a start and an end time."
+            elif start >= end:
+                row["error"] = "The window must end after it starts."
+            else:
+                try:
+                    resp = httpx.post(url, json={"location_name": row["name"], "window_start": start,
+                                                 "window_end": end}, headers=headers, timeout=15)
+                except httpx.HTTPError as exc:
+                    row["error"] = f"Couldn't save: {exc}"
+                else:
+                    if resp.status_code in (200, 201):
+                        row["saved_start"], row["saved_end"] = start, end
+                        saved += 1
+                        continue
+                    row["error"] = f"Couldn't save: {_ninja_windows_error(resp)}"
+            failed += 1
+        if not failed:
+            if saved:
+                messages.success(request, f"Saved {saved} window{'s' if saved != 1 else ''}.")
+            return redirect(reverse("backoffice:ninja_windows"))
+        if saved:
+            messages.success(request, f"Saved {saved} window{'s' if saved != 1 else ''}.")
+        messages.error(request, f"{failed} location{'s' if failed != 1 else ''} not saved — see below.")
+
+    for row in rows:
+        # A value already saved off the half-hour grid still shows in its picker.
+        row["start_slots"] = sorted(set(NINJA_WINDOW_SLOTS) | ({row["start"]} - {""}))
+        row["end_slots"] = sorted(set(NINJA_WINDOW_SLOTS) | ({row["end"]} - {""}))
+
     return render(request, "backoffice/ninja_windows.html", {
         "active": "ninja_windows",
-        "locations": locations,
+        "rows": rows,
+        "unset_count": sum(1 for r in rows if not r["saved_start"]),
         "load_error": load_error,
-        "error": error,
-        "posted": posted if error else None,
         "hide_dates": True,
         "hide_branch": True,
         **_branch_topbar_context(request),

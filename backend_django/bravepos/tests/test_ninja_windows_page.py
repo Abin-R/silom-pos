@@ -37,7 +37,8 @@ class NinjaWindowsPageTests(TestCase):
         page = self.client.get("/backoffice/ninja-windows").content.decode()
         self.assertEqual(get.call_args.kwargs["headers"], {"X-Api-Token": "t0ken"})
         self.assertIn("Silom", page)
-        self.assertIn('value="09:00"', page)
+        self.assertIn('value="09:00" selected', page)
+        self.assertIn('value="10:00" selected', page)
         self.assertIn("No window set", page)
 
     @mock.patch("backoffice.views.httpx.get", return_value=_resp(200, LOCATIONS))
@@ -48,6 +49,28 @@ class NinjaWindowsPageTests(TestCase):
         self.assertEqual(r.status_code, 302)
         self.assertEqual(post.call_args.kwargs["json"],
                          {"location_name": "Ari", "window_start": "11:00", "window_end": "12:00"})
+
+    @mock.patch("backoffice.views.httpx.get", return_value=_resp(200, LOCATIONS))
+    @mock.patch("backoffice.views.httpx.post", return_value=_resp(201, {"location": {}}))
+    def test_one_save_sends_only_the_changed_rows(self, post, _get):
+        r = self.client.post("/backoffice/ninja-windows", {
+            "location_name": ["Silom", "Ari"],
+            "window_start": ["09:00", "13:00"],
+            "window_end": ["10:00", "14:30"]})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual([c.kwargs["json"]["location_name"] for c in post.call_args_list], ["Ari"])
+
+    @mock.patch("backoffice.views.httpx.get", return_value=_resp(200, LOCATIONS))
+    @mock.patch("backoffice.views.httpx.post", return_value=_resp(201, {"location": {}}))
+    def test_a_bad_row_keeps_its_input_and_the_rest_save(self, post, _get):
+        r = self.client.post("/backoffice/ninja-windows", {
+            "location_name": ["Silom", "Ari"],
+            "window_start": ["11:00", "15:00"],
+            "window_end": ["12:00", ""]})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Pick both a start and an end time.")
+        self.assertContains(r, 'value="15:00" selected')
+        self.assertEqual([c.kwargs["json"]["location_name"] for c in post.call_args_list], ["Silom"])
 
     @mock.patch("backoffice.views.httpx.get", return_value=_resp(200, LOCATIONS))
     @mock.patch("backoffice.views.httpx.post")

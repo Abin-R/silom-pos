@@ -1,57 +1,175 @@
 {% extends "backoffice/base.html" %}
 {% comment %}
   Delivery windows for each Ninja stop location.  The list of locations and
-  the saved windows both come from the Shopify Django app's API; Save posts
-  one location's window back to it.
+  the saved windows both come from the Shopify Django app's API.  The whole
+  table is one form: edit any rows, then one Save sends only those that
+  changed.  Picking a start fills the end an hour later if it is empty or
+  would end first.
 {% endcomment %}
 
 {% block title %}Ninja windows{% endblock %}
 {% block page_title %}Ninja delivery windows{% endblock %}
 {% block page_sub %}
-  <div class="tb-sub">{{ locations|length }} location{{ locations|length|pluralize }}</div>
+  <div class="tb-sub">{{ rows|length }} location{{ rows|length|pluralize }}{% if unset_count %} · {{ unset_count }} without a window{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if rows %}
+  <div class="ctl ctl-search">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" id="nwSearch" placeholder="Search locations" autocomplete="off">
+  </div>
+  <button type="submit" form="nwForm" class="btn btn-blue" id="nwSave">
+    <svg><use href="#i-check"/></svg> <span>Save</span></button>
+  {% endif %}
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  .nw-tbl select.inp { width: 108px; padding-right: 6px; }
+  .nw-tbl tr.nw-dirty td { background: var(--blue-soft); }
+  .nw-tbl tr.nw-bad td { background: var(--red-soft); }
+  .nw-tbl .nw-err { color: var(--red-dd); font-size: 12px; margin-top: 3px; }
+  .nw-tbl .nw-dash { color: var(--mut2); padding: 0 2px; }
+  .nw-tbl .nw-clear { visibility: hidden; }
+  .nw-tbl tr.nw-dirty .nw-clear { visibility: visible; }
+  .nw-filter { display: flex; gap: 6px; margin-left: auto; font-size: 13px; font-weight: 500; }
+  .nw-filter label { display: flex; align-items: center; gap: 6px; color: var(--mut); cursor: pointer; }
+</style>
 {% endblock %}
 
 {% block content %}
 {% if load_error %}
   <div class="banner b-red" role="alert"><svg><use href="#i-alert"/></svg><span>Couldn't load locations: {{ load_error }}</span></div>
 {% endif %}
-{% if error %}
-  <div class="banner b-red" role="alert" style="margin-top:10px"><svg><use href="#i-alert"/></svg><span>{{ posted.location_name }} — {{ error }}</span></div>
-{% endif %}
 
-<div class="panel panel-grow" style="margin-top:14px">
-  <div class="panel-h">Locations</div>
+<form method="post" id="nwForm" class="panel panel-grow" style="margin-top:14px">
+  {% csrf_token %}
+  <div class="panel-h">
+    Locations
+    {% if rows %}
+    <div class="nw-filter">
+      <label><input type="checkbox" id="nwUnset"> Only without a window</label>
+    </div>
+    {% endif %}
+  </div>
   <div class="panel-scroll">
-    <table class="tbl">
-      <thead><tr><th style="width:50px">#</th><th>Location</th><th style="width:140px">Start</th><th style="width:140px">End</th><th style="width:110px"></th></tr></thead>
+    <table class="tbl nw-tbl">
+      <thead><tr><th style="width:50px">#</th><th>Location</th><th style="width:270px">Window (24-hour)</th><th style="width:44px"></th></tr></thead>
       <tbody>
-        {% for loc in locations %}
-        <tr>
+        {% for row in rows %}
+        <tr class="{% if row.error %}nw-bad{% endif %}"
+            data-name="{{ row.name|lower }}" data-start="{{ row.saved_start }}" data-end="{{ row.saved_end }}">
           <td class="money" style="color:var(--mut)">{{ forloop.counter }}</td>
           <td>
-            <b style="font-weight:620">{{ loc.location_name }}</b>
-            {% if not loc.window_start %}<div class="sub">No window set</div>{% endif %}
+            <b style="font-weight:620">{{ row.name }}</b>
+            {% if row.error %}<div class="nw-err">{{ row.error }}</div>
+            {% elif not row.saved_start %}<div class="sub">No window set</div>{% endif %}
+            <input type="hidden" name="location_name" value="{{ row.name }}">
           </td>
-          {% if posted and posted.location_name == loc.location_name %}
-          <td><input class="inp" type="time" name="window_start" form="nw-{{ forloop.counter }}" required value="{{ posted.window_start }}"></td>
-          <td><input class="inp" type="time" name="window_end" form="nw-{{ forloop.counter }}" required value="{{ posted.window_end }}"></td>
-          {% else %}
-          <td><input class="inp" type="time" name="window_start" form="nw-{{ forloop.counter }}" required value="{{ loc.window_start|default:'' }}"></td>
-          <td><input class="inp" type="time" name="window_end" form="nw-{{ forloop.counter }}" required value="{{ loc.window_end|default:'' }}"></td>
-          {% endif %}
+          <td>
+            <select class="inp" name="window_start" aria-label="Start for {{ row.name }}">
+              <option value="">Start</option>
+              {% for t in row.start_slots %}<option value="{{ t }}"{% if t == row.start %} selected{% endif %}>{{ t }}</option>{% endfor %}
+            </select>
+            <span class="nw-dash">–</span>
+            <select class="inp" name="window_end" aria-label="End for {{ row.name }}">
+              <option value="">End</option>
+              {% for t in row.end_slots %}<option value="{{ t }}"{% if t == row.end %} selected{% endif %}>{{ t }}</option>{% endfor %}
+            </select>
+          </td>
           <td class="r">
-            <form id="nw-{{ forloop.counter }}" method="post">
-              {% csrf_token %}
-              <input type="hidden" name="location_name" value="{{ loc.location_name }}">
-              <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save</button>
-            </form>
+            <button type="button" class="ico-btn nw-clear" aria-label="Undo changes to {{ row.name }}" title="Undo"><svg><use href="#i-back"/></svg></button>
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="empty">{% if load_error %}Nothing to show.{% else %}No Ninja locations yet.{% endif %}</td></tr>
+        <tr><td colspan="4" class="empty">{% if load_error %}Nothing to show.{% else %}No Ninja locations yet.{% endif %}</td></tr>
         {% endfor %}
+        <tr id="nwNoMatch" hidden><td colspan="4" class="empty">No locations match.</td></tr>
       </tbody>
     </table>
   </div>
-</div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var form = document.getElementById("nwForm");
+  if (!form) return;
+  var rows = Array.prototype.slice.call(form.querySelectorAll("tr[data-name]"));
+  var save = document.getElementById("nwSave");
+  var search = document.getElementById("nwSearch");
+  var unset = document.getElementById("nwUnset");
+  var noMatch = document.getElementById("nwNoMatch");
+  var submitting = false;
+
+  function sel(row, name) { return row.querySelector('select[name="' + name + '"]'); }
+  function isDirty(row) {
+    return sel(row, "window_start").value !== row.dataset.start
+        || sel(row, "window_end").value !== row.dataset.end;
+  }
+  function plusHour(t) {
+    var h = Math.min(parseInt(t.slice(0, 2), 10) + 1, 23);
+    return (h < 10 ? "0" : "") + h + t.slice(2);
+  }
+  function setEnd(select, value) {
+    if (!select.querySelector('option[value="' + value + '"]')) {
+      select.add(new Option(value, value));
+    }
+    select.value = value;
+  }
+  function refresh() {
+    var n = rows.filter(function (r) {
+      var d = isDirty(r);
+      r.classList.toggle("nw-dirty", d);
+      return d;
+    }).length;
+    if (save) {
+      save.disabled = n === 0;
+      save.querySelector("span").textContent = n ? "Save " + n + " change" + (n === 1 ? "" : "s") : "Save";
+    }
+  }
+  function filter() {
+    var q = (search && search.value || "").trim().toLowerCase();
+    var onlyUnset = unset && unset.checked;
+    var shown = 0;
+    rows.forEach(function (r) {
+      var show = (!q || r.dataset.name.indexOf(q) !== -1) && (!onlyUnset || !r.dataset.start);
+      r.hidden = !show;
+      if (show) shown++;
+    });
+    noMatch.hidden = shown !== 0 || rows.length === 0;
+  }
+
+  rows.forEach(function (r) {
+    var start = sel(r, "window_start"), end = sel(r, "window_end");
+    start.addEventListener("change", function () {
+      if (start.value && (!end.value || end.value <= start.value)) setEnd(end, plusHour(start.value));
+      refresh();
+    });
+    end.addEventListener("change", refresh);
+    r.querySelector(".nw-clear").addEventListener("click", function () {
+      start.value = r.dataset.start;
+      end.value = r.dataset.end;
+      refresh();
+    });
+  });
+  if (search) search.addEventListener("input", filter);
+  if (unset) unset.addEventListener("change", filter);
+
+  // Only changed rows are sent, so a 42-row page is a handful of API calls.
+  form.addEventListener("submit", function () {
+    submitting = true;
+    rows.forEach(function (r) {
+      if (!isDirty(r)) r.querySelectorAll("input, select").forEach(function (el) { el.disabled = true; });
+    });
+  });
+  window.addEventListener("beforeunload", function (e) {
+    if (!submitting && rows.some(isDirty)) { e.preventDefault(); e.returnValue = ""; }
+  });
+
+  refresh();
+})();
+</script>
 {% endblock %}

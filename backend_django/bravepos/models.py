@@ -36,11 +36,14 @@ class Staff(models.Model):
     # PIN picker and refused by both till login endpoints. "packer" is the
     # same kind of backoffice-only login, limited to the dashboard and the
     # Check stock documents (which it may create, edit and delete).
+    # "logistic" is another backoffice-only login that opens just the Ninja
+    # delivery windows page.
     ROLE_CHOICES = [
         ("admin", "Admin"),
         ("cashier", "Cashier"),
         ("viewer", "Viewer"),
         ("packer", "Packer"),
+        ("logistic", "Logistic"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)

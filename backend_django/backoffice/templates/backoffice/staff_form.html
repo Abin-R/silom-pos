@@ -43,6 +43,7 @@
           {# Offered only to keep a viewer a viewer — saving would otherwise make them a cashier. #}
           {% if member.role == 'viewer' %}<option value="viewer" selected>Viewer (backoffice reports only)</option>{% endif %}
           {% if member.role == 'packer' %}<option value="packer" selected>Packer (backoffice check stock only)</option>{% endif %}
+          {% if member.role == 'logistic' %}<option value="logistic" selected>Logistic (backoffice Ninja windows only)</option>{% endif %}
         </select>
         <span class="hint">Sets the starting ticks under Till permissions below. Changing it resets them to that role's defaults.</span>
       </div>
