@@ -238,12 +238,15 @@ def order_price(request, branch_id):
 def order_suggest(request, branch_id):
     """What to offer alongside the cart — the till's upsell strip, for the
     customer.  Ids and reasons only: the page already holds the menu, and a
-    product it doesn't hold (or holds as sold out) is simply not shown."""
+    product it doesn't hold (or holds as sold out) is simply not shown.
+
+    On at every branch: ``Branch.suggestions_enabled`` switches the *till's*
+    strip only.  The pairings are learned across all branches anyway."""
     if request.method != 'POST':
         return _err('POST required', 405)
 
     branch = get_object_or_404(Branch, id=branch_id, active=True)
-    if not selforder.branch_is_open(branch) or not branch.suggestions_enabled:
+    if not selforder.branch_is_open(branch):
         return JsonResponse({'status': 'ok', 'suggestions': []})
 
     try:

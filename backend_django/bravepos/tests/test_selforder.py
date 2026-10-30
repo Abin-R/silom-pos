@@ -197,13 +197,11 @@ class PublicEndpointTests(TestCase):
 
 # ─── Frequently bought together ──────────────────────────────────────────────
 class SelfOrderSuggestionTests(TestCase):
-    """The till's upsell strip on the menu: same rules, same kill switch."""
+    """The till's upsell strip on the menu: same rules, at every branch."""
 
     def setUp(self):
         make_shop()
         self.branch = make_branch()
-        self.branch.suggestions_enabled = True
-        self.branch.save()
         open_shift(self.branch)
         self.latte = make_product(self.branch, name='Latte')
         self.croissant = make_product(self.branch, name='Croissant', price='60.00')
@@ -228,10 +226,11 @@ class SelfOrderSuggestionTests(TestCase):
              'because_id': str(self.latte.id)},
         ])
 
-    def test_switched_off_branch_offers_nothing(self):
+    def test_offered_where_the_tills_strip_is_switched_off(self):
+        """The branch switch is the till's; self-order suggests everywhere."""
         self.branch.suggestions_enabled = False
         self.branch.save()
-        self.assertEqual(self._suggest(self.latte).json()['suggestions'], [])
+        self.assertEqual(len(self._suggest(self.latte).json()['suggestions']), 1)
 
     def test_closed_branch_offers_nothing(self):
         self.branch.shifts.update(status='closed', closed_at=djtz.now())
