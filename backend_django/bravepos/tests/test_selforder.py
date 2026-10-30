@@ -12,6 +12,8 @@ from unittest import skipUnless
 
 from django.db import connection, connections
 from django.test import Client, TestCase, TransactionTestCase
+from datetime import timedelta as timezone_timedelta
+
 from django.utils import timezone as djtz
 
 # The race tests rely on real SELECT ... FOR UPDATE row locking, which SQLite
@@ -25,7 +27,9 @@ REQUIRES_ROW_LOCKS = skipUnless(
 
 from bravepos import gateways, selforder
 from bravepos.gateways import compute_order_charges
-from bravepos.models import Branch, Order, SelfOrder, Settings
+from bravepos.models import (
+    Branch, DiscountType, Order, SelfOrder, Settings, StockDocument, SuggestionRule,
+)
 from bravepos.orders import create_order_from_items
 
 from .factories import (
@@ -191,6 +195,191 @@ class PublicEndpointTests(TestCase):
         self.assertEqual(res.status_code, 404)
 
 
+# ─── Frequently bought together ──────────────────────────────────────────────
+class SelfOrderSuggestionTests(TestCase):
+    """The till's upsell strip on the menu: same rules, same kill switch."""
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch()
+        self.branch.suggestions_enabled = True
+        self.branch.save()
+        open_shift(self.branch)
+        self.latte = make_product(self.branch, name='Latte')
+        self.croissant = make_product(self.branch, name='Croissant', price='60.00')
+        SuggestionRule.objects.create(
+            branch=None, kind='pair', antecedent_key='latte', antecedent_size=1,
+            consequent_name='croissant', lift=3, score=3, basket_count=20,
+        )
+        self.c = Client()
+
+    def _suggest(self, *products):
+        return self.c.post(
+            f'/order/{self.branch.id}/suggest/',
+            data={'product_ids': [str(p.id) for p in products]},
+            content_type='application/json',
+        )
+
+    def test_offers_what_is_bought_together(self):
+        res = self._suggest(self.latte)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()['suggestions'], [
+            {'id': str(self.croissant.id), 'reason': 'often_together',
+             'because_id': str(self.latte.id)},
+        ])
+
+    def test_switched_off_branch_offers_nothing(self):
+        self.branch.suggestions_enabled = False
+        self.branch.save()
+        self.assertEqual(self._suggest(self.latte).json()['suggestions'], [])
+
+    def test_closed_branch_offers_nothing(self):
+        self.branch.shifts.update(status='closed', closed_at=djtz.now())
+        self.assertEqual(self._suggest(self.latte).json()['suggestions'], [])
+
+    def test_suggested_line_is_attributed_on_the_order(self):
+        """A line added from the strip lands as ``suggested`` on the Order, as
+        a till's does, so the uplift report counts self-orders too."""
+        with StubGateway():
+            d = selforder.create_draft(self.branch, [
+                {'product_id': str(self.latte.id), 'qty': 1},
+                {'product_id': str(self.croissant.id), 'qty': 1, 'suggested': True},
+            ])
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+        with StubGateway(paid=True):
+            order = selforder.promote(SelfOrder.objects.get(pk=d.pk))
+        by_name = {i.name: i.suggested for i in order.items.all()}
+        self.assertEqual(by_name, {'Latte': False, 'Croissant': True})
+
+
+# ─── Discounts the customer picks ────────────────────────────────────────────
+class SelfOrderDiscountTests(TestCase):
+    """The till's preset dropdown, on the menu: picked by the customer, checked
+    and computed by the server (bravepos/discount_rules.py)."""
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch()
+        self.branch.discount_types_enabled = True
+        self.branch.save()
+        open_shift(self.branch)
+        self.latte = make_product(self.branch, name='Latte', price='90.00', stock=10)
+        self.cake = make_product(self.branch, name='Cake', price='125.00', stock=10)
+        self.cookie = make_product(self.branch, name='Cookie', price='25.00', stock=10)
+        self.c = Client()
+
+    def _preset(self, products=(), **kw):
+        d = DiscountType.objects.create(branch=self.branch, **kw)
+        if products:
+            d.products.set(products)
+        return d
+
+    def _items(self, *lines):
+        return [{'product_id': str(p.id), 'qty': q, **({'discount_type_id': str(d.id)} if d else {})}
+                for p, q, d in lines]
+
+    def test_picked_percent_discount_is_computed_here_and_rounds_the_bill(self):
+        d = self._preset([self.cake], name='Cake 15%', kind='percent', value=15,
+                         applies_to=DiscountType.APPLIES_PRODUCTS)
+        items, goods = selforder.price_cart(self.branch, self._items((self.cake, 1, d)))
+        # 15% of 125 = 18.75 off → 106.25, and a discounted bill rounds to the baht.
+        self.assertEqual(items[0]['discount'], 18.75)
+        self.assertEqual(items[0]['discount_label'], 'Cake 15%')
+        self.assertEqual(goods, Decimal('106'))
+
+    def test_a_discount_the_line_is_not_offered_is_ignored(self):
+        cake_only = self._preset([self.cake], name='Cake 50%', kind='percent', value=50,
+                                 applies_to=DiscountType.APPLIES_PRODUCTS)
+        items, goods = selforder.price_cart(self.branch, self._items((self.latte, 1, cake_only)))
+        self.assertEqual(items[0]['discount'], 0)
+        self.assertEqual(goods, Decimal('90.00'))
+
+    def test_an_unknown_or_other_branch_preset_is_ignored(self):
+        other = make_branch(name='Elsewhere')
+        foreign = DiscountType.objects.create(branch=other, name='All 90%', kind='percent', value=90)
+        items, goods = selforder.price_cart(self.branch, self._items((self.latte, 1, foreign)))
+        self.assertEqual(items[0]['discount'], 0)
+        items, _ = selforder.price_cart(self.branch, [
+            {'product_id': str(self.latte.id), 'qty': 1, 'discount_type_id': 'other'},
+        ])
+        self.assertEqual(items[0]['discount'], 0)
+
+    def test_branch_without_discount_types_offers_none(self):
+        self.branch.discount_types_enabled = False
+        self.branch.save()
+        d = self._preset(name='All 10%', kind='percent', value=10)
+        items, goods = selforder.price_cart(self.branch, self._items((self.latte, 1, d)))
+        self.assertEqual(items[0]['discount'], 0)
+        self.assertEqual(selforder.preview(self.branch, self._items((self.latte, 1, None)))
+                         ['lines'][0]['options'], [])
+
+    def test_expired_promotion_is_not_offered(self):
+        d = self._preset(name='Ended', kind='percent', value=10,
+                         end_date=djtz.localdate() - timezone_timedelta(days=1))
+        items, _ = selforder.price_cart(self.branch, self._items((self.latte, 1, d)))
+        self.assertEqual(items[0]['discount'], 0)
+
+    def test_free_item_picked_from_a_category_is_not_offered_online(self):
+        d = self._preset(name='Free drink', kind='free', value=0,
+                         free_category=self.latte.category)
+        lines = selforder.preview(self.branch, self._items((self.cake, 1, None)))['lines']
+        self.assertNotIn(str(d.id), [o['id'] for o in lines[0]['options']])
+
+    def test_preview_lists_options_and_the_bill(self):
+        d = self._preset([self.latte], name='Latte ฿10', kind='fixed', value=10,
+                         applies_to=DiscountType.APPLIES_PRODUCTS)
+        res = self.c.post(f'/order/{self.branch.id}/price/',
+                          data={'items': self._items((self.latte, 2, d), (self.cake, 1, None))},
+                          content_type='application/json')
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        latte, cake = body['lines']
+        self.assertEqual([o['id'] for o in latte['options']], [str(d.id)])
+        self.assertEqual(latte['options'][0]['value'], '฿10 off')
+        self.assertEqual(latte['discount'], 10)
+        self.assertEqual(cake['options'], [])
+        self.assertEqual(body['subtotal'], 305.0)
+        self.assertEqual(body['discount'], 10.0)
+        self.assertEqual(body['total'], 295.0)
+
+    def test_paid_order_records_the_discount_and_gives_the_free_item(self):
+        pct = self._preset([self.cake], name='Cake 15%', kind='percent', value=15,
+                           applies_to=DiscountType.APPLIES_PRODUCTS, code='PR-0001')
+        free = self._preset([self.latte], name='Free cookie', kind='free', value=0,
+                            applies_to=DiscountType.APPLIES_PRODUCTS, free_product=self.cookie)
+        with StubGateway() as gw:
+            d = selforder.create_draft(self.branch, self._items((self.cake, 1, pct), (self.latte, 1, free)))
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+        # 125 + 90 = 215, less 18.75 = 196.25 → rounds to 196; that is what Beam charges.
+        self.assertEqual(d.goods_total, Decimal('196'))
+        self.assertEqual(gw.created_charges[0]['amount'], Decimal('196'))
+        with StubGateway(paid=True):
+            order = selforder.promote(SelfOrder.objects.get(pk=d.pk))
+
+        self.assertEqual(order.subtotal, Decimal('215.00'))
+        self.assertEqual(order.discount_amount, Decimal('18.75'))
+        self.assertEqual(order.discount_type, 'item')
+        self.assertEqual(order.total, Decimal('196.00'))
+        cake_line = order.items.get(product_id=self.cake.id)
+        self.assertEqual(cake_line.discount, Decimal('18.75'))
+        self.assertEqual(cake_line.discount_code, 'PR-0001')
+        # The cookie is not on the bill; it leaves stock on a "Free item" document.
+        self.assertFalse(order.items.filter(product_id=self.cookie.id).exists())
+        self.cookie.refresh_from_db()
+        self.assertEqual(self.cookie.stock, 9)
+        self.assertTrue(StockDocument.objects.filter(ref_no=order.order_number).exists())
+
+    def test_pay_page_shows_the_discount(self):
+        d = self._preset([self.cake], name='Cake 15%', kind='percent', value=15,
+                         applies_to=DiscountType.APPLIES_PRODUCTS)
+        draft = selforder.create_draft(self.branch, self._items((self.cake, 1, d)))
+        res = self.c.get(f'/order/s/{draft.token}/')
+        self.assertContains(res, 'Cake 15%')
+        self.assertContains(res, '−฿18.75')
+        self.assertContains(res, '฿106.00')
+        self.assertContains(res, '−฿0.25')
+
+
 # ─── Branch-level payment credentials ────────────────────────────────────────
 class BranchPaymentConfigTests(TestCase):
     """Every branch owns its payment config; the shop row only seeds new ones."""
@@ -322,6 +511,52 @@ class StartPaymentTests(TestCase):
                 draft, 'card', redirect_url=f'https://shop.test/order/s/{draft.token}/',
             )
         self.assertIn(draft.token, gw.created_links[0]['redirect_url'])
+
+
+    def test_wallet_charge_is_the_goods_total_and_returns_to_the_order(self):
+        """An e-wallet / banking app adds no fee, and Beam sends the customer
+        back to their own order page."""
+        with StubGateway() as gw:
+            draft = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            res = selforder.start_payment(
+                draft, 'KPLUS', redirect_url=f'https://shop.test/order/s/{draft.token}/',
+                device_type='IOS',
+            )
+        draft.refresh_from_db()
+        charge = gw.created_charges[0]
+        self.assertEqual(charge['method_type'], 'KPLUS')
+        self.assertEqual(charge['device_type'], 'IOS')
+        self.assertIn(draft.token, charge['return_url'])
+        self.assertEqual(charge['amount'], Decimal('100.00'))
+        self.assertEqual(draft.total, Decimal('100.00'))
+        self.assertEqual(draft.payment_method, 'Beam KPlus')
+        self.assertEqual(res['payment_uri'], 'https://pay.beam.test/app')
+
+    def test_wallet_replay_hands_back_the_same_link(self):
+        with StubGateway() as gw:
+            draft = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            first = selforder.start_payment(draft, 'LINE_PAY', redirect_url='https://x/')
+            draft.refresh_from_db()
+            second = selforder.start_payment(draft, 'qr', redirect_url='https://x/')
+        self.assertEqual(len(gw.created_charges), 1)
+        self.assertEqual(second['method'], 'app')
+        self.assertEqual(first['payment_uri'], second['payment_uri'])
+
+    def test_unknown_method_is_refused(self):
+        with StubGateway():
+            draft = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            with self.assertRaises(selforder.SelfOrderError):
+                selforder.start_payment(draft, 'MAKE', redirect_url='https://x/')
+
+    def test_paid_wallet_order_refunds_through_beam_on_void(self):
+        with StubGateway() as gw:
+            draft = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            selforder.start_payment(draft, 'TRUE_MONEY', redirect_url='https://x/')
+            gw.paid = True
+            order = selforder.promote(SelfOrder.objects.get(pk=draft.pk))
+        self.assertEqual(order.payment_method, 'Beam TrueMoney')
+        self.assertEqual(order.beam_charge_id, 'chg_1')
+        self.assertIn(order.payment_method, gateways.BEAM_METHODS)
 
 
 # ─── Promotion ───────────────────────────────────────────────────────────────

@@ -301,9 +301,10 @@ def create_order_from_items(
                         sku=(prod.sku if prod else str(it.get('sku') or ''))[:64],
                         category_id=cat_id,
                         category_name=cat_name or '',
-                        # Did this line come from the cashier's upsell strip?
-                        # The self-order client and any older till bundle never
-                        # send the key, so both land as False without a guard.
+                        # Did this line come from the upsell strip (the till's,
+                        # or the self-order menu's "frequently bought together")?
+                        # An older till bundle never sends the key, so it lands
+                        # as False without a guard.
                         suggested=bool(it.get('suggested')),
                     )
 

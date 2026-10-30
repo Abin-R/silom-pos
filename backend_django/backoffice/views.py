@@ -54,7 +54,7 @@ from bravepos.models import (
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
-from bravepos.gateways import seed_branch_payment
+from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
 
@@ -1493,6 +1493,8 @@ _PAYMENT_BUCKETS = {
     "promptpay": "promptpay",
     "beam": "beam",
     "beam qr": "beam",           # gateways.BEAM_QR_METHOD — till *and* self-order
+    # Self-order e-wallets and banking apps ('Beam LINE Pay', 'Beam KPlus', …).
+    **{m.lower(): "beam" for _, m in BEAM_APP_METHODS.values()},
     "qr kbank": "kbank",
     "easy pay": "easypay",
     "edc": "edc",

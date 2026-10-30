@@ -44,7 +44,23 @@ OMISE_GET_TIMEOUT_S = 10.0
 CARD_METHOD_PREFIX = 'Credit Card'
 BEAM_CARD_METHOD = 'Beam Card'
 BEAM_QR_METHOD = 'Beam QR'
-BEAM_METHODS = (BEAM_QR_METHOD, BEAM_CARD_METHOD)
+
+# E-wallets and banking apps, self-order only: Beam's paymentMethodType →
+# (the request's empty method object, the stored payment_method).  Each is a
+# plain Beam charge that sends the customer off to the app, with no fee added.
+BEAM_APP_METHODS = {
+    'LINE_PAY': ('linePay', 'Beam LINE Pay'),
+    'SHOPEE_PAY': ('shopeePay', 'Beam ShopeePay'),
+    'TRUE_MONEY': ('trueMoney', 'Beam TrueMoney'),
+    'KPLUS': ('kPlus', 'Beam KPlus'),
+    'SCB_EASY': ('scbEasy', 'Beam SCB Easy'),
+    'KRUNGSRI_APP': ('krungsri', 'Beam Krungsri'),
+    'BANGKOK_BANK_APP': ('bbl', 'Beam Bangkok Bank'),
+}
+BEAM_METHODS = (
+    BEAM_QR_METHOD, BEAM_CARD_METHOD, *(m for _, m in BEAM_APP_METHODS.values()),
+)
+BEAM_DEVICE_TYPES = ('ANDROID', 'IOS', 'WEB')
 
 # Beam's *charge* endpoint reports raw lifecycle strings; its *payment-link*
 # endpoint reports a different vocabulary which we normalise.  The POS frontend
@@ -305,6 +321,52 @@ def beam_create_promptpay_charge(
         'status': data.get('status', 'PENDING'),   # RAW Beam status — see BEAM_CHARGE_SUCCESS
         'qr_image': qr_image,
         'qr_string': qr_string,
+        'amount': Decimal(str(amount)),
+        'currency': 'THB',
+        'raw': data,
+    }
+
+
+def beam_create_app_charge(
+    amount: Decimal, reference_id: str, method_type: str, return_url: str,
+    device_type: str = 'WEB', description: str = '', branch=None,
+) -> dict:
+    """E-wallet / banking-app charge (``BEAM_APP_METHODS``).  Like PromptPay,
+    ``amount`` is the goods total with nothing added, and it is polled with
+    ``beam_get_charge``.
+
+    Beam answers with a URL that opens the app (``REDIRECT``), and then sends
+    the browser to ``return_url``.  ``device_type`` matters for the banking
+    apps: they only open on a phone, so a WEB charge is unlikely to complete.
+    """
+    obj_key, _ = BEAM_APP_METHODS[method_type]
+    cfg = resolve_payment_config(branch)
+    payload = {
+        'amount': to_satang(amount),
+        'currency': 'THB',
+        'referenceId': reference_id,
+        'description': description or f"Order {reference_id}",
+        'paymentMethod': {'paymentMethodType': method_type, obj_key: {}},
+        'deviceType': device_type if device_type in BEAM_DEVICE_TYPES else 'WEB',
+        'returnUrl': return_url,
+    }
+    data = _beam_request('POST', '/api/v1/charges', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S)
+
+    charge_id = data.get('chargeId') or data.get('id') or data.get('charge_id') or ''
+    if not charge_id:
+        raise GatewayError(
+            'Beam response did not include a charge id; cannot poll status.', 502,
+        )
+    payment_uri = (data.get('redirect') or {}).get('redirectUrl') or ''
+    # Some wallets answer a desktop browser with a QR to scan instead.
+    qr_image, _ = _extract_qr_data(data)
+    if not payment_uri and not qr_image:
+        raise GatewayError('Beam response included nothing to pay with.', 502)
+    return {
+        'charge_id': charge_id,
+        'status': data.get('status', 'PENDING'),
+        'payment_uri': payment_uri,
+        'qr_image': qr_image,
         'amount': Decimal(str(amount)),
         'currency': 'THB',
         'raw': data,

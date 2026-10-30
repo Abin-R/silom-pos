@@ -144,11 +144,16 @@ export function useSelfOrderPrinting(
           if (stopped) return;
           // Sequential on purpose. useStarPrinter queues these, but awaiting
           // each keeps the order deterministic and the log readable.
-          const r = await printRef.current(cfg, toReceiptOrder(o), shop);
-          if (!r.ok) {
-            // Not dropped — useStarPrinter has persisted it to printerQueue
-            // and will retry. Nothing to do but note it.
-            console.warn(`self-order ${o.order_number} print queued:`, r.error);
+          // Two slips per self-order: the customer's receipt, then the
+          // packer's copy that goes with the bag.
+          const receipt = toReceiptOrder(o);
+          for (const order of [receipt, { ...receipt, doc_type: "packer" as const }]) {
+            const r = await printRef.current(cfg, order, shop);
+            if (!r.ok) {
+              // Not dropped — useStarPrinter has persisted it to printerQueue
+              // and will retry. Nothing to do but note it.
+              console.warn(`self-order ${o.order_number} ${order.doc_type ?? "receipt"} print queued:`, r.error);
+            }
           }
         }
       } catch (e) {

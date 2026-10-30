@@ -25,7 +25,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone as djtz
 
-from . import gateways, images
+from . import discount_rules, discounts, gateways, images
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -137,13 +137,34 @@ def menu_for(branch) -> list[dict]:
     return out
 
 
-def price_cart(branch, raw_items: list[dict]) -> tuple[list[dict], Decimal]:
+def discount_presets(branch) -> list[dict]:
+    """The promotions a customer can pick on the menu: the till's list.
+
+    Version "2" of the till's feed, which leaves out a free item the cashier
+    picks from a category (the website has no picker for it).  "Other", the
+    hand-typed discount, is not a preset and is never in it.
+    """
+    if not branch.discount_types_enabled:
+        return []
+    return discounts.preset_feed(branch, '2')
+
+
+def _round_baht(n: float) -> Decimal:
+    return Decimal(str(int(discount_rules.js_round(n))))
+
+
+def price_cart(branch, raw_items: list[dict], presets: list[dict] | None = None,
+               ) -> tuple[list[dict], Decimal]:
     """Re-price a customer's cart from the DB.
 
-    Takes only ``product_id`` and ``qty`` from the client — everything else
-    (name, price, category) is read from the Product row.  A tampered
-    ``price: 0`` in the request body is therefore not just rejected, it is
-    never looked at.
+    Takes only ``product_id``, ``qty``, the picked ``discount_type_id`` and
+    the ``suggested`` attribution from the client — everything else (name, price, category) is read from the
+    Product row.  A tampered ``price: 0`` in the request body is therefore not
+    just rejected, it is never looked at.
+
+    A picked discount is kept only if the till's dropdown would have offered it
+    for that line, and its amount is computed here (``discount_rules``), never
+    read from the request.  Free items come back as ``is_free`` lines.
     """
     if not raw_items:
         raise SelfOrderError('Your cart is empty.')
@@ -152,6 +173,8 @@ def price_cart(branch, raw_items: list[dict]) -> tuple[list[dict], Decimal]:
 
     # Collapse duplicate lines for the same product before we look anything up.
     qty_by_pid: dict[str, int] = {}
+    pick_by_pid: dict[str, str] = {}
+    suggested_pids: set[str] = set()   # added from "frequently bought together"
     for it in raw_items:
         pid = str(it.get('product_id') or '').strip()
         if not pid:
@@ -165,6 +188,10 @@ def price_cart(branch, raw_items: list[dict]) -> tuple[list[dict], Decimal]:
         if qty > MAX_QTY_PER_LINE:
             raise SelfOrderError(f'Quantity too high (max {MAX_QTY_PER_LINE} per item).')
         qty_by_pid[pid] = qty_by_pid.get(pid, 0) + qty
+        if it.get('discount_type_id'):
+            pick_by_pid[pid] = str(it['discount_type_id'])
+        if it.get('suggested'):
+            suggested_pids.add(pid)
 
     if not qty_by_pid:
         raise SelfOrderError('Your cart is empty.')
@@ -180,22 +207,136 @@ def price_cart(branch, raw_items: list[dict]) -> tuple[list[dict], Decimal]:
         # A product was deactivated or deleted while they were browsing.
         raise SelfOrderError('An item in your cart is no longer available. Please review it.')
 
+    lines = [
+        {'product_id': pid, 'name': products[pid].name,
+         'price': float(products[pid].price), 'qty': qty}
+        for pid, qty in qty_by_pid.items()
+    ]
+    if presets is None:
+        presets = discount_presets(branch)
+    if presets:
+        # One pick at a time, each checked against the cart as the previous
+        # picks left it — the order a cashier would have applied them in.
+        for pid in qty_by_pid:
+            pick = pick_by_pid.get(pid)
+            if not pick or not any(p['id'] == pick for p in
+                                   discount_rules.offered(lines, presets, pid)):
+                continue
+            lines = discount_rules.reconcile([
+                {**l, 'discount': None, 'discount_type_id': pick}
+                if l['product_id'] == pid else l
+                for l in lines
+            ], presets)
+        lines = discount_rules.reconcile(lines, presets)
+
     items: list[dict] = []
-    goods_total = Decimal('0')
-    for pid, qty in qty_by_pid.items():
-        p = products[pid]
-        price = Decimal(str(p.price))
-        goods_total += price * qty
+    for l in lines:
+        if l.get('is_free'):
+            items.append({
+                'product_id': l['real_product_id'],
+                'name': l['name'],
+                'price': l['price'],
+                'qty': l['qty'],
+                'discount': l['discount'],
+                'discount_type_id': l['discount_type_id'],
+                'discount_label': l['discount_label'],
+                'discount_logic': l.get('discount_logic') or '',
+                'is_free': True,
+                'free_of': l['free_of'],
+            })
+            continue
+        p = products[l['product_id']]
         items.append({
-            'product_id': pid,
+            'product_id': l['product_id'],
             'name': p.name,
-            'price': float(price),
-            'qty': qty,
-            'discount': 0,
+            'price': float(p.price),
+            'qty': l['qty'],
+            'discount': l.get('discount') or 0,
+            'discount_type_id': l.get('discount_type_id') or '',
+            'discount_label': l.get('discount_label') or '',
+            'discount_logic': l.get('discount_logic') or '',
             'category_id': str(p.category_id) if p.category_id else None,
             'category_name': p.category.name if p.category else 'Other',
+            'suggested': l['product_id'] in suggested_pids,
         })
+
+    subtotal, discount = bill_figures(items)
+    if discount > 0:
+        # As at the till: only a discounted bill rounds to the whole baht.
+        goods_total = _round_baht(max(0.0, float(subtotal) - float(discount)))
+    else:
+        goods_total = sum(
+            (Decimal(str(products[it['product_id']].price)) * it['qty']
+             for it in items if not it.get('is_free')),
+            Decimal('0'),
+        )
     return items, goods_total
+
+
+def bill_figures(items: list[dict]) -> tuple[Decimal, Decimal]:
+    """(subtotal, discount) of a priced cart, as the till sends them: the gross
+    of the billed lines, and their discounts.  Free items are on neither."""
+    subtotal = 0.0
+    discount = 0.0
+    for it in items:
+        if it.get('is_free'):
+            continue
+        gross = it['price'] * it['qty']
+        subtotal += gross
+        discount += min(float(it.get('discount') or 0), gross)
+    return Decimal(str(discount_rules.round2(subtotal))), Decimal(str(discount_rules.round2(discount)))
+
+
+def preview(branch, raw_items: list[dict]) -> dict:
+    """The cart as the menu page shows it: each line's price, the discount it
+    carries, the discounts it could pick, and the bill.  Same rules as
+    ``price_cart`` — the page never computes money itself."""
+    presets = discount_presets(branch)
+    items, goods_total = price_cart(branch, raw_items, presets)
+    # Offered against the cart as priced, as the till's dropdown is.
+    rule_lines = [
+        {'product_id': it['product_id'], 'name': it['name'], 'price': it['price'],
+         'qty': it['qty'], 'discount': it['discount'] or None,
+         'discount_type_id': it['discount_type_id'] or None}
+        for it in items if not it.get('is_free')
+    ]
+    subtotal, discount = bill_figures(items)
+
+    def option(p):
+        if discount_rules.is_free(p):
+            fp = p['free_product']
+            value = f"Free {fp['name']} ×{p.get('free_qty') or 1}"
+        else:
+            v = (f"{discount_rules._num(p['value'])}%" if p['kind'] == 'percent'
+                 else discount_rules._baht(p['value']))
+            value = f"{v} off the set" if discount_rules.is_combo(p) else f"{v} off"
+        return {'id': p['id'], 'name': p['name'], 'value': value,
+                'detail': discount_rules.preset_details(p)}
+
+    lines = []
+    for it in items:
+        if it.get('is_free'):
+            continue
+        lines.append({
+            'product_id': it['product_id'],
+            'qty': it['qty'],
+            'gross': discount_rules.round2(it['price'] * it['qty']),
+            'discount': it['discount'],
+            'discount_type_id': it['discount_type_id'],
+            'discount_label': it['discount_label'],
+            'free': [{'name': f['name'], 'qty': f['qty']} for f in items
+                     if f.get('is_free') and f['free_of'] == it['product_id']],
+            'options': [option(p) for p in
+                        discount_rules.offered(rule_lines, presets, it['product_id'])],
+        })
+    net = max(Decimal('0'), subtotal - discount)
+    return {
+        'lines': lines,
+        'subtotal': float(subtotal),
+        'discount': float(discount),
+        'rounding': float(goods_total - net),
+        'total': float(goods_total),
+    }
 
 
 def create_draft(branch, raw_items: list[dict]) -> SelfOrder:
@@ -234,7 +375,8 @@ def quote(draft: SelfOrder, method: str) -> dict:
     )
 
 
-def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
+def start_payment(draft: SelfOrder, method: str, redirect_url: str,
+                  device_type: str = 'WEB') -> dict:
     """Create (or return) the gateway object for this draft.
 
     **Idempotent on the draft.**  The first call wins the method and creates the
@@ -243,7 +385,7 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
     goods+fee, leave both live, pay one, and we would have two payable objects
     and no way to know which reflects reality.
     """
-    if method not in ('qr', 'card'):
+    if method not in ('qr', 'card') and method not in gateways.BEAM_APP_METHODS:
         raise SelfOrderError('Unknown payment method.')
 
     # Already started → replay the cached artefact, ignoring the requested
@@ -252,9 +394,10 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
     # would mint a *second* payable object for the same cart.
     if draft.beam_charge_id:
         return {
-            'method': 'qr',
+            # An e-wallet / banking app is a charge too, told apart by its URL.
+            'method': 'app' if draft.payment_uri_cache else 'qr',
             'qr_image': draft.qr_image_cache,
-            'payment_uri': '',
+            'payment_uri': draft.payment_uri_cache,
             'total': float(draft.total),
         }
     if draft.beam_link_id:
@@ -292,6 +435,39 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str) -> dict:
             'method': 'qr',
             'qr_image': draft.qr_image_cache,
             'payment_uri': '',
+            'total': float(draft.total),
+        }
+
+    if method in gateways.BEAM_APP_METHODS:
+        # Opens the wallet or bank app, which sends the customer back to
+        # redirect_url.  No fee, so the quote is PromptPay's.
+        res = gateways.beam_create_app_charge(
+            amount=draft.goods_total,
+            reference_id=reference_id,
+            method_type=method,
+            return_url=redirect_url,
+            device_type=device_type,
+            description=description,
+            branch=draft.branch,
+        )
+        charges = quote(draft, 'qr')
+        with transaction.atomic():
+            draft.payment_method = gateways.BEAM_APP_METHODS[method][1]
+            draft.beam_charge_id = res['charge_id']
+            draft.payment_uri_cache = res['payment_uri'] or ''
+            draft.qr_image_cache = res['qr_image'] or ''
+            draft.processing_fee = charges['processing_fee']
+            draft.processing_fee_vat = charges['processing_fee_vat']
+            draft.vat_amount = charges['vat_amount']
+            draft.total = charges['total']
+            draft.save(update_fields=[
+                'payment_method', 'beam_charge_id', 'payment_uri_cache', 'qr_image_cache',
+                'processing_fee', 'processing_fee_vat', 'vat_amount', 'total',
+            ])
+        return {
+            'method': 'app',
+            'qr_image': draft.qr_image_cache,
+            'payment_uri': draft.payment_uri_cache,
             'total': float(draft.total),
         }
 
@@ -375,9 +551,11 @@ def promote(draft: SelfOrder) -> Order | None:
         if locked.status != 'pending':
             return None
 
+        subtotal, discount = bill_figures(locked.items)
         order = create_order_from_items(
             branch=locked.branch,
-            items=locked.items,
+            items=[it for it in locked.items if not it.get('is_free')],
+            free_items=[it for it in locked.items if it.get('is_free')],
             payment_method=locked.payment_method,
             # Attribute the sale to the round it was PLACED in, not the one open
             # when the payment confirmation lands — those differ when a customer
@@ -395,8 +573,9 @@ def promote(draft: SelfOrder) -> Order | None:
                 'total': locked.total,
             },
             goods_total=locked.goods_total,
-            subtotal=locked.goods_total,
-            discount_amount=Decimal('0'),
+            subtotal=subtotal,
+            discount_type='item' if discount > 0 else 'none',
+            discount_amount=discount,
             paid_amount=locked.total,
             status='completed',     # paid is done; the kanban is switched off
             source='kiosk',         # already a valid Order.SOURCE_CHOICES value

@@ -1,0 +1,855 @@
+[
+ {
+  "name": "percent off one product",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [
+     "latte"
+    ],
+    "id": "p10",
+    "name": "10% latte",
+    "kind": "percent",
+    "value": 10,
+    "applies_to": "products"
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 2,
+    "discount_type_id": "p10"
+   },
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 2,
+    "discount_type_id": "p10",
+    "discount": 18,
+    "discount_label": "10% latte",
+    "discount_logic": "one product · 10% off"
+   },
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "latte": [
+    "p10"
+   ],
+   "cake": []
+  }
+ },
+ {
+  "name": "baht off is clamped to the line",
+  "presets": [
+   {
+    "all_products": true,
+    "product_ids": [],
+    "id": "b500",
+    "name": "500 off",
+    "kind": "fixed",
+    "value": 500,
+    "applies_to": "all"
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "b500"
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "b500",
+    "discount": 120,
+    "discount_label": "500 off",
+    "discount_logic": "one product · ฿500 off"
+   }
+  ],
+  "offered": {
+   "cake": [
+    "b500"
+   ]
+  }
+ },
+ {
+  "name": "percent with satang rounding",
+  "presets": [
+   {
+    "all_products": true,
+    "product_ids": [],
+    "id": "p15",
+    "name": "15%",
+    "kind": "percent",
+    "value": 15,
+    "applies_to": "all"
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "muffin",
+    "name": "Muffin",
+    "price": 33.33,
+    "qty": 3,
+    "discount_type_id": "p15"
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "muffin",
+    "name": "Muffin",
+    "price": 33.33,
+    "qty": 3,
+    "discount_type_id": "p15",
+    "discount": 15,
+    "discount_label": "15%",
+    "discount_logic": "one product · 15% off"
+   }
+  ],
+  "offered": {
+   "muffin": [
+    "p15"
+   ]
+  }
+ },
+ {
+  "name": "combination, all rows, repeats per set, most expensive first",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [],
+    "id": "c1",
+    "name": "Cake + 2 drinks",
+    "kind": "fixed",
+    "value": 50,
+    "applies_to": "combo",
+    "match": "all",
+    "conditions": [
+     {
+      "product_ids": [
+       "cake"
+      ],
+      "min_qty": 1
+     },
+     {
+      "product_ids": [
+       "latte",
+       "mocha"
+      ],
+      "min_qty": 2
+     }
+    ]
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "c1"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 3
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "c1",
+    "discount": 39.35,
+    "discount_label": "Cake + 2 drinks",
+    "discount_logic": "combination (all of these) · ฿50 off per set · 2 sets"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 3,
+    "discount": 44.52,
+    "discount_type_id": "c1",
+    "discount_label": "Cake + 2 drinks",
+    "discount_logic": "combination (all of these) · ฿50 off per set · 2 sets"
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1,
+    "discount": 16.13,
+    "discount_type_id": "c1",
+    "discount_label": "Cake + 2 drinks",
+    "discount_logic": "combination (all of these) · ฿50 off per set · 2 sets"
+   }
+  ],
+  "offered": {
+   "cake": [
+    "c1"
+   ],
+   "latte": [
+    "c1"
+   ],
+   "mocha": [
+    "c1"
+   ]
+  }
+ },
+ {
+  "name": "combination, any one row",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [],
+    "id": "c2",
+    "name": "Any 2 bakes 10%",
+    "kind": "percent",
+    "value": 10,
+    "applies_to": "combo",
+    "match": "any",
+    "conditions": [
+     {
+      "product_ids": [
+       "cake"
+      ],
+      "min_qty": 2
+     },
+     {
+      "product_ids": [
+       "muffin"
+      ],
+      "min_qty": 3
+     }
+    ]
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "c2"
+   },
+   {
+    "product_id": "muffin",
+    "name": "Muffin",
+    "price": 33.33,
+    "qty": 4
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "c2",
+    "discount": 24,
+    "discount_label": "Any 2 bakes 10%",
+    "discount_logic": "combination (any one of these) · 10% off per set · 2 sets"
+   },
+   {
+    "product_id": "muffin",
+    "name": "Muffin",
+    "price": 33.33,
+    "qty": 4,
+    "discount": 10,
+    "discount_type_id": "c2",
+    "discount_label": "Any 2 bakes 10%",
+    "discount_logic": "combination (any one of these) · 10% off per set · 2 sets"
+   }
+  ],
+  "offered": {
+   "cake": [
+    "c2"
+   ],
+   "muffin": [
+    "c2"
+   ]
+  }
+ },
+ {
+  "name": "combination percent split pro rata with remainder on the last part",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [],
+    "id": "c3",
+    "name": "Trio 7%",
+    "kind": "percent",
+    "value": 7,
+    "applies_to": "combo",
+    "match": "all",
+    "conditions": [
+     {
+      "product_ids": [
+       "a"
+      ],
+      "min_qty": 1
+     },
+     {
+      "product_ids": [
+       "b"
+      ],
+      "min_qty": 1
+     },
+     {
+      "product_ids": [
+       "c"
+      ],
+      "min_qty": 1
+     }
+    ]
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "a",
+    "name": "A",
+    "price": 10.01,
+    "qty": 1,
+    "discount_type_id": "c3"
+   },
+   {
+    "product_id": "b",
+    "name": "B",
+    "price": 20.02,
+    "qty": 1
+   },
+   {
+    "product_id": "c",
+    "name": "C",
+    "price": 33.37,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "a",
+    "name": "A",
+    "price": 10.01,
+    "qty": 1,
+    "discount_type_id": "c3",
+    "discount": 0.7,
+    "discount_label": "Trio 7%",
+    "discount_logic": "combination (all of these) · 7% off per set · 1 set"
+   },
+   {
+    "product_id": "b",
+    "name": "B",
+    "price": 20.02,
+    "qty": 1,
+    "discount": 1.4,
+    "discount_type_id": "c3",
+    "discount_label": "Trio 7%",
+    "discount_logic": "combination (all of these) · 7% off per set · 1 set"
+   },
+   {
+    "product_id": "c",
+    "name": "C",
+    "price": 33.37,
+    "qty": 1,
+    "discount": 2.34,
+    "discount_type_id": "c3",
+    "discount_label": "Trio 7%",
+    "discount_logic": "combination (all of these) · 7% off per set · 1 set"
+   }
+  ],
+  "offered": {
+   "a": [
+    "c3"
+   ],
+   "b": [
+    "c3"
+   ],
+   "c": [
+    "c3"
+   ]
+  }
+ },
+ {
+  "name": "combination skips a line already carrying another discount",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [],
+    "id": "c1",
+    "name": "Cake + drink",
+    "kind": "fixed",
+    "value": 30,
+    "applies_to": "combo",
+    "match": "all",
+    "conditions": [
+     {
+      "product_ids": [
+       "cake"
+      ],
+      "min_qty": 1
+     },
+     {
+      "product_ids": [
+       "latte",
+       "mocha"
+      ],
+      "min_qty": 1
+     }
+    ]
+   },
+   {
+    "all_products": false,
+    "product_ids": [
+     "latte"
+    ],
+    "id": "p10",
+    "name": "10% latte",
+    "kind": "percent",
+    "value": 10,
+    "applies_to": "products"
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "c1"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "p10"
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "c1",
+    "discount": 16.36,
+    "discount_label": "Cake + drink",
+    "discount_logic": "combination (all of these) · ฿30 off per set · 1 set"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "p10",
+    "discount": 9,
+    "discount_label": "10% latte",
+    "discount_logic": "one product · 10% off"
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1,
+    "discount": 13.64,
+    "discount_type_id": "c1",
+    "discount_label": "Cake + drink",
+    "discount_logic": "combination (all of these) · ฿30 off per set · 1 set"
+   }
+  ],
+  "offered": {
+   "cake": [
+    "c1"
+   ],
+   "latte": [
+    "c1",
+    "p10"
+   ],
+   "mocha": [
+    "c1"
+   ]
+  }
+ },
+ {
+  "name": "combination that no longer matches comes off",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [],
+    "id": "c1",
+    "name": "Cake + drink",
+    "kind": "fixed",
+    "value": 30,
+    "applies_to": "combo",
+    "match": "all",
+    "conditions": [
+     {
+      "product_ids": [
+       "cake"
+      ],
+      "min_qty": 1
+     },
+     {
+      "product_ids": [
+       "latte"
+      ],
+      "min_qty": 1
+     }
+    ]
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "c1"
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "cake": []
+  }
+ },
+ {
+  "name": "minimum bill not reached: discount comes off",
+  "presets": [
+   {
+    "all_products": true,
+    "product_ids": [],
+    "id": "m",
+    "name": "20 off over 300",
+    "kind": "fixed",
+    "value": 20,
+    "applies_to": "all",
+    "min_order_amount": 300
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1,
+    "discount_type_id": "m"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "cake": [],
+   "latte": []
+  }
+ },
+ {
+  "name": "minimum bill reached",
+  "presets": [
+   {
+    "all_products": true,
+    "product_ids": [],
+    "id": "m",
+    "name": "20 off over 300",
+    "kind": "fixed",
+    "value": 20,
+    "applies_to": "all",
+    "min_order_amount": 300
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "m"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "m",
+    "discount": 20,
+    "discount_label": "20 off over 300",
+    "discount_logic": "one product · ฿20 off · bill ≥ ฿300"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "cake": [
+    "m"
+   ],
+   "latte": [
+    "m"
+   ]
+  }
+ },
+ {
+  "name": "maximum discount shared across lines",
+  "presets": [
+   {
+    "all_products": true,
+    "product_ids": [],
+    "id": "x",
+    "name": "50% max 100",
+    "kind": "percent",
+    "value": 50,
+    "applies_to": "all",
+    "max_discount": 100
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "x"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "x"
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 2,
+    "discount_type_id": "x",
+    "discount": 72.73,
+    "discount_label": "50% max 100",
+    "discount_logic": "one product · 50% off · capped at ฿100 per bill"
+   },
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "x",
+    "discount": 27.27,
+    "discount_label": "50% max 100",
+    "discount_logic": "one product · 50% off · capped at ฿100 per bill"
+   },
+   {
+    "product_id": "mocha",
+    "name": "Mocha",
+    "price": 100,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "cake": [
+    "x"
+   ],
+   "latte": [
+    "x"
+   ],
+   "mocha": [
+    "x"
+   ]
+  }
+ },
+ {
+  "name": "free item with a fixed product",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [
+     "latte"
+    ],
+    "id": "f",
+    "name": "Free cookie",
+    "kind": "free",
+    "value": 0,
+    "applies_to": "products",
+    "free_product": {
+     "id": "cookie",
+     "name": "Cookie",
+     "price": 25
+    },
+    "free_qty": 2
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "f"
+   },
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "f",
+    "discount_logic": "earned free Cookie ×2"
+   },
+   {
+    "product_id": "cake",
+    "name": "Cake",
+    "price": 120,
+    "qty": 1
+   },
+   {
+    "product_id": "free:f:latte",
+    "real_product_id": "cookie",
+    "free_of": "latte",
+    "name": "Cookie",
+    "price": 25,
+    "qty": 2,
+    "discount": 50,
+    "discount_type_id": "f",
+    "discount_label": "Free cookie",
+    "is_free": true,
+    "discount_logic": "free item with Latte"
+   }
+  ],
+  "offered": {
+   "latte": [
+    "f"
+   ],
+   "cake": []
+  }
+ },
+ {
+  "name": "free item dropped below its minimum",
+  "presets": [
+   {
+    "all_products": false,
+    "product_ids": [
+     "latte"
+    ],
+    "id": "f",
+    "name": "Free cookie over 200",
+    "kind": "free",
+    "value": 0,
+    "applies_to": "products",
+    "free_product": {
+     "id": "cookie",
+     "name": "Cookie",
+     "price": 25
+    },
+    "free_qty": 1,
+    "min_order_amount": 200
+   }
+  ],
+  "cart": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1,
+    "discount_type_id": "f"
+   }
+  ],
+  "expect": [
+   {
+    "product_id": "latte",
+    "name": "Latte",
+    "price": 90,
+    "qty": 1
+   }
+  ],
+  "offered": {
+   "latte": []
+  }
+ }
+]

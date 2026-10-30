@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from django.db.models import Q
 from django.utils import timezone
 
 from . import seatalk
@@ -298,3 +299,115 @@ def sync_promotion(dt, targets):
         apply_targets(copy, plan["products"], plan["categories"], plan["rows"])
         report["created" if created else "updated"].append(target.name)
     return report
+
+
+def preset_feed(branch, version=None) -> list:
+    """The promotions running today at ``branch``, as the till's dropdown reads
+    them (``GET /discount-types``).  The self-order menu reads the same list
+    (``version="2"``: no free item the cashier picks from a category).
+    """
+    from .models import DiscountType, Product
+
+    # v2: combinations and free items.  v3 adds a free item picked from a
+    # category at the till — a v2 till can't show that picker, so it isn't
+    # offered those.
+    v2 = version in ('2', '3')
+    v3 = version == '3'
+    # Only promotions running today (shop-local date): outside its start/end
+    # dates a promotion simply isn't offered.  Blank dates are open-ended.
+    today = timezone.localdate()
+    qs = (DiscountType.objects.filter(branch=branch, active=True)
+          .filter(Q(start_date__isnull=True) | Q(start_date__lte=today))
+          .filter(Q(end_date__isnull=True) | Q(end_date__gte=today)))
+    if not v2:
+        qs = (qs.exclude(applies_to=DiscountType.APPLIES_COMBO)
+                .exclude(kind=DiscountType.KIND_FREE))
+    rows = list(qs.select_related('free_product', 'free_category')
+                  .prefetch_related('products', 'categories', 'conditions__product',
+                                    'conditions__category'))
+
+    # One query for every category any preset or combination row names.
+    cat_ids = {c.id for d in rows if d.applies_to == DiscountType.APPLIES_CATEGORIES
+               for c in d.categories.all()}
+    cat_ids |= {c.category_id for d in rows for c in d.conditions.all() if c.category_id}
+    free_cat_ids = {d.free_category_id for d in rows if d.free_category_id} if v3 else set()
+    free_by_cat: dict = {}
+    if free_cat_ids:
+        for p in (Product.objects.filter(branch=branch, active=True, category_id__in=free_cat_ids)
+                  .order_by('sort_order', 'name')):
+            free_by_cat.setdefault(p.category_id, []).append(
+                {'id': str(p.id), 'name': p.name, 'price': float(p.price)})
+    by_cat: dict = {}
+    if cat_ids:
+        for pid, cid in (Product.objects
+                         .filter(branch=branch, active=True, category_id__in=cat_ids)
+                         .values_list('id', 'category_id')):
+            by_cat.setdefault(cid, []).append(str(pid))
+    live_ids = {str(i) for i in Product.objects.filter(branch=branch, active=True)
+                .filter(id__in={c.product_id for d in rows for c in d.conditions.all()
+                                if c.product_id}).values_list('id', flat=True)}
+
+    def product_ids(d):
+        if d.applies_to == DiscountType.APPLIES_PRODUCTS:
+            return [str(p.id) for p in d.products.all()]
+        if d.applies_to == DiscountType.APPLIES_CATEGORIES:
+            return [pid for c in d.categories.all() for pid in by_cat.get(c.id, [])]
+        return []
+
+    def conditions(d):
+        out = []
+        for c in d.conditions.all():
+            if c.product_id:
+                ids = [str(c.product_id)] if str(c.product_id) in live_ids else []
+            else:
+                ids = by_cat.get(c.category_id, [])
+            out.append({'product_ids': ids, 'min_qty': c.min_qty})
+        return out
+
+    def free_product(d):
+        p = d.free_product
+        if p is None or not p.active or p.branch_id != branch.id:
+            return None
+        return {'id': str(p.id), 'name': p.name, 'price': float(p.price)}
+
+    payload = []
+    for d in rows:
+        row = {
+            'id': str(d.id),
+            'name': d.name,
+            'kind': d.kind,
+            'value': float(d.value),
+            'applies_to': d.applies_to,
+            'all_products': d.applies_to == DiscountType.APPLIES_ALL,
+            'product_ids': product_ids(d),
+            'category_ids': ([str(c.id) for c in d.categories.all()]
+                             if d.applies_to == DiscountType.APPLIES_CATEGORIES else []),
+            # Promotion details the till shows under each dropdown entry.
+            'code': d.code or '',
+            'start_date': d.start_date.isoformat() if d.start_date else None,
+            'end_date': d.end_date.isoformat() if d.end_date else None,
+            'summary': describe_buys(d),
+            # Bill-level rules the till enforces: offered only once the bill
+            # (before discounts) reaches min_order_amount; everything this
+            # promotion takes off one bill is capped at max_discount.
+            'min_order_amount': float(d.min_order_amount) if d.min_order_amount else None,
+            'max_discount': float(d.max_discount) if d.max_discount else None,
+            'match': d.combo_match,
+        }
+        if v2:
+            if d.applies_to == DiscountType.APPLIES_COMBO:
+                row['conditions'] = conditions(d)
+            if d.kind == DiscountType.KIND_FREE:
+                row['free_product'] = free_product(d)
+                row['free_qty'] = d.free_qty
+                if d.free_category_id and v3:
+                    # The cashier picks one of these at the till.
+                    row['free_choices'] = free_by_cat.get(d.free_category_id, [])
+                    row['free_category_name'] = d.free_category.name
+                # A free item whose product has since been retired (or whose
+                # category is now empty) has nothing left to give away.
+                if row['free_product'] is None and not row.get('free_choices'):
+                    continue
+        payload.append(row)
+
+    return payload

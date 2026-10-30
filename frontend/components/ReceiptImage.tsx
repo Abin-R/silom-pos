@@ -161,6 +161,9 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
   // back to the abbreviated layout rather than printing an unusable document.
   const party = order.tax_invoice;
   const isFull = order.doc_type === "full" && !!party;
+  // Packer slip for self-orders: the abbreviated slip minus the company
+  // header, receipt title, QR and footer.
+  const isPacker = order.doc_type === "packer";
 
   // The abbreviated slip stays Thai-only (unchanged for every existing call
   // site); the full tax invoice prints "Thai / English" so the buyer's
@@ -212,6 +215,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       />
 
       {/* ─── Branch + company info ────────────────────────────────── */}
+      {!isPacker && (<>
       <Text style={s.branchLine} numberOfLines={1}>{lbl("สาขา", "Branch")}: {sh.branch}</Text>
       <Text style={s.companyCenter}>{sh.company}</Text>
       {sh.address.map((line, i) => (
@@ -237,6 +241,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       {/* Void marker — same position/styling as the reference void copy.
           The only difference from a normal receipt is this single line. */}
       {order.voided && <Text style={s.voidMark}>ยกเลิกการขาย</Text>}
+      </>)}
 
       <Dash />
 
@@ -362,7 +367,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
         </View>
       )}
 
-      {isFull ? (
+      {isPacker ? null : isFull ? (
         // ─── Signature blocks ───────────────────────────────────────
         // A full tax invoice doubles as the delivery/receipt document, so it
         // carries the two acknowledgement blocks from the reference printout.
@@ -382,12 +387,14 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       )}
 
       {/* ─── Footer ───────────────────────────────────────────────── */}
+      {!isPacker && (<>
       <Text style={s.smallCenter}>
         {lbl("ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว", "Prices include VAT")}
       </Text>
       <Text style={s.thankYou}>THANK YOU FOR YOUR SHOPPING</Text>
       <Text style={s.centerText}>Tel. {sh.phone}</Text>
       <Text style={s.poweredBy}>Powered by Brave POS</Text>
+      </>)}
     </View>
   );
 });

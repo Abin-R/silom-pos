@@ -116,8 +116,10 @@ export type ReceiptOrder = {
   // call site) is the everyday slip — ใบกำกับภาษีอย่างย่อ.  'full' is the
   // buyer-named full tax invoice: it drops the queue number and the receipt QR,
   // adds the buyer block, and adds the two signature blocks.  ``tax_invoice``
-  // is required for 'full' and ignored otherwise.
-  doc_type?: 'abbreviated' | 'full';
+  // is required for 'full' and ignored otherwise.  'packer' is the second slip
+  // a self-order prints for whoever packs the bag: queue number, logo, order
+  // details, items, totals and payment — no company header, QR or footer.
+  doc_type?: 'abbreviated' | 'full' | 'packer';
   tax_invoice?: TaxInvoiceParty;
 
   // The Revenue Department's approved machine number for the branch this bill

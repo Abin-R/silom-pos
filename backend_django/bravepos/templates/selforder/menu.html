@@ -3,9 +3,10 @@
 Food-delivery-style menu (think Swiggy / KFC kiosk): sticky category pills,
 image cards with sold-out + low-stock states, and a slide-up cart sheet.
 
-The cart is JS-only.  The server is told about it exactly once, at /start/, and
-re-prices every line from the DB there — nothing this page computes is trusted
-for money; the totals shown here are a preview.
+The cart lives in JS, but its money doesn't: every change is sent to /price/,
+which re-prices the lines from the DB, applies the discounts the customer
+picked (the till's rules, bravepos/discount_rules.py) and says which ones each
+line may pick.  /start/ prices it again, so nothing this page shows is trusted.
 {% endcomment %}
 
 {% block title %}สั่งอาหาร — {{ branch.name }}{% endblock %}
@@ -14,9 +15,19 @@ for money; the totals shown here are a preview.
 <style>
   body { padding-bottom: 96px; }
 
+  /* Search */
+  .search { position: sticky; top: 62px; z-index: 31; padding: 10px 16px 0; background: var(--bg); }
+  .search input {
+    width: 100%; box-sizing: border-box; padding: 11px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: #fff; font-size: 15px;
+  }
+  .no-match { text-align: center; color: var(--ink-2); padding: 40px 24px; }
+  /* Cards and pills set their own display, which would beat [hidden]. */
+  [hidden] { display: none !important; }
+
   /* Category pills */
   .pills {
-    position: sticky; top: 62px; z-index: 30;
+    position: sticky; top: 114px; z-index: 30;
     display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
     padding: 12px 16px; background: var(--bg);
     box-shadow: 0 1px 0 var(--line);
@@ -30,7 +41,7 @@ for money; the totals shown here are a preview.
   }
   .pill.active { background: var(--brand-red); border-color: var(--brand-red); color: #fff; }
 
-  .section { padding: 6px 16px 0; scroll-margin-top: 112px; }
+  .section { padding: 6px 16px 0; scroll-margin-top: 164px; }
   .section h2 { font-size: 16px; font-weight: 800; margin: 16px 2px 8px; }
 
   /* Product card */
@@ -123,10 +134,36 @@ for money; the totals shown here are a preview.
   .line { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
   .line .l-name { flex: 1; min-width: 0; font-weight: 600; }
   .line .l-name small { display: block; color: var(--ink-2); font-weight: 500; }
-  .line .l-price { font-weight: 700; white-space: nowrap; }
+  .line .l-price { font-weight: 700; white-space: nowrap; text-align: right; }
+  .line .l-price s { display: block; color: var(--ink-3); font-weight: 500; font-size: 12px; }
+  .line-wrap { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+  .line-wrap .line { border-bottom: 0; padding-bottom: 6px; }
+  .disc { width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-size: 13.5px; }
+  .disc-detail { color: var(--ink-2); font-size: 12px; margin-top: 4px; }
+  .freebie { color: var(--ok); font-size: 13px; font-weight: 600; margin-top: 6px; }
+  .sheet .sum.small { margin-bottom: 4px; font-size: 14px; }
   .sheet .foot { padding: 14px 18px calc(16px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
   .sheet .sum { display: flex; justify-content: space-between; margin-bottom: 12px; }
   .sheet .sum .big { font-weight: 800; font-size: 20px; }
+
+  /* Frequently bought together — the till's upsell strip, in the cart sheet. */
+  .fbt { padding: 14px 0 6px; }
+  .fbt h4 { margin: 0 0 8px; font-size: 13.5px; font-weight: 800; color: var(--ink-2); }
+  .fbt .row { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; }
+  .fbt .row::-webkit-scrollbar { display: none; }
+  .fbt .tile {
+    flex: 0 0 116px; display: flex; flex-direction: column; gap: 4px;
+    border: 1px solid var(--line); border-radius: 12px; padding: 8px; background: #fff;
+  }
+  .fbt .tile .thumb { width: 100%; height: 72px; border-radius: 8px; object-fit: cover; background: #f0f0f2; }
+  .fbt .tile .thumb.ph {
+    display: flex; align-items: center; justify-content: center; font-size: 28px;
+    background: linear-gradient(135deg, #ffe3fb 0%, #ffd0d4 100%);
+  }
+  .fbt .tile .t-name { font-size: 13px; font-weight: 600; line-height: 1.25;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .fbt .tile .t-price { font-size: 13px; font-weight: 800; margin-top: auto; }
+  .fbt .tile .add { padding: 6px 0; font-size: 13px; }
 
   .empty { text-align: center; padding: 80px 24px; color: var(--ink-2); }
   .empty .em { font-size: 52px; }
@@ -149,8 +186,12 @@ for money; the totals shown here are a preview.
     <p class="muted" style="margin:0">This branch isn’t taking orders right now.<br>Please order at the counter.</p>
   </div>
 {% else %}
+  <div class="search">
+    <input id="search" type="search" placeholder="ค้นหาเมนู · Search the menu" autocomplete="off">
+  </div>
   <div class="pills" id="pills"></div>
   <div id="menu"></div>
+  <div class="no-match" id="no-match" hidden>ไม่พบเมนู · Nothing matches that search</div>
   {% comment %}Sized in JS so the last (short) category can scroll to the top.{% endcomment %}
   <div id="scroll-pad" aria-hidden="true"></div>
 
@@ -174,6 +215,12 @@ for money; the totals shown here are a preview.
     </div>
     <div class="lines" id="cart-lines"></div>
     <div class="foot">
+      <div class="sum small" id="sum-discount" hidden>
+        <span class="muted">ส่วนลด · Discount</span><span id="sheet-discount"></span>
+      </div>
+      <div class="sum small" id="sum-rounding" hidden>
+        <span class="muted">ปัดเศษ · Rounding</span><span id="sheet-rounding"></span>
+      </div>
       <div class="sum">
         <span class="muted">ยอดรวม (รวม VAT 7%)</span>
         <span class="big" id="sheet-total">฿0.00</span>
@@ -189,9 +236,15 @@ for money; the totals shown here are a preview.
 <script>
   const MENU = {{ menu_json|safe }};
   const START_URL = "{{ start_url }}";
+  const PRICE_URL = "{{ price_url }}";
+  const SUGGEST_URL = "{{ suggest_url }}";
   const cart = new Map();   // product_id -> qty
+  const picks = new Map();  // product_id -> discount_type_id the customer picked
+  let priced = null;        // the last /price/ answer for the cart as it is now
+  const suggestedIds = new Set();  // lines added from "frequently bought together"
+  let suggestions = [];     // product ids to offer, from /suggest/
 
-  const baht = (n) => "฿" + n.toFixed(2);
+  const baht = (n) => (n < 0 ? "−฿" : "฿") + Math.abs(n).toFixed(2);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -244,6 +297,7 @@ for money; the totals shown here are a preview.
   function cardFor(p) {
     const card = document.createElement("div");
     card.className = "card" + (p.sold_out ? " sold" : "");
+    card.dataset.find = (p.name + " " + (p.name_th || "")).toLowerCase();
     // Images are separate requests now (they used to be base64 inlined into
     // this document), so lazy-loading them actually means something: a customer
     // who orders one coffee never downloads the pictures further down the menu.
@@ -269,6 +323,28 @@ for money; the totals shown here are a preview.
     return card;
   }
 
+  // Search narrows the menu in place: cards that don't match, and categories
+  // left with none, are hidden.  English or Thai name, any part of it.
+  function applySearch() {
+    const q = document.getElementById("search").value.trim().toLowerCase();
+    let shown = 0;
+    for (const c of cats) {
+      const sec = document.getElementById(catId(c));
+      let inSec = 0;
+      for (const card of sec.querySelectorAll(".card")) {
+        const hit = !q || card.dataset.find.includes(q);
+        card.hidden = !hit;
+        if (hit) inSec++;
+      }
+      sec.hidden = inSec === 0;
+      document.querySelector(`.pill[data-cat="${CSS.escape(c)}"]`).hidden = inSec === 0;
+      shown += inSec;
+    }
+    document.getElementById("no-match").hidden = shown > 0;
+    sizeScrollPad();
+  }
+  document.getElementById("search").addEventListener("input", applySearch);
+
   function renderCtl(host, p) {
     const qty = cart.get(p.id) || 0;
     if (p.sold_out) { host.innerHTML = `<span class="muted" style="font-weight:700">—</span>`; return; }
@@ -291,7 +367,7 @@ for money; the totals shown here are a preview.
   function setQty(p, n) {
     const max = p.stock || 999;
     n = Math.max(0, Math.min(n, max));
-    if (n === 0) cart.delete(p.id); else cart.set(p.id, n);
+    if (n === 0) { cart.delete(p.id); picks.delete(p.id); suggestedIds.delete(p.id); } else cart.set(p.id, n);
     // Re-render just this product's control + the cart chrome.
     const host = document.querySelector(`[data-ctl="${p.id}"]`);
     if (host) renderCtl(host, p);
@@ -307,36 +383,184 @@ for money; the totals shown here are a preview.
     return out;
   }
 
+  function cartPayload() {
+    return cartArray().map(({ p, qty }) => ({
+      product_id: p.id, qty, discount_type_id: picks.get(p.id) || undefined,
+      suggested: suggestedIds.has(p.id) || undefined,
+    }));
+  }
+
+  // The figures come from the server.  Until its answer for *this* cart
+  // arrives, the bar shows the undiscounted sum, and checkout waits for it.
+  let priceSeq = 0;
+  async function reprice() {
+    const seq = ++priceSeq;
+    priced = null;
+    if (!cart.size) return;
+    try {
+      const res = await fetch(PRICE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: cartPayload() }),
+      });
+      const data = await res.json();
+      if (seq !== priceSeq) return;          // the cart changed meanwhile
+      if (!res.ok) throw new Error(data.error || "Could not price your order.");
+      priced = data;
+      // A pick the rules dropped (bill below the minimum, combination broken)
+      // is dropped here too, so the dropdown says what the bill says.
+      for (const l of data.lines) {
+        if (l.discount_type_id) picks.set(l.product_id, l.discount_type_id);
+        else picks.delete(l.product_id);
+      }
+    } catch (err) {
+      if (seq !== priceSeq) return;
+      priced = { error: err.message };
+      render();
+      alert(err.message);
+      return;
+    }
+    render();
+  }
+
   function syncCart() {
+    render();
+    reprice();
+    resuggest();
+  }
+
+  // Keyed on *which* products are in the cart, so a quantity bump doesn't
+  // refetch.  Fails quiet: no answer just means no strip.
+  let suggestKey = "", suggestSeq = 0;
+  async function resuggest() {
+    const ids = [...cart.keys()];
+    const key = ids.slice().sort().join(",");
+    if (key === suggestKey) return;
+    suggestKey = key;
+    const seq = ++suggestSeq;
+    suggestions = [];
+    if (!ids.length) return;
+    try {
+      const res = await fetch(SUGGEST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_ids: ids, limit: 6 }),
+      });
+      const data = await res.json();
+      if (seq !== suggestSeq || !res.ok) return;
+      suggestions = (data.suggestions || []).map((s) => s.id);
+    } catch (err) {
+      return;
+    }
+    render();
+  }
+
+  function render() {
     const items = cartArray();
     const count = items.reduce((n, i) => n + i.qty, 0);
-    const total = items.reduce((s, i) => s + i.p.price * i.qty, 0);
+    const ok = priced && !priced.error;
+    const total = ok ? priced.total : items.reduce((s, i) => s + i.p.price * i.qty, 0);
     document.getElementById("cartbar").classList.toggle("show", count > 0);
     document.getElementById("cart-count").textContent = count + (count === 1 ? " item" : " items");
     document.getElementById("cart-total").textContent = baht(total);
-    document.getElementById("sheet-total").textContent = baht(total);
+    document.getElementById("sheet-total").textContent = ok ? baht(total) : "…";
+    document.getElementById("sum-discount").hidden = !(ok && priced.discount > 0);
+    document.getElementById("sheet-discount").textContent = ok ? baht(-priced.discount) : "";
+    document.getElementById("sum-rounding").hidden = !(ok && priced.rounding);
+    document.getElementById("sheet-rounding").textContent = ok ? baht(priced.rounding) : "";
+    const checkout = document.getElementById("checkout");
+    checkout.disabled = !ok;
     if (count === 0) closeSheet();
-    renderLines(items, total);
+    renderLines(items);
   }
 
-  function renderLines(items, total) {
+  function renderLines(items) {
     const el = document.getElementById("cart-lines");
     el.innerHTML = "";
+    const byPid = new Map(((priced && priced.lines) || []).map((l) => [l.product_id, l]));
     for (const { p, qty } of items) {
-      const row = document.createElement("div");
-      row.className = "line";
-      row.innerHTML = `
-        <div class="l-name">${esc(p.name)}<small>${baht(p.price)} each</small></div>
-        <div class="stepper">
-          <button data-d="-1">−</button>
-          <span class="n">${qty}</span>
-          <button data-d="1" ${qty >= (p.stock || 999) ? "disabled" : ""}>+</button>
-        </div>
-        <div class="l-price">${baht(p.price * qty)}</div>`;
-      row.querySelector('[data-d="-1"]').onclick = () => setQty(p, qty - 1);
-      row.querySelector('[data-d="1"]').onclick = () => setQty(p, qty + 1);
-      el.appendChild(row);
+      const pl = byPid.get(p.id);
+      const disc = pl && pl.discount > 0 ? pl.discount : 0;
+      const gross = p.price * qty;
+      const wrap = document.createElement("div");
+      wrap.className = "line-wrap";
+      wrap.innerHTML = `
+        <div class="line">
+          <div class="l-name">${esc(p.name)}<small>${baht(p.price)} each</small></div>
+          <div class="stepper">
+            <button data-d="-1">−</button>
+            <span class="n">${qty}</span>
+            <button data-d="1" ${qty >= (p.stock || 999) ? "disabled" : ""}>+</button>
+          </div>
+          <div class="l-price">${disc ? `<s>${baht(gross)}</s>` : ""}${baht(gross - disc)}</div>
+        </div>`;
+      wrap.querySelector('[data-d="-1"]').onclick = () => setQty(p, qty - 1);
+      wrap.querySelector('[data-d="1"]').onclick = () => setQty(p, qty + 1);
+      // The till's discount dropdown: only what this line may pick right now.
+      const options = (pl && pl.options) || [];
+      if (options.length) {
+        const current = pl.discount_type_id || "";
+        const sel = document.createElement("select");
+        sel.className = "disc";
+        sel.innerHTML =
+          `<option value="">ไม่มีส่วนลด · No discount</option>` +
+          options.map((o) =>
+            `<option value="${esc(o.id)}" ${o.id === current ? "selected" : ""}>${esc(o.name)} — ${esc(o.value)}</option>`
+          ).join("");
+        sel.onchange = () => {
+          if (sel.value) picks.set(p.id, sel.value); else picks.delete(p.id);
+          syncCart();
+        };
+        wrap.appendChild(sel);
+        const chosen = options.find((o) => o.id === current);
+        if (chosen && chosen.detail) {
+          const d = document.createElement("div");
+          d.className = "disc-detail";
+          d.textContent = chosen.detail;
+          wrap.appendChild(d);
+        }
+      } else if (pl && pl.discount_label) {
+        // On a combination another line picked: no choice here, just the label.
+        const d = document.createElement("div");
+        d.className = "disc-detail";
+        d.textContent = pl.discount_label;
+        wrap.appendChild(d);
+      }
+      for (const f of (pl && pl.free) || []) {
+        const d = document.createElement("div");
+        d.className = "freebie";
+        d.textContent = `🎁 ฟรี · Free: ${f.name} × ${f.qty}`;
+        wrap.appendChild(d);
+      }
+      el.appendChild(wrap);
     }
+    renderSuggestions(el);
+  }
+
+  function renderSuggestions(el) {
+    const offer = suggestions
+      .map((id) => MENU.find((x) => x.id === id))
+      .filter((p) => p && !p.sold_out && !cart.has(p.id))
+      .slice(0, 4);
+    if (!offer.length) return;
+    const box = document.createElement("div");
+    box.className = "fbt";
+    box.innerHTML = `<h4>มักซื้อคู่กัน · Frequently bought together</h4><div class="row"></div>`;
+    const row = box.querySelector(".row");
+    for (const p of offer) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.innerHTML = `
+        ${p.image_url
+          ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
+          : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`}
+        <div class="t-name">${esc(p.name)}</div>
+        <div class="t-price">${baht(p.price)}</div>
+        <button class="add">เพิ่ม · ADD</button>`;
+      tile.querySelector(".add").onclick = () => { suggestedIds.add(p.id); setQty(p, 1); };
+      row.appendChild(tile);
+    }
+    el.appendChild(box);
   }
 
   // Sheet open/close.  Locking the body stops the menu scrolling behind the
@@ -348,7 +572,9 @@ for money; the totals shown here are a preview.
   document.getElementById("open-cart").onclick = openSheet;
   scrim.onclick = closeSheet;
   document.getElementById("sheet-close").onclick = closeSheet;
-  document.getElementById("clear").onclick = () => { cart.clear(); renderMenu(); sizeScrollPad(); syncCart(); };
+  document.getElementById("clear").onclick = () => {
+    cart.clear(); picks.clear(); suggestedIds.clear(); renderMenu(); applySearch(); syncCart();
+  };
 
   // Swipe the sheet down to dismiss.  Drag is bound to the handle + header
   // only, so it never fights the scrollable item list below.
@@ -387,7 +613,8 @@ for money; the totals shown here are a preview.
     const lastSec = document.getElementById(catId(cats[cats.length - 1]));
     const pills = document.getElementById("pills");
     if (!lastSec || !pills) return;
-    const stickyH = document.querySelector(".appbar").offsetHeight + pills.offsetHeight;
+    const stickyH = document.querySelector(".appbar").offsetHeight
+      + document.querySelector(".search").offsetHeight + pills.offsetHeight;
     pad.style.height = Math.max(0, window.innerHeight - stickyH - lastSec.offsetHeight - 24) + "px";
   }
   window.addEventListener("resize", sizeScrollPad);
@@ -397,10 +624,10 @@ for money; the totals shown here are a preview.
     let active = cats[0];
     for (const c of cats) {
       const sec = document.getElementById(catId(c));
-      if (sec && sec.getBoundingClientRect().top <= 130) active = c;
+      if (sec && !sec.hidden && sec.getBoundingClientRect().top <= 180) active = c;
     }
     // At the very bottom, force the last pill active — a short final section
-    // may never cross the 130px line.
+    // may never cross the 180px line.
     if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
       active = cats[cats.length - 1];
     }
@@ -418,11 +645,10 @@ for money; the totals shown here are a preview.
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "กำลังดำเนินการ…";
     try {
-      const items = cartArray().map(({ p, qty }) => ({ product_id: p.id, qty }));
       const res = await fetch(START_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items: cartPayload() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not start your order.");

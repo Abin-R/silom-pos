@@ -35,6 +35,7 @@ from django.views.decorators.csrf import csrf_exempt
 from . import images, selforder
 from .gateways import GatewayConfigError, GatewayError
 from .models import Branch, Product, SelfOrder
+from .views import pick_suggestions
 
 
 def _no_referrer(response):
@@ -63,7 +64,8 @@ def _summary_lines(draft: SelfOrder) -> list[dict]:
     (``widthratio`` only does integers, which is wrong for money), so the line
     total is computed here.  It has to be the line total: rendering the unit
     price against a "name × qty" label makes the rows visibly fail to add up to
-    the total the customer is about to pay.
+    the total the customer is about to pay.  Discounts are their own row below
+    the lines (``_summary_money``); a free item is listed at ฿0.
     """
     lines = []
     for it in draft.items or []:
@@ -75,9 +77,18 @@ def _summary_lines(draft: SelfOrder) -> list[dict]:
         lines.append({
             'name': it.get('name') or '',
             'qty': qty,
-            'line_total': price * qty,
+            'line_total': Decimal('0') if it.get('is_free') else price * qty,
+            'is_free': bool(it.get('is_free')),
+            'discount_label': it.get('discount_label') or '',
         })
     return lines
+
+
+def _summary_money(draft: SelfOrder) -> dict:
+    """The discount and whole-baht rounding rows between the lines and the total."""
+    subtotal, discount = selforder.bill_figures(draft.items or [])
+    rounding = draft.goods_total - max(Decimal('0'), subtotal - discount)
+    return {'discount': discount, 'rounding': rounding, 'rounding_abs': abs(rounding)}
 
 
 # ─── Menu ────────────────────────────────────────────────────────────────────
@@ -90,6 +101,8 @@ def order_menu(request, branch_id):
         'open_now': open_now,
         'menu_json': json.dumps(selforder.menu_for(branch) if open_now else []),
         'start_url': f'/order/{branch.id}/start/',
+        'price_url': f'/order/{branch.id}/price/',
+        'suggest_url': f'/order/{branch.id}/suggest/',
     }))
 
 
@@ -193,6 +206,58 @@ def order_start(request, branch_id):
     })
 
 
+# ─── Price the cart ──────────────────────────────────────────────────────────
+@csrf_exempt
+def order_price(request, branch_id):
+    """What the cart costs, with the discounts each line may pick.
+
+    The menu calls this on every cart change so the page shows the server's
+    numbers instead of computing money itself.  Nothing is saved.
+    """
+    if request.method != 'POST':
+        return _err('POST required', 405)
+
+    branch = get_object_or_404(Branch, id=branch_id, active=True)
+    if not selforder.branch_is_open(branch):
+        return _err('ร้านปิดรับออร์เดอร์แล้ว / This branch is closed.', 409)
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except ValueError:
+        return _err('Malformed request.')
+
+    try:
+        res = selforder.preview(branch, payload.get('items') or [])
+    except selforder.SelfOrderError as e:
+        return _err(str(e))
+    return JsonResponse({'status': 'ok', **res})
+
+
+# ─── Frequently bought together ──────────────────────────────────────────────
+@csrf_exempt
+def order_suggest(request, branch_id):
+    """What to offer alongside the cart — the till's upsell strip, for the
+    customer.  Ids and reasons only: the page already holds the menu, and a
+    product it doesn't hold (or holds as sold out) is simply not shown."""
+    if request.method != 'POST':
+        return _err('POST required', 405)
+
+    branch = get_object_or_404(Branch, id=branch_id, active=True)
+    if not selforder.branch_is_open(branch) or not branch.suggestions_enabled:
+        return JsonResponse({'status': 'ok', 'suggestions': []})
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except ValueError:
+        return _err('Malformed request.')
+
+    picked, _source = pick_suggestions(branch, payload.get('product_ids'), payload.get('limit'))
+    return JsonResponse({'status': 'ok', 'suggestions': [
+        {'id': s['id'], 'reason': s['reason'], 'because_id': s['because_id']}
+        for s in picked
+    ]})
+
+
 # ─── Pay ─────────────────────────────────────────────────────────────────────
 def order_pay_page(request, token):
     """Payment page: pick PromptPay or card, then poll for confirmation.
@@ -205,11 +270,23 @@ def order_pay_page(request, token):
         'draft': draft,
         'branch': draft.branch,
         'lines': _summary_lines(draft),
+        'money': _summary_money(draft),
         'quote_qr': selforder.quote(draft, 'qr'),
         'quote_card': selforder.quote(draft, 'card'),
         'pay_url': f'/order/s/{draft.token}/pay/',
         'status_url': f'/order/s/{draft.token}/status/',
     }))
+
+
+def _device_type(request) -> str:
+    """The phone the customer is on, as Beam wants it: the banking apps only
+    open from a charge made for a phone."""
+    ua = request.META.get('HTTP_USER_AGENT', '')
+    if 'Android' in ua:
+        return 'ANDROID'
+    if any(k in ua for k in ('iPhone', 'iPad', 'iPod')):
+        return 'IOS'
+    return 'WEB'
 
 
 @csrf_exempt
@@ -236,6 +313,7 @@ def order_pay(request, token):
             # Must be the customer's own status page — the gateway default
             # points at the POS host, which is right for a cashier and wrong here.
             redirect_url=f'{_public_base()}/order/s/{draft.token}/',
+            device_type=_device_type(request),
         )
     except selforder.SelfOrderError as e:
         return _err(str(e))
@@ -273,7 +351,8 @@ def order_status(request, token):
             'order_number': order.order_number,
             'queue_number': order.queue_number,
             'total': float(order.total),
-            'receipt_url': f'/receipt/{order.order_number}/',
+            # /receipt/<n>/ redirects to the feedback form — see customer_receipt.
+            'feedback_url': f'/receipt/{order.order_number}/',
         })
     if draft.status in ('failed', 'expired'):
         return JsonResponse({'status': draft.status}, status=200)

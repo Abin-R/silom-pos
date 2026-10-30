@@ -110,6 +110,24 @@ class StubGateway:
             'raw': {},
         }
 
+    # — Beam e-wallet / banking app —
+    def _create_app_charge(self, amount, reference_id, method_type, return_url,
+                           device_type='WEB', description='', branch=None):
+        self.created_charges.append({
+            'amount': amount, 'reference_id': reference_id, 'branch': branch,
+            'method_type': method_type, 'return_url': return_url,
+            'device_type': device_type,
+        })
+        return {
+            'charge_id': f'chg_{len(self.created_charges)}',
+            'status': 'PENDING',
+            'payment_uri': 'https://pay.beam.test/app',
+            'qr_image': None,
+            'amount': Decimal(str(amount)),
+            'currency': 'THB',
+            'raw': {},
+        }
+
     def _get_charge(self, charge_id, branch=None):
         status = self.charge_status or ('SUCCEEDED' if self.paid else 'PENDING')
         return {
@@ -149,6 +167,7 @@ class StubGateway:
     def __enter__(self):
         targets = {
             'beam_create_promptpay_charge': self._create_charge,
+            'beam_create_app_charge': self._create_app_charge,
             'beam_get_charge': self._get_charge,
             'beam_create_card_link': self._create_link,
             'beam_get_link': self._get_link,

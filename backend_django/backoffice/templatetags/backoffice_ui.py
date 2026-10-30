@@ -73,6 +73,15 @@ def initials(value):
 # onto the three buckets the reports actually reason about, so "PromptPay",
 # "promptpay" and "qr" don't split into three columns.
 PAYMENT_TAGS = {
+    # Self-order's Beam e-wallets / banking apps — ahead of "beam", which is
+    # in every one of their names.
+    "line pay": ("LINE Pay", "t-info"),
+    "shopeepay": ("ShopeePay", "t-info"),
+    "truemoney": ("TrueMoney", "t-info"),
+    "kplus": ("Mobile banking", "t-info"),
+    "scb easy": ("Mobile banking", "t-info"),
+    "krungsri": ("Mobile banking", "t-info"),
+    "bangkok bank": ("Mobile banking", "t-info"),
     "cash": ("Cash", "t-ok"),
     "promptpay": ("PromptPay", "t-info"),
     "qr": ("PromptPay", "t-info"),

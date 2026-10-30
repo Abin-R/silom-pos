@@ -95,7 +95,12 @@ export async function enqueue(
   const jobs = await listJobs();
   // Don't double-enqueue the same order — if the cashier hits a retry
   // button on a row that's already queued, we'd otherwise stack copies.
-  const existing = jobs.find((j) => j.order.order_number === order.order_number);
+  // Keyed on doc_type too: a self-order prints a customer receipt AND a
+  // packer slip, and both must survive if the printer was off for both.
+  const docType = (o: ReceiptOrder) => o.doc_type ?? "abbreviated";
+  const existing = jobs.find(
+    (j) => j.order.order_number === order.order_number && docType(j.order) === docType(order),
+  );
   if (existing) return existing;
 
   const job: PrintJob = {
