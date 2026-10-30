@@ -74,6 +74,7 @@ const en = {
     cost: "Cost",
     cost_thb: "Cost (THB)",
     couldnt_render_qr: "Couldn’t render QR",
+    download_qr: "Download QR",
     couldnt_save_tax_invoice: "Couldn't save tax invoice",
     count: "Count",
     counted_cash_required: "Counted cash required",

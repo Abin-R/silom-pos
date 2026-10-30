@@ -175,6 +175,21 @@ class PublicEndpointTests(TestCase):
         self.assertEqual(res.status_code, 409)
         self.assertEqual(SelfOrder.objects.count(), 0)
 
+    def test_qr_png_downloads_the_branch_menu_link(self):
+        res = self.c.get(f'/order/{self.branch.id}/qr.png')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'image/png')
+        self.assertTrue(res.content.startswith(b'\x89PNG'))
+        self.assertEqual(
+            res['Content-Disposition'], 'attachment; filename="self-order-qr-silom.png"',
+        )
+
+    def test_qr_png_is_404_on_a_disabled_branch(self):
+        self.branch.self_order_enabled = False
+        self.branch.save()
+        res = self.c.get(f'/order/{self.branch.id}/qr.png')
+        self.assertEqual(res.status_code, 404)
+
 
 # ─── Branch-level payment credentials ────────────────────────────────────────
 class BranchPaymentConfigTests(TestCase):

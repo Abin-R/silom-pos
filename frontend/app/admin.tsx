@@ -5509,6 +5509,22 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
         </Text>
       </View>
 
+      {/* No file-writing native module on the till, so the browser does the
+          saving: the backend serves the PNG as an attachment. */}
+      {qr ? (
+        <TouchableOpacity
+          onPress={() => whileAway(() => Linking.openURL(`${url}qr.png`))}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 8,
+            backgroundColor: C.brand, paddingVertical: 12, paddingHorizontal: 22,
+            borderRadius: 12,
+          }}
+        >
+          <Ionicons name="download-outline" size={18} color={C.surface} />
+          <Text style={{ color: C.surface, fontWeight: "700" }}>{tr("admin.download_qr")}</Text>
+        </TouchableOpacity>
+      ) : null}
+
       <View
         style={{
           backgroundColor: C.bgSoft,

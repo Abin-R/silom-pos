@@ -17,6 +17,9 @@ sentry-sdk = {extras = ["django"], version = ">=2.0"}
 # management command — never by the web tier — so a box that missed this
 # install degrades one cron job instead of failing deploy.sh's import gate.
 efficient-apriori = ">=2.0,<3.0"
+# The branch self-order QR as a downloadable PNG.  Pure Python, no
+# dependencies (PNG is written by segno itself, not Pillow).
+segno = "*"
 
 [dev-packages]
 

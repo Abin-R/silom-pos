@@ -21,12 +21,15 @@ Trust model:
 """
 from __future__ import annotations
 
+import io
 import json
 from decimal import Decimal, InvalidOperation
 
+import segno
 from django.conf import settings as django_settings
 from django.http import Http404, HttpResponse, HttpResponseNotModified, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 
 from . import images, selforder
@@ -88,6 +91,29 @@ def order_menu(request, branch_id):
         'menu_json': json.dumps(selforder.menu_for(branch) if open_now else []),
         'start_url': f'/order/{branch.id}/start/',
     }))
+
+
+# ─── Branch QR download ──────────────────────────────────────────────────────
+def order_qr_png(request, branch_id):
+    """The branch's self-ordering QR as a print-ready PNG download.
+
+    The till has no native module that can write a file, so its Download button
+    opens this URL and the tablet's browser saves it. Encodes the same URL the
+    till's Self-Order QR screen shows (``PUBLIC_BASE_URL`` + ``/order/<id>/``).
+    """
+    branch = get_object_or_404(Branch, id=branch_id, active=True)
+    if not selforder.self_order_enabled(branch):
+        raise Http404
+
+    buf = io.BytesIO()
+    # scale=20 → ~700 px for a typical URL: sharp on an A6 table card.
+    segno.make(f'{_public_base()}/order/{branch.id}/', error='m').save(
+        buf, kind='png', scale=20, border=4,
+    )
+    resp = HttpResponse(buf.getvalue(), content_type='image/png')
+    name = slugify(branch.name) or 'branch'
+    resp['Content-Disposition'] = f'attachment; filename="self-order-qr-{name}.png"'
+    return resp
 
 
 # ─── Product image ───────────────────────────────────────────────────────────

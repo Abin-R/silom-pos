@@ -73,6 +73,7 @@ const th = {
     cost: "ต้นทุน",
     cost_thb: "ต้นทุน (บาท)",
     couldnt_render_qr: "สร้าง QR ไม่สำเร็จ",
+    download_qr: "ดาวน์โหลด QR",
     couldnt_save_tax_invoice: "บันทึกใบกำกับภาษีไม่สำเร็จ",
     count: "จำนวน",
     counted_cash_required: "กรุณากรอกจำนวนเงินที่นับได้",
