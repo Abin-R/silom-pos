@@ -237,7 +237,7 @@ def _cheapest(target, rows, match="all"):
 
 COPIED_FIELDS = ("name", "kind", "value", "applies_to", "free_qty",
                  "start_date", "end_date", "active", "code",
-                 "combo_match", "min_order_amount", "max_discount")
+                 "combo_match", "min_order_amount", "max_discount", "self_order")
 
 
 def sync_promotion(dt, targets):
@@ -301,10 +301,11 @@ def sync_promotion(dt, targets):
     return report
 
 
-def preset_feed(branch, version=None) -> list:
+def preset_feed(branch, version=None, self_order=False) -> list:
     """The promotions running today at ``branch``, as the till's dropdown reads
     them (``GET /discount-types``).  The self-order menu reads the same list
-    (``version="2"``: no free item the cashier picks from a category).
+    (``version="2"``: no free item the cashier picks from a category), cut down
+    to the promotions ticked for it (``self_order``).
     """
     from .models import DiscountType, Product
 
@@ -316,7 +317,10 @@ def preset_feed(branch, version=None) -> list:
     # Only promotions running today (shop-local date): outside its start/end
     # dates a promotion simply isn't offered.  Blank dates are open-ended.
     today = timezone.localdate()
-    qs = (DiscountType.objects.filter(branch=branch, active=True)
+    qs = DiscountType.objects.filter(branch=branch, active=True)
+    if self_order:
+        qs = qs.filter(self_order=True)
+    qs = (qs
           .filter(Q(start_date__isnull=True) | Q(start_date__lte=today))
           .filter(Q(end_date__isnull=True) | Q(end_date__gte=today)))
     if not v2:

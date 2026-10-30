@@ -269,6 +269,7 @@ class SelfOrderDiscountTests(TestCase):
         self.c = Client()
 
     def _preset(self, products=(), **kw):
+        kw.setdefault('self_order', True)
         d = DiscountType.objects.create(branch=self.branch, **kw)
         if products:
             d.products.set(products)
@@ -303,6 +304,18 @@ class SelfOrderDiscountTests(TestCase):
             {'product_id': str(self.latte.id), 'qty': 1, 'discount_type_id': 'other'},
         ])
         self.assertEqual(items[0]['discount'], 0)
+
+    def test_a_promotion_not_ticked_for_self_order_is_till_only(self):
+        """Staff and near-expiry discounts need a cashier's judgement: unless a
+        promotion is ticked for self-order, the website neither lists it nor
+        accepts it."""
+        staff = self._preset(name='TRP STAFF', kind='percent', value=25, self_order=False)
+        res = selforder.preview(self.branch, self._items((self.latte, 1, staff)))
+        self.assertEqual(res['lines'][0]['options'], [])
+        self.assertEqual(res['discount'], 0)
+        # The till still offers it.
+        self.assertIn(str(staff.id), [p['id'] for p in
+                                      selforder.discounts.preset_feed(self.branch, '3')])
 
     def test_branch_without_discount_types_offers_none(self):
         self.branch.discount_types_enabled = False

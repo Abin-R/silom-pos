@@ -4332,6 +4332,7 @@ def _apply_discount_form(dt, post, branch):
         errors.append("“Other” is reserved for the till's own hand-entered discount — pick another name.")
 
     dt.active = post.get("active") == "on"
+    dt.self_order = post.get("self_order") == "on"
 
     # Validity period. Blank means open-ended on that side.
     for field, label in (("start_date", "start"), ("end_date", "end")):

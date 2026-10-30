@@ -146,7 +146,7 @@ def discount_presets(branch) -> list[dict]:
     """
     if not branch.discount_types_enabled:
         return []
-    return discounts.preset_feed(branch, '2')
+    return discounts.preset_feed(branch, '2', self_order=True)
 
 
 def _round_baht(n: float) -> Decimal:

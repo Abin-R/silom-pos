@@ -228,6 +228,18 @@ class BackofficeTests(TestCase):
         self.assertEqual((dt.branch, dt.kind, dt.value, dt.applies_to),
                          (self.branch, "fixed", Decimal("30"), "products"))
         self.assertEqual(list(dt.products.all()), [self.cake])
+        self.assertFalse(dt.self_order)  # till-only unless ticked
+
+    def test_self_order_tick_is_saved_and_cleared(self):
+        form = {"name": "Cake deal", "kind": "fixed", "value": "30", "active": "on",
+                "applies_to": "all", "self_order": "on"}
+        self.client.post(reverse("backoffice:discount_new") + self.qs, form)
+        dt = DiscountType.objects.get()
+        self.assertTrue(dt.self_order)
+        form.pop("self_order")
+        self.client.post(reverse("backoffice:discount_detail", args=[dt.id]) + self.qs, form)
+        dt.refresh_from_db()
+        self.assertFalse(dt.self_order)
 
     def test_create_for_categories_then_switch_to_all(self):
         cakes = Category.objects.create(name="Cakes", branch=self.branch)

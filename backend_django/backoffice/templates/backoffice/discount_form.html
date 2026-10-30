@@ -111,6 +111,14 @@
         <span class="hint">Untick to pause it early. Otherwise the status follows the dates:
           it is offered on the till only from the start date to the end date.</span>
       </div>
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="self_order" {% if dt.self_order %}checked{% endif %}>
+          Also offer it on self-order
+        </label>
+        <span class="hint">Customers ordering from their phone can pick it themselves, with no
+          cashier to check. Leave staff and near-expiry discounts unticked.</span>
+      </div>
     </div>
   </div>
 

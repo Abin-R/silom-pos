@@ -1262,6 +1262,11 @@ class DiscountType(models.Model):
     # from the date-driven status: it stops a promotion early without
     # rewriting the dates it was planned with.
     active = models.BooleanField(default=True)
+    # Also offered to customers on the self-order menu.  Off by default: a
+    # cashier judges who gets a staff or near-expiry discount, and a customer
+    # picking for themselves can't be trusted to — only the deals meant for
+    # everyone are ticked.  The till ignores this.
+    self_order = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
