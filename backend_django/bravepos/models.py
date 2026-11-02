@@ -1016,6 +1016,46 @@ class SelfOrder(models.Model):
         return secrets.token_urlsafe(32)
 
 
+class TillBeamCharge(models.Model):
+    """A Beam PromptPay QR the till put on screen, kept so a payment the till
+    never saw is still noticed.
+
+    At the till the sale is only saved when the tablet's own poll sees "paid".
+    Cancel the QR a second too early (PS000011903: the money landed 0.8 s
+    after the last poll) and the charge is forgotten — the customer has paid,
+    Beam has the money, and no bill points at it.  Self-orders have
+    ``reconcile_selforders`` for exactly this; the till had nothing.
+
+    Written when the charge is created; ``check_till_beam_charges`` polls the
+    unfinished ones and raises an alert for a paid charge that no bill carries.
+    It never creates a sale itself: the basket lives only on the tablet.
+    """
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="till_beam_charges",
+    )
+    charge_id = models.CharField(max_length=128, unique=True)
+    reference_id = models.CharField(max_length=128, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    staff = models.CharField(max_length=128, blank=True, default="")
+    # Beam's raw charge status, as last seen by the sweep.
+    status = models.CharField(max_length=32, blank=True, default="PENDING")
+    # When the sweep first saw it paid.  The till saves the bill within a
+    # poll (3 s) of that, so a paid charge with no bill is only alerted once
+    # it has stayed that way for a while.
+    paid_seen_at = models.DateTimeField(null=True, blank=True)
+    alerted_at = models.DateTimeField(null=True, blank=True)
+    # Nothing left to do: failed, matched to a bill, or alerted.
+    done = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["done", "created_at"])]  # the sweep's scan
+
+    def __str__(self):
+        return f"TillBeamCharge {self.charge_id} ({self.status})"
+
+
 # ─── Shifts ──────────────────────────────────────────────────────────────────
 class Shift(models.Model):
     STATUS_CHOICES = [("open", "Open"), ("closed", "Closed")]

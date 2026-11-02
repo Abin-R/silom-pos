@@ -6,10 +6,12 @@ a group chat), and nothing else — this project has no bot, no cards and no
 single chats.  Uses ``httpx`` rather than ``requests`` because that is what the
 production virtualenv already has (see ``gateways``).
 
-Config is three env vars, all read at call time:
+Config is env vars, all read at call time:
 
 * ``SEATALK_APP_ID`` / ``SEATALK_APP_SECRET`` — the Open Platform app.
 * ``SEATALK_DISCOUNT_GROUP_ID`` — the group "Other" discount alerts go to.
+* ``SEATALK_BEAM_GROUP_ID`` — the group for a paid till Beam QR that no bill
+  carries.  Optional: unset, those alerts go to the discount group.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.
@@ -46,6 +48,10 @@ def _app() -> tuple:
 
 def discount_group_id() -> str:
     return (os.environ.get("SEATALK_DISCOUNT_GROUP_ID") or "").strip()
+
+
+def beam_group_id() -> str:
+    return (os.environ.get("SEATALK_BEAM_GROUP_ID") or "").strip() or discount_group_id()
 
 
 def is_configured() -> bool:

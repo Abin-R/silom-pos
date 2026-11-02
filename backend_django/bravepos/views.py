@@ -35,7 +35,7 @@ from .models import (
     Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
     StockMovement, StockDocument, StockDocumentItem, StockOutReason,
-    SuggestionOverride, SuggestionRule,
+    SuggestionOverride, SuggestionRule, TillBeamCharge,
 )
 from .serializers import (
     BranchSerializer,
@@ -2213,6 +2213,24 @@ def _gateway_response(fn, *args, **kwargs):
         return None, Response({'detail': e.detail}, status=e.status)
 
 
+def _record_till_beam_charge(request, res, reference_id):
+    """Remember a till QR charge for ``check_till_beam_charges``.  Never fails
+    the charge: the QR is already minted, and the customer is waiting."""
+    session = request.session_obj
+    try:
+        with transaction.atomic():
+            TillBeamCharge.objects.create(
+                branch=session.branch,
+                charge_id=res['charge_id'],
+                reference_id=(reference_id or '')[:128],
+                amount=res['amount'],
+                staff=session.staff.name or '',
+                status=res.get('status') or 'PENDING',
+            )
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.exception('Could not record till Beam charge %s', res.get('charge_id'))
+
+
 @api_view(['POST'])
 @require_session
 def beam_charge_create(request):
@@ -2228,6 +2246,7 @@ def beam_charge_create(request):
     )
     if err:
         return err
+    _record_till_beam_charge(request, res, reference_id)
     return Response({
         'charge_id': res['charge_id'],
         'status': res['status'],
