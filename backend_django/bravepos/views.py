@@ -2742,9 +2742,14 @@ def suggestions(request):
     return Response({'suggestions': picked, 'source': source})
 
 
-def pick_suggestions(branch, raw_ids, limit=None):
+def pick_suggestions(branch, raw_ids, limit=None, sellable=None):
     """``(suggestions, source)`` for a cart — the till's strip and the
-    self-order menu's "frequently bought together" both ask this."""
+    self-order menu's "frequently bought together" both ask this.
+
+    ``sellable(product)``, when given, is a further test every pick must pass.
+    Self-order passes its own sold-out rule, so a slot is never spent on an
+    item the menu would hide — the next pairing takes it instead."""
+    ok = sellable or (lambda p: True)
     try:
         limit = int(limit or SUGGESTION_DEFAULT_LIMIT)
     except (TypeError, ValueError):
@@ -2812,7 +2817,8 @@ def pick_suggestions(branch, raw_ids, limit=None):
     picked, chosen_ids, source = [], set(cart_set | blocked), ''
 
     for o in overrides:
-        if o.mode != 'pin' or o.product_id in chosen_ids or not o.product.active:
+        if (o.mode != 'pin' or o.product_id in chosen_ids or not o.product.active
+                or not ok(o.product)):
             continue
         picked.append(_suggestion_payload(
             o.product, 'pinned',
@@ -2841,6 +2847,8 @@ def pick_suggestions(branch, raw_ids, limit=None):
             if nm in wanted and nm not in local:
                 if p.par_level and p.par_level > 0 and (p.stock or 0) <= 0:
                     continue          # tracked and out of stock — unsellable
+                if not ok(p):
+                    continue
                 local[nm] = p
 
     # Which cart item triggered a single-item rule, for the "goes with" label.
@@ -2877,9 +2885,10 @@ def pick_suggestions(branch, raw_ids, limit=None):
             Product.objects
             .filter(branch=branch, active=True, is_favorite=True)
             .exclude(id__in=chosen_ids)
-            .order_by('sort_order', 'name')[:limit]
+            .order_by('sort_order', 'name')
         )
-        picked = [_suggestion_payload(p, 'popular') for p in favourites]
+        picked = [_suggestion_payload(p, 'popular')
+                  for p in favourites if ok(p)][:limit]
         source = 'none'
 
     return picked, source or 'none'

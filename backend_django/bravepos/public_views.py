@@ -254,7 +254,10 @@ def order_suggest(request, branch_id):
     except ValueError:
         return _err('Malformed request.')
 
-    picked, _source = pick_suggestions(branch, payload.get('product_ids'), payload.get('limit'))
+    picked, _source = pick_suggestions(
+        branch, payload.get('product_ids'), payload.get('limit'),
+        sellable=lambda p: not selforder.is_sold_out(p),
+    )
     return JsonResponse({'status': 'ok', 'suggestions': [
         {'id': s['id'], 'reason': s['reason'], 'because_id': s['because_id']}
         for s in picked

@@ -99,6 +99,12 @@ def menu_image_ref(branch, product) -> str:
     return f'/order/{branch.id}/img/{product.id}/?v={images.digest(raw)}'
 
 
+def is_sold_out(product) -> bool:
+    """A stocked product with none on hand.  Service products don't track
+    stock and are always orderable."""
+    return int(product.stock or 0) <= 0 and product.product_type == 'P'
+
+
 def menu_for(branch) -> list[dict]:
     """The public menu for one branch — every active product it stocks.
 
@@ -128,7 +134,7 @@ def menu_for(branch) -> list[dict]:
             # hand are orderable. ``stock`` only caps the quantity; the page
             # does not show it.
             'stock': stock,
-            'sold_out': stock <= 0 and p.product_type == 'P',
+            'sold_out': is_sold_out(p),
         })
     return out
 

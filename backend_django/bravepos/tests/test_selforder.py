@@ -236,6 +236,18 @@ class SelfOrderSuggestionTests(TestCase):
         self.branch.save()
         self.assertEqual(len(self._suggest(self.latte).json()['suggestions']), 1)
 
+    def test_sold_out_pairing_gives_its_slot_to_the_next(self):
+        """The menu hides sold-out items, so suggesting one wastes a tile."""
+        cookie = make_product(self.branch, name='Cookie', price='40.00')
+        SuggestionRule.objects.create(
+            branch=None, kind='pair', antecedent_key='latte', antecedent_size=1,
+            consequent_name='cookie', lift=2, score=2, basket_count=20,
+        )
+        self.croissant.stock = 0
+        self.croissant.save()
+        ids = [s['id'] for s in self._suggest(self.latte).json()['suggestions']]
+        self.assertEqual(ids, [str(cookie.id)])
+
     def test_closed_branch_offers_nothing(self):
         self.branch.shifts.update(status='closed', closed_at=djtz.now())
         self.assertEqual(self._suggest(self.latte).json()['suggestions'], [])
