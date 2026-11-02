@@ -84,10 +84,6 @@ def branch_is_open(branch) -> bool:
     ).exists()
 
 
-# Below this on-hand level a product shows a "only N left" nudge (Swiggy-style).
-LOW_STOCK_THRESHOLD = 5
-
-
 def menu_image_ref(branch, product) -> str:
     """What the menu should put in ``image_url`` for one product.
 
@@ -107,9 +103,9 @@ def menu_for(branch) -> list[dict]:
     """The public menu for one branch — every active product it stocks.
 
     Hand-rolled rather than reusing ProductSerializer so we control exactly what
-    reaches a customer's phone: ``stock``/``sold_out`` are surfaced (so the page
-    can grey out and block sold-out items, like a food-delivery app), but
-    ``cost`` — the margin — is deliberately never included.
+    reaches a customer's phone: ``sold_out`` greys out and blocks sold-out
+    items, and ``stock`` caps the + button (the page never prints the number),
+    but ``cost`` — the margin — is deliberately never included.
     """
     products = (
         Product.objects
@@ -128,17 +124,18 @@ def menu_for(branch) -> list[dict]:
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
             'image_url': menu_image_ref(branch, p),
-            # Inventory the customer is allowed to see. Service products (stock
-            # not tracked) and anything with stock on hand are orderable.
+            # Service products (stock not tracked) and anything with stock on
+            # hand are orderable. ``stock`` only caps the quantity; the page
+            # does not show it.
             'stock': stock,
             'sold_out': stock <= 0 and p.product_type == 'P',
-            'low_stock': 0 < stock <= LOW_STOCK_THRESHOLD and p.product_type == 'P',
         })
     return out
 
 
 def discount_presets(branch) -> list[dict]:
-    """The promotions a customer can pick on the menu: the till's list.
+    """The promotions a customer can pick on the menu: the till's list, cut
+    down to those ticked "Offer on self-order" in the backoffice.
 
     Version "2" of the till's feed, which leaves out a free item the cashier
     picks from a category (the website has no picker for it).  "Other", the

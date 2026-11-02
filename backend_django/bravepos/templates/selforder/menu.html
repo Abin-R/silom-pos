@@ -1,7 +1,7 @@
 {% extends "selforder/base.html" %}
 {% comment %}
 Food-delivery-style menu (think Swiggy / KFC kiosk): sticky category pills,
-image cards with sold-out + low-stock states, and a slide-up cart sheet.
+image cards with sold-out states, and a slide-up cart sheet.
 
 The cart lives in JS, but its money doesn't: every change is sent to /price/,
 which re-prices the lines from the DB, applies the discounts the customer
@@ -62,10 +62,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .card .name { font-weight: 700; font-size: 15.5px; }
   .card .name-th { color: var(--ink-2); font-size: 13px; font-weight: 500; }
-  .card .badge {
-    display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700;
-    color: #b26b00; background: #fff3e0; padding: 2px 8px; border-radius: 6px;
-  }
   .card .foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; }
   .card .price { font-weight: 800; font-size: 16px; }
 
@@ -304,7 +300,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     const thumb = p.image_url
       ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
       : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`;
-    const badge = p.low_stock ? `<span class="badge">เหลือ ${p.stock} ชิ้น</span>` : "";
     card.innerHTML = `
       ${p.sold_out ? '<span class="sold-tag">หมด · Sold out</span>' : ""}
       ${thumb}
@@ -312,7 +307,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
         <div>
           <div class="name">${esc(p.name)}</div>
           ${p.name_th ? `<div class="name-th">${esc(p.name_th)}</div>` : ""}
-          ${badge}
         </div>
         <div class="foot">
           <div class="price">${baht(p.price)}</div>

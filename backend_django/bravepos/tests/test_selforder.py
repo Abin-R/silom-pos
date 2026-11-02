@@ -135,15 +135,19 @@ class PublicEndpointTests(TestCase):
         self.assertEqual(Decimal(str(draft.items[0]['price'])), Decimal('100.00'))
 
     def test_menu_never_leaks_cost(self):
-        """Stock IS shown to customers (sold-out / low-stock nudges, like a food
-        app).  Cost — the margin — must never reach a customer's phone."""
+        """Sold-out is shown; stock only caps the + button and is never printed.
+        Cost — the margin — must never reach a customer's phone."""
         menu = selforder.menu_for(self.branch)
         self.assertTrue(menu)
         for item in menu:
             self.assertNotIn('cost', item)
-            # Inventory is intentionally surfaced.
-            self.assertIn('stock', item)
+            self.assertNotIn('low_stock', item)
             self.assertIn('sold_out', item)
+
+    def test_menu_page_does_not_print_stock(self):
+        res = self.c.get(f'/order/{self.branch.id}/')
+        self.assertEqual(res.status_code, 200)
+        self.assertNotContains(res, 'เหลือ')
 
     def test_closed_branch_refuses_orders(self):
         """No open shift means nobody is at the till to see the order or the slip."""
@@ -606,6 +610,19 @@ class PromotionTests(TestCase):
         self.p.refresh_from_db()
         self.assertEqual(self.p.stock, 8)
         self.assertIsNotNone(order.shift)
+
+    def test_queue_number_counts_the_branchs_self_orders(self):
+        """Queue = n + 1, n = every self-order the branch has had (till sales
+        and other branches don't count)."""
+        other = make_branch(name='Other')
+        for n, (branch, source) in enumerate([
+            (other, 'kiosk'), (self.branch, 'table'),
+            (self.branch, 'kiosk'), (self.branch, 'kiosk'),
+        ]):
+            Order.objects.create(branch=branch, order_number=f'Q-{n}', source=source)
+        with StubGateway(paid=True):
+            order = selforder.promote(self._draft())
+        self.assertEqual(order.queue_number, 3)
 
     def test_promotion_is_idempotent(self):
         d = self._draft()

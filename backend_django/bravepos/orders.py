@@ -64,14 +64,19 @@ def _next_order_number() -> str:
     return f'PS{n:09d}'
 
 
-def _next_queue_number(branch) -> int:
+def _next_queue_number(branch, source: str = '') -> int:
     """The number the customer is *called* by — per branch, per day.
 
     Previously derived on the client as the last two digits of the global PS
     sequence, which meant two branches shared a counter and the same number came
     round again every 100 orders.  Safe against races because every caller holds
     the branch row lock taken in ``_create_order_with_retry``.
+
+    A self-order (``source='kiosk'``) runs its own counter instead: n + 1, where
+    n is how many self-orders the branch has ever had.  It never resets.
     """
+    if source == 'kiosk':
+        return Order.objects.filter(branch=branch, source='kiosk').count() + 1
     today = djtz.localdate()
     last = (
         Order.objects
@@ -239,7 +244,7 @@ def create_order_from_items(
                 order = Order.objects.create(
                     branch=branch,
                     order_number=_next_order_number(),
-                    queue_number=_next_queue_number(branch),
+                    queue_number=_next_queue_number(branch, source),
                     shift=shift,
                     subtotal=Decimal(str(subtotal)),
                     discount_type=discount_type,
