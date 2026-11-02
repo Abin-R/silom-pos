@@ -161,6 +161,30 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   .fbt .tile .t-price { font-size: 13px; font-weight: 800; margin-top: auto; }
   .fbt .tile .add { padding: 6px 0; font-size: 13px; }
 
+  /* The same suggestions on the menu itself, riding on the cart bar so they
+     stay in view while the customer scrolls.  Fixed, so showing it never
+     shifts the menu under a thumb. */
+  body.has-fbt { padding-bottom: 176px; }
+  .fbt-bar {
+    background: #fff; border-radius: 14px; box-shadow: var(--shadow-lg);
+    padding: 8px 10px 10px; margin-bottom: 8px;
+  }
+  .fbt-bar h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 800; color: var(--ink-2); }
+  .fbt-bar .row { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+  .fbt-bar .row::-webkit-scrollbar { display: none; }
+  .fbt-bar .chip {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); border-radius: 12px; padding: 6px;
+  }
+  .fbt-bar .chip .thumb { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: #f0f0f2; }
+  .fbt-bar .chip .thumb.ph {
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+    background: linear-gradient(135deg, #ffe3fb 0%, #ffd0d4 100%);
+  }
+  .fbt-bar .chip .c-name { max-width: 120px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fbt-bar .chip .c-price { font-size: 12.5px; font-weight: 800; }
+  .fbt-bar .chip .add { padding: 6px 12px; font-size: 13px; }
+
   .empty { text-align: center; padding: 80px 24px; color: var(--ink-2); }
   .empty .em { font-size: 52px; }
 </style>
@@ -192,6 +216,10 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   <div id="scroll-pad" aria-hidden="true"></div>
 
   <div class="cartbar" id="cartbar">
+    <div class="fbt-bar" id="fbt-bar" hidden>
+      <h4>มักซื้อคู่กัน · Frequently bought together</h4>
+      <div class="row" id="fbt-row"></div>
+    </div>
     <div class="inner" id="open-cart">
       <div>
         <div class="count" id="cart-count">0 items</div>
@@ -466,6 +494,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     checkout.disabled = !ok;
     if (count === 0) closeSheet();
     renderLines(items);
+    renderBar();
   }
 
   function renderLines(items) {
@@ -531,11 +560,44 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     renderSuggestions(el);
   }
 
-  function renderSuggestions(el) {
-    const offer = suggestions
+  function offerable() {
+    return suggestions
       .map((id) => MENU.find((x) => x.id === id))
       .filter((p) => p && !p.sold_out && !cart.has(p.id))
       .slice(0, 4);
+  }
+
+  function thumbFor(p) {
+    return p.image_url
+      ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
+      : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`;
+  }
+
+  // The strip on the menu, above the cart bar: same picks as the sheet's.
+  function renderBar() {
+    const bar = document.getElementById("fbt-bar");
+    const row = document.getElementById("fbt-row");
+    const offer = cart.size ? offerable() : [];
+    row.innerHTML = "";
+    bar.hidden = !offer.length;
+    document.body.classList.toggle("has-fbt", offer.length > 0);
+    for (const p of offer) {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      chip.innerHTML = `
+        ${thumbFor(p)}
+        <div>
+          <div class="c-name">${esc(p.name)}</div>
+          <div class="c-price">${baht(p.price)}</div>
+        </div>
+        <button class="add">เพิ่ม</button>`;
+      chip.querySelector(".add").onclick = () => { suggestedIds.add(p.id); setQty(p, 1); };
+      row.appendChild(chip);
+    }
+  }
+
+  function renderSuggestions(el) {
+    const offer = offerable();
     if (!offer.length) return;
     const box = document.createElement("div");
     box.className = "fbt";
@@ -545,9 +607,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
       const tile = document.createElement("div");
       tile.className = "tile";
       tile.innerHTML = `
-        ${p.image_url
-          ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
-          : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`}
+        ${thumbFor(p)}
         <div class="t-name">${esc(p.name)}</div>
         <div class="t-price">${baht(p.price)}</div>
         <button class="add">เพิ่ม · ADD</button>`;
