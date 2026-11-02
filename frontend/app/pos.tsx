@@ -2389,6 +2389,8 @@ function PaymentModal({
   const [beamQrImage, setBeamQrImage] = useState<string | null>(null);
   const [beamStatus, setBeamStatus] = useState<"idle" | "loading" | "pending" | "completed" | "failed">("idle");
   const [beamError, setBeamError] = useState<string | null>(null);
+  // True while Cancel / close asks Beam one last time before dropping the QR.
+  const [beamLeaving, setBeamLeaving] = useState(false);
 
   // Omise credit-card payment-link state (mirrors the Beam flow: generate a
   // hosted-checkout link, render its URL as a QR, poll until the card charge
@@ -2512,6 +2514,17 @@ function PaymentModal({
   useEffect(() => { onPayRef.current = onPay; }, [onPay]);
   useEffect(() => { totalRef.current = total; }, [total]);
 
+  // The charge whose sale has been handed to onPay. Both the poll and the
+  // last check on Cancel / close (leaveBeamQr) can see "paid" for the same
+  // charge; only the first may save the sale.
+  const beamPaidRef = useRef<string | null>(null);
+  const settleBeamPaid = (chargeId: string) => {
+    if (beamPaidRef.current === chargeId) return;
+    beamPaidRef.current = chargeId;
+    setBeamStatus("completed");
+    onPayRef.current("Beam QR", totalRef.current, { beamChargeId: chargeId });
+  };
+
   // Poll Beam charge status until completed/failed
   useEffect(() => {
     if (beamStatus !== "pending" || !beamChargeId) return;
@@ -2533,9 +2546,8 @@ function PaymentModal({
         // GET /charges/{id} status). Accept "COMPLETED" too for forward-compat.
         if (data.status === "SUCCEEDED" || data.status === "COMPLETED") {
           settled = true;
-          setBeamStatus("completed");
           clearInterval(interval);
-          onPayRef.current("Beam QR", totalRef.current, { beamChargeId });
+          settleBeamPaid(beamChargeId);
         } else if (data.status === "FAILED" || data.status === "EXPIRED") {
           settled = true;
           setBeamStatus("failed");
@@ -2546,6 +2558,50 @@ function PaymentModal({
     }, BEAM_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [beamStatus, beamChargeId]);
+
+  // Cancel, Back and the close button all drop a QR that is still waiting.
+  // The till only saves the sale when a poll sees "paid", so dropping it a
+  // moment before the money lands loses the sale (PS000011903: paid 0.8 s
+  // after the last poll, then rung up again as Custom). Ask Beam once more
+  // first; if it is still unpaid, make the cashier say so.
+  const leaveBeamQr = async (then: () => void) => {
+    const chargeId = beamChargeId;
+    if (beamStatus !== "pending" || !chargeId) {
+      then();
+      return;
+    }
+    if (beamLeaving) return;
+    setBeamLeaving(true);
+    let status = "";
+    try {
+      const res = await apiFetch(`${API}/beam/charge/${chargeId}`);
+      if (res.ok) status = (await res.json()).status || "";
+    } catch { /* unknown: treated as still waiting */ }
+    setBeamLeaving(false);
+    if (status === "SUCCEEDED" || status === "COMPLETED") {
+      settleBeamPaid(chargeId);
+      return;
+    }
+    if (beamPaidRef.current === chargeId) return; // the poll got there first
+    if (status === "FAILED" || status === "EXPIRED") {
+      resetBeam();
+      then();
+      return;
+    }
+    showAlert(tr("pos.beam_leave_title"), tr("pos.beam_leave_message"), [
+      { text: tr("pos.beam_keep_waiting"), style: "cancel" },
+      {
+        text: tr("pos.beam_cancel_anyway"),
+        style: "destructive",
+        onPress: () => {
+          if (beamPaidRef.current === chargeId) return; // paid while asking
+          resetBeam();
+          then();
+        },
+      },
+    ]);
+  };
+  const closePayment = () => leaveBeamQr(onClose);
 
   // Create an Omise payment Link for a credit-card charge.  The backend adds
   // the 3.65% processing fee + 7% VAT on that fee on top of the goods total
@@ -2698,9 +2754,12 @@ function PaymentModal({
     (beamCardStatus === "loading" || beamCardStatus === "pending" || beamCardStatus === "completed");
   const isCardLink = method === PAYMENT_METHODS.CARD_LINK;
   const isBeamCard = method === PAYMENT_METHODS.BEAM_CARD;
+  // A Beam QR left waiting under another method keeps polling, and would save
+  // a second sale if the customer then paid it. Cancel the QR first.
+  const beamQrWaiting = beamStatus === "loading" || beamStatus === "pending";
   const canConfirm =
     (isQrLikeMethod || isCustomReady || isCreditReady || isCardLink || isBeamCard || canPay) &&
-    !isBeamBusy && !isOmiseBusy && !isBeamCardBusy;
+    !isBeamBusy && !isOmiseBusy && !isBeamCardBusy && !beamQrWaiting;
 
   const confirmLabel = (() => {
     if (method === PAYMENT_METHODS.BEAM) {
@@ -2722,6 +2781,7 @@ function PaymentModal({
   })();
 
   const handleConfirmPayment = () => {
+    if (!canConfirm) return;
     if (method === PAYMENT_METHODS.BEAM) {
       // Generate QR — use a temp reference ID; actual order is created when polling confirms
       const ref = `POS-${Date.now()}`;
@@ -2774,7 +2834,7 @@ function PaymentModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={closePayment}>
       <View style={[styles.overlay, isNarrow && { padding: 0 }]}>
         <View
           style={[styles.payModal, isNarrow && styles.payModalNarrow]}
@@ -2793,7 +2853,7 @@ function PaymentModal({
             <View style={{ flex: 1 }} />
             <TouchableOpacity
               style={styles.xbtn}
-              onPress={onClose}
+              onPress={closePayment}
               testID="close-payment"
             >
               <Ionicons name="close" size={18} color={C.ink2Soft} />
@@ -2992,10 +3052,13 @@ function PaymentModal({
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
-                      onPress={resetBeam}
+                      onPress={() => leaveBeamQr(() => {})}
+                      disabled={beamLeaving}
                       testID="beam-cancel"
                     >
-                      <Text style={styles.beamCancelText}>{tr("pos.cancel")}</Text>
+                      {beamLeaving
+                        ? <ActivityIndicator size="small" color={C.brand} />
+                        : <Text style={styles.beamCancelText}>{tr("pos.cancel")}</Text>}
                     </TouchableOpacity>
                   </View>
                 )}
@@ -3453,13 +3516,19 @@ function PaymentModal({
               )}
 
 
+              {beamQrWaiting && method !== PAYMENT_METHODS.BEAM && (
+                <Text style={styles.beamWaitingHint} testID="beam-still-waiting">
+                  {tr("pos.beam_qr_still_waiting")}
+                </Text>
+              )}
+
               {/* ── Footer ── */}
               <View style={[styles.payFoot, dense && { padding: 14 }]}>
                 <Btn
                   label={tr("common.back")}
                   icon="arrow-back"
                   height={dense ? 52 : 60}
-                  onPress={onClose}
+                  onPress={closePayment}
                   style={{ flexGrow: 0, flexShrink: 0, width: isNarrow ? 122 : 170 }}
                 />
                 <Btn
@@ -7183,6 +7252,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   beamCancelText: { color: C.ink2Soft, fontSize: 13 },
+  beamWaitingHint: {
+    backgroundColor: C.warnTint,
+    color: C.warnDark,
+    fontSize: 13,
+    textAlign: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
 
   // Omise credit-card fee + VAT breakdown
   feeBreakdown: {
