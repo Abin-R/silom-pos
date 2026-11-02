@@ -22,8 +22,8 @@ import type { ReceiptOrder, ReceiptShop } from "../lib/starPrinter";
 const LOGO = require("../assets/images/rolling-pinn-logo.png");
 
 // Base URL the receipt QR resolves to.  Per-receipt URLs are formed by
-// appending the order number so each receipt lands on its own customer
-// page (Issue Tax Invoice + Leave a Review buttons).  Matches the prod
+// appending the order number; the backend redirects that straight to the
+// feedback form, tagged with the order (see customer_receipt).  Matches the prod
 // backend host from .env.production (EXPO_PUBLIC_BACKEND_URL).
 const QR_BASE_URL = "https://pos.rollingpinn.com/receipt";
 
@@ -382,7 +382,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
         /* ─── QR code ────────────────────────────────────────────── */
         <View style={s.qrSection}>
           <QrCode value={`${QR_BASE_URL}/${order.order_number || ""}/`} targetSize={180} />
-          <Text style={s.qrCaption}>สแกนเพื่อดูใบเสร็จ / Scan to view receipt</Text>
+          <Text style={s.qrCaption}>สแกนเพื่อแสดงความคิดเห็น / Scan to leave feedback</Text>
         </View>
       )}
 
