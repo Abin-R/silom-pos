@@ -641,17 +641,45 @@ class PromotionTests(TestCase):
         self.assertEqual(self.p.stock, 8)
         self.assertIsNotNone(order.shift)
 
-    def test_queue_number_counts_the_branchs_self_orders(self):
-        """Queue = n + 1, n = every self-order the branch has had (till sales
-        and other branches don't count)."""
+    def _past_order(self, n, branch, source, queue, days_ago=0):
+        o = Order.objects.create(
+            branch=branch, order_number=f'Q-{n}', source=source, queue_number=queue,
+        )
+        if days_ago:
+            Order.objects.filter(pk=o.pk).update(
+                created_at=djtz.now() - timezone_timedelta(days=days_ago))
+        return o
+
+    def test_self_order_queue_counts_only_todays_self_orders(self):
+        """Queue = today's highest self-order number + 1. Till sales, other
+        branches and earlier days don't count."""
         other = make_branch(name='Other')
-        for n, (branch, source) in enumerate([
-            (other, 'kiosk'), (self.branch, 'table'),
-            (self.branch, 'kiosk'), (self.branch, 'kiosk'),
-        ]):
-            Order.objects.create(branch=branch, order_number=f'Q-{n}', source=source)
+        self._past_order(0, other, 'kiosk', 9)
+        self._past_order(1, self.branch, 'table', 40)
+        self._past_order(2, self.branch, 'kiosk', 140, days_ago=1)
+        self._past_order(3, self.branch, 'kiosk', 1)
+        self._past_order(4, self.branch, 'kiosk', 2)
         with StubGateway(paid=True):
             order = selforder.promote(self._draft())
+        self.assertEqual(order.queue_number, 3)
+
+    def test_first_self_order_of_the_day_is_one(self):
+        self._past_order(0, self.branch, 'kiosk', 57, days_ago=1)
+        with StubGateway(paid=True):
+            order = selforder.promote(self._draft())
+        self.assertEqual(order.queue_number, 1)
+
+    def test_till_queue_ignores_self_orders(self):
+        """A self-order numbered high today must not push the till's count."""
+        self._past_order(0, self.branch, 'table', 1)
+        self._past_order(1, self.branch, 'table', 2)
+        self._past_order(2, self.branch, 'kiosk', 141)
+        order = create_order_from_items(
+            branch=self.branch,
+            items=[{'product_id': str(self.p.id), 'qty': 1, 'price': '100.00'}],
+            payment_method='Cash', goods_total=Decimal('100.00'),
+            subtotal=Decimal('100.00'), paid_amount=Decimal('100.00'),
+        )
         self.assertEqual(order.queue_number, 3)
 
     def test_promotion_is_idempotent(self):
