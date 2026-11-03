@@ -36,6 +36,7 @@
 {% block filter_extra %}
   <input type="hidden" name="status" value="{{ status }}">
   <input type="hidden" name="payment" value="{{ payment }}">
+  <input type="hidden" name="channel" value="{{ channel }}">
 {% endblock %}
 
 {% block content %}
@@ -51,6 +52,12 @@
     <a class="{% if not payment %}on{% endif %}" href="?{% qs_replace request payment=None page=None %}">Any payment</a>
     {% for p in payments %}
       <a class="{% if payment == p %}on{% endif %}" href="?{% qs_replace request payment=p page=None %}">{{ p }}</a>
+    {% endfor %}
+  </div>
+  <div class="seg">
+    {% for key, label in channels %}
+      <a class="{% if channel == key %}on{% endif %}"
+         href="?{% if key %}{% qs_replace request channel=key page=None %}{% else %}{% qs_replace request channel=None page=None %}{% endif %}">{{ label }}</a>
     {% endfor %}
   </div>
   <div class="spacer"></div>
