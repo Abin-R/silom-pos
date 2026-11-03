@@ -805,7 +805,7 @@ def _transactions_qs(request):
     if payment:
         qs = qs.filter(payment_method__icontains=payment)
 
-    # By the SelfOrder link, not source='kiosk', which any order can carry.
+    # By the SelfOrder link, not source='self_order', which any order can carry.
     channel = request.GET.get("channel") or ""
     if channel == "self_order":
         qs = qs.filter(self_order__isnull=False)

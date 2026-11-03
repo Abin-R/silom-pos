@@ -92,9 +92,9 @@ class OrdersListWindowTests(TestCase):
         self.assertEqual(len(self._numbers(limit='99999')), 4)
 
     def test_self_order_channel_keeps_only_customer_placed_bills(self):
-        # Marked by the SelfOrder link, so a till bill tagged 'kiosk' by hand
+        # Marked by the SelfOrder link, so a till bill tagged 'self_order' by hand
         # stays out.
-        Order.objects.filter(id=self.yesterday.id).update(source='kiosk')
+        Order.objects.filter(id=self.yesterday.id).update(source='self_order')
         SelfOrder.objects.create(
             token='so-tok', branch=self.branch, order=self.today, status='paid',
         )

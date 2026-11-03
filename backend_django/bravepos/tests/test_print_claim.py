@@ -90,7 +90,7 @@ class PrintClaimTests(TestCase):
         self._paid_selforder()
         [job] = self._poll(self.tablets[0])
 
-        self.assertEqual(job['source'], 'kiosk')
+        self.assertEqual(job['source'], 'self_order')
         self.assertIsNotNone(job['queue_number'])
         self.assertTrue(job['order_number'].startswith('PS'))
         self.assertEqual(len(job['items']), 1)

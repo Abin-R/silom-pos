@@ -129,7 +129,7 @@ class BackofficePageSmokeTests(TestCase):
         link carries the filter so the CSV is the bills on screen."""
         self_placed = Order.objects.create(
             branch=self.branch, order_number="SMK-0003", total=Decimal("30.00"),
-            created_at=timezone.now(), source="kiosk",
+            created_at=timezone.now(), source="self_order",
         )
         SelfOrder.objects.create(
             token="smk-so", branch=self.branch, order=self_placed, status="paid",

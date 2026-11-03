@@ -706,11 +706,20 @@ class Order(models.Model):
         ("cancel", "Cancelled"),
     ]
     SOURCE_CHOICES = [
-        ("table", "Table"),
+        ("counter", "Counter"),
         ("delivery", "Delivery"),
-        ("kiosk", "KIOSK"),
+        ("self_order", "Self Order"),
         ("other", "Other"),
     ]
+    # Renamed 2026-11-03 from "table" / "kiosk" (migration 0078).  Tills still
+    # on older JS keep sending the old values until their OTA lands, so
+    # anything coming in over the API goes through normalize_source().
+    LEGACY_SOURCES = {"table": "counter", "kiosk": "self_order"}
+
+    @classmethod
+    def normalize_source(cls, value):
+        return cls.LEGACY_SOURCES.get(value, value)
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
         "Branch", on_delete=models.CASCADE, related_name="orders",
@@ -726,7 +735,7 @@ class Order(models.Model):
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     change = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="completed")
-    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default="table")
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default="counter")
     customer = models.ForeignKey(
         Customer, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="orders",
@@ -780,7 +789,7 @@ class Order(models.Model):
         if self.queue_number is None:
             return None
         if self.branch_id and self.branch.queue_prefix_enabled:
-            return f"{'SO' if self.source == 'kiosk' else 'CO'}-{self.queue_number}"
+            return f"{'SO' if self.source == 'self_order' else 'CO'}-{self.queue_number}"
         return str(self.queue_number)
 
     # ── Void / cancel audit ────────────────────────────────────────────

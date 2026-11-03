@@ -1096,10 +1096,10 @@ def orders_list_create(request):
         source = request.query_params.get('source')
         status_ = request.query_params.get('status')
         if source and source != 'all':
-            qs = qs.filter(source=source)
+            qs = qs.filter(source=Order.normalize_source(source))
         if status_:
             qs = qs.filter(status=status_)
-        # By the SelfOrder link, not source='kiosk' — that is a free-text
+        # By the SelfOrder link, not source='self_order' — that is a free-text
         # channel anyone posting an order can set.
         if request.query_params.get('channel') == 'self_order':
             qs = qs.filter(self_order__isnull=False)
@@ -1176,7 +1176,7 @@ def orders_list_create(request):
         discount_amount=Decimal(str(payload.get('discount_amount', 0))),
         paid_amount=Decimal(str(payload.get('paid_amount', 0))),
         status=initial_status,
-        source=payload.get('source', 'table'),
+        source=Order.normalize_source(payload.get('source', 'counter')),
         # Stamp the cashier who rang up the sale.  Prefer the client-sent name
         # but fall back to the authenticated session's staff so the field is
         # never empty (the void/reprint copy reads it back from the DB, not the
@@ -1843,9 +1843,9 @@ def _period_range(period, now, start_q='', end_q=''):
 
 # ─── Sales channel report ────────────────────────────────────────────────────
 CHANNEL_LABELS = {
-    'table': 'Store',
+    'counter': 'Counter',
     'delivery': 'Delivery',
-    'kiosk': 'KIOSK',
+    'self_order': 'Self Order',
     'other': 'Other',
 }
 

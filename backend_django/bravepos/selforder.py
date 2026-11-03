@@ -581,7 +581,7 @@ def promote(draft: SelfOrder) -> Order | None:
             discount_amount=discount,
             paid_amount=locked.total,
             status='completed',     # paid is done; the kanban is switched off
-            source='kiosk',         # already a valid Order.SOURCE_CHOICES value
+            source='self_order',
             # No session here, so no cashier name. The void/reprint copy reads
             # this back from the DB, so it must not be empty.
             staff='Self Order',

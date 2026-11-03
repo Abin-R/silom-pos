@@ -44,6 +44,13 @@ class OneBillPerPaymentTests(TestCase):
     def _bills(self):
         return Order.objects.filter(branch=self.branch).count()
 
+    def test_old_till_source_value_is_stored_under_its_new_name(self):
+        # _save posts 'table', as tills on pre-rename JS still do.
+        self._save(beam_charge_id='ch_old')
+        self.assertEqual(Order.objects.get(branch=self.branch).source, 'counter')
+        res = self.client.get('/api/orders?source=table', **self.auth)
+        self.assertEqual(len(res.json()), 1)
+
     def test_second_save_for_same_beam_charge_returns_the_first_bill(self):
         first = self._save(beam_charge_id='ch_1')
         again = self._save(beam_charge_id='ch_1')

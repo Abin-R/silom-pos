@@ -72,16 +72,16 @@ def _next_queue_number(branch, source: str = '') -> int:
     round again every 100 orders.  Safe against races because every caller holds
     the branch row lock taken in ``_create_order_with_retry``.
 
-    Self-orders (``source='kiosk'``) and till sales count separately, each from 1
+    Self-orders (``source='self_order'``) and till sales count separately, each from 1
     every day.  They used to share the till's max(), so one self-order numbered
     141 pushed the next till sale to 142.
     """
     today = djtz.localdate()
     same_kind = Order.objects.filter(branch=branch, created_at__date=today)
-    if source == 'kiosk':
-        same_kind = same_kind.filter(source='kiosk')
+    if source == 'self_order':
+        same_kind = same_kind.filter(source='self_order')
     else:
-        same_kind = same_kind.exclude(source='kiosk')
+        same_kind = same_kind.exclude(source='self_order')
     last = same_kind.aggregate(m=Max('queue_number'))['m']
     return (last or 0) + 1
 
@@ -102,7 +102,7 @@ def create_order_from_items(
     # new → preparing → completed is switched off, so anything left in an
     # earlier state would sit there forever with nothing to advance it.
     status: str = 'completed',
-    source: str = 'table',
+    source: str = 'counter',
     staff: str = '',
     customer_id=None,
     customer_name: str = '',

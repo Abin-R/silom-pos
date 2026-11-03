@@ -703,7 +703,7 @@ export default function POS() {
           payment_method: method,
           paid_amount: paid,
           change: Math.max(0, paid - total),
-          source: "table",
+          source: "counter",
           staff: staff || "",
           customer_id: customer?.id,
           customer_name: customer?.name,
@@ -4409,7 +4409,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
           )}
 
           <View style={styles.hubTabs}>
-            {["all", "table", "delivery", "kiosk", "other"].map((t) => (
+            {["all", "counter", "delivery", "self_order", "other"].map((t) => (
               <TouchableOpacity
                 key={t}
                 style={[styles.hubTab, tab === t && styles.hubTabActive]}
@@ -4419,7 +4419,7 @@ function OrderHubModal({ visible, onClose }: { visible: boolean; onClose: () => 
                 <Text
                   style={[styles.hubTabText, tab === t && styles.hubTabTextActive]}
                 >
-                  {t === "kiosk" ? "KIOSK" : t.charAt(0).toUpperCase() + t.slice(1)}
+                  {t === "self_order" ? "Self Order" : t.charAt(0).toUpperCase() + t.slice(1)}
                 </Text>
               </TouchableOpacity>
             ))}

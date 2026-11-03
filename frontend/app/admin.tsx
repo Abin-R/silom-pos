@@ -2349,10 +2349,10 @@ function TdLine({ label, value, bold }: { label: string; value: string; bold?: b
 function channelLabel(source: string): string {
   switch (source) {
     case "delivery": return tr("admin.channel_delivery");
-    case "kiosk": return tr("admin.channel_kiosk");
-    case "table":
+    case "self_order": return tr("admin.channel_self_order");
+    case "counter":
     case "other":
-    default: return tr("admin.channel_store");
+    default: return tr("admin.channel_counter");
   }
 }
 

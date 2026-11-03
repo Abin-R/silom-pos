@@ -631,7 +631,7 @@ class PromotionTests(TestCase):
             order = selforder.promote(d)
 
         self.assertEqual(Order.objects.count(), 1)
-        self.assertEqual(order.source, 'kiosk')
+        self.assertEqual(order.source, 'self_order')
         self.assertEqual(order.status, 'completed')
         self.assertEqual(order.staff, 'Self Order')
         self.assertEqual(order.total, Decimal('200.00'))
@@ -654,26 +654,26 @@ class PromotionTests(TestCase):
         """Queue = today's highest self-order number + 1. Till sales, other
         branches and earlier days don't count."""
         other = make_branch(name='Other')
-        self._past_order(0, other, 'kiosk', 9)
-        self._past_order(1, self.branch, 'table', 40)
-        self._past_order(2, self.branch, 'kiosk', 140, days_ago=1)
-        self._past_order(3, self.branch, 'kiosk', 1)
-        self._past_order(4, self.branch, 'kiosk', 2)
+        self._past_order(0, other, 'self_order', 9)
+        self._past_order(1, self.branch, 'counter', 40)
+        self._past_order(2, self.branch, 'self_order', 140, days_ago=1)
+        self._past_order(3, self.branch, 'self_order', 1)
+        self._past_order(4, self.branch, 'self_order', 2)
         with StubGateway(paid=True):
             order = selforder.promote(self._draft())
         self.assertEqual(order.queue_number, 3)
 
     def test_first_self_order_of_the_day_is_one(self):
-        self._past_order(0, self.branch, 'kiosk', 57, days_ago=1)
+        self._past_order(0, self.branch, 'self_order', 57, days_ago=1)
         with StubGateway(paid=True):
             order = selforder.promote(self._draft())
         self.assertEqual(order.queue_number, 1)
 
     def test_till_queue_ignores_self_orders(self):
         """A self-order numbered high today must not push the till's count."""
-        self._past_order(0, self.branch, 'table', 1)
-        self._past_order(1, self.branch, 'table', 2)
-        self._past_order(2, self.branch, 'kiosk', 141)
+        self._past_order(0, self.branch, 'counter', 1)
+        self._past_order(1, self.branch, 'counter', 2)
+        self._past_order(2, self.branch, 'self_order', 141)
         order = create_order_from_items(
             branch=self.branch,
             items=[{'product_id': str(self.p.id), 'qty': 1, 'price': '100.00'}],
@@ -683,8 +683,8 @@ class PromotionTests(TestCase):
         self.assertEqual(order.queue_number, 3)
 
     def test_queue_label_prefixes_only_on_flagged_branches(self):
-        till = self._past_order(0, self.branch, 'table', 4)
-        kiosk = self._past_order(1, self.branch, 'kiosk', 2)
+        till = self._past_order(0, self.branch, 'counter', 4)
+        kiosk = self._past_order(1, self.branch, 'self_order', 2)
         self.assertEqual((till.queue_label, kiosk.queue_label), ('4', '2'))
 
         self.branch.queue_prefix_enabled = True
