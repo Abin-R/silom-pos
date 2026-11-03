@@ -240,6 +240,12 @@ class Branch(models.Model):
     # test-branch-first reason as the two flags above.
     discount_types_enabled = models.BooleanField(default=False)
 
+    # Shows queue numbers as "CO-3" (till) / "SO-3" (self-order) instead of a
+    # bare "3".  The two count separately from 1 each day, so a busy branch has
+    # a cashier 3 and a self-order 3 at once.  Display only: Order.queue_number
+    # stays a plain integer.  Default False, test branches first.
+    queue_prefix_enabled = models.BooleanField(default=False)
+
     # ── CRM link ───────────────────────────────────────────────────────
     # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
     # its own branch list for the customer-facing loyalty app.  Set from the
@@ -766,6 +772,16 @@ class Order(models.Model):
     # every 100 orders.  Null for orders created before this field existed —
     # the receipt falls back to the old derivation for those.
     queue_number = models.IntegerField(null=True, blank=True)
+
+    @property
+    def queue_label(self):
+        """The queue number as printed and shown — ``queue_number`` with the
+        branch's CO-/SO- prefix when it has one.  None when there's no number."""
+        if self.queue_number is None:
+            return None
+        if self.branch_id and self.branch.queue_prefix_enabled:
+            return f"{'SO' if self.source == 'kiosk' else 'CO'}-{self.queue_number}"
+        return str(self.queue_number)
 
     # ── Void / cancel audit ────────────────────────────────────────────
     # Set when a cashier voids a completed bill from the Transactions

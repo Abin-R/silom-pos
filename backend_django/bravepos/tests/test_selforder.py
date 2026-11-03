@@ -682,6 +682,31 @@ class PromotionTests(TestCase):
         )
         self.assertEqual(order.queue_number, 3)
 
+    def test_queue_label_prefixes_only_on_flagged_branches(self):
+        till = self._past_order(0, self.branch, 'table', 4)
+        kiosk = self._past_order(1, self.branch, 'kiosk', 2)
+        self.assertEqual((till.queue_label, kiosk.queue_label), ('4', '2'))
+
+        self.branch.queue_prefix_enabled = True
+        self.branch.save(update_fields=['queue_prefix_enabled'])
+        till.refresh_from_db()
+        kiosk.refresh_from_db()
+        self.assertEqual((till.queue_label, kiosk.queue_label), ('CO-4', 'SO-2'))
+        self.assertEqual(till.queue_number, 4)
+
+        no_number = Order.objects.create(branch=self.branch, order_number='Q-x')
+        self.assertIsNone(no_number.queue_label)
+
+    def test_paid_poll_returns_the_prefixed_label(self):
+        self.branch.queue_prefix_enabled = True
+        self.branch.save(update_fields=['queue_prefix_enabled'])
+        d = self._draft()
+        with StubGateway(paid=True):
+            selforder.promote(d)
+        with StubGateway(paid=True):
+            res = Client().get(f'/order/s/{d.token}/status/')
+        self.assertEqual(res.json().get('queue_label'), 'SO-1', res.content)
+
     def test_promotion_is_idempotent(self):
         d = self._draft()
         with StubGateway(paid=True):

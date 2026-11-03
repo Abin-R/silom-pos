@@ -369,6 +369,7 @@ def order_status(request, token):
             'status': 'paid',
             'order_number': order.order_number,
             'queue_number': order.queue_number,
+            'queue_label': order.queue_label,
             'total': float(order.total),
             # /receipt/<n>/ redirects to the feedback form — see customer_receipt.
             'feedback_url': f'/receipt/{order.order_number}/',

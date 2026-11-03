@@ -268,6 +268,9 @@ class OrderSerializer(serializers.ModelSerializer):
             # per day; the receipt used to derive it from the last two digits of
             # the global order_number, which collided across branches.
             'queue_number',
+            # What to print/show: queue_number, plus "CO-"/"SO-" on branches
+            # with queue_prefix_enabled.
+            'queue_label',
             'customer_id', 'customer_name',
             'beam_charge_id', 'beam_link_id', 'omise_link_id', 'omise_charge_id',
             'delivery_provider', 'delivery_status',
@@ -280,7 +283,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'pos_tax_invoice',
         ]
         read_only_fields = [
-            'order_number', 'queue_number', 'created_at', 'voided_by', 'voided_at',
+            'order_number', 'queue_number', 'queue_label', 'created_at', 'voided_by', 'voided_at',
             'beam_refund_id', 'beam_refund_error', 'pos_tax_invoice',
         ]
 

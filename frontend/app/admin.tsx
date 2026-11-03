@@ -150,6 +150,8 @@ type Order = {
   // The number the customer is called by, assigned by the server per branch
   // per day.  Null on bills rung up before queue numbers existed.
   queue_number?: number | null;
+  // queue_number as shown: "CO-3"/"SO-3" on branches with the prefix on.
+  queue_label?: string | null;
   customer_id?: string | null; customer_name?: string;
   // Buyer of record, set once a full tax invoice has been issued for this
   // bill.  Present → the form prefills from it on a re-issue.
@@ -967,6 +969,8 @@ function Transactions({ isWide, reprint, staff }: {
   // every visit, which left the screen on a spinner for seconds.  The cashier
   // almost always wants the current day; the other buckets refetch on tap.
   const [dateFilter, setDateFilter] = useState<DateFilter>("today");
+  // Only bills customers placed themselves from the self-order QR.
+  const [selfOrderOnly, setSelfOrderOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   // Debounced copy of `query` — the search now goes to the server, so firing
@@ -1026,6 +1030,7 @@ function Transactions({ isWide, reprint, staff }: {
       if (from) params.set("from", from);
       if (to) params.set("to", to);
       if (debouncedQuery) params.set("q", debouncedQuery);
+      if (selfOrderOnly) params.set("channel", "self_order");
       // Only page against a server that can. An older one ignores `offset`
       // and would hand back page 1 forever while the pager claimed otherwise,
       // so there we fall back to the previous behaviour: one large fetch.
@@ -1055,7 +1060,7 @@ function Transactions({ isWide, reprint, staff }: {
       }
     })();
     return () => { stale = true; };
-  }, [dateFilter, isWide, page, debouncedQuery, serverPaged]);
+  }, [dateFilter, isWide, page, debouncedQuery, serverPaged, selfOrderOnly]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -1064,7 +1069,7 @@ function Transactions({ isWide, reprint, staff }: {
 
   // Changing the date bucket or the search restarts at page 1 — staying on
   // page 4 of a filter that now has one page shows an empty list.
-  useEffect(() => { setPage(0); }, [dateFilter, debouncedQuery]);
+  useEffect(() => { setPage(0); }, [dateFilter, debouncedQuery, selfOrderOnly]);
 
   // Filter by order number (case-insensitive substring) and the chosen
   // date bucket.  Buckets are computed from the local-day boundary of the
@@ -1180,6 +1185,12 @@ function Transactions({ isWide, reprint, staff }: {
               testID={`tx-date-${opt.key}`}
             />
           ))}
+          <Pill
+            label={tr("admin.self_order")}
+            active={selfOrderOnly}
+            onPress={() => setSelfOrderOnly((v) => !v)}
+            testID="tx-self-order"
+          />
         </ScrollView>
         <Spacer />
         <SearchField
@@ -1475,7 +1486,7 @@ function TransactionDetail({
     // receipt falls back to the last two digits of the order number, so a
     // reprint of PS000000785 came out "85" against the original's "17" and
     // the customer was called by a number nobody was holding.
-    queue_number: order.queue_number ?? undefined,
+    queue_number: order.queue_label ?? order.queue_number ?? undefined,
     // The RD machine number of the branch this bill was rung up at — not the
     // shop-wide Settings value, which is one number for every branch.
     branch_pos_id: order.branch_pos_id || "",
