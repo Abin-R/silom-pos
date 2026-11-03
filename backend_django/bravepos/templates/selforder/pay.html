@@ -69,6 +69,9 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
 
   .qrbox { text-align: center; padding: 8px; }
   .qrbox img { width: 100%; max-width: 260px; margin: 0 auto; border-radius: 14px; border: 1px solid var(--line); }
+  /* base.html's img { display: block } beats the hidden attribute — without
+     this an empty "PromptPay QR" box shows on every app/card redirect. */
+  .qrbox img[hidden] { display: none; }
   .pulse { display: inline-flex; align-items: center; gap: 8px; color: var(--brand-red); font-weight: 700; margin-top: 12px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand-red); animation: blink 1s infinite; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -192,6 +195,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         <div class="spin"></div>
         <p style="margin:6px 0 0">กำลังพาไปหน้าชำระเงิน…<br><span class="muted" style="font-size:13px">Taking you to secure checkout…</span></p>
       </div>
+      <p id="noapp" class="muted" hidden style="font-size:13px; margin:6px 0 0">ไม่เปิดแอป? ตรวจสอบว่ามีแอปธนาคารในเครื่อง แล้วกดปุ่มด้านล่าง<br>App didn’t open? Check the app is installed on this phone, then tap below.</p>
       <a id="reopen" class="btn-primary" href="#" hidden style="margin-top:10px">ไปหน้าชำระเงิน · Continue to payment</a>
       <div class="pulse"><span class="dot"></span> รอการชำระเงิน · Waiting for payment</div>
       <p class="muted" style="font-size:12.5px; margin:8px 0 0">อย่าปิดหน้านี้จนกว่าจะสำเร็จ · Keep this page open</p>
@@ -316,6 +320,13 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         showReopen(data.payment_uri);
         startPolling();
         window.location.href = data.payment_uri;
+        // A bank-app link (scbeasy://…) does nothing at all when that app isn't
+        // installed — don't leave the customer watching a spinner forever.
+        setTimeout(() => {
+          if (document.hidden) return;   // the app opened
+          document.getElementById("redirecting").hidden = true;
+          document.getElementById("noapp").hidden = false;
+        }, 4000);
       } else if (data.qr_image) {
         show("paying");
         showQr(data.qr_image);
