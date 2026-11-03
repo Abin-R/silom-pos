@@ -805,6 +805,13 @@ def _transactions_qs(request):
     if payment:
         qs = qs.filter(payment_method__icontains=payment)
 
+    # By the SelfOrder link, not source='kiosk', which any order can carry.
+    channel = request.GET.get("channel") or ""
+    if channel == "self_order":
+        qs = qs.filter(self_order__isnull=False)
+    elif channel == "till":
+        qs = qs.filter(self_order__isnull=True)
+
     query = (request.GET.get("q") or "").strip()
     if query:
         # Bill number, who it was for, or the exact amount — the three things
@@ -936,8 +943,18 @@ def transactions(request):
         "selected": selected,
         "page_obj": page_obj,
         "paginator": paginator,
-        "qs": _filter_qs(request),
+        # The Export link must carry every filter on screen, or the CSV is
+        # some other set of bills than the one being looked at.
+        "qs": _filter_qs(
+            request,
+            status=request.GET.get("status") or None,
+            payment=request.GET.get("payment") or None,
+            q=(request.GET.get("q") or "").strip() or None,
+            channel=request.GET.get("channel") or None,
+        ),
         "tax_percent": tax_percent,
+        "channel": request.GET.get("channel") or "",
+        "channels": [("", "All channels"), ("till", "Till"), ("self_order", "Self-order")],
         "status": request.GET.get("status") or "all",
         "statuses": [("all", "All"), ("paid", "Paid"), ("voided", "Voided")],
         "payment": request.GET.get("payment") or "",

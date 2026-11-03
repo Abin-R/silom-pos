@@ -13,7 +13,7 @@ from datetime import timedelta, timezone as stdtz
 from django.test import TestCase
 from django.utils import timezone as djtz
 
-from bravepos.models import BranchSession, Order, Staff
+from bravepos.models import BranchSession, Order, SelfOrder, Staff
 
 from .factories import make_branch, make_shop
 
@@ -90,3 +90,12 @@ class OrdersListWindowTests(TestCase):
     def test_limit_is_honoured_and_capped(self):
         self.assertEqual(len(self._numbers(limit='2')), 2)
         self.assertEqual(len(self._numbers(limit='99999')), 4)
+
+    def test_self_order_channel_keeps_only_customer_placed_bills(self):
+        # Marked by the SelfOrder link, so a till bill tagged 'kiosk' by hand
+        # stays out.
+        Order.objects.filter(id=self.yesterday.id).update(source='kiosk')
+        SelfOrder.objects.create(
+            token='so-tok', branch=self.branch, order=self.today, status='paid',
+        )
+        self.assertEqual(self._numbers(channel='self_order'), {'T-1'})

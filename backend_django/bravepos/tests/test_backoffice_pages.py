@@ -19,7 +19,7 @@ from django.urls import URLPattern, URLResolver, reverse
 from django.utils import timezone
 
 from bravepos.models import (
-    AuditLog, Branch, Category, Order, OrderItem, Product, Settings, Staff,
+    AuditLog, Branch, Category, Order, OrderItem, Product, SelfOrder, Settings, Staff,
 )
 
 
@@ -123,6 +123,37 @@ class BackofficePageSmokeTests(TestCase):
         # Bill Detail = one row per line item, so the product name does.
         lines = self.client.get(reverse("backoffice:report_sell_export"), scope)
         self.assertIn("Latte", lines.content.decode())
+
+    def test_transactions_channel_filter_and_export_agree(self):
+        """Self-order vs till is read off the SelfOrder link, and the Export
+        link carries the filter so the CSV is the bills on screen."""
+        self_placed = Order.objects.create(
+            branch=self.branch, order_number="SMK-0003", total=Decimal("30.00"),
+            created_at=timezone.now(), source="kiosk",
+        )
+        SelfOrder.objects.create(
+            token="smk-so", branch=self.branch, order=self_placed, status="paid",
+        )
+        scope = {"branch": str(self.branch.id)}
+
+        page = self.client.get(
+            reverse("backoffice:transactions"), {**scope, "channel": "self_order"},
+        )
+        self.assertContains(page, "#SMK-0003")
+        self.assertNotContains(page, "#SMK-0001")
+        self.assertIn("channel=self_order", page.context["qs"])
+
+        till = self.client.get(
+            reverse("backoffice:transactions"), {**scope, "channel": "till"},
+        )
+        self.assertContains(till, "#SMK-0001")
+        self.assertNotContains(till, "#SMK-0003")
+
+        csv = self.client.get(
+            reverse("backoffice:transactions_export"), {**scope, "channel": "self_order"},
+        ).content.decode()
+        self.assertIn("SMK-0003", csv)
+        self.assertNotIn("SMK-0001", csv)
 
     def test_transactions_flags_a_void_beam_did_not_refund(self):
         """A voided bill Beam refused to refund reads "Not refunded" in the

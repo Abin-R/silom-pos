@@ -1099,6 +1099,10 @@ def orders_list_create(request):
             qs = qs.filter(source=source)
         if status_:
             qs = qs.filter(status=status_)
+        # By the SelfOrder link, not source='kiosk' — that is a free-text
+        # channel anyone posting an order can set.
+        if request.query_params.get('channel') == 'self_order':
+            qs = qs.filter(self_order__isnull=False)
 
         # Date window — Transactions asks only for the bucket it is showing
         # (today / yesterday / last 7 days) rather than pulling every order the
