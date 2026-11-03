@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows
+from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
 from .customers import phone_search_digits
 from .orders import create_order_from_items
 from .peak import flag_branch_day_for_reissue
@@ -2611,6 +2611,32 @@ def print_receipt(request, order_id):
 # that receipt would never print.
 PRINT_CLAIM_LEASE_S = 90
 
+# The tablet's poll also asks Beam about this branch's unpaid drafts, so a
+# customer who pays and closes the tab still gets a slip within one poll (~10s)
+# instead of waiting for the 2-minute sweeper.  Only recent drafts, and only a
+# few: each one is an outbound call inside the tablet's request.  Anything
+# older is left to reconcile_selforders.
+PRINT_POLL_CONFIRM_MINUTES = 20
+PRINT_POLL_CONFIRM_MAX = 5
+
+
+def _confirm_recent_payments(branch) -> None:
+    cutoff = djtz.now() - timedelta(minutes=PRINT_POLL_CONFIRM_MINUTES)
+    drafts = (
+        SelfOrder.objects
+        .filter(branch=branch, status='pending', created_at__gte=cutoff)
+        .exclude(beam_charge_id='', beam_link_id='')
+        .select_related('branch')
+        .order_by('-created_at')[:PRINT_POLL_CONFIRM_MAX]
+    )
+    for draft in drafts:
+        try:
+            selforder.promote(draft)
+        except (GatewayError, GatewayConfigError) as e:
+            # A Beam hiccup must not stop already-paid slips from printing;
+            # the next poll or the sweeper retries this draft.
+            logger.warning('self-order poll confirm failed token=%s: %s', draft.token[:8], e)
+
 
 @api_view(['GET'])
 @require_session
@@ -2628,6 +2654,8 @@ def self_orders_pending(request):
     now = djtz.now()
     lease_cutoff = now - timedelta(seconds=PRINT_CLAIM_LEASE_S)
     claimant = str(request.session_obj.id)
+
+    _confirm_recent_payments(branch)
 
     claimable = (
         SelfOrder.objects

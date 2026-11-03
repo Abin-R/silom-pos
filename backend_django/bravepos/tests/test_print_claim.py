@@ -99,8 +99,8 @@ class PrintClaimTests(TestCase):
         with StubGateway():
             d = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
             selforder.start_payment(d, 'qr', redirect_url='https://x/')
-
-        self.assertEqual(self._poll(self.tablets[0]), [])
+            # The poll asks Beam about this draft; Beam still says unpaid.
+            self.assertEqual(self._poll(self.tablets[0]), [])
         self.assertEqual(Order.objects.count(), 0)
 
     def test_a_branchs_tablet_never_sees_another_branchs_orders(self):
@@ -114,3 +114,40 @@ class PrintClaimTests(TestCase):
             selforder.promote(SelfOrder.objects.get(pk=d.pk))
 
         self.assertEqual(self._poll(self.tablets[0]), [], 'branch scoping must hold')
+
+    def test_poll_confirms_a_payment_nobody_else_noticed(self):
+        """Customer paid and closed the tab: the tablet's own poll asks Beam,
+        so the slip comes out on that poll, not after the 2-minute sweeper."""
+        with StubGateway() as gw:
+            d = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+            self.assertEqual(self._poll(self.tablets[0]), [], 'not paid yet')
+
+            gw.paid = True
+            got = self._poll(self.tablets[0])
+
+        self.assertEqual(len(got), 1)
+        self.assertEqual(SelfOrder.objects.get(pk=d.pk).status, 'paid')
+
+    def test_poll_leaves_old_drafts_to_the_sweeper(self):
+        from bravepos.views import PRINT_POLL_CONFIRM_MINUTES
+        with StubGateway() as gw:
+            d = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+            SelfOrder.objects.filter(pk=d.pk).update(
+                created_at=djtz.now() - timedelta(minutes=PRINT_POLL_CONFIRM_MINUTES + 1),
+            )
+            gw.paid = True
+            self.assertEqual(self._poll(self.tablets[0]), [])
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_a_gateway_error_still_serves_paid_slips(self):
+        from unittest import mock
+        from bravepos.gateways import GatewayError
+        self._paid_selforder()
+        with StubGateway():
+            d = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+            selforder.start_payment(d, 'qr', redirect_url='https://x/')
+        with mock.patch.object(selforder, 'gateway_status', side_effect=GatewayError('down', 502)):
+            got = self._poll(self.tablets[0])
+        self.assertEqual(len(got), 1, 'the already-paid slip must still print')
