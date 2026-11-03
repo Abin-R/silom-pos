@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from decimal import Decimal, InvalidOperation
 
 import segno
@@ -36,6 +37,8 @@ from . import images, selforder
 from .gateways import GatewayConfigError, GatewayError
 from .models import Branch, Product, SelfOrder
 from .views import pick_suggestions
+
+logger = logging.getLogger(__name__)
 
 
 def _no_referrer(response):
@@ -326,7 +329,17 @@ def order_pay(request, token):
     except GatewayConfigError as e:
         return _err(str(e), 400)
     except GatewayError as e:
-        return _err(e.detail, e.status)
+        logger.warning('self-order pay %s failed at Beam: %s', payload.get('method'), e.detail)
+        # Never a 5xx: Cloudflare swaps a 502's body for its own plain text, and
+        # the customer sees Safari's "string did not match the expected pattern".
+        # Beam's raw error is for us, not the customer.
+        if 'not supported' in e.detail:
+            msg = ('ช่องทางนี้ยังไม่เปิดให้บริการ กรุณาเลือกวิธีอื่น / '
+                   'This payment method isn’t available here. Please choose another.')
+        else:
+            msg = ('เริ่มการชำระเงินไม่สำเร็จ กรุณาลองอีกครั้ง / '
+                   'Could not start the payment. Please try again or choose another method.')
+        return _err(msg, 400)
 
     return JsonResponse({'status': 'ok', **res})
 

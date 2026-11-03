@@ -304,8 +304,10 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ method: picked }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not start payment.");
+      // A proxy error page (Cloudflare) isn't JSON — don't let Safari's parse
+      // error be what the customer reads.
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not start payment. Please try again.");
       // A redirect (card checkout, wallet or bank app) wins over a QR: some
       // wallets answer a desktop browser with a QR instead.
       if (data.payment_uri) {

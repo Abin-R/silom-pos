@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 from decimal import Decimal
 from unittest import skipUnless
+from unittest.mock import patch
 
 from django.db import connection, connections
 from django.test import Client, TestCase, TransactionTestCase
@@ -197,6 +198,23 @@ class PublicEndpointTests(TestCase):
         self.branch.save()
         res = self.c.get(f'/order/{self.branch.id}/qr.png')
         self.assertEqual(res.status_code, 404)
+
+    def test_beam_refusal_is_a_readable_4xx_not_a_502(self):
+        """Cloudflare replaces a 502's JSON body with plain text, which Safari
+        reports as "The string did not match the expected pattern"."""
+        draft = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+        refusal = gateways.GatewayError(
+            'Beam API error 400: {"message":"inputs are failing validation; '
+            'payment method is not supported"}', 502,
+        )
+        with patch.object(selforder, 'start_payment', side_effect=refusal):
+            res = self.c.post(
+                f'/order/s/{draft.token}/pay/', data={'method': 'LINE_PAY'},
+                content_type='application/json',
+            )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('choose another', res.json()['error'])
+        self.assertNotIn('Beam API', res.json()['error'])
 
 
 # ─── Frequently bought together ──────────────────────────────────────────────
