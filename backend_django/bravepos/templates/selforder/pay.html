@@ -140,6 +140,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         <span class="lbl">บัตรเครดิต/เดบิต · Card<small>+ ค่าธรรมเนียม ฿{{ quote_card.processing_fee|floatformat:2 }}</small></span>
         <span class="radio"></span>
       </button>
+      {% comment "Hidden until Beam confirms how wallets behave on live: refused there on 2026-11-03, and sandbox answers with a QR, not an app link. Remove this wrapper to bring them back." %}
       <button class="opt" role="radio" aria-checked="false" data-method="LINE_PAY" data-total="{{ quote_qr.total|floatformat:2 }}">
         <span class="ico line">LINE</span>
         <span class="lbl">LINE Pay</span>
@@ -155,6 +156,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         <span class="lbl">TrueMoney</span>
         <span class="radio"></span>
       </button>
+      {% endcomment %}
       <div class="bank-group">
         <button class="opt" id="banks-toggle" aria-expanded="false" aria-controls="banks">
           <span class="ico mb">⇄</span>
