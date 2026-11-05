@@ -650,6 +650,18 @@ class PromotionTests(TestCase):
                 created_at=djtz.now() - timezone_timedelta(days=days_ago))
         return o
 
+    def _share_the_queue(self):
+        self.branch.common_queue_enabled = True
+        self.branch.save(update_fields=['common_queue_enabled'])
+
+    def _counter_sale(self):
+        return create_order_from_items(
+            branch=self.branch,
+            items=[{'product_id': str(self.p.id), 'qty': 1, 'price': '100.00'}],
+            payment_method='Cash', goods_total=Decimal('100.00'),
+            subtotal=Decimal('100.00'), paid_amount=Decimal('100.00'),
+        )
+
     def test_self_order_queue_counts_only_todays_self_orders(self):
         """Queue = today's highest self-order number + 1. Till sales, other
         branches and earlier days don't count."""
@@ -674,38 +686,55 @@ class PromotionTests(TestCase):
         self._past_order(0, self.branch, 'counter', 1)
         self._past_order(1, self.branch, 'counter', 2)
         self._past_order(2, self.branch, 'self_order', 141)
-        order = create_order_from_items(
-            branch=self.branch,
-            items=[{'product_id': str(self.p.id), 'qty': 1, 'price': '100.00'}],
-            payment_method='Cash', goods_total=Decimal('100.00'),
-            subtotal=Decimal('100.00'), paid_amount=Decimal('100.00'),
+        self.assertEqual(self._counter_sale().queue_number, 3)
+
+    def test_shared_queue_self_order_follows_a_counter_sale(self):
+        """One count per branch per day. Other branches and earlier days don't
+        count."""
+        self._share_the_queue()
+        other = make_branch(name='Other')
+        self._past_order(0, other, 'self_order', 9)
+        self._past_order(1, self.branch, 'self_order', 140, days_ago=1)
+        self._past_order(2, self.branch, 'counter', 1)
+        self._past_order(3, self.branch, 'self_order', 2)
+        self._past_order(4, self.branch, 'counter', 3)
+        with StubGateway(paid=True):
+            order = selforder.promote(self._draft())
+        self.assertEqual(order.queue_number, 4)
+
+    def test_shared_queue_counter_sale_follows_a_self_order(self):
+        self._share_the_queue()
+        self._past_order(0, self.branch, 'counter', 1)
+        self._past_order(1, self.branch, 'self_order', 2)
+        self._past_order(2, self.branch, 'self_order', 3)
+        self.assertEqual(self._counter_sale().queue_number, 4)
+
+    def test_shared_queue_starts_from_one_each_day(self):
+        self._share_the_queue()
+        self._past_order(0, self.branch, 'self_order', 57, days_ago=1)
+        self._past_order(1, self.branch, 'counter', 58, days_ago=1)
+        self.assertEqual(self._counter_sale().queue_number, 1)
+
+    def test_order_type_only_prints_on_a_shared_queue_branch(self):
+        till = self._past_order(0, self.branch, 'counter', 1)
+        online = self._past_order(1, self.branch, 'self_order', 1)
+        self.assertEqual((till.receipt_order_type, online.receipt_order_type), ('', ''))
+
+        self._share_the_queue()
+        till = Order.objects.get(pk=till.pk)
+        online = Order.objects.get(pk=online.pk)
+        self.assertEqual(
+            (till.receipt_order_type, online.receipt_order_type),
+            ('counter', 'self_order'),
         )
-        self.assertEqual(order.queue_number, 3)
 
-    def test_queue_label_prefixes_only_on_flagged_branches(self):
-        till = self._past_order(0, self.branch, 'counter', 4)
-        kiosk = self._past_order(1, self.branch, 'self_order', 2)
-        self.assertEqual((till.queue_label, kiosk.queue_label), ('4', '2'))
-
-        self.branch.queue_prefix_enabled = True
-        self.branch.save(update_fields=['queue_prefix_enabled'])
-        till.refresh_from_db()
-        kiosk.refresh_from_db()
-        self.assertEqual((till.queue_label, kiosk.queue_label), ('CO-4', 'SO-2'))
-        self.assertEqual(till.queue_number, 4)
-
-        no_number = Order.objects.create(branch=self.branch, order_number='Q-x')
-        self.assertIsNone(no_number.queue_label)
-
-    def test_paid_poll_returns_the_prefixed_label(self):
-        self.branch.queue_prefix_enabled = True
-        self.branch.save(update_fields=['queue_prefix_enabled'])
+    def test_paid_poll_returns_the_plain_queue_number(self):
         d = self._draft()
         with StubGateway(paid=True):
             selforder.promote(d)
         with StubGateway(paid=True):
             res = Client().get(f'/order/s/{d.token}/status/')
-        self.assertEqual(res.json().get('queue_label'), 'SO-1', res.content)
+        self.assertEqual(res.json().get('queue_number'), 1, res.content)
 
     def test_promotion_is_idempotent(self):
         d = self._draft()

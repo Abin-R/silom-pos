@@ -267,7 +267,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       const data = await res.json();
       if (data.status === "paid") {
         clearInterval(polling);
-        document.getElementById("queue-no").textContent = data.queue_label ?? data.queue_number ?? "—";
+        document.getElementById("queue-no").textContent = data.queue_number ?? "—";
         document.getElementById("order-no").textContent = data.order_number;
         document.getElementById("paid-total").textContent = "฿" + Number(data.total).toFixed(2);
         document.getElementById("feedback-link").href = data.feedback_url;

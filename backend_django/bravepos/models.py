@@ -240,11 +240,12 @@ class Branch(models.Model):
     # test-branch-first reason as the two flags above.
     discount_types_enabled = models.BooleanField(default=False)
 
-    # Shows queue numbers as "CO-3" (till) / "SO-3" (self-order) instead of a
-    # bare "3".  The two count separately from 1 each day, so a busy branch has
-    # a cashier 3 and a self-order 3 at once.  Display only: Order.queue_number
-    # stays a plain integer.  Default False, test branches first.
-    queue_prefix_enabled = models.BooleanField(default=False)
+    # Per-branch switch for the shared queue.  On, counter sales and self-orders
+    # draw from one daily count, so a number is only ever called once, and the
+    # slip prints the order type above it.  Off, the two count separately and
+    # the slip prints no order type.  Default False for the same
+    # test-branch-first reason as the flags above.
+    common_queue_enabled = models.BooleanField(default=False)
 
     # ── CRM link ───────────────────────────────────────────────────────
     # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
@@ -783,14 +784,12 @@ class Order(models.Model):
     queue_number = models.IntegerField(null=True, blank=True)
 
     @property
-    def queue_label(self):
-        """The queue number as printed and shown — ``queue_number`` with the
-        branch's CO-/SO- prefix when it has one.  None when there's no number."""
-        if self.queue_number is None:
-            return None
-        if self.branch_id and self.branch.queue_prefix_enabled:
-            return f"{'SO' if self.source == 'self_order' else 'CO'}-{self.queue_number}"
-        return str(self.queue_number)
+    def receipt_order_type(self):
+        """The order type to print on the slip, which is ``source`` on branches
+        with the shared queue.  Blank everywhere else: the slip prints no line."""
+        if self.branch_id and self.branch.common_queue_enabled:
+            return self.source
+        return ""
 
     # ── Void / cancel audit ────────────────────────────────────────────
     # Set when a cashier voids a completed bill from the Transactions

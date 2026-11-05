@@ -126,6 +126,13 @@ type Props = {
   rightPad?: number;
 };
 
+// Order.source as printed above the queue number.  "other" prints nothing.
+const ORDER_TYPE_LABELS: Record<string, string> = {
+  counter: "เคาน์เตอร์ / Counter Order",
+  self_order: "สั่งเอง / Self Order",
+  delivery: "เดลิเวอรี / Delivery",
+};
+
 export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady, rightPad }, ref) => {
   // Prefer the backoffice-edited address_line_1/2 fields; fall back to the
   // legacy `address` blob (split on newlines) and only use the hardcoded
@@ -175,6 +182,9 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
     order.queue_number !== undefined
       ? String(order.queue_number)
       : (order.order_number || "").slice(-2).replace(/^0+/, "") || "1";
+  // Blank for a slip with no known source, e.g. one already waiting in the
+  // print queue from before this field existed.
+  const orderType = ORDER_TYPE_LABELS[order.source ?? ""] ?? "";
 
   const grandTotal = Number(order.total) || 0;
   const taxRate = sh.tax_percent / 100;
@@ -204,6 +214,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       {/* ─── Big queue number ─────────────────────────────────────── */}
       {/* Omitted on a full tax invoice: it's an accounting document issued
           after the fact, not the slip the customer is called by. */}
+      {!isFull && !!orderType && <Text style={s.orderType} numberOfLines={1}>{orderType}</Text>}
       {!isFull && <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>}
 
       {/* ─── Shop logo (replaces the text title) ──────────────────── */}
@@ -421,6 +432,13 @@ const s = StyleSheet.create({
     textAlign: "center",
     marginTop: 8,
     marginBottom: 2,
+  },
+  orderType: {
+    fontFamily: BOLD,
+    fontSize: 22,
+    color: "#000000",
+    textAlign: "center",
+    marginTop: 6,
   },
   queue: {
     fontFamily: BOLD,

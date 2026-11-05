@@ -95,19 +95,6 @@ class PrintClaimTests(TestCase):
         self.assertTrue(job['order_number'].startswith('PS'))
         self.assertEqual(len(job['items']), 1)
 
-    def test_payload_label_is_the_bare_number_without_the_prefix_flag(self):
-        self._paid_selforder()
-        [job] = self._poll(self.tablets[0])
-        self.assertEqual(job['queue_label'], str(job['queue_number']))
-
-    def test_payload_label_carries_so_prefix_on_a_prefixed_branch(self):
-        self.branch.queue_prefix_enabled = True
-        self.branch.save(update_fields=['queue_prefix_enabled'])
-        self._paid_selforder()
-        [job] = self._poll(self.tablets[0])
-        self.assertEqual(job['queue_number'], 1)          # stored as a plain int
-        self.assertEqual(job['queue_label'], 'SO-1')
-
     def test_unpaid_selforders_are_never_offered(self):
         with StubGateway():
             d = selforder.create_draft(self.branch, [{'product_id': str(self.p.id), 'qty': 1}])

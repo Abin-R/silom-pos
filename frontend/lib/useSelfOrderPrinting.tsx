@@ -31,7 +31,7 @@ type PrintFn = (
 type ApiOrder = {
   order_number: string;
   queue_number?: number | null;
-  queue_label?: string | null;
+  receipt_order_type?: string;
   items: Array<{ name: string; qty: number; price: number }>;
   subtotal?: number;
   discount_amount?: number;
@@ -54,8 +54,8 @@ function toReceiptOrder(o: ApiOrder): ReceiptOrder {
     // Server-assigned, per branch per day. Without this the receipt falls back
     // to slicing the global order_number, and the number on the paper wouldn't
     // match the one the customer was shown on their phone.
-    // queue_label carries the branch's SO- prefix when it has one.
-    queue_number: o.queue_label ?? o.queue_number ?? undefined,
+    queue_number: o.queue_number ?? undefined,
+    source: o.receipt_order_type,
     items: (o.items || []).map((i) => ({
       name: i.name,
       qty: Number(i.qty) || 0,

@@ -88,6 +88,9 @@ export type TaxInvoiceParty = {
 export type ReceiptOrder = {
   order_number: string;
   queue_number?: string | number;
+  // ``Order.receipt_order_type`` — the order type at the top of the slip, which
+  // tells orders apart on a shared queue.  Blank prints no line.
+  source?: string;
   items: Array<{ name: string; qty: number; price: number }>;
   // ``subtotal`` is the gross sum of items BEFORE any discount.  ``total``
   // is the net the customer pays AFTER discount.  ``discount_amount`` is

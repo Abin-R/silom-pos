@@ -153,8 +153,8 @@ type Order = {
   // The number the customer is called by, assigned by the server per branch
   // per day.  Null on bills rung up before queue numbers existed.
   queue_number?: number | null;
-  // queue_number as shown: "CO-3"/"SO-3" on branches with the prefix on.
-  queue_label?: string | null;
+  // Printed at the top of the slip; blank without the branch's shared queue.
+  receipt_order_type?: string;
   customer_id?: string | null; customer_name?: string;
   // Buyer of record, set once a full tax invoice has been issued for this
   // bill.  Present → the form prefills from it on a re-issue.
@@ -1489,7 +1489,8 @@ function TransactionDetail({
     // receipt falls back to the last two digits of the order number, so a
     // reprint of PS000000785 came out "85" against the original's "17" and
     // the customer was called by a number nobody was holding.
-    queue_number: order.queue_label ?? order.queue_number ?? undefined,
+    queue_number: order.queue_number ?? undefined,
+    source: order.receipt_order_type,
     // The RD machine number of the branch this bill was rung up at — not the
     // shop-wide Settings value, which is one number for every branch.
     branch_pos_id: order.branch_pos_id || "",

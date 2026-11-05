@@ -768,8 +768,8 @@ export default function POS() {
               // derived this itself from the last two digits of the *global*
               // order number, which collided across branches and wrapped every
               // 100 sales — and it's the number the customer gets called by.
-              // queue_label carries the branch's CO- prefix when it has one.
-              queue_number: order.queue_label ?? order.queue_number ?? undefined,
+              queue_number: order.queue_number ?? undefined,
+              source: order.receipt_order_type,
               // This branch's RD machine number; blank omits the POS ID line.
               branch_pos_id: order.branch_pos_id || "",
               items: cart

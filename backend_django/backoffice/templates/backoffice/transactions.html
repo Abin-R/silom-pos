@@ -156,7 +156,7 @@
         <div class="dkv"><span>Customer</span><b>{{ o.customer.name|default:o.customer_name|default:"Walk-in" }}</b></div>
         <div class="dkv"><span>Payment</span>
           <b class="money">{{ o.payment_method|payment_label }}{% if o.paid_amount %} ฿{{ o.paid_amount|floatformat:2 }} → ฿{{ o.change|floatformat:2 }}{% endif %}</b></div>
-        {% if o.queue_number %}<div class="dkv"><span>Queue</span><b class="money">{{ o.queue_label }}</b></div>{% endif %}
+        {% if o.queue_number %}<div class="dkv"><span>Queue</span><b class="money">{{ o.queue_number }}</b></div>{% endif %}
       </div>
 
       <div style="flex:1;min-height:0;overflow:auto;padding:8px 20px">
