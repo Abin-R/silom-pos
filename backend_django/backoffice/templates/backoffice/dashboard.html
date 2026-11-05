@@ -133,7 +133,7 @@
                 {% if o.status == 'cancel' and o.beam_refund_error %}
                   <span class="tag t-low">Not refunded</span>
                 {% elif o.status == 'cancel' %}
-                  <span class="tag t-red">Voided</span>
+                  <span class="tag t-red">{% if o.cancel_type == 'refund' %}Refunded{% else %}Voided{% endif %}</span>
                 {% else %}
                   {% include "backoffice/_payment_tag.html" with method=o.payment_method %}
                 {% endif %}

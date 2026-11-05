@@ -99,7 +99,7 @@
             <td class="r money" style="font-weight:660;{% if o.status == 'cancel' %}color:var(--mut);text-decoration:line-through{% endif %}">฿{{ o.total|floatformat:2|intcomma }}</td>
             <td class="r">
               {% if o.status == 'cancel' and o.beam_refund_error %}<span class="tag t-low" title="Beam refused the refund: {{ o.beam_refund_error }}">Not refunded</span>
-              {% elif o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+              {% elif o.status == 'cancel' %}<span class="tag t-red">{% if o.cancel_type == 'refund' %}Refunded{% else %}Voided{% endif %}</span>
               {% else %}<span class="tag t-ok">Paid</span>{% endif %}
             </td>
           </tr>
@@ -136,7 +136,7 @@
         Bill #{{ o.order_number }}
         <div class="spacer"></div>
         {% if o.status == 'cancel' and o.beam_refund_error %}<span class="tag t-low">Not refunded</span>
-        {% elif o.status == 'cancel' %}<span class="tag t-red">Voided</span>
+        {% elif o.status == 'cancel' %}<span class="tag t-red">{% if o.cancel_type == 'refund' %}Refunded{% else %}Voided{% endif %}</span>
         {% else %}<span class="tag t-ok">Paid</span>{% endif %}
       </div>
 

@@ -27,7 +27,7 @@ from rest_framework.response import Response
 
 from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
 from .customers import phone_search_digits
-from .orders import create_order_from_items
+from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
 from .peak import flag_branch_day_for_reissue
 from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
@@ -1293,9 +1293,14 @@ def order_tax_invoice(request, order_id):
 @api_view(['PUT'])
 @require_session
 def order_update_status(request, order_id):
-    new_status = (request.data or {}).get('status')
+    payload = request.data or {}
+    new_status = payload.get('status')
     if new_status not in dict(Order.STATUS_CHOICES):
         return Response({'detail': 'Invalid status'}, status=400)
+    cancel_type = payload.get('cancel_type') or ''
+    if cancel_type and cancel_type not in dict(Order.CANCEL_TYPES):
+        return Response({'detail': 'Invalid cancel type'}, status=400)
+    staff = request.session_obj.staff
     with transaction.atomic():
         # Locked so two voids of the same bill (two tablets, a double tap)
         # cannot both reach Beam and refund it twice.
@@ -1303,20 +1308,50 @@ def order_update_status(request, order_id):
             Order.objects.select_for_update(),
             id=order_id, branch=request.session_obj.branch,
         )
+        # The money has gone back to the customer; un-voiding would put a sale
+        # on the books that nobody paid for.
+        if new_status != 'cancel' and order.beam_refund_id:
+            return Response(
+                {'detail': 'This bill was refunded through Beam and cannot be un-voided.'},
+                status=409,
+            )
         # Only cancelled-ness decides whether this bill's money is part of the day.
         # new/preparing/completed are kitchen flow and change nothing downstream.
         void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
         update_fields = ['status']
-        # Voiding a Beam bill hands the money back through Beam.  Beam can
+        if new_status == 'cancel':
+            # The first cancel decides what kind it is, so a repeat from a
+            # second tablet cannot turn a void into a refund.  A till on an
+            # older bundle sends no type and has one button, which refunds a
+            # Beam bill and voids the rest.
+            if not order.cancel_type:
+                order.cancel_type = cancel_type or ('refund' if order.refund_on_void else 'void')
+                update_fields.append('cancel_type')
+            # Before Beam: anything here that fails should fail with the
+            # customer's money still untouched.
+            if void_state_changed:
+                return_bill_stock(order, staff)
+                order.stock_returned = True
+                update_fields.append('stock_returned')
+        else:
+            if order.cancel_type:
+                order.cancel_type = ''
+                update_fields.append('cancel_type')
+            if order.stock_returned:
+                retake_bill_stock(order, staff)
+                order.stock_returned = False
+                update_fields.append('stock_returned')
+        # A refund hands a Beam bill's money back through Beam.  Beam can
         # refuse — a charge it has already paid out refunds only from the
-        # account balance — and the void must not hang on that: the bill is
-        # voided either way and Beam's reason is kept, so the till can flag
+        # account balance — and the cancel must not hang on that: the bill is
+        # cancelled either way and Beam's reason is kept, so the till can flag
         # the bill for a hand refund.
-        if new_status == 'cancel' and order.refund_on_void and not order.beam_refund_id:
+        if (new_status == 'cancel' and order.cancel_type == 'refund'
+                and order.payment_method in gateways.BEAM_METHODS and not order.beam_refund_id):
             try:
                 order.beam_refund_id = gateways.beam_refund_order(
                     order,
-                    reason=f'Bill {order.order_number} voided by {request.session_obj.staff.name}',
+                    reason=f'Bill {order.order_number} refunded by {staff.name}',
                 )
                 order.beam_refund_error = ''
             except GatewayConfigError as e:
@@ -1327,20 +1362,13 @@ def order_update_status(request, order_id):
                 logger.exception('Beam refund for order %s crashed', order.order_number)
                 order.beam_refund_error = 'Beam refund could not be completed (unexpected error).'
             update_fields += ['beam_refund_id', 'beam_refund_error']
-        # The money has gone back to the customer; un-voiding would put a sale
-        # on the books that nobody paid for.
-        if new_status != 'cancel' and order.beam_refund_id:
-            return Response(
-                {'detail': 'This bill was refunded through Beam and cannot be un-voided.'},
-                status=409,
-            )
         order.status = new_status
         # Stamp the void audit the first time a bill is cancelled so the
         # receipt detail can show "Voided by: <name>".  Leave any earlier
         # stamp untouched on a re-cancel; clear it if a bill is un-cancelled.
         if new_status == 'cancel':
             if not order.voided_at:
-                order.voided_by = request.session_obj.staff.name
+                order.voided_by = staff.name
                 order.voided_at = djtz.now()
                 update_fields += ['voided_by', 'voided_at']
         elif order.voided_at:

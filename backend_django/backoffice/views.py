@@ -2244,7 +2244,8 @@ def _rewind_stock(products, as_of):
     * sales — ``create_order_from_items`` decrements with a queryset
       ``update()`` (no audit row), so they're read from the StockMovement it
       writes alongside, recognised by ``document_no`` being an order number.
-      Voids don't give stock back, so voided sales count too;
+      A voided or refunded sale counts too: its stock left then and came back
+      later, as a ``return`` movement on the same document;
     * every other change — stock documents, the app's stock modal, product
       edits from the till or the backoffice, catalogue sync — goes through
       ``Product.save()``, whose audit row carries ``stock`` from/to. That
@@ -2282,6 +2283,16 @@ def _rewind_stock(products, as_of):
     for row in sales:
         oid = str(row["product_id"])
         change[oid] = change.get(oid, 0) - (row["qty"] or 0)
+
+    returns = (
+        StockMovement.objects
+        .filter(product__in=products, type="return", created_at__gt=cutoff)
+        .filter(Exists(Order.objects.filter(order_number=OuterRef("document_no"))))
+        .values("product_id").annotate(qty=Sum("qty"))
+    )
+    for row in returns:
+        oid = str(row["product_id"])
+        change[oid] = change.get(oid, 0) + (row["qty"] or 0)
 
     kept = []
     for p in products:

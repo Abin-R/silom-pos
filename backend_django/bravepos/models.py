@@ -483,6 +483,9 @@ class StockMovement(models.Model):
         ("out", "Stock out"),
         ("adjust", "Adjust"),
         ("check", "Check"),
+        # Back on the shelf from a voided or refunded bill.  Not "in": that
+        # means stock received, and the inventory page shows the last one.
+        ("return", "Returned from bill"),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     branch = models.ForeignKey(
@@ -811,6 +814,17 @@ class Order(models.Model):
     refund_on_void = models.BooleanField(default=False)
     beam_refund_id = models.CharField(max_length=128, blank=True, default="")
     beam_refund_error = models.TextField(blank=True, default="")
+
+    # ── How the bill was cancelled ──────────────────────────
+    # Both kinds are ``status='cancel'``, so every report treats them alike:
+    # the sale is off the books and its stock is back.  A refund also hands the
+    # customer their money (through Beam, or by hand); a void does not.  Blank
+    # on bills cancelled before the till offered the choice.
+    CANCEL_TYPES = [("void", "Void"), ("refund", "Refund")]
+    cancel_type = models.CharField(max_length=8, blank=True, default="", choices=CANCEL_TYPES)
+    # True while this bill's stock sits back in inventory.  Bills cancelled
+    # before voids returned stock read False, so un-voiding one takes nothing.
+    stock_returned = models.BooleanField(default=False)
 
     # ── CRM loyalty ────────────────────────────────────────────────────
     # The id the CRM gave this sale when it was filed for points (see

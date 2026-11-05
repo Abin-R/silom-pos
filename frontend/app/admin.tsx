@@ -164,6 +164,9 @@ type Order = {
   // customer still has to be paid back by hand.
   beam_refund_id?: string;
   beam_refund_error?: string;
+  // How the bill was cancelled.  Blank on bills cancelled before the till
+  // offered the choice, and read as a void.
+  cancel_type?: "" | "void" | "refund";
 };
 
 // What /orders/<id>/tax-invoice stores and returns.  ``issued_by`` /
@@ -1262,6 +1265,7 @@ function Transactions({ isWide, reprint, staff }: {
                   // still owed their money, so the row must stand out from
                   // an ordinary void.
                   const notRefunded = voided && !!o.beam_refund_error;
+                  const cancelledLabel = tr(o.cancel_type === "refund" ? "admin.refunded" : "admin.voided");
                   const active = selected?.id === o.id && isWide;
                   const qty = (o.items || []).reduce(
                     (n: number, it: any) => n + (Number(it.qty) || 0), 0,
@@ -1279,7 +1283,7 @@ function Transactions({ isWide, reprint, staff }: {
                             {o.order_number}
                           </Money>
                           <Text style={styles.billMeta} numberOfLines={1}>
-                            {`${o.created_time} · ${voided ? tr("admin.voided") : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
+                            {`${o.created_time} · ${voided ? cancelledLabel : (o.payment_method ? methodLabel(o.payment_method) : o.source || "—")}`}
                             {notRefunded && (
                               <Text style={styles.billNotRefunded}>{` · ${tr("admin.not_refunded")}`}</Text>
                             )}
@@ -1340,7 +1344,7 @@ function Transactions({ isWide, reprint, staff }: {
                         {notRefunded ? (
                           <Tag tone="low" icon="alert-circle">{tr("admin.not_refunded")}</Tag>
                         ) : voided ? (
-                          <Tag tone="red">{tr("admin.voided")}</Tag>
+                          <Tag tone="red">{cancelledLabel}</Tag>
                         ) : o.pos_tax_invoice ? (
                           <Tag tone="purple">{tr("admin.tax_inv")}</Tag>
                         ) : (
@@ -1458,13 +1462,14 @@ function TransactionDetail({
 }) {
   useT(); // re-render this screen when the language changes
   const [reprintBusy, setReprintBusy] = useState(false);
-  const [voidBusy, setVoidBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState<"void" | "refund" | null>(null);
   // Reprint is a menu of documents (abbreviated slip, full tax invoice, …),
   // not a single action — see the reference POS's พิมพ์ซ้ำ popup.
   const [menuOpen, setMenuOpen] = useState(false);
   const [taxFlowOpen, setTaxFlowOpen] = useState(false);
 
   const isVoided = order.status === "cancel";
+  const isRefunded = isVoided && order.cancel_type === "refund";
 
   // Money breakdown.  Prices are VAT-inclusive (Thai retail), so ex-tax and
   // tax are derived from the gross total at the configured rate.
@@ -1562,16 +1567,17 @@ function TransactionDetail({
     }
   };
 
-  // Void = mark the bill cancelled on the server, then auto-print a void
-  // copy (matches the reference POS, where confirming a void immediately
-  // prints).  The list/detail update optimistically via onVoided().
-  const doVoid = async () => {
-    setVoidBusy(true);
+  // Void gives the stock back; Refund also gives the customer their money,
+  // through Beam on a Beam bill.  Either way the bill is cancelled on the
+  // server and a void copy auto-prints (matches the reference POS, where
+  // confirming immediately prints).  The list/detail update via onOrderUpdated.
+  const doCancel = async (cancelType: "void" | "refund") => {
+    setCancelBusy(cancelType);
     try {
       const res = await apiFetch(`${API}/orders/${order.id}/status`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "cancel" }),
+        body: JSON.stringify({ status: "cancel", cancel_type: cancelType }),
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
@@ -1579,7 +1585,7 @@ function TransactionDetail({
       }
       const updated: Order = await res.json();
       onOrderUpdated(updated);
-      // The void stands even when Beam refused the refund, so say so before
+      // The cancel stands even when Beam refused the refund, so say so before
       // the print overlay takes the screen.
       if (updated.beam_refund_error) {
         showAlert(tr("admin.refund_failed"), `${tr("admin.refund_failed_body")}\n\n${updated.beam_refund_error}`);
@@ -1587,19 +1593,25 @@ function TransactionDetail({
       // Auto-print the void receipt (fires the "Printing…" overlay).
       await sendPrint(toReceiptOrder(true, updated.voided_by));
     } catch (e: any) {
-      showAlert(tr("admin.void_failed"), e?.message || String(e));
+      showAlert(tr(cancelType === "refund" ? "admin.refund_failed" : "admin.void_failed"), e?.message || String(e));
     } finally {
-      setVoidBusy(false);
+      setCancelBusy(null);
     }
   };
 
-  const onVoid = () => {
+  const confirmCancel = (cancelType: "void" | "refund") => {
+    const method = order.payment_method || "";
+    const body = cancelType === "void"
+      ? tr("admin.void_bill_body")
+      : method.startsWith("Beam")
+        ? tr("admin.refund_bill_body_beam")
+        : tr("admin.refund_bill_body_manual");
     showAlert(
-      tr("admin.void_bill"),
-      tr("admin.are_you_sure_you_want_to_2"),
+      tr(cancelType === "void" ? "admin.void_bill" : "admin.refund_bill"),
+      body,
       [
         { text: "Close", style: "cancel" },
-        { text: "Confirm", style: "destructive", onPress: doVoid },
+        { text: "Confirm", style: "destructive", onPress: () => doCancel(cancelType) },
       ],
     );
   };
@@ -1616,7 +1628,7 @@ function TransactionDetail({
               </Text>
               <View style={[styles.tdStatus, isVoided && styles.tdStatusVoid]}>
                 <Text style={[styles.tdStatusText, isVoided && styles.tdStatusTextVoid]}>
-                  {isVoided ? tr("admin.voided") : tr("admin.paid")}
+                  {isRefunded ? tr("admin.refunded") : isVoided ? tr("admin.voided") : tr("admin.paid")}
                 </Text>
               </View>
             </View>
@@ -1636,12 +1648,20 @@ function TransactionDetail({
               <Text style={styles.tdReprintText}>{reprintBusy ? tr("admin.printing") : tr("admin.re_print")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.tdCancelBtn, (isVoided || voidBusy) && styles.tdCancelBtnDisabled]}
-              onPress={onVoid}
-              disabled={isVoided || voidBusy}
+              style={[styles.tdCancelBtn, (isVoided || !!cancelBusy) && styles.tdCancelBtnDisabled]}
+              onPress={() => confirmCancel("void")}
+              disabled={isVoided || !!cancelBusy}
               testID={`void-${order.order_number}`}
             >
-              <Text style={styles.tdCancelText}>{voidBusy ? tr("admin.voiding") : tr("admin.cancel_bill")}</Text>
+              <Text style={styles.tdCancelText}>{cancelBusy === "void" ? tr("admin.voiding") : tr("admin.void")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tdCancelBtn, (isVoided || !!cancelBusy) && styles.tdCancelBtnDisabled]}
+              onPress={() => confirmCancel("refund")}
+              disabled={isVoided || !!cancelBusy}
+              testID={`refund-${order.order_number}`}
+            >
+              <Text style={styles.tdCancelText}>{cancelBusy === "refund" ? tr("admin.refunding") : tr("admin.refund")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1662,7 +1682,7 @@ function TransactionDetail({
           <TdFact label={tr("admin.when")} value={formatThaiDateTime(order.created_at)} />
           <TdFact label={tr("common.cashier")} value={order.staff || "—"} />
           <TdFact label={tr("admin.channel")} value={channelLabel(order.source)} />
-          {isVoided && <TdFact label={tr("admin.voided_by")} value={order.voided_by || "—"} danger />}
+          {isVoided && <TdFact label={tr(isRefunded ? "admin.refunded_by" : "admin.voided_by")} value={order.voided_by || "—"} danger />}
         </View>
         {!!order.pos_tax_invoice && (
           <Text style={styles.tdTaxIssued}>

@@ -351,6 +351,49 @@ def create_order_from_items(
     )
 
 
+def _bill_stock_lines(order):
+    """Yield ``(product, qty, document_no)`` for everything this sale took out
+    of stock: its lines, then its free items, which left through a stock-out
+    document of their own.  A line whose product was from another branch or
+    has since been deleted was not deducted, or has nowhere to go back to."""
+    items = order.items.filter(
+        product__isnull=False, product__branch_id=order.branch_id,
+    ).select_related('product')
+    for item in items:
+        yield item.product, item.qty, order.order_number
+    free_docs = StockDocument.objects.filter(
+        branch_id=order.branch_id, type='out', ref_no=order.order_number,
+        reason=FREE_ITEM_REASON,
+    )
+    for doc in free_docs:
+        for line in doc.items.filter(product__isnull=False).select_related('product'):
+            yield line.product, int(line.qty), doc.document_no
+
+
+def return_bill_stock(order, staff):
+    """Put a cancelled bill's stock back.  The caller holds the order's lock
+    and stamps ``stock_returned``, which is what stops a second return."""
+    for product, qty, document_no in _bill_stock_lines(order):
+        Product.objects.filter(pk=product.pk).update(stock=F('stock') + qty)
+        StockMovement.objects.create(
+            branch_id=order.branch_id, product=product, product_name=product.name,
+            type='return', qty=qty, note=f'Bill {order.order_number} cancelled',
+            document_no=document_no, staff=staff, created_by=staff.name if staff else '',
+        )
+
+
+def retake_bill_stock(order, staff):
+    """Take a bill's stock back out when it is un-voided: the undo of
+    :func:`return_bill_stock`."""
+    for product, qty, document_no in _bill_stock_lines(order):
+        Product.objects.filter(pk=product.pk).update(stock=F('stock') - qty)
+        StockMovement.objects.create(
+            branch_id=order.branch_id, product=product, product_name=product.name,
+            type='out', qty=qty, note=f'Bill {order.order_number} reinstated',
+            document_no=document_no, staff=staff, created_by=staff.name if staff else '',
+        )
+
+
 def _bill_for_payment(branch, gateway_ids):
     """The branch's bill already carrying any of these gateway ids, or None.
     A sale with no gateway id (cash, a manual QR) never matches."""
