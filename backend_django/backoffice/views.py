@@ -5993,6 +5993,10 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.close_time = (post.get("close_time") or "22:00").strip() or "22:00"
     b.peak_account_code = (post.get("peak_account_code") or "BSV003").strip() or "BSV003"
     b.active = post.get("active") == "on"
+    # The "High volume branch" box.  This form always renders it, so an absent
+    # field really does mean unticked.  It is the same flag that gates the menu,
+    # the QR and the till's print poller, so unticking closes self-order here.
+    b.self_order_enabled = post.get("self_order") == "on"
     # Hiding the inputs only stops honest mistakes — a crafted POST would
     # otherwise still rewrite the keys, so the guard belongs here too.
     if can_edit_payment(user):

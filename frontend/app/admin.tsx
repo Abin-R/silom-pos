@@ -42,7 +42,10 @@ import { AppShell, TopBar, Body, isWideSize } from "../components/AppShell";
 import { SIDEBAR_ITEMS } from "../components/NavRail";
 import {
   loadLocalPrinterConfig,
+  loadPackerPrinterConfig,
   saveLocalPrinterConfig,
+  savePackerPrinterConfig,
+  type PrinterRole,
 } from "../lib/localPrinterConfig";
 import * as printerQueue from "../lib/printerQueue";
 import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api";
@@ -5844,7 +5847,7 @@ function SettingsView({
             </TouchableOpacity>
           </ScrollView>
         ) : active === "Printers" && s ? (
-          <PrintersSection s={s} update={update} save={save} saving={saving} />
+          <PrintersSection s={s} update={update} save={save} saving={saving} selfOrderOn={selfOrderOn} />
         ) : active === "Cash drawer" ? (
           <DrawerCategoriesSection />
         ) : active === "Branch" && canManage ? (
@@ -6462,11 +6465,13 @@ function PrintersSection({
   update,
   save,
   saving,
+  selfOrderOn,
 }: {
   s: Settings;
   update: (patch: Partial<Settings>) => void;
   save: () => Promise<void>;
   saving: boolean;
+  selfOrderOn: boolean;
 }) {
   useT(); // re-render this screen when the language changes
   const [status, setStatus] = useState<PrinterStatus | null>(null);
@@ -6479,6 +6484,13 @@ function PrintersSection({
   // ── Local (this-tablet) printer state — uses the Star SDK to talk to a USB
   //    printer attached to the tablet itself.  Stored in AsyncStorage.
   const [localCfg, setLocalCfg] = useState<PrinterConfig | null>(null);
+  // Which slip the card below is setting up.  Only a high-volume branch (the
+  // self-order flag) gets the choice; everywhere else this tablet has the one
+  // customer printer, whatever was picked before the branch was switched off.
+  const [pickedRole, setPickedRole] = useState<PrinterRole>("customer");
+  const role: PrinterRole = selfOrderOn ? pickedRole : "customer";
+  // The other slip's printer, to label it in the scan results.
+  const [otherCfg, setOtherCfg] = useState<PrinterConfig | null>(null);
   const [localScanning, setLocalScanning] = useState(false);
   const [localFound, setLocalFound] = useState<DiscoveredPrinter[]>([]);
   const [localTesting, setLocalTesting] = useState(false);
@@ -6496,7 +6508,21 @@ function PrintersSection({
   // they no longer want (e.g. they reprinted manually via order hub).
   const [queuedJobs, setQueuedJobs] = useState<printerQueue.PrintJob[]>([]);
 
-  useEffect(() => { loadLocalPrinterConfig().then(setLocalCfg); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([loadLocalPrinterConfig(), loadPackerPrinterConfig()]).then(([customer, packer]) => {
+      if (cancelled) return;
+      setLocalCfg(role === "packer" ? packer : customer);
+      setOtherCfg(role === "packer" ? customer : packer);
+    });
+    return () => { cancelled = true; };
+  }, [role]);
+
+  const saveRoleConfig = useCallback(
+    (next: PrinterConfig) =>
+      role === "packer" ? savePackerPrinterConfig(next) : saveLocalPrinterConfig(next),
+    [role],
+  );
 
   // Poll the queue every 5s while settings is open so the list reflects
   // drainer progress (jobs disappear as they print, attempts tick up).
@@ -6547,9 +6573,9 @@ function PrintersSection({
       paperWidth: localCfg?.paperWidth ?? 80,
     };
     setLocalCfg(next);
-    await saveLocalPrinterConfig(next);
+    await saveRoleConfig(next);
     setLocalResult(`Saved. Will print to ${d.identifier}`);
-  }, [localCfg?.paperWidth]);
+  }, [localCfg?.paperWidth, saveRoleConfig]);
 
   // Manual-IP fallback when network discovery doesn't surface the printer
   // (router blocks multicast, different VLAN, etc.).  We construct the
@@ -6571,17 +6597,17 @@ function PrintersSection({
       paperWidth: localCfg?.paperWidth ?? 80,
     };
     setLocalCfg(next);
-    await saveLocalPrinterConfig(next);
+    await saveRoleConfig(next);
     setManualIp("");
     setLocalResult(`Saved. Will print to ${identifier}`);
-  }, [manualIp, localCfg?.paperWidth]);
+  }, [manualIp, localCfg?.paperWidth, saveRoleConfig]);
 
   const toggleLocalEnabled = useCallback(async () => {
     if (!localCfg) return;
     const next = { ...localCfg, enabled: !localCfg.enabled };
     setLocalCfg(next);
-    await saveLocalPrinterConfig(next);
-  }, [localCfg]);
+    await saveRoleConfig(next);
+  }, [localCfg, saveRoleConfig]);
 
   // Per-device receipt right margin.  Increase it if this printer clips the
   // right edge (pushes content further left); undefined = 170 (default, e.g.
@@ -6590,8 +6616,8 @@ function PrintersSection({
     if (!localCfg) return;
     const next = { ...localCfg, receiptRightPad: v };
     setLocalCfg(next);
-    await saveLocalPrinterConfig(next);
-  }, [localCfg]);
+    await saveRoleConfig(next);
+  }, [localCfg, saveRoleConfig]);
 
   const runLocalTest = useCallback(async () => {
     if (!localCfg) return;
@@ -6705,6 +6731,45 @@ function PrintersSection({
         <Text style={styles.printerListMeta}>
           {tr("admin.connect_an_epson_tm_t82x_to")}
         </Text>
+
+        {/* High-volume branch: two printers, one for each slip.  Everything
+            below this works on whichever slip is picked here. */}
+        {selfOrderOn && (
+          <View>
+            <Text style={styles.formLabel}>{tr("admin.printer_for_slip")}</Text>
+            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+              {(["customer", "packer"] as const).map((r) => (
+                <TouchableOpacity
+                  key={r}
+                  onPress={() => {
+                    if (r === role) return;
+                    // Blank first: nothing may save into this role from the
+                    // other role's config while the new one loads.
+                    setLocalCfg(null);
+                    setOtherCfg(null);
+                    setLocalFound([]);
+                    setLocalResult("");
+                    setPickedRole(r);
+                  }}
+                  style={[
+                    styles.secondaryBtn,
+                    role === r && { borderColor: C.ok, backgroundColor: C.brandTintSoft },
+                  ]}
+                  testID={`printer-role-${r}`}
+                >
+                  <Text style={styles.secondaryBtnText}>
+                    {tr(r === "packer" ? "admin.packer_slip" : "admin.customer_slip")}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {role === "packer" && !localCfg?.identifier && (
+              <Text style={[styles.printerListMeta, { marginTop: 8 }]}>
+                {tr("admin.packer_slip_fallback_hint")}
+              </Text>
+            )}
+          </View>
+        )}
 
         <View style={styles.printerCard}>
           <View style={styles.printerHeader}>
@@ -6872,6 +6937,9 @@ function PrintersSection({
                   {d.model || "Star Printer"}{" "}
                   <Text style={styles.printerListMeta}>
                     ({d.interfaceType} · {d.identifier})
+                    {selfOrderOn && otherCfg?.identifier === d.identifier
+                      ? ` · ${tr(role === "packer" ? "admin.customer_slip" : "admin.packer_slip")}`
+                      : ""}
                   </Text>
                 </Text>
                 {localCfg?.identifier === d.identifier && (

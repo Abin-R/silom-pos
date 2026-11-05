@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api";
-import { loadLocalPrinterConfig } from "./localPrinterConfig";
+import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "./localPrinterConfig";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
 
 const POLL_MS = 10_000;
@@ -130,6 +130,7 @@ export function useSelfOrderPrinting(
       try {
         const cfg = await loadLocalPrinterConfig();
         if (!cfg.enabled || !cfg.identifier) return;  // no printer on this tablet
+        const packerCfg = await loadPackerPrinterConfig();
 
         const res = await apiFetch("/self-orders/pending");
         if (!res.ok || stopped) return;
@@ -150,7 +151,7 @@ export function useSelfOrderPrinting(
           // packer's copy that goes with the bag.
           const receipt = toReceiptOrder(o);
           for (const order of [receipt, { ...receipt, doc_type: "packer" as const }]) {
-            const r = await printRef.current(cfg, order, shop);
+            const r = await printRef.current(printerForSlip(order.doc_type, cfg, packerCfg), order, shop);
             if (!r.ok) {
               // Not dropped — useStarPrinter has persisted it to printerQueue
               // and will retry. Nothing to do but note it.

@@ -121,6 +121,23 @@
     </div>
   </div>
 
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-h">Self-order</div>
+    <div class="form-grid">
+      <div class="field wide">
+        <label class="check">
+          <input type="checkbox" name="self_order" {% if branch_obj.self_order_enabled %}checked{% endif %}>
+          High volume branch
+        </label>
+        <span class="hint">
+          Turns on customer self-ordering by QR and lets this branch's tablets connect
+          a second printer for packer slips. Unticking closes QR ordering at this
+          branch straight away, including for customers partway through an order.
+        </span>
+      </div>
+    </div>
+  </div>
+
   {% comment %}
     CRM link. The CRM (crm.rollingpinn.com) keeps its own branch list for the
     customer-facing loyalty app; this says which of those shops this till is.
