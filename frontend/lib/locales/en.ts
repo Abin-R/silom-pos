@@ -241,6 +241,8 @@ const en = {
     refunded: "Refunded",
     refunded_by: "Refunded by",
     refunding: "Refunding…",
+    refund_voided_body_beam: "The payment is refunded to the customer through Beam. Can't undo this action.",
+    refund_voided_body_manual: "Give the customer their money back yourself. Can't undo this action.",
     refund_failed: "Refund failed",
     refund_failed_body: "The bill is voided, but Beam did not refund the customer. Refund them by hand.",
     receipt_right_margin: "Receipt right margin",

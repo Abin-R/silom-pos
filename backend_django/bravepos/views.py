@@ -1320,11 +1320,13 @@ def order_update_status(request, order_id):
         void_state_changed = (order.status == 'cancel') != (new_status == 'cancel')
         update_fields = ['status']
         if new_status == 'cancel':
-            # The first cancel decides what kind it is, so a repeat from a
-            # second tablet cannot turn a void into a refund.  A till on an
-            # older bundle sends no type and has one button, which refunds a
-            # Beam bill and voids the rest.
-            if not order.cancel_type:
+            # A voided bill can still be refunded; nothing else changes the
+            # kind, so a refund stays a refund and a repeat with no type, from
+            # a till on an older bundle, stays what it was.  That till has one
+            # button, which refunds a Beam bill and voids the rest.
+            refunding_a_void = (order.status == 'cancel' and cancel_type == 'refund'
+                                and order.cancel_type != 'refund')
+            if refunding_a_void or not order.cancel_type:
                 order.cancel_type = cancel_type or ('refund' if order.refund_on_void else 'void')
                 update_fields.append('cancel_type')
             # Before Beam: anything here that fails should fail with the
@@ -1366,8 +1368,9 @@ def order_update_status(request, order_id):
         # Stamp the void audit the first time a bill is cancelled so the
         # receipt detail can show "Voided by: <name>".  Leave any earlier
         # stamp untouched on a re-cancel; clear it if a bill is un-cancelled.
+        # Refunding a voided bill re-stamps it, as the till shows "Refunded by".
         if new_status == 'cancel':
-            if not order.voided_at:
+            if not order.voided_at or refunding_a_void:
                 order.voided_by = staff.name
                 order.voided_at = djtz.now()
                 update_fields += ['voided_by', 'voided_at']

@@ -167,14 +167,40 @@ class VoidAndRefundTests(TestCase):
         self.assertEqual(self._stock(), 50)
         self.assertEqual(StockMovement.objects.filter(type='return').count(), 1)
 
-    def test_a_repeat_cannot_turn_a_void_into_a_refund(self):
+    def test_an_older_tills_repeat_does_not_refund_a_void(self):
         order = self._sell(method='Beam QR', beam_charge_id='ch_1')
         with self._beam():
             self._cancel(order, 'void')
-            res = self._cancel(order, 'refund')
-            self._cancel(order)  # and nor can an older till's repeat
+            res = self._cancel(order)
         self.assertEqual(res.json()['cancel_type'], 'void')
         self.assertEqual(self.refund_calls, [])
+
+    def test_a_voided_bill_can_still_be_refunded(self):
+        order = self._sell(method='Beam QR', beam_charge_id='ch_1')
+        self._cancel(order, 'void')
+        other = Staff.objects.create(
+            name='Ploy', email='ploy@test.local', password_hash='x', role='cashier',
+        )
+        BranchSession.objects.filter(staff=self.staff).update(staff=other)
+        with self._beam():
+            res = self._cancel(order, 'refund')
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()['cancel_type'], 'refund')
+        self.assertEqual(res.json()['beam_refund_id'], 'rf_1')
+        self.assertEqual(res.json()['voided_by'], 'Ploy')
+        self.assertEqual(len(self.refund_calls), 1)
+        # The stock came back on the void, and only then.
+        self.assertEqual(self._stock(), 50)
+        self.assertEqual(StockMovement.objects.filter(type='return').count(), 1)
+
+    def test_a_refund_stays_a_refund(self):
+        order = self._sell(method='Beam QR', beam_charge_id='ch_1')
+        with self._beam():
+            self._cancel(order, 'refund')
+            res = self._cancel(order, 'void')
+            self._cancel(order, 'refund')
+        self.assertEqual(res.json()['cancel_type'], 'refund')
+        self.assertEqual(len(self.refund_calls), 1)
 
     def test_unvoiding_takes_the_stock_out_again(self):
         order = self._sell(free_items=[{'product_id': str(self.gift.id), 'qty': 3}])

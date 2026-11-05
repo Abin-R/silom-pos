@@ -1601,11 +1601,12 @@ function TransactionDetail({
 
   const confirmCancel = (cancelType: "void" | "refund") => {
     const method = order.payment_method || "";
+    // On a voided bill the stock is already back, so only the money is left.
     const body = cancelType === "void"
       ? tr("admin.void_bill_body")
       : method.startsWith("Beam")
-        ? tr("admin.refund_bill_body_beam")
-        : tr("admin.refund_bill_body_manual");
+        ? tr(isVoided ? "admin.refund_voided_body_beam" : "admin.refund_bill_body_beam")
+        : tr(isVoided ? "admin.refund_voided_body_manual" : "admin.refund_bill_body_manual");
     showAlert(
       tr(cancelType === "void" ? "admin.void_bill" : "admin.refund_bill"),
       body,
@@ -1656,9 +1657,9 @@ function TransactionDetail({
               <Text style={styles.tdCancelText}>{cancelBusy === "void" ? tr("admin.voiding") : tr("admin.void")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.tdCancelBtn, (isVoided || !!cancelBusy) && styles.tdCancelBtnDisabled]}
+              style={[styles.tdCancelBtn, (isRefunded || !!cancelBusy) && styles.tdCancelBtnDisabled]}
               onPress={() => confirmCancel("refund")}
-              disabled={isVoided || !!cancelBusy}
+              disabled={isRefunded || !!cancelBusy}
               testID={`refund-${order.order_number}`}
             >
               <Text style={styles.tdCancelText}>{cancelBusy === "refund" ? tr("admin.refunding") : tr("admin.refund")}</Text>
