@@ -184,9 +184,8 @@ def menu_for(branch) -> list[dict]:
         on_hold = held.get(str(p.id), 0) if p.product_type == 'P' else 0
         if is_sold_out(p, on_hold):
             continue
-        stock = int(p.stock or 0) - on_hold
-        if p.product_type == 'P':
-            stock -= floor
+        shelf = int(p.stock or 0) - on_hold
+        stock = shelf - floor if p.product_type == 'P' else shelf
         out.append({
             'id': str(p.id),
             'name': p.name,
@@ -195,8 +194,10 @@ def menu_for(branch) -> list[dict]:
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
             'image_url': menu_image_ref(branch, p),
-            # ``stock`` only caps the quantity; the page does not show it.
+            # Neither number is shown.  ``shelf`` caps the + button; past
+            # ``stock`` the cart sends the customer to the counter instead.
             'stock': stock,
+            'shelf': shelf,
             'counter_only': is_counter_only(p, floor, on_hold),
         })
     return out
@@ -514,8 +515,8 @@ def _hold_stock(draft: SelfOrder) -> None:
             on_shelf = int(p.stock or 0) - held.get(str(p.id), 0)
             left = on_shelf - floor
             if wanted[str(p.id)] > left:
-                raise SelfOrderError(
-                    _short_message(p.name, max(left, 0), on_shelf > 0))
+                raise SelfOrderError(_short_message(
+                    p.name, max(left, 0), floor > 0 and on_shelf > 0))
 
         locked.hold_expires_at = djtz.now() + timedelta(
             minutes=HOLD_MINUTES + HOLD_GRACE_MINUTES,
@@ -525,13 +526,14 @@ def _hold_stock(draft: SelfOrder) -> None:
 
 
 def _short_message(name: str, left: int, at_counter: bool = False) -> str:
+    if at_counter:
+        return (f'ขออภัย {name} จำนวนนี้สั่งออนไลน์ไม่ได้ '
+                f'กรุณากลับไปแก้ไขรายการ หรือซื้อที่เคาน์เตอร์ / '
+                f"Sorry, this many {name} can't be ordered online. "
+                f'Please go back and change your order, or buy at the counter.')
     if left:
         return (f'ขออภัย {name} เหลือเพียง {left} ชิ้น กรุณากลับไปแก้ไขรายการ / '
                 f'Sorry, only {left} {name} left. Please go back and change your order.')
-    if at_counter:
-        return (f'ขออภัย ขณะนี้สั่ง {name} ออนไลน์ไม่ได้ กรุณาสั่งที่เคาน์เตอร์ / '
-                f'Sorry, {name} is not available online right now. '
-                f'Please order it at the counter.')
     return (f'ขออภัย {name} หมดแล้ว กรุณากลับไปแก้ไขรายการ / '
             f'Sorry, {name} has just sold out. Please go back and change your order.')
 

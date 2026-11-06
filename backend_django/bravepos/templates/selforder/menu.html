@@ -128,6 +128,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   .line .l-price s { display: block; color: var(--ink-3); font-weight: 500; font-size: 12px; }
   .line-wrap { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
   .line-wrap .line { border-bottom: 0; padding-bottom: 6px; }
+  .over-online { color: var(--brand-red); font-size: 12.5px; font-weight: 600; line-height: 1.35; margin-bottom: 6px; }
   .disc { width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font-size: 13.5px; }
   .disc-detail { color: var(--ink-2); font-size: 12px; margin-top: 4px; }
   .freebie { color: var(--ok); font-size: 13px; font-weight: 600; margin-top: 6px; }
@@ -264,6 +265,10 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   let suggestions = [];     // product ids to offer, from /suggest/
 
   const baht = (n) => (n < 0 ? "−฿" : "฿") + Math.abs(n).toFixed(2);
+  // The + button stops at the shelf.  Past what self-order may sell, the cart
+  // keeps the quantity but sends the customer to the counter.
+  const maxQty = (p) => p.shelf || 999;
+  const overOnline = (p, qty) => qty > (p.stock || 999);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -369,7 +374,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
       host.innerHTML = `<button class="add">เพิ่ม · ADD</button>`;
       host.querySelector(".add").onclick = () => { setQty(p, 1); };
     } else {
-      const max = p.stock || 999;
+      const max = maxQty(p);
       host.innerHTML = `
         <div class="stepper">
           <button data-d="-1">−</button>
@@ -382,7 +387,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   }
 
   function setQty(p, n) {
-    const max = p.stock || 999;
+    const max = maxQty(p);
     n = Math.max(0, Math.min(n, max));
     if (n === 0) { cart.delete(p.id); picks.delete(p.id); suggestedIds.delete(p.id); } else cart.set(p.id, n);
     // Re-render just this product's control + the cart chrome.
@@ -486,7 +491,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     document.getElementById("sum-rounding").hidden = !(ok && priced.rounding);
     document.getElementById("sheet-rounding").textContent = ok ? baht(priced.rounding) : "";
     const checkout = document.getElementById("checkout");
-    checkout.disabled = !ok;
+    checkout.disabled = !ok || items.some((i) => overOnline(i.p, i.qty));
     if (count === 0) closeSheet();
     renderLines(items);
     renderBar();
@@ -508,10 +513,11 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
           <div class="stepper">
             <button data-d="-1">−</button>
             <span class="n">${qty}</span>
-            <button data-d="1" ${qty >= (p.stock || 999) ? "disabled" : ""}>+</button>
+            <button data-d="1" ${qty >= maxQty(p) ? "disabled" : ""}>+</button>
           </div>
           <div class="l-price">${disc ? `<s>${baht(gross)}</s>` : ""}${baht(gross - disc)}</div>
-        </div>`;
+        </div>
+        ${overOnline(p, qty) ? `<div class="over-online">จำนวนนี้สั่งออนไลน์ไม่ได้ กรุณาลดจำนวน หรือซื้อที่เคาน์เตอร์<br>This quantity can't be ordered online. Please reduce it, or buy at the counter.</div>` : ""}`;
       wrap.querySelector('[data-d="-1"]').onclick = () => setQty(p, qty - 1);
       wrap.querySelector('[data-d="1"]').onclick = () => setQty(p, qty + 1);
       // The till's discount dropdown: only what this line may pick right now.

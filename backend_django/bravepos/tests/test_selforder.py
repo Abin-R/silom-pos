@@ -920,6 +920,7 @@ class MinimumStockTests(TestCase):
         item = self._item(make_product(self.branch, stock=5))
         self.assertFalse(item['counter_only'])
         self.assertEqual(item['stock'], 2)
+        self.assertEqual(item['shelf'], 5)
 
     def test_at_or_below_the_minimum_is_counter_only(self):
         for stock in (3, 1):
@@ -939,6 +940,7 @@ class MinimumStockTests(TestCase):
         item = self._item(make_product(self.branch, name='One', stock=1))
         self.assertFalse(item['counter_only'])
         self.assertEqual(item['stock'], 1)
+        self.assertEqual(item['shelf'], 1)
         self.assertIsNone(self._item(make_product(self.branch, name='None', stock=0)))
 
     def test_service_products_ignore_the_minimum(self):
@@ -956,7 +958,7 @@ class MinimumStockTests(TestCase):
     def test_payment_cannot_cross_the_minimum(self):
         p = make_product(self.branch, stock=5)
         with StubGateway() as gw:
-            with self.assertRaisesRegex(selforder.SelfOrderError, 'only 2'):
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'at the counter'):
                 self._pay(self._draft(p, 3))
             self._pay(self._draft(p, 2))
         self.assertEqual(len(gw.created_charges), 1)
