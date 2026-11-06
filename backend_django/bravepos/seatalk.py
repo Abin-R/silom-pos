@@ -12,6 +12,8 @@ Config is env vars, all read at call time:
 * ``SEATALK_DISCOUNT_GROUP_ID`` — the group "Other" discount alerts go to.
 * ``SEATALK_BEAM_GROUP_ID`` — the group for a paid till Beam QR that no bill
   carries.  Optional: unset, those alerts go to the discount group.
+* ``SEATALK_LATE_PAYMENT_GROUP_ID`` — the group for a self-order paid after its
+  payment ended, which needs a refund.  Unset, those alerts are not sent.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.
@@ -52,6 +54,10 @@ def discount_group_id() -> str:
 
 def beam_group_id() -> str:
     return (os.environ.get("SEATALK_BEAM_GROUP_ID") or "").strip() or discount_group_id()
+
+
+def late_payment_group_id() -> str:
+    return (os.environ.get("SEATALK_LATE_PAYMENT_GROUP_ID") or "").strip()
 
 
 def is_configured() -> bool:

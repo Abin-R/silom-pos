@@ -44,7 +44,7 @@ from django.db.models import Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
-from . import discount_rules, discounts, gateways, images
+from . import discount_rules, discounts, gateways, images, seatalk
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Branch, Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -709,6 +709,23 @@ def _paid_too_late(draft: SelfOrder) -> bool:
     return paid_at is None or paid_at > draft.hold_expires_at
 
 
+def _alert_late_payment(draft: SelfOrder) -> None:
+    """Tell staff there is money to give back; no bill exists to find it by.
+    Not the async sender: the sweeper usually lands here, and its process would
+    exit and take a background thread with it."""
+    logger.warning('self-order paid after its hold ended, refund due: SELF-%s %s',
+                   draft.token[:12], draft.beam_charge_id)
+    seatalk.send_group_text(seatalk.late_payment_group_id(), '\n'.join([
+        'BravePOS: Self-order paid late, refund needed',
+        f'Branch: {draft.branch.name}',
+        f'Amount: ฿{draft.total:,.2f}',
+        f'Reference: SELF-{draft.token[:12]}',
+        f'Beam charge: {draft.beam_charge_id}',
+        'No sale was recorded and no stock moved. '
+        'Refund it in the Beam dashboard.',
+    ]))
+
+
 def promote(draft: SelfOrder) -> Order | None:
     """Turn a paid draft into a real sale.  Idempotent.
 
@@ -731,9 +748,10 @@ def promote(draft: SelfOrder) -> Order | None:
     if status != 'successful':
         return None
     if _paid_too_late(draft):
-        SelfOrder.objects.filter(pk=draft.pk, status='pending').update(status='late_paid')
-        logger.warning('self-order paid after its hold ended, refund due: SELF-%s %s',
-                       draft.token[:12], draft.beam_charge_id)
+        marked = SelfOrder.objects.filter(
+            pk=draft.pk, status='pending').update(status='late_paid')
+        if marked:      # exactly one poller wins, so exactly one alert
+            _alert_late_payment(draft)
         return None
 
     with transaction.atomic():

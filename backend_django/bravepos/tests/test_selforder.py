@@ -1152,6 +1152,29 @@ class PaymentDeadlineTests(TestCase):
             self.assertIsNotNone(selforder.promote(d))
         self.assertEqual(Order.objects.count(), 1)
 
+    def test_a_late_payment_alerts_the_group_once(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+        with patch.dict('os.environ', {'SEATALK_LATE_PAYMENT_GROUP_ID': 'grp'}), \
+                patch('bravepos.selforder.seatalk.send_group_text') as send, \
+                StubGateway(paid=True, paid_at=self._paid_at(d, 60)):
+            selforder.promote(d)
+            selforder.promote(SelfOrder.objects.get(pk=d.pk))
+        send.assert_called_once()
+        group, text = send.call_args.args
+        self.assertEqual(group, 'grp')
+        self.assertIn(f'SELF-{d.token[:12]}', text)
+        self.assertIn(d.beam_charge_id, text)
+        self.assertIn('฿200.00', text)
+
+    def test_a_payment_in_time_sends_no_alert(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+        with patch('bravepos.selforder.seatalk.send_group_text') as send, \
+                StubGateway(paid=True, paid_at=self._paid_at(d, -30)):
+            selforder.promote(d)
+        send.assert_not_called()
+
     def test_a_late_payment_tells_the_customer_about_the_refund(self):
         with StubGateway() as gw:
             d = self._started(gw)
