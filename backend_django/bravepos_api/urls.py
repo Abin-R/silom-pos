@@ -32,6 +32,7 @@ urlpatterns = [
     path('order/s/<str:token>/', public_views.order_pay_page, name='selforder_pay_page'),
     path('order/s/<str:token>/pay/', public_views.order_pay, name='selforder_pay'),
     path('order/s/<str:token>/status/', public_views.order_status, name='selforder_status'),
+    path('order/s/<str:token>/cancel/', public_views.order_cancel, name='selforder_cancel'),
     path('order/s/<str:token>/receipt.png', public_views.order_receipt_png,
          name='selforder_receipt_png'),
 

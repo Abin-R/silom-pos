@@ -16,8 +16,16 @@ The rules that matter, in one place, so the HTTP views stay dumb:
     stays what is on the shelf until the sale is real.  What self-order may
     still sell is stock minus ``held_quantities``, and a hold ends by itself.
     It stops self-order customers racing each other; the till ignores it.
-    Nothing here ever refuses a payment Beam has taken: ``promote`` is not
-    stock-checked, and stock going negative is better than money with no sale.
+    ``promote`` is not stock-checked: money that arrives while the hold is live
+    is always a sale, even if that sends stock negative.
+  * **A payment ends once, and never reopens.**  QR and card payments expire at
+    Beam after ``HOLD_MINUTES``; the hold runs a little longer so stock always
+    outlives what can still be paid.  Closing a tab does nothing: on a phone it
+    looks the same as leaving for a bank app.  Cancelling ends the hold now but
+    leaves the draft ``pending``, because a charge cannot be cancelled at Beam
+    and the pollers must still see a late payment.  Money that lands after the
+    hold ended is not a sale: the stock may be gone, so the draft is marked
+    ``late_paid`` and the customer gets a refund at the counter.
   * **The last units belong to the counter.**  ``Branch.self_order_min_stock``
     is taken off what self-order may sell.  A product at or below it stays on
     the menu but is counter-only; at zero it leaves the menu.  The till, again,
@@ -34,6 +42,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone as djtz
+from django.utils.dateparse import parse_datetime
 
 from . import discount_rules, discounts, gateways, images
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
@@ -72,8 +81,8 @@ DRAFT_TTL_MINUTES = 120
 # How long a customer's items stay reserved once they start paying.  The grace
 # keeps a payment made in the last seconds counted until a poller or the
 # sweeper (every 2 minutes) has turned it into a sale and moved the stock.
-HOLD_MINUTES = 10
-HOLD_GRACE_MINUTES = 3
+HOLD_MINUTES = 5
+HOLD_GRACE_MINUTES = 2
 
 # A payment may not start on a draft older than this.  DRAFT_TTL_MINUTES is also
 # how far back the sweeper looks, so a late start could be paid after it has
@@ -442,6 +451,33 @@ def quote(draft: SelfOrder, method: str) -> dict:
     )
 
 
+def payment_closed(draft: SelfOrder) -> bool:
+    """This draft's payment timed out or was cancelled, so it stays shut."""
+    return (draft.hold_expires_at is not None
+            and draft.hold_expires_at <= djtz.now())
+
+
+def cancel_payment(draft: SelfOrder) -> None:
+    """End the payment now and give the stock back.
+
+    The status stays ``pending`` on purpose: ``promote`` and the sweeper only
+    look at pending drafts, and a QR already saved to a banking app can still be
+    paid.  They must see that money to record it as ``late_paid``.
+    """
+    if not (draft.beam_charge_id or draft.beam_link_id):
+        return
+    now = djtz.now()
+    SelfOrder.objects.filter(pk=draft.pk, status='pending').update(hold_expires_at=now)
+    draft.hold_expires_at = now
+    if draft.beam_link_id:
+        try:
+            gateways.beam_disable_link(draft.beam_link_id, branch=draft.branch)
+        except Exception:
+            # The stock is released either way, and the link expires by itself.
+            logger.warning('could not disable link for draft %s', draft.token[:8],
+                           exc_info=True)
+
+
 def start_payment(draft: SelfOrder, method: str, redirect_url: str,
                   device_type: str = 'WEB') -> dict:
     """Create (or return) the gateway object for this draft.
@@ -454,6 +490,12 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str,
     """
     if method not in ('qr', 'card') and method not in gateways.BEAM_APP_METHODS:
         raise SelfOrderError('Unknown payment method.')
+
+    if payment_closed(draft):
+        raise SelfOrderError(
+            'การชำระเงินนี้สิ้นสุดแล้ว กรุณากลับไปที่เมนูแล้วสั่งใหม่ / '
+            'This payment has ended. Please go back to the menu and order again.'
+        )
 
     # Already started → replay the cached artefact, ignoring the requested
     # method.  Beam only returns the QR image / checkout URL when the charge is
@@ -543,6 +585,7 @@ def _create_gateway_object(draft: SelfOrder, method: str, redirect_url: str,
     """Mint the one charge or link this draft will ever have."""
     reference_id = f'SELF-{draft.token[:12]}'
     description = f'{draft.branch.name} self-order'
+    expires_at = draft.hold_expires_at - timedelta(minutes=HOLD_GRACE_MINUTES)
 
     if method == 'qr':
         res = gateways.beam_create_promptpay_charge(
@@ -550,6 +593,7 @@ def _create_gateway_object(draft: SelfOrder, method: str, redirect_url: str,
             reference_id=reference_id,
             description=description,
             branch=draft.branch,
+            expires_at=expires_at,
         )
         charges = quote(draft, 'qr')
         with transaction.atomic():
@@ -613,6 +657,7 @@ def _create_gateway_object(draft: SelfOrder, method: str, redirect_url: str,
         description=description,
         redirect_url=redirect_url,
         branch=draft.branch,
+        expires_at=expires_at,
     )
     with transaction.atomic():
         draft.payment_method = BEAM_CARD_METHOD
@@ -653,6 +698,17 @@ def gateway_status(draft: SelfOrder) -> str:
     return 'pending'
 
 
+def _paid_too_late(draft: SelfOrder) -> bool:
+    """Did the money land after the hold ended?  Beam's time decides, not ours:
+    a sweep can run after the hold on a payment made inside it.  Card links are
+    not checked, because Beam itself stops them being paid."""
+    if not draft.beam_charge_id or not payment_closed(draft):
+        return False
+    raw = gateways.beam_get_charge(draft.beam_charge_id, branch=draft.branch)['raw']
+    paid_at = parse_datetime(raw.get('transactionTime') or '')
+    return paid_at is None or paid_at > draft.hold_expires_at
+
+
 def promote(draft: SelfOrder) -> Order | None:
     """Turn a paid draft into a real sale.  Idempotent.
 
@@ -664,7 +720,7 @@ def promote(draft: SelfOrder) -> Order | None:
     """
     if draft.status == 'paid':
         return draft.order
-    if draft.status in ('failed', 'expired'):
+    if draft.status in ('failed', 'expired', 'late_paid'):
         return None
 
     status = gateway_status(draft)          # network — no lock held
@@ -673,6 +729,11 @@ def promote(draft: SelfOrder) -> Order | None:
         SelfOrder.objects.filter(pk=draft.pk, status='pending').update(status='failed')
         return None
     if status != 'successful':
+        return None
+    if _paid_too_late(draft):
+        SelfOrder.objects.filter(pk=draft.pk, status='pending').update(status='late_paid')
+        logger.warning('self-order paid after its hold ended, refund due: SELF-%s %s',
+                       draft.token[:12], draft.beam_charge_id)
         return None
 
     with transaction.atomic():

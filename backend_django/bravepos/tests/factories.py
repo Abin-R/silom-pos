@@ -89,17 +89,21 @@ class StubGateway:
     charge, assert nothing was promoted, then mark it paid and assert it was.
     """
 
-    def __init__(self, paid=False, link_status=None, charge_status=None):
+    def __init__(self, paid=False, link_status=None, charge_status=None, paid_at=None):
+        self.paid_at = paid_at
         self.paid = paid
         self.link_status = link_status
         self.charge_status = charge_status
         self.created_charges = []
         self.created_links = []
+        self.disabled_links = []
+        self.disable_error = None
         self._patches = []
 
     # — Beam PromptPay —  (accept branch: gateway calls are now branch-aware)
-    def _create_charge(self, amount, reference_id, description='', branch=None):
-        self.created_charges.append({'amount': amount, 'reference_id': reference_id, 'branch': branch})
+    def _create_charge(self, amount, reference_id, description='', branch=None,
+                       expires_at=None):
+        self.created_charges.append({'expires_at': expires_at, 'amount': amount, 'reference_id': reference_id, 'branch': branch})
         return {
             'charge_id': f'chg_{len(self.created_charges)}',
             'status': 'PENDING',
@@ -132,11 +136,13 @@ class StubGateway:
         status = self.charge_status or ('SUCCEEDED' if self.paid else 'PENDING')
         return {
             'charge_id': charge_id, 'status': status,
-            'amount': Decimal('0'), 'currency': 'THB', 'raw': {},
+            'amount': Decimal('0'), 'currency': 'THB',
+            'raw': {'transactionTime': self.paid_at},
         }
 
     # — Beam card link —
-    def _create_link(self, goods_total, reference_id, description='', redirect_url=None, branch=None):
+    def _create_link(self, goods_total, reference_id, description='', redirect_url=None,
+                     branch=None, expires_at=None):
         from bravepos.gateways import compute_order_charges, get_shop_settings
         s = get_shop_settings()
         charges = compute_order_charges(
@@ -144,6 +150,7 @@ class StubGateway:
         )
         self.created_links.append({
             'goods_total': goods_total, 'redirect_url': redirect_url,
+            'expires_at': expires_at,
         })
         return {
             'link_id': f'lnk_{len(self.created_links)}',
@@ -156,6 +163,11 @@ class StubGateway:
             'currency': 'THB',
             'raw': {},
         }
+
+    def _disable_link(self, link_id, branch=None):
+        if self.disable_error:
+            raise self.disable_error
+        self.disabled_links.append(link_id)
 
     def _get_link(self, link_id, branch=None):
         status = self.link_status or ('successful' if self.paid else 'pending')
@@ -171,6 +183,7 @@ class StubGateway:
             'beam_get_charge': self._get_charge,
             'beam_create_card_link': self._create_link,
             'beam_get_link': self._get_link,
+            'beam_disable_link': self._disable_link,
         }
         for name, fn in targets.items():
             # Patch in every module that imported the symbol, not just its home.

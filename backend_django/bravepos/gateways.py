@@ -21,6 +21,7 @@ module.
 from __future__ import annotations
 
 import base64
+from datetime import timezone as dt_timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 import httpx
@@ -286,27 +287,38 @@ def _beam_request(method: str, path: str, *, cfg: PaymentConfig, json=None, time
 
     if resp.status_code == 401:
         raise GatewayError('Beam API key is invalid or expired.', 401)
-    if resp.status_code not in (200, 201):
+    # 202 is how Beam answers a disable.
+    if resp.status_code not in (200, 201, 202):
         raise GatewayError(f'Beam API error {resp.status_code}: {resp.text[:300]}', 502)
     return resp.json()
 
 
+def _beam_time(moment) -> str:
+    """A datetime as Beam takes it: ISO 8601 in UTC."""
+    return moment.astimezone(dt_timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
 def beam_create_promptpay_charge(
     amount: Decimal, reference_id: str, description: str = '', branch=None,
+    expires_at=None,
 ) -> dict:
     """PromptPay QR charge.  ``amount`` is captured verbatim — PromptPay carries
     no processing fee, so this is the goods total with nothing added.
 
     ``branch`` selects whose Beam account to charge into: the branch's own if it
     has opted in, otherwise the shop's.  ``None`` = shop-wide (the POS default).
+
+    A charge cannot be cancelled once made, so ``expires_at`` is the only way to
+    stop it being paid.  The till passes none and gets Beam's default.
     """
     cfg = resolve_payment_config(branch)
+    qr_settings = {'expiryTime': _beam_time(expires_at)} if expires_at else {}
     payload = {
         'amount': to_satang(amount),
         'currency': 'THB',
         'referenceId': reference_id,
         'description': description or f"Order {reference_id}",
-        'paymentMethod': {'paymentMethodType': 'QR_PROMPT_PAY', 'qrPromptPay': {}},
+        'paymentMethod': {'paymentMethodType': 'QR_PROMPT_PAY', 'qrPromptPay': qr_settings},
     }
     data = _beam_request('POST', '/api/v1/charges', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S)
 
@@ -393,6 +405,7 @@ def beam_create_card_link(
     description: str = '',
     redirect_url: str | None = None,
     branch=None,
+    expires_at=None,
 ) -> dict:
     """Card hosted-checkout link.  ``goods_total`` is the pre-fee total; the
     customer is charged goods + card fee + VAT on the fee.
@@ -431,6 +444,8 @@ def beam_create_card_link(
             'PUBLIC_BASE_URL', 'https://pos.rollingpinn.com',
         ),
     }
+    if expires_at:
+        payload['expiresAt'] = _beam_time(expires_at)
     data = _beam_request(
         'POST', '/api/v1/payment-links', cfg=cfg, json=payload, timeout=BEAM_POST_TIMEOUT_S,
     )
@@ -452,6 +467,15 @@ def beam_create_card_link(
         'currency': 'THB',
         'raw': data,
     }
+
+
+def beam_disable_link(link_id: str, branch=None) -> None:
+    """Stop an unpaid link being paid.  Beam only allows this while it is ACTIVE."""
+    cfg = resolve_payment_config(branch)
+    _beam_request(
+        'PATCH', f'/api/v1/payment-links/{link_id}/disable',
+        cfg=cfg, timeout=BEAM_POST_TIMEOUT_S,
+    )
 
 
 def beam_get_link(link_id: str, branch=None) -> dict:

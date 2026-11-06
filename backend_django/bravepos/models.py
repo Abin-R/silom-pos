@@ -984,6 +984,8 @@ class SelfOrder(models.Model):
         ("paid", "Paid"),          # gateway confirmed → promoted to an Order
         ("failed", "Failed"),      # gateway said expired/voided/refunded
         ("expired", "Expired"),    # never paid; aged out by the sweeper
+        ("late_paid", "Paid late"),  # money came after the payment ended: no
+                                     # sale, refund it in the Beam dashboard
     ]
     METHOD_QR = "Beam QR"
     METHOD_CARD = "Beam Card"

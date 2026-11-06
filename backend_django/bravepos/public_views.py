@@ -290,8 +290,10 @@ def order_pay_page(request, token):
         'money': _summary_money(draft),
         'quote_qr': selforder.quote(draft, 'qr'),
         'quote_card': selforder.quote(draft, 'card'),
+        'payment_closed': selforder.payment_closed(draft),
         'pay_url': f'/order/s/{draft.token}/pay/',
         'status_url': f'/order/s/{draft.token}/status/',
+        'cancel_url': f'/order/s/{draft.token}/cancel/',
     }))
 
 
@@ -382,10 +384,33 @@ def order_status(request, token):
             'feedback_url': f'/receipt/{order.order_number}/',
             'receipt_url': f'/order/s/{draft.token}/receipt.png',
         })
-    if draft.status in ('failed', 'expired'):
+    if draft.status in ('failed', 'expired', 'late_paid'):
         return JsonResponse({'status': draft.status}, status=200)
+    if selforder.payment_closed(draft):
+        return JsonResponse({'status': 'expired'}, status=200)
 
     return JsonResponse({'status': 'pending'}, status=202)
+
+
+# ─── Cancel ──────────────────────────────────────────────────────────────────
+@csrf_exempt
+def order_cancel(request, token):
+    """The customer gave up on this payment: release the stock right away."""
+    if request.method != 'POST':
+        return _err('POST required', 405)
+
+    draft = _get_draft(token)
+    # They may have paid a moment ago.  Find out before calling it cancelled.
+    try:
+        selforder.promote(draft)
+    except (GatewayError, GatewayConfigError):
+        pass
+    draft.refresh_from_db()
+    if draft.status == 'paid':
+        return JsonResponse({'status': 'paid'})
+
+    selforder.cancel_payment(draft)
+    return JsonResponse({'status': 'expired'})
 
 
 # ─── Customer slip ───────────────────────────────────────────────────────────

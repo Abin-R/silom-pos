@@ -1004,3 +1004,215 @@ class MinimumStockTests(TestCase):
             content_type='application/json',
         )
         self.assertEqual([s['id'] for s in res.json()['suggestions']], [str(cookie.id)])
+
+
+class PaymentDeadlineTests(TestCase):
+    """A payment ends by timeout or cancel, gives the stock back, and stays shut."""
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch()
+        open_shift(self.branch)
+        self.p = make_product(self.branch, stock=2)
+        self.c = Client()
+
+    def _started(self, gw, method='qr', qty=2):
+        draft = selforder.create_draft(
+            self.branch, [{'product_id': str(self.p.id), 'qty': qty}])
+        selforder.start_payment(draft, method, redirect_url='https://x/')
+        return SelfOrder.objects.get(pk=draft.pk)
+
+    def _lapse(self, draft):
+        SelfOrder.objects.filter(pk=draft.pk).update(
+            hold_expires_at=djtz.now() - timezone_timedelta(seconds=1))
+        return SelfOrder.objects.get(pk=draft.pk)
+
+    def _left(self):
+        return selforder.held_quantities(self.branch).get(str(self.p.id), 0)
+
+    def _cancel(self, draft):
+        return self.c.post(f'/order/s/{draft.token}/cancel/').json()['status']
+
+    def test_a_qr_expires_at_beam_before_the_hold_ends(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+        self.assertEqual(
+            d.hold_expires_at - gw.created_charges[0]['expires_at'],
+            timezone_timedelta(minutes=selforder.HOLD_GRACE_MINUTES))
+
+    def test_a_card_link_expires_at_beam_before_the_hold_ends(self):
+        with StubGateway() as gw:
+            d = self._started(gw, 'card')
+        self.assertEqual(
+            d.hold_expires_at - gw.created_links[0]['expires_at'],
+            timezone_timedelta(minutes=selforder.HOLD_GRACE_MINUTES))
+
+    def test_a_timed_out_payment_gives_the_stock_back(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+        self.assertEqual(self._left(), 2)
+        self._lapse(d)
+        self.assertEqual(self._left(), 0)
+
+    def test_a_timed_out_payment_cannot_be_reopened(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'has ended'):
+                selforder.start_payment(d, 'qr', redirect_url='https://x/')
+            res = self.c.get(f'/order/s/{d.token}/status/')
+        self.assertEqual(res.json()['status'], 'expired')
+
+    def test_coming_back_after_it_ended_shows_no_qr(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+            self.assertNotContains(self.c.get(f'/order/s/{d.token}/'), d.qr_image_cache)
+
+    def test_coming_back_in_time_shows_the_same_qr(self):
+        """The customer may be back from a banking app, mid-payment."""
+        with StubGateway() as gw:
+            d = self._started(gw)
+            self.assertContains(self.c.get(f'/order/s/{d.token}/'), d.qr_image_cache)
+
+    def test_cancel_gives_the_stock_back_at_once(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+            self.assertEqual(self._cancel(d), 'expired')
+        self.assertEqual(self._left(), 0)
+
+    def test_a_cancelled_payment_cannot_be_reopened(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+            self._cancel(d)
+            d.refresh_from_db()
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'has ended'):
+                selforder.start_payment(d, 'qr', redirect_url='https://x/')
+
+    def test_cancel_disables_a_card_link(self):
+        with StubGateway() as gw:
+            d = self._started(gw, 'card')
+            self._cancel(d)
+        self.assertEqual(gw.disabled_links, [d.beam_link_id])
+
+    def test_cancel_works_when_beam_will_not_disable_the_link(self):
+        with StubGateway() as gw:
+            gw.disable_error = gateways.GatewayError('down', 502)
+            d = self._started(gw, 'card')
+            self.assertEqual(self._cancel(d), 'expired')
+        self.assertEqual(self._left(), 0)
+
+    def _paid_at(self, draft, seconds):
+        """Beam's payment time, relative to when the hold ended."""
+        moment = draft.hold_expires_at + timezone_timedelta(seconds=seconds)
+        return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+    def test_money_arriving_after_cancel_is_not_a_sale(self):
+        """A charge cannot be cancelled at Beam, so a saved QR can still be paid."""
+        with StubGateway() as gw:
+            d = self._started(gw)
+            self._cancel(d)
+        d.refresh_from_db()
+        self.assertEqual(d.status, 'pending')
+        with StubGateway(paid=True, paid_at=self._paid_at(d, 60)):
+            res = self.c.get(f'/order/s/{d.token}/status/')
+        self.assertEqual(res.json()['status'], 'late_paid')
+        d.refresh_from_db()
+        self.assertEqual(d.status, 'late_paid')
+        self.assertEqual(Order.objects.count(), 0)
+        self.p.refresh_from_db()
+        self.assertEqual(self.p.stock, 2)
+
+    def test_money_arriving_after_a_timeout_is_not_a_sale(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+        with StubGateway(paid=True, paid_at=self._paid_at(d, 60)):
+            self.assertIsNone(selforder.promote(d))
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_paid_in_time_but_confirmed_late_is_a_sale(self):
+        """The sweep runs after the hold ended, on a payment made inside it."""
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+        with StubGateway(paid=True, paid_at=self._paid_at(d, -30)):
+            self.assertIsNotNone(selforder.promote(d))
+        self.assertEqual(Order.objects.count(), 1)
+
+    def test_no_payment_time_from_beam_counts_as_late(self):
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw))
+        with StubGateway(paid=True):
+            self.assertIsNone(selforder.promote(d))
+        d.refresh_from_db()
+        self.assertEqual(d.status, 'late_paid')
+
+    def test_a_card_link_paid_after_the_hold_is_still_a_sale(self):
+        """Beam stops an expired link being paid, so this money was on time."""
+        with StubGateway() as gw:
+            d = self._lapse(self._started(gw, 'card'))
+        with StubGateway(paid=True):
+            self.assertIsNotNone(selforder.promote(d))
+        self.assertEqual(Order.objects.count(), 1)
+
+    def test_a_late_payment_tells_the_customer_about_the_refund(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+        SelfOrder.objects.filter(pk=d.pk).update(status='late_paid')
+        with StubGateway() as gw:
+            self.assertContains(self.c.get(f'/order/s/{d.token}/'), f'SELF-{d.token[:12]}')
+            self.assertEqual(
+                self.c.get(f'/order/s/{d.token}/status/').json()['status'], 'late_paid')
+
+    def test_cancelling_a_paid_order_reports_it_as_paid(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+        with StubGateway(paid=True):
+            self.assertEqual(self._cancel(d), 'paid')
+        d.refresh_from_db()
+        self.assertEqual(d.status, 'paid')
+        self.assertEqual(Order.objects.count(), 1)
+
+    def test_cancel_needs_a_post(self):
+        with StubGateway() as gw:
+            d = self._started(gw)
+            self.assertEqual(self.c.get(f'/order/s/{d.token}/cancel/').status_code, 405)
+        self.assertEqual(self._left(), 2)
+
+
+class BeamExpiryPayloadTests(TestCase):
+    """What is sent to Beam.  Without a deadline the till's calls are unchanged."""
+
+    def setUp(self):
+        make_shop()
+        self.moment = djtz.now().replace(microsecond=0)
+
+    def _sent(self, fn, **kw):
+        reply = {'chargeId': 'c', 'paymentLinkId': 'l', 'id': 'l', 'url': 'https://x/'}
+        with patch('bravepos.gateways._beam_request', return_value=reply) as req:
+            fn(**kw)
+        return req.call_args.kwargs['json']
+
+    def test_qr_carries_the_expiry_in_utc(self):
+        body = self._sent(gateways.beam_create_promptpay_charge, amount=Decimal('10'),
+                          reference_id='R', expires_at=self.moment)
+        self.assertEqual(body['paymentMethod']['qrPromptPay']['expiryTime'],
+                         self.moment.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    def test_card_link_carries_the_expiry(self):
+        body = self._sent(gateways.beam_create_card_link, goods_total=Decimal('10'),
+                          reference_id='R', expires_at=self.moment)
+        self.assertEqual(body['expiresAt'], self.moment.strftime('%Y-%m-%dT%H:%M:%SZ'))
+
+    def test_disabling_a_link_accepts_beams_202(self):
+        client = patch('bravepos.gateways.httpx.Client').start()
+        self.addCleanup(patch.stopall)
+        resp = client.return_value.__enter__.return_value.request.return_value
+        resp.status_code = 202
+        resp.json.return_value = {'code': 202, 'message': 'disabled'}
+        gateways.beam_disable_link('lnk')
+
+    def test_the_tills_calls_are_unchanged(self):
+        qr = self._sent(gateways.beam_create_promptpay_charge, amount=Decimal('10'),
+                        reference_id='R')
+        link = self._sent(gateways.beam_create_card_link, goods_total=Decimal('10'),
+                          reference_id='R')
+        self.assertEqual(qr['paymentMethod']['qrPromptPay'], {})
+        self.assertNotIn('expiresAt', link)
