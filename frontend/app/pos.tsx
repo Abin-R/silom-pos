@@ -24,7 +24,7 @@ import { phoneMatchKey } from "../lib/phone";
 import { useStarPrinter } from "../lib/useStarPrinter";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { useSuggestions, type Suggestion } from "../lib/useSuggestions";
-import { loadLocalPrinterConfig } from "../lib/localPrinterConfig";
+import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "../lib/localPrinterConfig";
 import { listJobs } from "../lib/printerQueue";
 import { AppShell, TopBar, isWideSize, railWidth, useDense } from "../components/AppShell";
 import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api";
@@ -196,7 +196,7 @@ export default function POS() {
   // double every receipt.  Waits for auth — the endpoint is session-scoped.
   // Gated on the branch's self_order_enabled flag inside the hook — a branch
   // that doesn't use self-ordering never polls and never prints.
-  useSelfOrderPrinting(printReceipt, activeBranchName, authLoaded, activeBranchId);
+  const highVolumeBranch = useSelfOrderPrinting(printReceipt, activeBranchName, authLoaded, activeBranchId);
 
   useEffect(() => {
     (async () => {
@@ -760,38 +760,52 @@ export default function POS() {
           // the cashier's actually-selected branch.  Override with the
           // active branch so receipts carry the correct location.
           if (activeBranchName) shop.branch = activeBranchName;
-          const r = await printReceipt(
-            cfg,
-            {
-              order_number: order.order_number,
-              // Server-assigned, per branch per day.  Previously the receipt
-              // derived this itself from the last two digits of the *global*
-              // order number, which collided across branches and wrapped every
-              // 100 sales — and it's the number the customer gets called by.
-              queue_number: order.queue_number ?? undefined,
-              source: order.receipt_order_type,
-              // This branch's RD machine number; blank omits the POS ID line.
-              branch_pos_id: order.branch_pos_id || "",
-              items: cart
-                .filter((c) => !isFreeLine(c))
-                .map((c) => ({ name: c.name, qty: c.qty, price: c.price })),
-              subtotal,
-              discount_amount: discountAmount,
-              vat_amount: Number(order.vat_amount) || 0,
-              processing_fee: Number(order.processing_fee) || 0,
-              processing_fee_vat: Number(order.processing_fee_vat) || 0,
-              total: grandTotal,
-              payment_method: method,
-              paid_amount: paidShown,
-              change: Math.max(0, paidShown - grandTotal),
-              created_at_local: new Date().toLocaleString("en-GB"),
-              staff: staff || "",
-            },
-            shop,
-          );
+          const slipLine = (c: (typeof cart)[number]) => ({
+            name: c.name,
+            qty: c.qty,
+            price: isFreeLine(c) ? 0 : c.price,
+          });
+          const receipt = {
+            order_number: order.order_number,
+            // Server-assigned, per branch per day.  Previously the receipt
+            // derived this itself from the last two digits of the *global*
+            // order number, which collided across branches and wrapped every
+            // 100 sales — and it's the number the customer gets called by.
+            queue_number: order.queue_number ?? undefined,
+            source: order.receipt_order_type,
+            // This branch's RD machine number; blank omits the POS ID line.
+            branch_pos_id: order.branch_pos_id || "",
+            items: cart.filter((c) => !isFreeLine(c)).map(slipLine),
+            subtotal,
+            discount_amount: discountAmount,
+            vat_amount: Number(order.vat_amount) || 0,
+            processing_fee: Number(order.processing_fee) || 0,
+            processing_fee_vat: Number(order.processing_fee_vat) || 0,
+            total: grandTotal,
+            payment_method: method,
+            paid_amount: paidShown,
+            change: Math.max(0, paidShown - grandTotal),
+            created_at_local: new Date().toLocaleString("en-GB"),
+            staff: staff || "",
+          };
+          const results = [await printReceipt(cfg, receipt, shop)];
+          // High-volume branches get the packer's copy as well, the same as a
+          // self-order.  It lists the free items the customer slip leaves off,
+          // because they still have to go in the bag.
+          if (highVolumeBranch) {
+            const packerCfg = await loadPackerPrinterConfig();
+            results.push(await printReceipt(
+              printerForSlip("packer", cfg, packerCfg),
+              { ...receipt, doc_type: "packer" as const, items: cart.map(slipLine) },
+              shop,
+            ));
+          }
           // useStarPrinter enqueues the job on failure, so "not ok" means
           // queued-for-retry, not dropped.
-          setPrintStatus(r.ok ? { state: "printed" } : { state: "queued", error: r.error });
+          const failed = results.find((r) => !r.ok);
+          setPrintStatus(
+            failed && !failed.ok ? { state: "queued", error: failed.error } : { state: "printed" },
+          );
         } catch (printErr: any) {
           console.warn("local print failed", printErr);
           setPrintStatus({ state: "queued", error: printErr?.message || String(printErr) });

@@ -81,6 +81,9 @@ function toReceiptOrder(o: ApiOrder): ReceiptOrder {
  * @param printReceipt  from the screen's existing useStarPrinter() — do NOT
  *                      mount a second one, it would create a second hidden
  *                      overlay and receiptRef for view-shot to fight over.
+ * @returns             whether this is a high-volume branch (self_order_enabled),
+ *                      so the cashier's checkout can print a packer slip too
+ *                      without asking the server a second time.
  */
 export function useSelfOrderPrinting(
   printReceipt: PrintFn,
@@ -170,4 +173,6 @@ export function useSelfOrderPrinting(
     const timer = setInterval(tick, POLL_MS);
     return () => { stopped = true; clearInterval(timer); };
   }, [enabled, allowed]);
+
+  return allowed;
 }
