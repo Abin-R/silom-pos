@@ -32,6 +32,8 @@ urlpatterns = [
     path('order/s/<str:token>/', public_views.order_pay_page, name='selforder_pay_page'),
     path('order/s/<str:token>/pay/', public_views.order_pay, name='selforder_pay'),
     path('order/s/<str:token>/status/', public_views.order_status, name='selforder_status'),
+    path('order/s/<str:token>/receipt.png', public_views.order_receipt_png,
+         name='selforder_receipt_png'),
 
     # Android app distribution.  Root-level and unauthenticated for the same
     # reason as /order/ above: it is opened on a tablet being set up, which

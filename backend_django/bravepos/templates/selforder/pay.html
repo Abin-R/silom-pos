@@ -84,6 +84,8 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
   .order-meta .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
   .order-meta .row span:last-child { font-weight: 700; }
 
+  .slip img { width: 100%; max-width: 360px; margin: 0 auto 14px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+
   .spin { width: 40px; height: 40px; border: 4px solid #eee; border-top-color: var(--brand-red); border-radius: 50%; animation: spin 1s linear infinite; margin: 8px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -216,6 +218,11 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       <p class="muted" style="font-size:13px; margin:0 0 14px">กรุณารอเรียกคิว — ใบเสร็จกำลังพิมพ์ที่เคาน์เตอร์<br>Please wait for your number — receipt printing at the counter.</p>
       <a id="feedback-link" class="btn-primary" href="#" target="_blank" rel="noopener">ให้คะแนนเรา · Leave feedback</a>
     </div>
+    {# Revealed once the image has loaded, so a failed render shows nothing. #}
+    <div class="card-soft slip" id="slip" hidden>
+      <img id="slip-img" alt="ใบเสร็จ · Receipt">
+      <a id="slip-download" class="btn-primary" href="#" download>ดาวน์โหลดใบเสร็จ · Download receipt</a>
+    </div>
   </div>
 
   {# ── Failed / expired ── #}
@@ -260,6 +267,13 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
     a.hidden = false;
   };
 
+  const showSlip = (url) => {
+    const img = document.getElementById("slip-img");
+    img.onload = () => { document.getElementById("slip").hidden = false; };
+    img.src = url;
+    document.getElementById("slip-download").href = url + "?download=1";
+  };
+
   let polling = null;
   async function poll() {
     try {
@@ -271,6 +285,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         document.getElementById("order-no").textContent = data.order_number;
         document.getElementById("paid-total").textContent = "฿" + Number(data.total).toFixed(2);
         document.getElementById("feedback-link").href = data.feedback_url;
+        showSlip(data.receipt_url);
         show("done");
       } else if (data.status === "failed" || data.status === "expired") {
         clearInterval(polling);

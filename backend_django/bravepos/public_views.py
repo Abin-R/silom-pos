@@ -33,7 +33,7 @@ from django.shortcuts import get_object_or_404, render
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 
-from . import images, selforder
+from . import images, receipt_image, selforder
 from .gateways import GatewayConfigError, GatewayError
 from .models import Branch, Product, SelfOrder
 from .views import pick_suggestions
@@ -380,8 +380,33 @@ def order_status(request, token):
             'total': float(order.total),
             # /receipt/<n>/ redirects to the feedback form — see customer_receipt.
             'feedback_url': f'/receipt/{order.order_number}/',
+            'receipt_url': f'/order/s/{draft.token}/receipt.png',
         })
     if draft.status in ('failed', 'expired'):
         return JsonResponse({'status': draft.status}, status=200)
 
     return JsonResponse({'status': 'pending'}, status=202)
+
+
+# ─── Customer slip ───────────────────────────────────────────────────────────
+def order_receipt_png(request, token):
+    """The slip the till printed, for the customer's phone.  ``?download=1``
+    saves it instead of showing it.
+
+    Never stored anywhere: Cloudflare caches ``.png`` by default, and this URL
+    is a bearer secret, a void has to show the next time it's opened, and a
+    404 from before the payment landed mustn't outlive it.
+    """
+    draft = _get_draft(token)
+    if draft.status != 'paid' or draft.order is None:
+        resp = HttpResponse(status=404)
+    else:
+        resp = HttpResponse(
+            receipt_image.render_customer_slip(draft.order), content_type='image/png',
+        )
+        if 'download' in request.GET:
+            resp['Content-Disposition'] = (
+                f'attachment; filename="receipt-{draft.order.order_number}.png"'
+            )
+    resp['Cache-Control'] = 'no-store'
+    return resp
