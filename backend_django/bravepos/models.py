@@ -225,6 +225,12 @@ class Branch(models.Model):
     # obscurity — is what keeps self-ordering closed on a branch.
     self_order_enabled = models.BooleanField(default=False)
 
+    # Units of each product kept back for the counter.  At or below this level
+    # the QR menu stops selling a product and sends the customer to the cashier;
+    # the till is not limited.  0 keeps nothing back.  Not ``Product.par_level``,
+    # which is when to reorder.
+    self_order_min_stock = models.PositiveIntegerField(default=0)
+
     # Per-branch on/off switch for the cashier upsell strip.  Defaults False so
     # deploying the code exposes NO branch until someone turns it on — the
     # rollout is "test branch first", and a flag that defaults on would put
@@ -1016,6 +1022,10 @@ class SelfOrder(models.Model):
     payment_uri_cache = models.TextField(blank=True, default="")
 
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
+
+    # Until when this draft's items are reserved.  Set when the customer starts
+    # paying; see ``selforder.held_quantities``.  Null means nothing is held.
+    hold_expires_at = models.DateTimeField(null=True, blank=True)
 
     # The sale this draft became.  OneToOne is a DB-level backstop against
     # double promotion: two pollers (the customer's phone and the POS) can race

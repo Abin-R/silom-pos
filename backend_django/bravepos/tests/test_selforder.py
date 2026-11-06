@@ -29,7 +29,8 @@ REQUIRES_ROW_LOCKS = skipUnless(
 from bravepos import gateways, selforder
 from bravepos.gateways import compute_order_charges
 from bravepos.models import (
-    Branch, DiscountType, Order, SelfOrder, Settings, StockDocument, SuggestionRule,
+    Branch, DiscountType, Order, Product, SelfOrder, Settings, StockDocument,
+    SuggestionRule,
 )
 from bravepos.orders import create_order_from_items
 
@@ -136,14 +137,14 @@ class PublicEndpointTests(TestCase):
         self.assertEqual(Decimal(str(draft.items[0]['price'])), Decimal('100.00'))
 
     def test_menu_never_leaks_cost(self):
-        """Sold-out is shown; stock only caps the + button and is never printed.
-        Cost — the margin — must never reach a customer's phone."""
+        """Stock only caps the + button and is never printed.  Cost — the margin
+        — must never reach a customer's phone."""
         menu = selforder.menu_for(self.branch)
         self.assertTrue(menu)
         for item in menu:
             self.assertNotIn('cost', item)
             self.assertNotIn('low_stock', item)
-            self.assertIn('sold_out', item)
+            self.assertIn('counter_only', item)
 
     def test_menu_page_does_not_print_stock(self):
         res = self.c.get(f'/order/{self.branch.id}/')
@@ -891,3 +892,113 @@ class ConcurrencyTests(TransactionTestCase):
         self.assertEqual(errors, [], f'raised: {errors}')
         self.p.refresh_from_db()
         self.assertEqual(self.p.stock, 100 - (5 * 2), 'no decrement may be lost')
+
+
+class MinimumStockTests(TestCase):
+    """``Branch.self_order_min_stock``: the last units belong to the counter."""
+
+    def setUp(self):
+        make_shop()
+        self.branch = make_branch()
+        self.branch.self_order_min_stock = 3
+        self.branch.save()
+        open_shift(self.branch)
+        self.c = Client()
+
+    def _item(self, product):
+        return next((i for i in selforder.menu_for(self.branch)
+                     if i['id'] == str(product.id)), None)
+
+    def _draft(self, product, qty):
+        return selforder.create_draft(
+            self.branch, [{'product_id': str(product.id), 'qty': qty}])
+
+    def _pay(self, draft):
+        return selforder.start_payment(draft, 'qr', redirect_url='https://x/')
+
+    def test_above_the_minimum_sells_only_down_to_it(self):
+        item = self._item(make_product(self.branch, stock=5))
+        self.assertFalse(item['counter_only'])
+        self.assertEqual(item['stock'], 2)
+
+    def test_at_or_below_the_minimum_is_counter_only(self):
+        for stock in (3, 1):
+            with self.subTest(stock=stock):
+                item = self._item(make_product(self.branch, name=f'P{stock}', stock=stock))
+                self.assertTrue(item['counter_only'])
+
+    def test_sold_out_leaves_the_menu(self):
+        for stock in (0, -1):
+            with self.subTest(stock=stock):
+                self.assertIsNone(self._item(
+                    make_product(self.branch, name=f'P{stock}', stock=stock)))
+
+    def test_no_minimum_keeps_nothing_back(self):
+        self.branch.self_order_min_stock = 0
+        self.branch.save()
+        item = self._item(make_product(self.branch, name='One', stock=1))
+        self.assertFalse(item['counter_only'])
+        self.assertEqual(item['stock'], 1)
+        self.assertIsNone(self._item(make_product(self.branch, name='None', stock=0)))
+
+    def test_service_products_ignore_the_minimum(self):
+        p = make_product(self.branch, stock=0)
+        p.product_type = 'S'
+        p.save()
+        self.assertFalse(self._item(p)['counter_only'])
+
+    def test_units_on_hold_count_against_the_minimum(self):
+        p = make_product(self.branch, stock=5)
+        with StubGateway():
+            self._pay(self._draft(p, 2))
+        self.assertTrue(self._item(p)['counter_only'])
+
+    def test_payment_cannot_cross_the_minimum(self):
+        p = make_product(self.branch, stock=5)
+        with StubGateway() as gw:
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'only 2'):
+                self._pay(self._draft(p, 3))
+            self._pay(self._draft(p, 2))
+        self.assertEqual(len(gw.created_charges), 1)
+
+    def test_payment_for_a_counter_only_product_points_to_the_counter(self):
+        """A menu page opened before the stock dropped still offers it."""
+        p = make_product(self.branch, stock=3)
+        with StubGateway():
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'at the counter'):
+                self._pay(self._draft(p, 1))
+
+    def test_payment_for_a_sold_out_product_is_refused(self):
+        p = make_product(self.branch, stock=0)
+        with StubGateway():
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'sold out'):
+                self._pay(self._draft(p, 1))
+
+    def test_a_paid_draft_still_becomes_a_sale_below_the_minimum(self):
+        """Stock fell after the customer paid: the money is taken, so it sells."""
+        p = make_product(self.branch, stock=5)
+        with StubGateway():
+            draft = self._draft(p, 2)
+            self._pay(draft)
+        Product.objects.filter(pk=p.pk).update(stock=1)
+        with StubGateway(paid=True):
+            order = selforder.promote(SelfOrder.objects.get(pk=draft.pk))
+        self.assertIsNotNone(order)
+        p.refresh_from_db()
+        self.assertEqual(p.stock, -1)
+
+    def test_suggestions_skip_counter_only_products(self):
+        latte = make_product(self.branch, name='Latte')
+        make_product(self.branch, name='Croissant', price='60.00', stock=3)
+        cookie = make_product(self.branch, name='Cookie', price='40.00')
+        for name, score in (('croissant', 3), ('cookie', 2)):
+            SuggestionRule.objects.create(
+                branch=None, kind='pair', antecedent_key='latte', antecedent_size=1,
+                consequent_name=name, lift=score, score=score, basket_count=20,
+            )
+        res = self.c.post(
+            f'/order/{self.branch.id}/suggest/',
+            data={'product_ids': [str(latte.id)]},
+            content_type='application/json',
+        )
+        self.assertEqual([s['id'] for s in res.json()['suggestions']], [str(cookie.id)])

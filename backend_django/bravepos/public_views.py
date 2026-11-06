@@ -257,9 +257,17 @@ def order_suggest(request, branch_id):
     except ValueError:
         return _err('Malformed request.')
 
+    held = selforder.held_quantities(branch)
+    floor = branch.self_order_min_stock
+
+    def sellable(p):
+        on_hold = held.get(str(p.id), 0)
+        return not (selforder.is_sold_out(p, on_hold)
+                    or selforder.is_counter_only(p, floor, on_hold))
+
     picked, _source = pick_suggestions(
         branch, payload.get('product_ids'), payload.get('limit'),
-        sellable=lambda p: not selforder.is_sold_out(p),
+        sellable=sellable,
     )
     return JsonResponse({'status': 'ok', 'suggestions': [
         {'id': s['id'], 'reason': s['reason'], 'because_id': s['because_id']}

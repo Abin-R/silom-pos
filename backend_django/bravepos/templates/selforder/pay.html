@@ -245,6 +245,8 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
     for (const s of ["choose", "paying", "done", "failed"])
       document.getElementById("state-" + s).hidden = (s !== id);
     document.getElementById("paybar").hidden = (id !== "choose");
+    // Back to the menu mid-payment leaves a live QR and a reserved order behind.
+    document.querySelector(".back").style.visibility = (id === "paying") ? "hidden" : "";
   };
   const fail = (msg) => { const e = document.getElementById("err"); e.textContent = msg; e.hidden = false; };
   const showQr = (raw) => {

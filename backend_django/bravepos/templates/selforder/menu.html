@@ -1,7 +1,7 @@
 {% extends "selforder/base.html" %}
 {% comment %}
 Food-delivery-style menu (think Swiggy / KFC kiosk): sticky category pills,
-image cards with sold-out states, and a slide-up cart sheet.
+image cards, and a slide-up cart sheet.
 
 The cart lives in JS, but its money doesn't: every change is sent to /price/,
 which re-prices the lines from the DB, applies the discounts the customer
@@ -77,14 +77,8 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   .stepper button:active { background: #fff0f1; }
   .stepper .n { min-width: 26px; text-align: center; font-weight: 800; color: var(--brand-red); }
 
-  /* Sold out */
-  .card.sold { opacity: .55; }
-  .card.sold .thumb { filter: grayscale(1); }
-  .sold-tag {
-    position: absolute; top: 12px; left: 12px;
-    background: rgba(28,28,30,.8); color: #fff; font-size: 11px; font-weight: 700;
-    padding: 3px 8px; border-radius: 6px;
-  }
+  /* Held back for the counter */
+  .card .at-counter { color: var(--brand-red); font-size: 12.5px; font-weight: 600; line-height: 1.35; margin-top: 4px; }
 
   /* Sticky cart bar */
   .cartbar {
@@ -212,6 +206,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   <div class="pills" id="pills"></div>
   <div id="menu"></div>
   <div class="no-match" id="no-match" hidden>ไม่พบเมนู · Nothing matches that search</div>
+  <div class="no-match" id="no-items" hidden>ขณะนี้ไม่มีเมนูให้สั่งออนไลน์ กรุณาสั่งที่เคาน์เตอร์<br>Nothing is available online right now. Please order at the counter.</div>
   {% comment %}Sized in JS so the last (short) category can scroll to the top.{% endcomment %}
   <div id="scroll-pad" aria-hidden="true"></div>
 
@@ -320,7 +315,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
 
   function cardFor(p) {
     const card = document.createElement("div");
-    card.className = "card" + (p.sold_out ? " sold" : "");
+    card.className = "card";
     card.dataset.find = (p.name + " " + (p.name_th || "")).toLowerCase();
     // Images are separate requests now (they used to be base64 inlined into
     // this document), so lazy-loading them actually means something: a customer
@@ -329,12 +324,12 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
       ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" decoding="async">`
       : `<div class="thumb ph">${emojiFor(p.category_name)}</div>`;
     card.innerHTML = `
-      ${p.sold_out ? '<span class="sold-tag">หมด · Sold out</span>' : ""}
       ${thumb}
       <div class="body">
         <div>
           <div class="name">${esc(p.name)}</div>
           ${p.name_th ? `<div class="name-th">${esc(p.name_th)}</div>` : ""}
+          ${p.counter_only ? `<div class="at-counter">ขณะนี้สั่งออนไลน์ไม่ได้ กรุณาสั่งที่เคาน์เตอร์<br>Not available online right now. Please order at the counter.</div>` : ""}
         </div>
         <div class="foot">
           <div class="price">${baht(p.price)}</div>
@@ -362,14 +357,14 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
       document.querySelector(`.pill[data-cat="${CSS.escape(c)}"]`).hidden = inSec === 0;
       shown += inSec;
     }
-    document.getElementById("no-match").hidden = shown > 0;
+    document.getElementById("no-match").hidden = shown > 0 || !MENU.length;
     sizeScrollPad();
   }
   document.getElementById("search").addEventListener("input", applySearch);
 
   function renderCtl(host, p) {
     const qty = cart.get(p.id) || 0;
-    if (p.sold_out) { host.innerHTML = `<span class="muted" style="font-weight:700">—</span>`; return; }
+    if (p.counter_only) { host.innerHTML = `<span class="muted" style="font-weight:700">—</span>`; return; }
     if (!qty) {
       host.innerHTML = `<button class="add">เพิ่ม · ADD</button>`;
       host.querySelector(".add").onclick = () => { setQty(p, 1); };
@@ -563,7 +558,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   function offerable() {
     return suggestions
       .map((id) => MENU.find((x) => x.id === id))
-      .filter((p) => p && !p.sold_out && !cart.has(p.id))
+      .filter((p) => p && !p.counter_only && !cart.has(p.id))
       .slice(0, 4);
   }
 
@@ -713,6 +708,11 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     }
   };
 
+  if (!MENU.length) {
+    document.querySelector(".search").hidden = true;
+    document.getElementById("pills").hidden = true;
+    document.getElementById("no-items").hidden = false;
+  }
   renderPills();
   renderMenu();
   sizeScrollPad();

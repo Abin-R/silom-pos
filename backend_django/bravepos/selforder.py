@@ -12,6 +12,16 @@ The rules that matter, in one place, so the HTTP views stay dumb:
   * **Promotion is idempotent and gateway-verified.**  Several things poll the
     same draft (the customer's phone, the POS, the sweeper).  Exactly one Order
     may result.  The gateway is asked; the client is never believed.
+  * **A hold is a time on the draft, not a stock move.**  ``Product.stock``
+    stays what is on the shelf until the sale is real.  What self-order may
+    still sell is stock minus ``held_quantities``, and a hold ends by itself.
+    It stops self-order customers racing each other; the till ignores it.
+    Nothing here ever refuses a payment Beam has taken: ``promote`` is not
+    stock-checked, and stock going negative is better than money with no sale.
+  * **The last units belong to the counter.**  ``Branch.self_order_min_stock``
+    is taken off what self-order may sell.  A product at or below it stays on
+    the menu but is counter-only; at zero it leaves the menu.  The till, again,
+    ignores this.
 
 Nothing here imports DRF or touches ``request``.
 """
@@ -27,7 +37,7 @@ from django.utils import timezone as djtz
 
 from . import discount_rules, discounts, gateways, images
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
-from .models import Order, Product, SelfOrder, Shift
+from .models import Branch, Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
 
 logger = logging.getLogger("bravepos")
@@ -58,6 +68,17 @@ MAX_QTY_PER_LINE = 50
 
 # How long a customer has to pay before the sweeper gives up on the draft.
 DRAFT_TTL_MINUTES = 120
+
+# How long a customer's items stay reserved once they start paying.  The grace
+# keeps a payment made in the last seconds counted until a poller or the
+# sweeper (every 2 minutes) has turned it into a sale and moved the stock.
+HOLD_MINUTES = 10
+HOLD_GRACE_MINUTES = 3
+
+# A payment may not start on a draft older than this.  DRAFT_TTL_MINUTES is also
+# how far back the sweeper looks, so a late start could be paid after it has
+# stopped looking.
+DRAFT_PAYABLE_MINUTES = 60
 
 
 class SelfOrderError(Exception):
@@ -99,19 +120,56 @@ def menu_image_ref(branch, product) -> str:
     return f'/order/{branch.id}/img/{product.id}/?v={images.digest(raw)}'
 
 
-def is_sold_out(product) -> bool:
-    """A stocked product with none on hand.  Service products don't track
+def held_quantities(branch, exclude_pk=None) -> dict[str, int]:
+    """Units per product id under a live hold at this branch.
+
+    Free lines count: they leave the shelf like any other.  A draft stops
+    counting the moment its hold lapses, it fails, or it is paid, and paying
+    moves the stock in the same transaction, so a unit is never counted twice.
+    """
+    drafts = SelfOrder.objects.filter(
+        branch=branch, status='pending', hold_expires_at__gt=djtz.now(),
+    )
+    if exclude_pk is not None:
+        drafts = drafts.exclude(pk=exclude_pk)
+    held: dict[str, int] = {}
+    for items in drafts.values_list('items', flat=True):
+        for pid, qty in _line_quantities(items).items():
+            held[pid] = held.get(pid, 0) + qty
+    return held
+
+
+def _line_quantities(items: list[dict]) -> dict[str, int]:
+    """Units per product id in one draft.  A product can sit on two lines, once
+    paid and once free."""
+    out: dict[str, int] = {}
+    for it in items:
+        pid = str(it.get('product_id') or '')
+        if pid:
+            out[pid] = out.get(pid, 0) + int(it.get('qty') or 0)
+    return out
+
+
+def is_sold_out(product, held: int = 0) -> bool:
+    """A stocked product with none left to sell.  Service products don't track
     stock and are always orderable."""
-    return int(product.stock or 0) <= 0 and product.product_type == 'P'
+    return int(product.stock or 0) - held <= 0 and product.product_type == 'P'
+
+
+def is_counter_only(product, floor: int, held: int = 0) -> bool:
+    """Still on the shelf, but down to what the branch keeps for the counter."""
+    return (product.product_type == 'P'
+            and 0 < int(product.stock or 0) - held <= floor)
 
 
 def menu_for(branch) -> list[dict]:
-    """The public menu for one branch — every active product it stocks.
+    """The public menu for one branch — every active product it has left.
 
     Hand-rolled rather than reusing ProductSerializer so we control exactly what
-    reaches a customer's phone: ``sold_out`` greys out and blocks sold-out
-    items, and ``stock`` caps the + button (the page never prints the number),
-    but ``cost`` — the margin — is deliberately never included.
+    reaches a customer's phone: sold-out products are left out, ``counter_only``
+    blocks the ones held back for the counter, and ``stock`` caps the + button
+    (the page never prints the number), but ``cost`` — the margin — is
+    deliberately never included.
     """
     products = (
         Product.objects
@@ -119,9 +177,16 @@ def menu_for(branch) -> list[dict]:
         .select_related('category')
         .order_by('sort_order', 'name')
     )
+    held = held_quantities(branch)
+    floor = branch.self_order_min_stock
     out = []
     for p in products:
-        stock = int(p.stock or 0)
+        on_hold = held.get(str(p.id), 0) if p.product_type == 'P' else 0
+        if is_sold_out(p, on_hold):
+            continue
+        stock = int(p.stock or 0) - on_hold
+        if p.product_type == 'P':
+            stock -= floor
         out.append({
             'id': str(p.id),
             'name': p.name,
@@ -130,11 +195,9 @@ def menu_for(branch) -> list[dict]:
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
             'image_url': menu_image_ref(branch, p),
-            # Service products (stock not tracked) and anything with stock on
-            # hand are orderable. ``stock`` only caps the quantity; the page
-            # does not show it.
+            # ``stock`` only caps the quantity; the page does not show it.
             'stock': stock,
-            'sold_out': is_sold_out(p),
+            'counter_only': is_counter_only(p, floor, on_hold),
         })
     return out
 
@@ -411,6 +474,71 @@ def start_payment(draft: SelfOrder, method: str, redirect_url: str,
             'total': float(draft.total),
         }
 
+    _hold_stock(draft)
+    try:
+        return _create_gateway_object(draft, method, redirect_url, device_type)
+    except Exception:
+        # Nothing payable exists, so nothing should stay reserved.
+        SelfOrder.objects.filter(pk=draft.pk).update(hold_expires_at=None)
+        draft.hold_expires_at = None
+        raise
+
+
+def _hold_stock(draft: SelfOrder) -> None:
+    """Reserve the draft's items, or refuse with what ran out.
+
+    Locks the draft and then the branch, the same order as ``promote`` into
+    ``create_order_from_items``; the reverse could deadlock against it.  Every
+    self-order sale moves stock under that branch lock, so stock is read after
+    taking it.  The lock is released before the gateway is called.
+    """
+    if draft.created_at < djtz.now() - timedelta(minutes=DRAFT_PAYABLE_MINUTES):
+        raise SelfOrderError(
+            'รายการนี้หมดเวลาแล้ว กรุณากลับไปที่เมนูแล้วสั่งใหม่ / '
+            'This order has timed out. Please go back to the menu and order again.'
+        )
+
+    wanted = _line_quantities(draft.items)
+    with transaction.atomic():
+        locked = SelfOrder.objects.select_for_update().get(pk=draft.pk)
+        if locked.status != 'pending':
+            raise SelfOrderError('This order is no longer awaiting payment.')
+        Branch.objects.select_for_update().filter(pk=draft.branch_id).first()
+
+        held = held_quantities(draft.branch, exclude_pk=draft.pk)
+        floor = draft.branch.self_order_min_stock
+        tracked = Product.objects.filter(
+            pk__in=wanted, branch=draft.branch, product_type='P',
+        )
+        for p in tracked:
+            on_shelf = int(p.stock or 0) - held.get(str(p.id), 0)
+            left = on_shelf - floor
+            if wanted[str(p.id)] > left:
+                raise SelfOrderError(
+                    _short_message(p.name, max(left, 0), on_shelf > 0))
+
+        locked.hold_expires_at = djtz.now() + timedelta(
+            minutes=HOLD_MINUTES + HOLD_GRACE_MINUTES,
+        )
+        locked.save(update_fields=['hold_expires_at'])
+    draft.hold_expires_at = locked.hold_expires_at
+
+
+def _short_message(name: str, left: int, at_counter: bool = False) -> str:
+    if left:
+        return (f'ขออภัย {name} เหลือเพียง {left} ชิ้น กรุณากลับไปแก้ไขรายการ / '
+                f'Sorry, only {left} {name} left. Please go back and change your order.')
+    if at_counter:
+        return (f'ขออภัย ขณะนี้สั่ง {name} ออนไลน์ไม่ได้ กรุณาสั่งที่เคาน์เตอร์ / '
+                f'Sorry, {name} is not available online right now. '
+                f'Please order it at the counter.')
+    return (f'ขออภัย {name} หมดแล้ว กรุณากลับไปแก้ไขรายการ / '
+            f'Sorry, {name} has just sold out. Please go back and change your order.')
+
+
+def _create_gateway_object(draft: SelfOrder, method: str, redirect_url: str,
+                           device_type: str) -> dict:
+    """Mint the one charge or link this draft will ever have."""
     reference_id = f'SELF-{draft.token[:12]}'
     description = f'{draft.branch.name} self-order'
 

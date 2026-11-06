@@ -6008,6 +6008,12 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     # field really does mean unticked.  It is the same flag that gates the menu,
     # the QR and the till's print poller, so unticking closes self-order here.
     b.self_order_enabled = post.get("self_order") == "on"
+    # Submitted even while the box is unticked, so re-ticking restores it.
+    try:
+        b.self_order_min_stock = min(
+            max(int((post.get("self_order_min_stock") or "").strip() or 0), 0), 9999)
+    except ValueError:
+        pass
     # Hiding the inputs only stops honest mistakes — a crafted POST would
     # otherwise still rewrite the keys, so the guard belongs here too.
     if can_edit_payment(user):
