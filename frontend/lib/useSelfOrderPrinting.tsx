@@ -132,8 +132,12 @@ export function useSelfOrderPrinting(
       busy = true;
       try {
         const cfg = await loadLocalPrinterConfig();
-        if (!cfg.enabled || !cfg.identifier) return;  // no printer on this tablet
         const packerCfg = await loadPackerPrinterConfig();
+        // Both of a self-order's slips come out at the packer's station, which
+        // is where the order gets made up and handed over.  With no packer
+        // printer this falls back to the customer printer.
+        const printer = printerForSlip("packer", cfg, packerCfg);
+        if (!printer.enabled || !printer.identifier) return;  // no printer on this tablet
 
         const res = await apiFetch("/self-orders/pending");
         if (!res.ok || stopped) return;
@@ -154,7 +158,7 @@ export function useSelfOrderPrinting(
           // packer's copy that goes with the bag.
           const receipt = toReceiptOrder(o);
           for (const order of [receipt, { ...receipt, doc_type: "packer" as const }]) {
-            const r = await printRef.current(printerForSlip(order.doc_type, cfg, packerCfg), order, shop);
+            const r = await printRef.current(printer, order, shop);
             if (!r.ok) {
               // Not dropped — useStarPrinter has persisted it to printerQueue
               // and will retry. Nothing to do but note it.
