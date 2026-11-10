@@ -320,6 +320,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
         )
         created = Product.objects.get(name="New Cookie")
         self.assertEqual(created.par_level, 20, "par level was not saved")
+        self.assertEqual(created.counter_stock, 3, "a new product keeps 3 for the counter")
 
         self._post(
             reverse("backoffice:product_detail", args=[created.id]) + self.scope,
@@ -331,6 +332,31 @@ class HostileFormTests(HostileDataMixin, TestCase):
         created.refresh_from_db()
         self.assertEqual(created.name, "Renamed Cookie")
         self.assertEqual(created.par_level, 8)
+        self.assertEqual(created.counter_stock, 3, "a form without the field changed it")
+
+        for typed, saved in (("5", 5), ("", 0), ("-2", 0)):
+            self._post(
+                reverse("backoffice:product_detail", args=[created.id]) + self.scope,
+                {"name": "Renamed Cookie", "price": "50", "cost": "12",
+                 "par_level": "8", "counter_stock": typed, "category": "",
+                 "unit": "", "product_type": "P", "tax_type": "V", "sku": "",
+                 "barcode": "", "name_th": "", "image_url": ""},
+            )
+            created.refresh_from_db()
+            if typed != "-2":
+                self.assertEqual(created.counter_stock, saved, typed)
+        self.assertEqual(created.counter_stock, 0, "a negative number was saved")
+        # Shown only where the branch's High volume box is ticked.
+        list_url = reverse("backoffice:product_list")
+        form_url = reverse("backoffice:product_detail", args=[created.id])
+        scope = {"branch": str(self.branch.id)}
+        for ticked in (False, True):
+            type(self.branch).objects.filter(pk=self.branch.pk).update(
+                self_order_enabled=ticked)
+            for url in (list_url, form_url):
+                page = self.client.get(url, scope)
+                (self.assertContains if ticked else self.assertNotContains)(
+                    page, "Stock for counter", msg_prefix=f"{url} ticked={ticked}: ")
         self.assertIsNone(created.category_id, "clearing the category failed")
 
         # And the catalogue still renders it with no category.

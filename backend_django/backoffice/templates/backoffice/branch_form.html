@@ -135,16 +135,6 @@
           branch straight away, including for customers partway through an order.
         </span>
       </div>
-      <div class="field" id="min-stock-field">
-        <label for="f-min-stock">Minimum stock for self-order</label>
-        <input id="f-min-stock" type="number" name="self_order_min_stock" min="0" max="9999" step="1"
-               value="{{ branch_obj.self_order_min_stock|default:0 }}">
-        <span class="hint">
-          Units of each product kept for the counter. At this level or below, customers
-          see the product but are asked to order it at the counter. At zero it leaves
-          the self-order menu. The till can always sell it. 0 keeps nothing back.
-        </span>
-      </div>
     </div>
   </div>
 
@@ -272,18 +262,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-  // The minimum only means anything on a self-order branch.  Hidden, not
-  // disabled, so it still posts and unticking the box doesn't lose it.
-  (() => {
-    const box = document.querySelector('input[name="self_order"]');
-    const field = document.getElementById('min-stock-field');
-    if (!box || !field) return;
-    const sync = () => { field.style.display = box.checked ? '' : 'none'; };
-    box.addEventListener('change', sync);
-    sync();
-  })();
-</script>
 <script>
   // A value another branch already holds, caught while the cursor is still in
   // the box rather than after a save round trip.

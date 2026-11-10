@@ -41,7 +41,8 @@ from .models import Branch, Category, Product, Unit
 # either identity (id, branch), a foreign key resolved per-branch below
 # (category, unit), or deliberately branch-local (stock — see the docstring).
 PRODUCT_FIELDS = (
-    "name_th", "price", "cost", "par_level", "shelf_life", "sku", "barcode",
+    "name_th", "price", "cost", "par_level", "counter_stock", "shelf_life",
+    "sku", "barcode",
     "image_url", "image_base64", "is_favorite", "tax_type", "product_type",
     "active", "sort_order",
 )

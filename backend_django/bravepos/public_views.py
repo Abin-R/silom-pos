@@ -258,12 +258,11 @@ def order_suggest(request, branch_id):
         return _err('Malformed request.')
 
     held = selforder.held_quantities(branch)
-    floor = branch.self_order_min_stock
 
     def sellable(p):
         on_hold = held.get(str(p.id), 0)
         return not (selforder.is_sold_out(p, on_hold)
-                    or selforder.is_counter_only(p, floor, on_hold))
+                    or selforder.is_counter_only(p, on_hold))
 
     picked, _source = pick_suggestions(
         branch, payload.get('product_ids'), payload.get('limit'),

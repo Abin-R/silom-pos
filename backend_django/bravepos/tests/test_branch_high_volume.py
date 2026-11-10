@@ -62,29 +62,6 @@ class HighVolumeToggleTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(self._flag())
 
-    def _minimum(self):
-        return Branch.objects.get(pk=self.silom.pk).self_order_min_stock
-
-    def test_the_minimum_stock_is_saved(self):
-        self.client.post(self.url, self._form(self_order="on", self_order_min_stock="3"))
-        self.assertEqual(self._minimum(), 3)
-
-    def test_the_minimum_survives_unticking(self):
-        self.client.post(self.url, self._form(self_order_min_stock="3"))
-        self.assertEqual(self._minimum(), 3)
-
-    def test_a_blank_or_negative_minimum_is_zero(self):
-        for value in ("", "-2"):
-            with self.subTest(value=value):
-                Branch.objects.filter(pk=self.silom.pk).update(self_order_min_stock=3)
-                self.client.post(self.url, self._form(self_order_min_stock=value))
-                self.assertEqual(self._minimum(), 0)
-
-    def test_a_non_numeric_minimum_keeps_the_old_value(self):
-        Branch.objects.filter(pk=self.silom.pk).update(self_order_min_stock=3)
-        self.client.post(self.url, self._form(self_order_min_stock="abc"))
-        self.assertEqual(self._minimum(), 3)
-
     def test_the_form_shows_the_saved_state(self):
         Branch.objects.filter(pk=self.silom.pk).update(self_order_enabled=True)
         self.assertContains(

@@ -131,7 +131,12 @@
           <tr>
             <th style="width:28%">Product</th><th>Category</th>
             <th class="r">Price</th><th class="r">Cost</th><th class="r">Margin</th>
-            <th class="r">On hand</th><th class="r">Sold 30d</th>
+            <th class="r">On hand</th>
+            {% comment %}Only a self-order ("High volume") branch uses it.{% endcomment %}
+            {% if branch.self_order_enabled %}
+            <th class="r" title="Kept for counter orders; QR self-order cannot buy these">Stock for counter</th>
+            {% endif %}
+            <th class="r">Sold 30d</th>
             <th class="r" style="width:96px">{% if archived %}{% else %}On tills{% endif %}</th>
           </tr>
         </thead>
@@ -165,6 +170,9 @@
             <td class="r money" style="font-weight:650;color:{% if p.margin >= 60 %}var(--green){% elif p.margin >= 40 %}var(--amber){% else %}var(--red-d){% endif %}">
               {% if p.price %}{{ p.margin|floatformat:0 }}%{% else %}—{% endif %}</td>
             <td class="r money" {% if p.stock <= 0 %}style="color:var(--red-d);font-weight:650"{% endif %}>{{ p.stock }}</td>
+            {% if branch.self_order_enabled %}
+            <td class="r money">{% if p.product_type == 'P' %}{{ p.counter_stock }}{% else %}—{% endif %}</td>
+            {% endif %}
             <td class="r money">{{ p.sold_30d|intcomma }}</td>
             <td class="r">
               {% if archived %}
@@ -185,7 +193,7 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="8" class="empty">
+          <tr><td colspan="{% if branch.self_order_enabled %}9{% else %}8{% endif %}" class="empty">
             <svg><use href="#i-box"/></svg>
             {% if q %}No product matches “{{ q }}”.{% elif archived %}Nothing has been removed from this catalogue.{% else %}No products in this catalogue yet.{% endif %}
           </td></tr>

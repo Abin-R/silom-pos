@@ -225,10 +225,9 @@ class Branch(models.Model):
     # obscurity — is what keeps self-ordering closed on a branch.
     self_order_enabled = models.BooleanField(default=False)
 
-    # Units of each product kept back for the counter.  At or below this level
-    # the QR menu stops selling a product and sends the customer to the cashier;
-    # the till is not limited.  0 keeps nothing back.  Not ``Product.par_level``,
-    # which is when to reorder.
+    # Unused since 2026-11-10: the minimum is per product now
+    # (``Product.counter_stock``).  Kept for one release so the running code
+    # never queries a dropped column mid-deploy; remove in the next migration.
     self_order_min_stock = models.PositiveIntegerField(default=0)
 
     # Per-branch on/off switch for the cashier upsell strip.  Defaults False so
@@ -430,6 +429,12 @@ class Product(models.Model):
     # Cannot be derived from sales history: how much stock is "enough"
     # depends on lead time and shelf life, which only the shop knows.
     par_level = models.IntegerField(default=0)
+    # Stock for counter order: units kept back from self-order.  At or below
+    # this the QR menu still lists the product but sends the customer to the
+    # counter, and a QR order can never take stock below it.  The till is not
+    # limited.  0 keeps nothing back.  Not ``par_level``, which is when to
+    # reorder.
+    counter_stock = models.PositiveIntegerField(default=3)
     # Days the product stays sellable after it is made. Null means nobody has
     # set one; 0 is a real answer (sell the same day), so it cannot stand in
     # for "not set" the way par_level's 0 does.

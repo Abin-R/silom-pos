@@ -43,13 +43,17 @@ def open_shift(branch) -> Shift:
     return Shift.objects.create(branch=branch, status='open', round_number=1)
 
 
-def make_product(branch, name='Latte', price='100.00', stock=50) -> Product:
+def make_product(branch, name='Latte', price='100.00', stock=50,
+                 counter_stock=0) -> Product:
+    # counter_stock defaults to 0 here, not the model's 3, so a suite about
+    # something else is not quietly limited by it.  MinimumStockTests sets it.
     cat, _ = Category.objects.get_or_create(
         branch=branch, name='Drinks', defaults={'color': '#fff', 'order': 1},
     )
     return Product.objects.create(
         branch=branch, category=cat, name=name,
         price=Decimal(price), stock=stock, active=True,
+        counter_stock=counter_stock,
     )
 
 

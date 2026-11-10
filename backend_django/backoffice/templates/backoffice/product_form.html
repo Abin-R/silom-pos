@@ -130,6 +130,19 @@
             <span class="hint">Reorder point. Below this, Inventory flags it as low. Leave at 0 to track no level at all.</span>
           </div>
 
+          {% comment %}
+            Only a self-order ("High volume") branch uses it.  Left off the
+            form elsewhere, and a save without it leaves the number alone.
+          {% endcomment %}
+          {% if product.branch.self_order_enabled %}
+          <div class="field">
+            <label for="f-counter">Stock for counter order</label>
+            <input id="f-counter" type="number" min="0" step="1" name="counter_stock"
+                   value="{{ product.counter_stock|default_if_none:'3' }}">
+            <span class="hint">Kept for the counter. At this many or fewer, QR self-order customers are asked to buy it at the counter. The till can always sell it. 0 keeps none back.</span>
+          </div>
+          {% endif %}
+
           <div class="field">
             <label for="f-shelf">Shelf life (days)</label>
             <input id="f-shelf" type="number" min="0" step="1" name="shelf_life"

@@ -29,7 +29,7 @@ REQUIRES_ROW_LOCKS = skipUnless(
 from bravepos import gateways, selforder
 from bravepos.gateways import compute_order_charges
 from bravepos.models import (
-    Branch, DiscountType, Order, Product, SelfOrder, Settings, StockDocument,
+    Branch, Category, DiscountType, Order, Product, SelfOrder, Settings, StockDocument,
     SuggestionRule,
 )
 from bravepos.orders import create_order_from_items
@@ -895,13 +895,11 @@ class ConcurrencyTests(TransactionTestCase):
 
 
 class MinimumStockTests(TestCase):
-    """``Branch.self_order_min_stock``: the last units belong to the counter."""
+    """``Product.counter_stock``: the last units belong to the counter."""
 
     def setUp(self):
         make_shop()
         self.branch = make_branch()
-        self.branch.self_order_min_stock = 3
-        self.branch.save()
         open_shift(self.branch)
         self.c = Client()
 
@@ -917,7 +915,7 @@ class MinimumStockTests(TestCase):
         return selforder.start_payment(draft, 'qr', redirect_url='https://x/')
 
     def test_above_the_minimum_sells_only_down_to_it(self):
-        item = self._item(make_product(self.branch, stock=5))
+        item = self._item(make_product(self.branch, stock=5, counter_stock=3))
         self.assertFalse(item['counter_only'])
         self.assertEqual(item['stock'], 2)
         self.assertEqual(item['shelf'], 5)
@@ -925,38 +923,47 @@ class MinimumStockTests(TestCase):
     def test_at_or_below_the_minimum_is_counter_only(self):
         for stock in (3, 1):
             with self.subTest(stock=stock):
-                item = self._item(make_product(self.branch, name=f'P{stock}', stock=stock))
+                item = self._item(make_product(self.branch, name=f'P{stock}', stock=stock, counter_stock=3))
                 self.assertTrue(item['counter_only'])
 
     def test_sold_out_leaves_the_menu(self):
         for stock in (0, -1):
             with self.subTest(stock=stock):
                 self.assertIsNone(self._item(
-                    make_product(self.branch, name=f'P{stock}', stock=stock)))
+                    make_product(self.branch, name=f'P{stock}', stock=stock, counter_stock=3)))
 
     def test_no_minimum_keeps_nothing_back(self):
-        self.branch.self_order_min_stock = 0
-        self.branch.save()
-        item = self._item(make_product(self.branch, name='One', stock=1))
+        item = self._item(make_product(self.branch, name='One', stock=1, counter_stock=0))
         self.assertFalse(item['counter_only'])
         self.assertEqual(item['stock'], 1)
         self.assertEqual(item['shelf'], 1)
         self.assertIsNone(self._item(make_product(self.branch, name='None', stock=0)))
 
+    def test_each_product_keeps_its_own_number(self):
+        five = self._item(make_product(self.branch, name='Five', stock=6, counter_stock=5))
+        one = self._item(make_product(self.branch, name='One', stock=6, counter_stock=1))
+        self.assertEqual((five['stock'], one['stock']), (1, 5))
+
+    def test_a_new_product_keeps_three_by_default(self):
+        cat = Category.objects.create(branch=self.branch, name='Cakes', color='#fff', order=1)
+        p = Product.objects.create(branch=self.branch, category=cat, name='Cake', stock=3)
+        self.assertEqual(p.counter_stock, 3)
+        self.assertTrue(self._item(p)['counter_only'])
+
     def test_service_products_ignore_the_minimum(self):
-        p = make_product(self.branch, stock=0)
+        p = make_product(self.branch, stock=0, counter_stock=3)
         p.product_type = 'S'
         p.save()
         self.assertFalse(self._item(p)['counter_only'])
 
     def test_units_on_hold_count_against_the_minimum(self):
-        p = make_product(self.branch, stock=5)
+        p = make_product(self.branch, stock=5, counter_stock=3)
         with StubGateway():
             self._pay(self._draft(p, 2))
         self.assertTrue(self._item(p)['counter_only'])
 
     def test_payment_cannot_cross_the_minimum(self):
-        p = make_product(self.branch, stock=5)
+        p = make_product(self.branch, stock=5, counter_stock=3)
         with StubGateway() as gw:
             with self.assertRaisesRegex(selforder.SelfOrderError, 'at the counter'):
                 self._pay(self._draft(p, 3))
@@ -965,20 +972,20 @@ class MinimumStockTests(TestCase):
 
     def test_payment_for_a_counter_only_product_points_to_the_counter(self):
         """A menu page opened before the stock dropped still offers it."""
-        p = make_product(self.branch, stock=3)
+        p = make_product(self.branch, stock=3, counter_stock=3)
         with StubGateway():
             with self.assertRaisesRegex(selforder.SelfOrderError, 'at the counter'):
                 self._pay(self._draft(p, 1))
 
     def test_payment_for_a_sold_out_product_is_refused(self):
-        p = make_product(self.branch, stock=0)
+        p = make_product(self.branch, stock=0, counter_stock=3)
         with StubGateway():
             with self.assertRaisesRegex(selforder.SelfOrderError, 'sold out'):
                 self._pay(self._draft(p, 1))
 
     def test_a_paid_draft_still_becomes_a_sale_below_the_minimum(self):
         """Stock fell after the customer paid: the money is taken, so it sells."""
-        p = make_product(self.branch, stock=5)
+        p = make_product(self.branch, stock=5, counter_stock=3)
         with StubGateway():
             draft = self._draft(p, 2)
             self._pay(draft)
@@ -990,9 +997,9 @@ class MinimumStockTests(TestCase):
         self.assertEqual(p.stock, -1)
 
     def test_suggestions_skip_counter_only_products(self):
-        latte = make_product(self.branch, name='Latte')
-        make_product(self.branch, name='Croissant', price='60.00', stock=3)
-        cookie = make_product(self.branch, name='Cookie', price='40.00')
+        latte = make_product(self.branch, name='Latte', counter_stock=3)
+        make_product(self.branch, name='Croissant', price='60.00', stock=3, counter_stock=3)
+        cookie = make_product(self.branch, name='Cookie', price='40.00', counter_stock=3)
         for name, score in (('croissant', 3), ('cookie', 2)):
             SuggestionRule.objects.create(
                 branch=None, kind='pair', antecedent_key='latte', antecedent_size=1,

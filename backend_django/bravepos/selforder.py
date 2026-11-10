@@ -26,10 +26,10 @@ The rules that matter, in one place, so the HTTP views stay dumb:
     and the pollers must still see a late payment.  Money that lands after the
     hold ended is not a sale: the stock may be gone, so the draft is marked
     ``late_paid`` and the customer gets a refund at the counter.
-  * **The last units belong to the counter.**  ``Branch.self_order_min_stock``
-    is taken off what self-order may sell.  A product at or below it stays on
-    the menu but is counter-only; at zero it leaves the menu.  The till, again,
-    ignores this.
+  * **The last units belong to the counter.**  Each product's
+    ``counter_stock`` is taken off what self-order may sell.  A product at or
+    below it stays on the menu but is counter-only; at zero it leaves the
+    menu.  The till, again, ignores this.
 
 Nothing here imports DRF or touches ``request``.
 """
@@ -168,10 +168,15 @@ def is_sold_out(product, held: int = 0) -> bool:
     return int(product.stock or 0) - held <= 0 and product.product_type == 'P'
 
 
-def is_counter_only(product, floor: int, held: int = 0) -> bool:
-    """Still on the shelf, but down to what the branch keeps for the counter."""
+def counter_floor(product) -> int:
+    """Units of this product self-order must leave for the counter."""
+    return int(product.counter_stock or 0) if product.product_type == 'P' else 0
+
+
+def is_counter_only(product, held: int = 0) -> bool:
+    """Still on the shelf, but down to what is kept for the counter."""
     return (product.product_type == 'P'
-            and 0 < int(product.stock or 0) - held <= floor)
+            and 0 < int(product.stock or 0) - held <= counter_floor(product))
 
 
 def menu_for(branch) -> list[dict]:
@@ -190,14 +195,13 @@ def menu_for(branch) -> list[dict]:
         .order_by('sort_order', 'name')
     )
     held = held_quantities(branch)
-    floor = branch.self_order_min_stock
     out = []
     for p in products:
         on_hold = held.get(str(p.id), 0) if p.product_type == 'P' else 0
         if is_sold_out(p, on_hold):
             continue
         shelf = int(p.stock or 0) - on_hold
-        stock = shelf - floor if p.product_type == 'P' else shelf
+        stock = shelf - counter_floor(p)
         out.append({
             'id': str(p.id),
             'name': p.name,
@@ -210,7 +214,7 @@ def menu_for(branch) -> list[dict]:
             # ``stock`` the cart sends the customer to the counter instead.
             'stock': stock,
             'shelf': shelf,
-            'counter_only': is_counter_only(p, floor, on_hold),
+            'counter_only': is_counter_only(p, on_hold),
         })
     return out
 
@@ -564,12 +568,12 @@ def _hold_stock(draft: SelfOrder) -> None:
         Branch.objects.select_for_update().filter(pk=draft.branch_id).first()
 
         held = held_quantities(draft.branch, exclude_pk=draft.pk)
-        floor = draft.branch.self_order_min_stock
         tracked = Product.objects.filter(
             pk__in=wanted, branch=draft.branch, product_type='P',
         )
         for p in tracked:
             on_shelf = int(p.stock or 0) - held.get(str(p.id), 0)
+            floor = counter_floor(p)
             left = on_shelf - floor
             if wanted[str(p.id)] > left:
                 raise SelfOrderError(_short_message(

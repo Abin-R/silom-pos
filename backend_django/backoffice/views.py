@@ -3574,6 +3574,14 @@ def _apply_product_form(product, post, branch, errors):
     # 0 means "not tracked" — Inventory says so rather than flagging the
     # product against a threshold nobody set.
     product.par_level = _product_int(post, "par_level", "Par level", errors)
+    # Absent leaves it alone (a new product keeps the default); an emptied box
+    # means keep nothing back.
+    if "counter_stock" in post:
+        product.counter_stock = _product_int(
+            post, "counter_stock", "Stock for counter order", errors)
+        if product.counter_stock < 0:
+            errors.append("Stock for counter order can't be negative.")
+            product.counter_stock = 0
     # Blank stays blank rather than becoming 0: 0 days means "same day".
     if (post.get("shelf_life") or "").strip():
         product.shelf_life = _product_int(
@@ -6135,12 +6143,6 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     # field really does mean unticked.  It is the same flag that gates the menu,
     # the QR and the till's print poller, so unticking closes self-order here.
     b.self_order_enabled = post.get("self_order") == "on"
-    # Submitted even while the box is unticked, so re-ticking restores it.
-    try:
-        b.self_order_min_stock = min(
-            max(int((post.get("self_order_min_stock") or "").strip() or 0), 0), 9999)
-    except ValueError:
-        pass
     # Hiding the inputs only stops honest mistakes — a crafted POST would
     # otherwise still rewrite the keys, so the guard belongs here too.
     if can_edit_payment(user):
