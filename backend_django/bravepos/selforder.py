@@ -19,8 +19,8 @@ The rules that matter, in one place, so the HTTP views stay dumb:
     ``promote`` is not stock-checked: money that arrives while the hold is live
     is always a sale, even if that sends stock negative.
   * **A payment ends once, and never reopens.**  QR and card payments expire at
-    Beam after ``HOLD_MINUTES``; the hold runs a little longer so stock always
-    outlives what can still be paid.  Closing a tab does nothing: on a phone it
+    Beam after ``HOLD_MINUTES`` (3), which is also when the hold ends and what
+    the customer's countdown shows.  Closing a tab does nothing: on a phone it
     looks the same as leaving for a bank app.  Cancelling ends the hold now but
     leaves the draft ``pending``, because a charge cannot be cancelled at Beam
     and the pollers must still see a late payment.  Money that lands after the
@@ -78,11 +78,14 @@ MAX_QTY_PER_LINE = 50
 # How long a customer has to pay before the sweeper gives up on the draft.
 DRAFT_TTL_MINUTES = 120
 
-# How long a customer's items stay reserved once they start paying.  The grace
-# keeps a payment made in the last seconds counted until a poller or the
-# sweeper (every 2 minutes) has turned it into a sale and moved the stock.
-HOLD_MINUTES = 5
-HOLD_GRACE_MINUTES = 2
+# How long a customer's items stay reserved once they tap Pay: 3 minutes, and
+# that is the countdown the payment page shows.  No grace on top any more: a
+# payment made inside the hold is still a sale however late a poller or the
+# sweeper (every 2 minutes) gets to it, because ``_paid_too_late`` goes by
+# Beam's transaction time.  The cost is that the stock may be offered to the
+# next customer for those few seconds, which ``promote`` already tolerates.
+HOLD_MINUTES = 3
+HOLD_GRACE_MINUTES = 0
 
 # A payment may not start on a draft older than this.  DRAFT_TTL_MINUTES is also
 # how far back the sweeper looks, so a late start could be paid after it has
@@ -455,6 +458,18 @@ def payment_closed(draft: SelfOrder) -> bool:
     """This draft's payment timed out or was cancelled, so it stays shut."""
     return (draft.hold_expires_at is not None
             and draft.hold_expires_at <= djtz.now())
+
+
+def payment_seconds_left(draft: SelfOrder) -> int | None:
+    """Seconds the customer has left to pay, for the countdown on the page.
+
+    Counted on the server so a phone with a wrong clock still shows the truth.
+    ``None`` when no payment has started.
+    """
+    if draft.hold_expires_at is None:
+        return None
+    deadline = draft.hold_expires_at - timedelta(minutes=HOLD_GRACE_MINUTES)
+    return max(0, int((deadline - djtz.now()).total_seconds()))
 
 
 def cancel_payment(draft: SelfOrder) -> None:

@@ -291,6 +291,7 @@ def order_pay_page(request, token):
         'quote_qr': selforder.quote(draft, 'qr'),
         'quote_card': selforder.quote(draft, 'card'),
         'payment_closed': selforder.payment_closed(draft),
+        'seconds_left': selforder.payment_seconds_left(draft),
         'pay_url': f'/order/s/{draft.token}/pay/',
         'status_url': f'/order/s/{draft.token}/status/',
         'cancel_url': f'/order/s/{draft.token}/cancel/',
@@ -351,7 +352,11 @@ def order_pay(request, token):
                    'Could not start the payment. Please try again or choose another method.')
         return _err(msg, 400)
 
-    return JsonResponse({'status': 'ok', **res})
+    draft.refresh_from_db(fields=['hold_expires_at'])
+    return JsonResponse({
+        'status': 'ok', **res,
+        'seconds_left': selforder.payment_seconds_left(draft),
+    })
 
 
 # ─── Poll ────────────────────────────────────────────────────────────────────

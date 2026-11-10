@@ -91,6 +91,12 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
   .spin { width: 40px; height: 40px; border: 4px solid #eee; border-top-color: var(--brand-red); border-radius: 50%; animation: spin 1s linear infinite; margin: 8px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .timer { margin: 12px auto 0; display: inline-flex; flex-direction: column; align-items: center; }
+  .timer .t { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; color: var(--ink); }
+  .timer .t.low { color: var(--brand-red); }
+  .timer .l { font-size: 12.5px; color: var(--ink-2); }
+  .timer[hidden] { display: none; }
+
   .err { background: #fdecec; color: #b3241f; border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 600; margin-top: 12px; }
 </style>
 {% endblock %}
@@ -202,6 +208,10 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       <p id="noapp" class="muted" hidden style="font-size:13px; margin:6px 0 0">ไม่เปิดแอป? ตรวจสอบว่ามีแอปธนาคารในเครื่อง แล้วกดปุ่มด้านล่าง<br>App didn’t open? Check the app is installed on this phone, then tap below.</p>
       <a id="reopen" class="btn-primary" href="#" hidden style="margin-top:10px">ไปหน้าชำระเงิน · Continue to payment</a>
       <div class="pulse"><span class="dot"></span> รอการชำระเงิน · Waiting for payment</div>
+      <div><div class="timer" id="timer" hidden>
+        <span class="t" id="timer-t">3:00</span>
+        <span class="l">เวลาที่เหลือในการชำระ · Time left to pay</span>
+      </div></div>
       <p class="muted" style="font-size:12.5px; margin:8px 0 0">อย่าปิดหน้านี้จนกว่าจะสำเร็จ · Keep this page open</p>
       <button type="button" id="cancel-pay" class="muted" style="font-size:13.5px; font-weight:600; margin-top:12px; padding:8px 12px; text-decoration:underline">ยกเลิกการชำระเงิน · Cancel payment</button>
     </div>
@@ -289,6 +299,29 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
     document.getElementById("slip-download").href = url + "?download=1";
   };
 
+  // Counts down from the server's seconds_left, not the phone's clock.  At zero
+  // the poll (already running) gets 'expired' from the server and ends it.
+  let timerId = null;
+  function startTimer(seconds) {
+    if (seconds == null || timerId) return;
+    const end = Date.now() + seconds * 1000;
+    const box = document.getElementById("timer");
+    const t = document.getElementById("timer-t");
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+      t.textContent = Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0");
+      t.classList.toggle("low", left <= 30);
+      if (left === 0) { clearInterval(timerId); poll(); }
+    };
+    box.hidden = false;
+    tick();
+    timerId = setInterval(tick, 1000);
+  }
+  const stopTimer = () => {
+    clearInterval(timerId);
+    document.getElementById("timer").hidden = true;
+  };
+
   let polling = null;
   async function poll() {
     try {
@@ -301,12 +334,15 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         document.getElementById("paid-total").textContent = "฿" + Number(data.total).toFixed(2);
         document.getElementById("feedback-link").href = data.feedback_url;
         showSlip(data.receipt_url);
+        stopTimer();
         show("done");
       } else if (data.status === "late_paid") {
         clearInterval(polling);
+        stopTimer();
         show("late");
       } else if (data.status === "failed" || data.status === "expired") {
         clearInterval(polling);
+        stopTimer();
         show("failed");
       }
       // 'pending' → keep polling; the cron sweeper is the backstop if this tab dies.
@@ -323,6 +359,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       const data = await res.json();
       if (data.status === "paid") { poll(); return; }
       clearInterval(polling);
+      stopTimer();
       show("failed");
     } catch {
       btn.disabled = false;
@@ -369,6 +406,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         show("paying");
         document.getElementById("redirecting").hidden = false;
         showReopen(data.payment_uri);
+        startTimer(data.seconds_left);
         startPolling();
         window.location.href = data.payment_uri;
         // A bank-app link (scbeasy://…) does nothing at all when that app isn't
@@ -381,6 +419,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       } else if (data.qr_image) {
         show("paying");
         showQr(data.qr_image);
+        startTimer(data.seconds_left);
         startPolling();
       } else {
         throw new Error("The payment provider didn’t return anything to pay with.");
@@ -402,6 +441,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
     {% elif draft.qr_image_cache %}
       showQr("{{ draft.qr_image_cache }}");
     {% endif %}
+    {% if seconds_left is not None %}startTimer({{ seconds_left }});{% endif %}
     startPolling();
   {% endif %}
 </script>

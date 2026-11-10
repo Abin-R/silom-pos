@@ -1047,6 +1047,27 @@ class PaymentDeadlineTests(TestCase):
             d.hold_expires_at - gw.created_links[0]['expires_at'],
             timezone_timedelta(minutes=selforder.HOLD_GRACE_MINUTES))
 
+    def test_tapping_pay_holds_for_three_minutes(self):
+        before = djtz.now()
+        with StubGateway() as gw:
+            d = self._started(gw)
+        held_for = d.hold_expires_at - before
+        self.assertGreaterEqual(held_for, timezone_timedelta(minutes=3))
+        self.assertLess(held_for, timezone_timedelta(minutes=3, seconds=5))
+
+    def test_the_pay_page_counts_down_what_is_left(self):
+        draft = selforder.create_draft(
+            self.branch, [{'product_id': str(self.p.id), 'qty': 1}])
+        with StubGateway():
+            res = self.c.post(f'/order/s/{draft.token}/pay/', {'method': 'qr'},
+                              content_type='application/json').json()
+            self.assertIn(res['seconds_left'], (179, 180))
+            page = self.c.get(f'/order/s/{draft.token}/').content.decode()
+        self.assertRegex(page, r'startTimer\(1[78]\d\)')
+        self._lapse(SelfOrder.objects.get(pk=draft.pk))
+        self.assertEqual(selforder.payment_seconds_left(
+            SelfOrder.objects.get(pk=draft.pk)), 0)
+
     def test_a_timed_out_payment_gives_the_stock_back(self):
         with StubGateway() as gw:
             d = self._started(gw)
