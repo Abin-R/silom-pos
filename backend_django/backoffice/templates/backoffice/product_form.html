@@ -160,15 +160,6 @@
               <option value="__new__">＋ Add new unit…</option>
             </select>
           </div>
-          <div class="field">
-            <label for="f-type">Product type</label>
-            <select id="f-type" name="product_type">
-              <option value="P" {% if product.product_type == 'P' %}selected{% endif %}>General product</option>
-              <option value="BOM" {% if product.product_type == 'BOM' %}selected{% endif %}>Bill of materials</option>
-              <option value="SER" {% if product.product_type == 'SER' %}selected{% endif %}>Serial product</option>
-              <option value="S" {% if product.product_type == 'S' %}selected{% endif %}>Service — no stock</option>
-            </select>
-          </div>
 
           <div class="field">
             <label for="f-sku">SKU</label>

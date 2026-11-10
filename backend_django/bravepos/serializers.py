@@ -95,7 +95,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'id', 'name', 'name_th', 'category_id',
             'price', 'cost', 'stock', 'sku', 'barcode',
             'image_url', 'image_base64',
-            'is_favorite', 'tax_type', 'product_type',
+            'is_favorite', 'tax_type',
             'active', 'sort_order',
         ]
 

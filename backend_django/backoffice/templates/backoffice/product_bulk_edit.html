@@ -86,12 +86,8 @@
             {% if branch.self_order_enabled %}
             {% comment %}Every row posts one value so the lists stay aligned by row.{% endcomment %}
             <td class="r">
-              {% if p.product_type == 'P' %}
               <input type="number" min="0" step="1" name="counter_stock" value="{{ p.counter_stock }}"
                      class="inp money" style="height:34px;text-align:right;width:90px">
-              {% else %}
-              <input type="hidden" name="counter_stock" value="{{ p.counter_stock }}">—
-              {% endif %}
             </td>
             {% endif %}
           </tr>

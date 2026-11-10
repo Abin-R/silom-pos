@@ -171,7 +171,7 @@
               {% if p.price %}{{ p.margin|floatformat:0 }}%{% else %}—{% endif %}</td>
             <td class="r money" {% if p.stock <= 0 %}style="color:var(--red-d);font-weight:650"{% endif %}>{{ p.stock }}</td>
             {% if branch.self_order_enabled %}
-            <td class="r money">{% if p.product_type == 'P' %}{{ p.counter_stock }}{% else %}—{% endif %}</td>
+            <td class="r money">{{ p.counter_stock }}</td>
             {% endif %}
             <td class="r money">{{ p.shelf_life|default_if_none:'' }}</td>
             <td class="r">

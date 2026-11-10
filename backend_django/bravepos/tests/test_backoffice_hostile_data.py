@@ -315,7 +315,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             reverse("backoffice:product_new") + self.scope,
             {"name": "New Cookie", "price": "45", "cost": "12", "stock": "10",
              "par_level": "20", "category": str(self.category.id),
-             "unit": str(self.unit.id), "product_type": "P", "tax_type": "V",
+             "unit": str(self.unit.id), "tax_type": "V",
              "sku": "CK-999", "barcode": "", "name_th": "", "image_url": ""},
         )
         created = Product.objects.get(name="New Cookie")
@@ -326,7 +326,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             reverse("backoffice:product_detail", args=[created.id]) + self.scope,
             {"name": "Renamed Cookie", "price": "50", "cost": "12",
              "stock": "10", "par_level": "8", "category": "", "unit": "",
-             "product_type": "P", "tax_type": "V", "sku": "", "barcode": "",
+             "tax_type": "V", "sku": "", "barcode": "",
              "name_th": "", "image_url": ""},
         )
         created.refresh_from_db()
@@ -339,7 +339,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
                 reverse("backoffice:product_detail", args=[created.id]) + self.scope,
                 {"name": "Renamed Cookie", "price": "50", "cost": "12",
                  "par_level": "8", "counter_stock": typed, "category": "",
-                 "unit": "", "product_type": "P", "tax_type": "V", "sku": "",
+                 "unit": "", "tax_type": "V", "sku": "",
                  "barcode": "", "name_th": "", "image_url": ""},
             )
             created.refresh_from_db()
@@ -478,7 +478,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             "branch": str(self.branch.id),
             "barcode": ["", ""], "name": ["Bulk One", ""],
             "description": ["", ""], "category": ["", ""], "unit": ["", ""],
-            "price": ["12", "0"], "product_type": ["P", "P"],
+            "price": ["12", "0"],
         })
         self.assertTrue(Product.objects.filter(name="Bulk One").exists(),
                         "bulk add saved nothing")

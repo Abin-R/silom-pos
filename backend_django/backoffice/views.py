@@ -2623,7 +2623,7 @@ def inventory_export(request):
     writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
     rows = _inventory_as_of_rows(qs, _sort, as_of) if as_of else qs.iterator()
     for no, p in enumerate(rows, start=1):
-        balance = "non-stock" if p.product_type == "S" else p.stock
+        balance = p.stock
         writer.writerow([
             no,
             p.barcode or "",
@@ -3248,7 +3248,6 @@ def _check_stock_pickable(branch):
         return []
     rows = (Product.objects
             .filter(branch=branch, active=True)
-            .exclude(product_type="BOM")
             .select_related("category")
             .annotate(image_len=Length("image_url") + Length("image_base64"))
             .order_by("name"))
@@ -3408,8 +3407,6 @@ def product_list(request):
             qs = qs.filter(barcode__icontains=q)
         elif field == "category":
             qs = qs.filter(category__name__icontains=q)
-        elif field == "type":
-            qs = qs.filter(product_type__icontains=q)
         else:  # all
             qs = qs.filter(
                 Q(name__icontains=q)
@@ -3654,7 +3651,6 @@ def _apply_product_form(product, post, branch, errors):
     cat_id = post.get("category") or ""
     product.category_id = cat_id if cat_id else None
     product.tax_type = post.get("tax_type") or "V"
-    product.product_type = post.get("product_type") or "P"
     # The form's JS downscales before POSTing, but that runs in the browser and
     # can be bypassed (JS off) or fall through its own error path. Normalising
     # server-side is what actually bounds the column. See bravepos.images.
@@ -4132,8 +4128,6 @@ def product_bulk_add(request):
             p.category_id = cat or None
             unit = request.POST.getlist("unit")[idx] or ""
             p.unit_id = unit or None
-            ptype = request.POST.getlist("product_type")[idx] or "P"
-            p.product_type = ptype
             p.save()
             saved += 1
         if saved:

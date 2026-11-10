@@ -991,12 +991,6 @@ class MinimumStockTests(TestCase):
         self.assertEqual(p.counter_stock, 3)
         self.assertTrue(self._item(p)['counter_only'])
 
-    def test_service_products_ignore_the_minimum(self):
-        p = make_product(self.branch, stock=0, counter_stock=3)
-        p.product_type = 'S'
-        p.save()
-        self.assertFalse(self._item(p)['counter_only'])
-
     def test_units_on_hold_count_against_the_minimum(self):
         p = make_product(self.branch, stock=5, counter_stock=3)
         with StubGateway():

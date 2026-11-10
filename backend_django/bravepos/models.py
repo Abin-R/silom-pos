@@ -445,7 +445,6 @@ class Product(models.Model):
     image_base64 = models.TextField(blank=True, default="")
     is_favorite = models.BooleanField(default=False)
     tax_type = models.CharField(max_length=4, default="V")  # V=VAT, N=None
-    product_type = models.CharField(max_length=4, default="P")  # P=Product, S=Service, BOM=Bundle
     active = models.BooleanField(default=True)
     # True when ``active`` was turned off by the product's sale dates rather
     # than by someone pressing Remove.  Only these come back on their own when

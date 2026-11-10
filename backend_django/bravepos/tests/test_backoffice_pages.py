@@ -406,7 +406,7 @@ class ProductArchiveTests(TestCase):
         self.client.post(reverse("backoffice:product_detail", args=[product.id]), {
             "name": "Mooncake Box 2026", "price": "599", "cost": "400",
             "stock": "4", "par_level": "0", "category": str(self.category.id),
-            "tax_type": "V", "product_type": "P",
+            "tax_type": "V",
         })
 
         product.refresh_from_db()

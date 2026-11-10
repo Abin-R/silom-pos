@@ -163,20 +163,18 @@ def _line_quantities(items: list[dict]) -> dict[str, int]:
 
 
 def is_sold_out(product, held: int = 0) -> bool:
-    """A stocked product with none left to sell.  Service products don't track
-    stock and are always orderable."""
-    return int(product.stock or 0) - held <= 0 and product.product_type == 'P'
+    """A product with none left to sell."""
+    return int(product.stock or 0) - held <= 0
 
 
 def counter_floor(product) -> int:
     """Units of this product self-order must leave for the counter."""
-    return int(product.counter_stock or 0) if product.product_type == 'P' else 0
+    return int(product.counter_stock or 0)
 
 
 def is_counter_only(product, held: int = 0) -> bool:
     """Still on the shelf, but down to what is kept for the counter."""
-    return (product.product_type == 'P'
-            and 0 < int(product.stock or 0) - held <= counter_floor(product))
+    return 0 < int(product.stock or 0) - held <= counter_floor(product)
 
 
 def menu_for(branch) -> list[dict]:
@@ -197,7 +195,7 @@ def menu_for(branch) -> list[dict]:
     held = held_quantities(branch)
     out = []
     for p in products:
-        on_hold = held.get(str(p.id), 0) if p.product_type == 'P' else 0
+        on_hold = held.get(str(p.id), 0)
         if is_sold_out(p, on_hold):
             continue
         shelf = int(p.stock or 0) - on_hold
@@ -439,7 +437,7 @@ def free_item_stock(branch, items: list[dict], exclude_pk=None) -> dict[str, str
     wanted = _line_quantities(items)
     held = held_quantities(branch, exclude_pk=exclude_pk)
     out: dict[str, str] = {}
-    for p in Product.objects.filter(pk__in=free_pids, branch=branch, product_type='P'):
+    for p in Product.objects.filter(pk__in=free_pids, branch=branch):
         out[str(p.id)] = _free_status(p, wanted[str(p.id)], held.get(str(p.id), 0))
     return out
 
@@ -601,7 +599,7 @@ def _hold_stock(draft: SelfOrder) -> None:
 
         held = held_quantities(draft.branch, exclude_pk=draft.pk)
         tracked = Product.objects.filter(
-            pk__in=wanted, branch=draft.branch, product_type='P',
+            pk__in=wanted, branch=draft.branch,
         )
         for p in tracked:
             on_shelf = int(p.stock or 0) - held.get(str(p.id), 0)
