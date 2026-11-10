@@ -1551,6 +1551,22 @@ function TransactionDetail({
     }
   };
 
+  // The customer slip, then the packer's copy (to the packer printer when one
+  // is set up) — the pair a high-volume or self-order sale prints.
+  const printAbbreviatedAndPacker = async () => {
+    setReprintBusy(true);
+    try {
+      const receipt = toReceiptOrder(isVoided);
+      if (await sendPrint(receipt)) {
+        await sendPrint({ ...receipt, doc_type: "packer" });
+      }
+    } catch (e: any) {
+      showAlert(tr("admin.print_failed"), e?.message || String(e));
+    } finally {
+      setReprintBusy(false);
+    }
+  };
+
   // Called by TaxInvoiceFlow once the buyer details are saved on the server.
   // Printing is separate from saving on purpose: a print failure (paper out,
   // printer asleep) must not lose the details the cashier just typed — they
@@ -1733,6 +1749,7 @@ function TransactionDetail({
         visible={menuOpen}
         onClose={() => setMenuOpen(false)}
         onAbbreviated={() => { setMenuOpen(false); printAbbreviated(); }}
+        onAbbreviatedAndPacker={() => { setMenuOpen(false); printAbbreviatedAndPacker(); }}
         onFullTaxInvoice={() => { setMenuOpen(false); setTaxFlowOpen(true); }}
       />
 
@@ -1762,11 +1779,13 @@ function ReprintMenu({
   visible,
   onClose,
   onAbbreviated,
+  onAbbreviatedAndPacker,
   onFullTaxInvoice,
 }: {
   visible: boolean;
   onClose: () => void;
   onAbbreviated: () => void;
+  onAbbreviatedAndPacker: () => void;
   onFullTaxInvoice: () => void;
 }) {
   useT(); // re-render this screen when the language changes
@@ -1781,6 +1800,13 @@ function ReprintMenu({
             testID="reprint-abbreviated"
           >
             <Text style={styles.rpItemText}>{tr("admin.abbreviated_tax_invoice")}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.rpItem}
+            onPress={onAbbreviatedAndPacker}
+            testID="reprint-abbreviated-packer"
+          >
+            <Text style={styles.rpItemText}>{tr("admin.abbreviated_tax_invoice_and_packer")}</Text>
           </TouchableOpacity>
           {/* Always offered. A branch still waiting on its Revenue Department
               machine number prints the invoice with the POS ID line left

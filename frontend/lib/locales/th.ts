@@ -12,6 +12,7 @@
 const th = {
   admin: {
     abbreviated_tax_invoice: "ใบกำกับภาษีอย่างย่อ",
+    abbreviated_tax_invoice_and_packer: "ใบกำกับภาษีอย่างย่อ และใบแพ็คของ",
     abc_mail_com: "abc@mail.com",
     actual_in_drawer: "เงินที่นับได้จริง",
     add_a_customer_to_start_tracking: "เพิ่มลูกค้าเพื่อเริ่มบันทึกรายการที่สั่งประจำ",

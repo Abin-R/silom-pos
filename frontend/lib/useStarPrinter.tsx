@@ -29,7 +29,7 @@ import { View, NativeModules } from "react-native";
 import { captureRef } from "react-native-view-shot";
 import { ReceiptImage, RECEIPT_WIDTH } from "../components/ReceiptImage";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
-import { loadLocalPrinterConfig } from "./localPrinterConfig";
+import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "./localPrinterConfig";
 import * as queue from "./printerQueue";
 
 const BravePosPrinter = (NativeModules as any).BravePosPrinter as {
@@ -220,7 +220,12 @@ export function useStarPrinter() {
   const reprint = useCallback(
     async (order: ReceiptOrder, shop: ReceiptShop) => {
       const cfg = await loadLocalPrinterConfig();
-      return printReceipt(cfg, order, shop);
+      // A reprinted packer slip goes where the original did: the packer
+      // printer when one is set up, else the customer printer.
+      const target = order.doc_type === "packer"
+        ? printerForSlip("packer", cfg, await loadPackerPrinterConfig())
+        : cfg;
+      return printReceipt(target, order, shop);
     },
     [printReceipt],
   );

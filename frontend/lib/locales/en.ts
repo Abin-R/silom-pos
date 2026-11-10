@@ -13,6 +13,7 @@
 const en = {
   admin: {
     abbreviated_tax_invoice: "Abbreviated Tax Invoice",
+    abbreviated_tax_invoice_and_packer: "Abbreviated Tax Invoice and Packer Slip",
     abc_mail_com: "abc@mail.com",
     actual_in_drawer: "Actual in Drawer",
     add_a_customer_to_start_tracking: "Add a customer to start tracking their usual.",
