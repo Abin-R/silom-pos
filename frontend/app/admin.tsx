@@ -6934,11 +6934,13 @@ function PrintersSection({
             </Text>
             <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
               {[
-                { label: tr("admin.default"), v: undefined as number | undefined },
-                { label: "210", v: 210 },
-                { label: "250", v: 250 },
-                { label: "290", v: 290 },
-                { label: "330", v: 330 },
+                // Shown in mm; stored in printer dots (180 dpi → 1 dot ≈ 0.141 mm),
+                // so saved values stay valid.  170 / 210 / 250 / 290 / 330 dots.
+                { label: `${tr("admin.default")} (24 mm)`, v: undefined as number | undefined },
+                { label: "30 mm", v: 210 },
+                { label: "35 mm", v: 250 },
+                { label: "41 mm", v: 290 },
+                { label: "47 mm", v: 330 },
               ].map((opt) => {
                 const isActive = (localCfg.receiptRightPad ?? 170) === (opt.v ?? 170);
                 return (
@@ -6949,7 +6951,7 @@ function PrintersSection({
                       styles.secondaryBtn,
                       isActive && { borderColor: C.ok, backgroundColor: C.brandTintSoft },
                     ]}
-                    testID={`rightpad-${opt.label}`}
+                    testID={`rightpad-${opt.v ?? "default"}`}
                   >
                     <Text style={styles.secondaryBtnText}>{opt.label}</Text>
                   </TouchableOpacity>
