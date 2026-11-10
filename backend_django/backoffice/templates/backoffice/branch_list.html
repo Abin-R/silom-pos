@@ -19,15 +19,25 @@
 {% endblock %}
 
 {% block topbar_end %}
+  {% if branches_all %}
+  <div class="ctl ctl-search">
+    <svg><use href="#i-search"/></svg>
+    <input type="search" id="brSearch" placeholder="Search branches" autocomplete="off">
+  </div>
+  {% endif %}
   <a class="btn btn-blue" href="{% url 'backoffice:branch_new' %}">
     <svg><use href="#i-plus"/></svg> Add branch</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>.br-item.br-off { display: none !important; }</style>
 {% endblock %}
 
 {% block content %}
 
 <div class="cols c-3" style="flex:none">
   {% for b in branches_all %}
-  <div class="panel" style="padding:20px;display:flex;flex-direction:column;border-left:3px solid {{ b|branch_color }}">
+  <div class="panel br-item" data-q="{{ b.name|lower }} {{ b.code|lower }}" style="padding:20px;display:flex;flex-direction:column;border-left:3px solid {{ b|branch_color }}">
     <div style="display:flex;align-items:center;gap:12px">
       <div style="width:40px;height:40px;border-radius:11px;background:{{ b|branch_color }}1A;color:{{ b|branch_color }};display:flex;align-items:center;justify-content:center;flex:none">
         <svg style="width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8"><use href="#i-store"/></svg>
@@ -72,6 +82,11 @@
     </div>
   </div>
   {% endfor %}
+  {% if branches_all %}
+  <div class="panel" id="brNoMatch" hidden style="grid-column:1/-1">
+    <div class="empty">No branch matches that search.</div>
+  </div>
+  {% endif %}
 </div>
 
 {% if branches_all %}
@@ -88,7 +103,7 @@
     </thead>
     <tbody>
       {% for b in branches_all %}
-      <tr>
+      <tr class="br-item" data-q="{{ b.name|lower }} {{ b.code|lower }}">
         <td>
           <span class="branchdot" style="background:{{ b|branch_color }}"></span>
           <b style="font-weight:620">{{ b.name }}</b>
@@ -130,4 +145,26 @@
   {% endif %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Filters the cards and the detail table together, as you type.
+(function () {
+  var input = document.getElementById("brSearch");
+  if (!input) return;
+  var items = document.querySelectorAll(".br-item");
+  var noMatch = document.getElementById("brNoMatch");
+  input.addEventListener("input", function () {
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    items.forEach(function (el) {
+      var hit = !q || el.dataset.q.indexOf(q) !== -1;
+      el.classList.toggle("br-off", !hit);
+      if (hit && el.tagName !== "TR") shown++;
+    });
+    noMatch.hidden = shown > 0;
+  });
+})();
+</script>
 {% endblock %}
