@@ -24,6 +24,9 @@ PERMISSIONS = [
      "Registering a customer during a sale is always allowed."),
     ("manage_settings", "Manage settings",
      "Move this till to another branch."),
+    ("settle_late_payments", "Settle late payments",
+     "Under Orders › Refund due: mark a self-order paid after its time ran "
+     "out as refunded, or make the order after all."),
 ]
 
 KEYS = [key for key, _, _ in PERMISSIONS]

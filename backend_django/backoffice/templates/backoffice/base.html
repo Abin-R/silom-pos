@@ -61,7 +61,7 @@
       <a class="nv {% if active == 'report_daily' %}on{% endif %}" href="{% url 'backoffice:report_daily' %}">
         <svg><use href="#i-bars"/></svg>Sales</a>
       <a class="nv {% if active == 'transactions' %}on{% endif %}" href="{% url 'backoffice:transactions' %}">
-        <svg><use href="#i-orders"/></svg>Transactions</a>
+        <svg><use href="#i-orders"/></svg>Transactions{% if nav_refund_due %}<u class="alert" title="{{ nav_refund_due }} late payment{{ nav_refund_due|pluralize }} to refund">{{ nav_refund_due }}</u>{% endif %}</a>
       <a class="nv {% if active == 'report_sku' %}on{% endif %}" href="{% url 'backoffice:report_sku' %}">
         <svg><use href="#i-tag"/></svg>Product performance</a>
       <a class="nv {% if active == 'report_sell' %}on{% endif %}" href="{% url 'backoffice:report_sell' %}">

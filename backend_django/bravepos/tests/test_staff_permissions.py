@@ -48,9 +48,14 @@ class CatalogueTests(TestCase):
             permissions.ROLE_DEFAULTS['cashier'],
             ['manage_inventory', 'adjust_stock', 'manage_customers'])
 
+    # Granted by their own migration (0085 gives this one to admins).
+    ADDED_AFTER_0073 = {'settle_late_payments'}
+
     def test_migration_copy_matches_the_catalogue(self):
         migration = importlib.import_module('bravepos.migrations.0073_staff_permissions')
-        self.assertEqual(migration.ROLE_DEFAULTS, permissions.ROLE_DEFAULTS)
+        then = {role: [k for k in keys if k not in self.ADDED_AFTER_0073]
+                for role, keys in permissions.ROLE_DEFAULTS.items()}
+        self.assertEqual(migration.ROLE_DEFAULTS, then)
 
     def test_migration_backfill_ticks_role_defaults(self):
         branch = make_branch()
@@ -61,8 +66,8 @@ class CatalogueTests(TestCase):
         migration.backfill(django_apps, None)
         for member in (admin, cashier, viewer):
             member.refresh_from_db()
-        self.assertEqual(admin.permissions, permissions.ROLE_DEFAULTS['admin'])
-        self.assertEqual(cashier.permissions, permissions.ROLE_DEFAULTS['cashier'])
+        self.assertEqual(admin.permissions, migration.ROLE_DEFAULTS['admin'])
+        self.assertEqual(cashier.permissions, migration.ROLE_DEFAULTS['cashier'])
         self.assertEqual(viewer.permissions, [])
 
     def test_never_customised_follows_the_role(self):

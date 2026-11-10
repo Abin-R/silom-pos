@@ -43,6 +43,7 @@ import {
   type LoyaltyReward,
 } from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
+import { useRefundDue } from "../lib/refundDue";
 import {
   comboSetsWith,
   freeProductFor,
@@ -173,6 +174,8 @@ const THB = (n: number) => `฿${n.toLocaleString("en-US", { minimumFractionDigi
 export default function POS() {
   useT(); // re-render this screen when the language changes
   const router = useRouter();
+  // Late self-order payments waiting at Orders › Refund due (the rail badge).
+  const refundDue = useRefundDue();
   const insets = useSafeAreaInsets();
   // The app's one receipt printer, mounted in the root layout (printerHost),
   // so a self-order printing while Stock or Orders is open still gets its logo.
@@ -900,6 +903,7 @@ export default function POS() {
   // Navigation is identical on every screen; only what a key *means* differs.
   // Here "shop" is already the current screen, so it just closes the drawer.
   const navProps = {
+    badges: { transactions: refundDue.count },
     staff: staff || "Admin",
     role: role || "",
     branchName: activeBranchName || undefined,

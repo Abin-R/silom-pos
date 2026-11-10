@@ -240,6 +240,12 @@ body {
 .nv.on { background: var(--blue); color: #fff; font-weight: 600; }
 .nv.on svg { stroke: #fff; }
 .nv.on u { color: rgba(255,255,255,.75); }
+/* A count that needs someone to act (Refund due), not just a size. */
+.nv u.alert, .nv.on u.alert {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--red-d); color: #fff; font-weight: 700;
+}
 
 .side-foot { margin-top: auto; padding: 0 12px; flex: none; }
 .side-sep { height: 1px; background: rgba(255,255,255,.12); margin: 0 4px 12px; }
@@ -1085,3 +1091,10 @@ body {
 .nv-grp[open] > summary .nv-caret { transform: rotate(180deg); }
 .nv-grp > a.nv { padding-left: 42px; height: 38px; margin-top: 2px; }
 .nv-grp > a.nv svg { width: 16px; height: 16px; }
+
+/* Count on the Transactions › Refund due tab. */
+.seg-alert {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px;
+  background: var(--red-d); color: #fff; font-size: 11px; font-weight: 700;
+}

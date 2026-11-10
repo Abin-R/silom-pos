@@ -15,22 +15,30 @@
 {% block title %}Transactions{% endblock %}
 {% block page_title %}Transactions{% endblock %}
 {% block page_sub %}
+  {% if refund_due_view %}
+  <div class="tb-sub">Self-orders paid after their 3 minutes ran out · no bill was made</div>
+  {% else %}
   <div class="tb-sub">
     {{ window_bills|intcomma }} bill{{ window_bills|pluralize }} · ฿{{ window_total|floatformat:0|intcomma }} · {{ date_from }} → {{ date_to }}
   </div>
+  {% endif %}
 {% endblock %}
 
 {% block topbar %}
+  {% if not refund_due_view %}
   <div class="ctl ctl-search">
     <svg><use href="#i-search"/></svg>
     <input type="search" name="q" value="{{ query }}" form="filterForm"
            placeholder="Bill no., name, phone or amount">
   </div>
+  {% endif %}
 {% endblock %}
 
 {% block topbar_end %}
+  {% if not refund_due_view %}
   <a class="btn" href="{% url 'backoffice:transactions_export' %}?{{ qs }}">
     <svg><use href="#i-dl"/></svg> Export</a>
+  {% endif %}
 {% endblock %}
 
 {% block filter_extra %}
@@ -45,9 +53,13 @@
   <div class="seg">
     {% for key, label in statuses %}
       <a class="{% if status == key %}on{% endif %}"
-         href="?{% qs_replace request status=key page=None %}">{{ label }}</a>
+         href="?{% qs_replace request status=key page=None o=None %}">{{ label }}{% if key == 'refund_due' and nav_refund_due %} <span class="seg-alert">{{ nav_refund_due }}</span>{% endif %}</a>
     {% endfor %}
   </div>
+  {% if refund_due_view %}
+</div>
+{% include "backoffice/_refund_due.html" %}
+{% else %}
   <div class="seg">
     <a class="{% if not payment %}on{% endif %}" href="?{% qs_replace request payment=None page=None %}">Any payment</a>
     {% for p in payments %}
@@ -215,4 +227,5 @@
   {% endwith %}
   {% endif %}
 </div>
+{% endif %}
 {% endblock %}

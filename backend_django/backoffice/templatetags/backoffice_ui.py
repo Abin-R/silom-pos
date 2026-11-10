@@ -94,6 +94,17 @@ PAYMENT_TAGS = {
 
 
 @register.filter
+def iso_dt(value):
+    """An ISO timestamp (as the API rows carry it) as a local datetime, so the
+    ``date`` filter can format it.  Blank or unreadable gives ``None``."""
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+
+    dt = parse_datetime(value) if isinstance(value, str) and value else None
+    return timezone.localtime(dt) if dt else None
+
+
+@register.filter
 def payment_label(method):
     key = (method or "").strip().lower()
     for needle, (label, _) in PAYMENT_TAGS.items():

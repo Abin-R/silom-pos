@@ -7,12 +7,13 @@ export type Permission =
   | "manage_inventory"
   | "adjust_stock"
   | "manage_customers"
-  | "manage_settings";
+  | "manage_settings"
+  | "settle_late_payments";
 
 // A backend from before permissions sends none — fall back to what each
 // role could do then, so an older server keeps today's behaviour.
 const ROLE_DEFAULTS: Record<string, Permission[]> = {
-  admin: ["manage_products", "manage_inventory", "adjust_stock", "manage_customers", "manage_settings"],
+  admin: ["manage_products", "manage_inventory", "adjust_stock", "manage_customers", "manage_settings", "settle_late_payments"],
   cashier: ["manage_inventory", "adjust_stock", "manage_customers"],
 };
 

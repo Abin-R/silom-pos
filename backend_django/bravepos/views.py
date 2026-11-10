@@ -1115,8 +1115,40 @@ def orders_list_create(request):
             qs = qs.filter(status=status_)
         # By the SelfOrder link, not source='self_order' — that is a free-text
         # channel anyone posting an order can set.
-        if request.query_params.get('channel') == 'self_order':
+        channel = request.query_params.get('channel')
+        if channel == 'self_order':
             qs = qs.filter(self_order__isnull=False)
+        elif channel == 'till':
+            qs = qs.filter(self_order__isnull=True)
+
+        # Order history filters (the till's Filters sheet).  Each is optional
+        # and an unknown value is ignored rather than emptying the list.
+        state = request.query_params.get('state')
+        if state == 'paid':
+            qs = qs.exclude(status='cancel')
+        elif state == 'voided':
+            qs = qs.filter(status='cancel').exclude(cancel_type='refund')
+        elif state == 'refunded':
+            qs = qs.filter(status='cancel', cancel_type='refund')
+        elif state == 'not_refunded':
+            qs = qs.filter(status='cancel').exclude(beam_refund_error='')
+        elif state == 'tax_invoice':
+            qs = qs.filter(pos_tax_invoice__isnull=False)
+        payment = (request.query_params.get('payment') or '').strip()
+        if payment:
+            qs = qs.filter(payment_method__iexact=payment)
+        staff_name = (request.query_params.get('staff') or '').strip()
+        if staff_name:
+            qs = qs.filter(staff=staff_name)
+        try:
+            min_total = request.query_params.get('min_total')
+            if min_total not in (None, ''):
+                qs = qs.filter(total__gte=Decimal(min_total))
+            max_total = request.query_params.get('max_total')
+            if max_total not in (None, ''):
+                qs = qs.filter(total__lte=Decimal(max_total))
+        except (InvalidOperation, ValueError):
+            pass
 
         # Date window — Transactions asks only for the bucket it is showing
         # (today / yesterday / last 7 days) rather than pulling every order the
@@ -1134,9 +1166,18 @@ def orders_list_create(request):
         # Order-number search.  This has to happen server-side: the client
         # only holds one page, so filtering there would quietly search 50 rows
         # and report "no matching orders" for a bill sitting on page 2.
+        # Bill number, customer name, or the customer's phone as typed off a
+        # receipt (0812…), which ``phone_search_digits`` lines up with E.164.
         q = (request.query_params.get('q') or '').strip()
         if q:
-            qs = qs.filter(order_number__icontains=q)
+            match = (Q(order_number__icontains=q) | Q(customer_name__icontains=q)
+                     | Q(customer__name__icontains=q))
+            # Four digits at least: a bill number like "PS…123" carries digits
+            # too, and "3" would otherwise match half the phone book.
+            digits = phone_search_digits(q)
+            if len(digits) >= 4:
+                match |= Q(customer__phone__contains=digits)
+            qs = qs.filter(match)
 
         try:
             limit = int(request.query_params.get('limit', ORDERS_MAX_LIMIT))
@@ -2732,6 +2773,72 @@ def self_orders_pending(request):
         .prefetch_related('items')
     )
     return Response(OrderSerializer(orders, many=True).data)
+
+
+# ─── Order history filter choices ────────────────────────────────────────────
+ORDER_FILTER_LOOKBACK_DAYS = 90
+
+
+@api_view(['GET'])
+@require_session
+def order_filter_options(request):
+    """The payment methods and staff names worth offering as filters: those on
+    this branch's bills in the last 90 days, most used first."""
+    from django.db.models import Count
+    since = djtz.now() - timedelta(days=ORDER_FILTER_LOOKBACK_DAYS)
+    recent = Order.objects.filter(branch=request.session_obj.branch, created_at__gte=since)
+
+    def ranked(field):
+        return [
+            row[field] for row in
+            recent.exclude(**{field: ''}).values(field)
+            .annotate(n=Count('id')).order_by('-n', field)[:30]
+        ]
+    return Response({'payment_methods': ranked('payment_method'), 'staff': ranked('staff')})
+
+
+# ─── Late self-order payments ("Refund due") ─────────────────────────────────
+@api_view(['GET'])
+@require_session
+def self_orders_refund_due(request):
+    """Late payments at this branch nobody has settled.  Open to every
+    session: the list and its badge are for anyone at the counter; settling
+    one needs ``settle_late_payments``."""
+    rows = selforder.refund_due(request.session_obj.branch)
+    return Response([selforder.late_payment_row(d) for d in rows])
+
+
+def _settle_late_payment(request, draft_id, action):
+    if request.method != 'POST':
+        return Response({'detail': 'POST required'}, status=405)
+    staff = request.session_obj.staff
+    denied = perm_denied(staff, 'settle_late_payments')
+    if denied is not None:
+        return denied
+    branch = request.session_obj.branch
+    try:
+        if action == 'refunded':
+            draft = selforder.mark_refunded(draft_id, staff.name, branch=branch)
+        else:
+            order = selforder.make_order(draft_id, staff.name, branch=branch)
+            draft = order.self_order
+    except selforder.LatePaymentNotFound as e:
+        return Response({'detail': str(e)}, status=404)
+    except selforder.LatePaymentError as e:
+        return Response({'detail': str(e)}, status=409)
+    return Response(selforder.late_payment_row(draft))
+
+
+@api_view(['POST'])
+@require_session
+def self_order_mark_refunded(request, draft_id):
+    return _settle_late_payment(request, draft_id, 'refunded')
+
+
+@api_view(['POST'])
+@require_session
+def self_order_make_order(request, draft_id):
+    return _settle_late_payment(request, draft_id, 'make_order')
 
 
 # ─── Upsell suggestions ──────────────────────────────────────────────────────

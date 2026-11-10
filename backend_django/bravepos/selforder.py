@@ -44,7 +44,7 @@ from django.db.models import Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
-from . import discount_rules, discounts, gateways, images, seatalk
+from . import discount_rules, discounts, gateways, images
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Branch, Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -728,21 +728,55 @@ def _paid_too_late(draft: SelfOrder) -> bool:
     return paid_at is None or paid_at > draft.hold_expires_at
 
 
-def _alert_late_payment(draft: SelfOrder) -> None:
-    """Tell staff there is money to give back; no bill exists to find it by.
-    Not the async sender: the sweeper usually lands here, and its process would
-    exit and take a background thread with it."""
+def _note_late_payment(draft: SelfOrder) -> None:
+    """Log a payment that landed after its hold.  Staff find it under "Refund
+    due" on the till's Orders screen and on Backoffice › Transactions, so there
+    is no chat alert any more."""
     logger.warning('self-order paid after its hold ended, refund due: SELF-%s %s',
                    draft.token[:12], draft.beam_charge_id)
-    seatalk.send_group_text(seatalk.late_payment_group_id(), '\n'.join([
-        'BravePOS: Self-order paid late, refund needed',
-        f'Branch: {draft.branch.name}',
-        f'Amount: ฿{draft.total:,.2f}',
-        f'Reference: SELF-{draft.token[:12]}',
-        f'Beam charge: {draft.beam_charge_id}',
-        'No sale was recorded and no stock moved. '
-        'Refund it in the Beam dashboard.',
-    ]))
+
+
+def _record_sale(locked: SelfOrder) -> Order:
+    """The Order for a paid draft.  The caller holds the draft's row lock and
+    moves it to ``paid`` in the same transaction."""
+    subtotal, discount = bill_figures(locked.items)
+    order = create_order_from_items(
+        branch=locked.branch,
+        items=[it for it in locked.items if not it.get('is_free')],
+        free_items=[it for it in locked.items if it.get('is_free')],
+        payment_method=locked.payment_method,
+        # Attribute the sale to the round it was PLACED in, not the one open
+        # when the payment confirmation lands — those differ when a customer
+        # pays just before the cashier closes the round and the sweeper
+        # confirms just after.  Falls back to the time window in
+        # ``shift_orders`` if the draft predated any shift.
+        shift=_placed_in_shift(locked),
+        # Frozen — the customer was quoted this and the gateway already
+        # captured it. Recomputing could disagree if an admin edited the fee
+        # or VAT rate while the customer was paying.
+        charges={
+            'vat_amount': locked.vat_amount,
+            'processing_fee': locked.processing_fee,
+            'processing_fee_vat': locked.processing_fee_vat,
+            'total': locked.total,
+        },
+        goods_total=locked.goods_total,
+        subtotal=subtotal,
+        discount_type='item' if discount > 0 else 'none',
+        discount_amount=discount,
+        paid_amount=locked.total,
+        status='completed',     # paid is done; the kanban is switched off
+        source='self_order',
+        # No session here, so no cashier name. The void/reprint copy reads
+        # this back from the DB, so it must not be empty.
+        staff='Self Order',
+        gateway_ids={
+            'beam_charge_id': locked.beam_charge_id,
+            'beam_link_id': locked.beam_link_id,
+        },
+        trust_item_prices=False,   # re-price from the DB even now
+    )
+    return order
 
 
 def promote(draft: SelfOrder) -> Order | None:
@@ -769,8 +803,8 @@ def promote(draft: SelfOrder) -> Order | None:
     if _paid_too_late(draft):
         marked = SelfOrder.objects.filter(
             pk=draft.pk, status='pending').update(status='late_paid')
-        if marked:      # exactly one poller wins, so exactly one alert
-            _alert_late_payment(draft)
+        if marked:      # exactly one poller wins, so it is logged once
+            _note_late_payment(draft)
         return None
 
     with transaction.atomic():
@@ -782,43 +816,7 @@ def promote(draft: SelfOrder) -> Order | None:
         if locked.status != 'pending':
             return None
 
-        subtotal, discount = bill_figures(locked.items)
-        order = create_order_from_items(
-            branch=locked.branch,
-            items=[it for it in locked.items if not it.get('is_free')],
-            free_items=[it for it in locked.items if it.get('is_free')],
-            payment_method=locked.payment_method,
-            # Attribute the sale to the round it was PLACED in, not the one open
-            # when the payment confirmation lands — those differ when a customer
-            # pays just before the cashier closes the round and the sweeper
-            # confirms just after.  Falls back to the time window in
-            # ``shift_orders`` if the draft predated any shift.
-            shift=_placed_in_shift(locked),
-            # Frozen — the customer was quoted this and the gateway already
-            # captured it. Recomputing could disagree if an admin edited the fee
-            # or VAT rate while the customer was paying.
-            charges={
-                'vat_amount': locked.vat_amount,
-                'processing_fee': locked.processing_fee,
-                'processing_fee_vat': locked.processing_fee_vat,
-                'total': locked.total,
-            },
-            goods_total=locked.goods_total,
-            subtotal=subtotal,
-            discount_type='item' if discount > 0 else 'none',
-            discount_amount=discount,
-            paid_amount=locked.total,
-            status='completed',     # paid is done; the kanban is switched off
-            source='self_order',
-            # No session here, so no cashier name. The void/reprint copy reads
-            # this back from the DB, so it must not be empty.
-            staff='Self Order',
-            gateway_ids={
-                'beam_charge_id': locked.beam_charge_id,
-                'beam_link_id': locked.beam_link_id,
-            },
-            trust_item_prices=False,   # re-price from the DB even now
-        )
+        order = _record_sale(locked)
 
         locked.status = 'paid'
         locked.paid_at = djtz.now()
@@ -829,6 +827,96 @@ def promote(draft: SelfOrder) -> Order | None:
         'self-order promoted token=%s order=%s total=%s',
         draft.token[:8], order.order_number, order.total,
     )
+    return order
+
+
+# ── Late payments ("Refund due") ─────────────────────────────────────────────
+class LatePaymentError(SelfOrderError):
+    """This late payment was already settled, or is not one."""
+
+
+class LatePaymentNotFound(LatePaymentError):
+    """No such late payment (at this branch)."""
+
+
+def refund_due(branch=None):
+    """Late payments nobody has settled yet, newest first."""
+    qs = SelfOrder.objects.filter(status='late_paid').select_related('branch')
+    if branch is not None:
+        qs = qs.filter(branch=branch)
+    return qs.order_by('-created_at')
+
+
+def late_payment_row(d: SelfOrder) -> dict:
+    """One late payment as the till and backoffice show it."""
+    return {
+        'id': str(d.id),
+        'reference': f'SELF-{d.token[:12]}',
+        'branch_name': d.branch.name,
+        'total': float(d.total),
+        'payment_method': d.payment_method,
+        'beam_charge_id': d.beam_charge_id,
+        'created_at': d.created_at.isoformat(),
+        # When the customer's time ran out; the money landed after this.
+        'ended_at': d.hold_expires_at.isoformat() if d.hold_expires_at else None,
+        'items': [
+            {'name': it.get('name') or '', 'qty': int(it.get('qty') or 0),
+             'is_free': bool(it.get('is_free'))}
+            for it in (d.items or [])
+        ],
+        'status': d.status,
+        'resolution': d.resolution,
+        'resolved_by': d.resolved_by,
+        'resolved_at': d.resolved_at.isoformat() if d.resolved_at else None,
+        'order_number': d.order.order_number if d.order_id else None,
+    }
+
+
+def _settle(draft_id, by: str, resolution: str, branch=None) -> SelfOrder:
+    """Lock a late payment and stamp who settled it.  Saved through the model
+    (not ``update``) so the audit log records the change."""
+    qs = SelfOrder.objects.select_for_update()
+    if branch is not None:
+        qs = qs.filter(branch=branch)
+    locked = qs.filter(pk=draft_id).first()
+    if locked is None:
+        raise LatePaymentNotFound('Not found.')
+    if locked.status != 'late_paid':
+        raise LatePaymentError('This payment has already been settled.')
+    locked.resolution = resolution
+    locked.resolved_by = (by or '')[:120]
+    locked.resolved_at = djtz.now()
+    return locked
+
+
+def mark_refunded(draft_id, by: str, branch=None) -> SelfOrder:
+    """Staff gave the money back (in the Beam dashboard).  Records it only:
+    nothing here calls Beam."""
+    with transaction.atomic():
+        locked = _settle(draft_id, by, 'refunded', branch)
+        locked.status = 'refunded'
+        locked.save(update_fields=['status', 'resolution', 'resolved_by', 'resolved_at'])
+    return locked
+
+
+def make_order(draft_id, by: str, branch=None) -> Order:
+    """Turn a late payment into the sale after all, as if it had been on time.
+
+    Not stock-checked, like any till sale: the staff member is standing at the
+    shelf.  The slip prints on the till like every other self-order, because
+    the draft becomes ``paid`` with nothing printed yet.
+    """
+    with transaction.atomic():
+        locked = _settle(draft_id, by, 'ordered', branch)
+        order = _record_sale(locked)
+        locked.status = 'paid'
+        locked.paid_at = djtz.now()
+        locked.order = order
+        locked.save(update_fields=[
+            'status', 'paid_at', 'order', 'resolution', 'resolved_by', 'resolved_at',
+        ])
+    logger.info('late self-order made into order token=%s order=%s by=%s',
+                locked.token[:8], order.order_number, by)
     return order
 
 

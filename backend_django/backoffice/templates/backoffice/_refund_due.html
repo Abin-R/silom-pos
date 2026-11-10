@@ -1,0 +1,84 @@
+{% load humanize backoffice_ui %}
+{% comment %}
+  Transactions › Refund due.  A self-order whose money reached Beam after the
+  customer's 3 minutes ran out: no bill was made and no stock moved.  Staff
+  either give the money back (in the Beam dashboard — this page only records
+  it) or make the order after all, which prints the slip on the till.
+{% endcomment %}
+<div class="row" style="flex:1;flex-direction:column;gap:14px;align-items:stretch">
+  <div class="panel">
+    <div class="panel-h">Waiting for a refund
+      <div class="spacer"></div>
+      <span style="font-size:13px;color:var(--mut)">{{ due_rows|length }} open</span>
+    </div>
+    <div class="panel-scroll">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:150px">Reference</th><th style="width:130px">Time ran out</th><th>Branch</th>
+            <th>Items</th><th>Payment</th><th>Beam charge</th><th class="r">Amount</th>
+            <th class="r" style="width:260px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in due_rows %}
+          <tr>
+            <td class="money" style="font-weight:650">{{ r.reference }}</td>
+            <td class="money">{{ r.ended_at|iso_dt|date:"d M, H:i"|default:"—" }}</td>
+            <td>{{ r.branch_name }}</td>
+            <td>{% for it in r.items %}{{ it.name }} ×{{ it.qty }}{% if it.is_free %} (free){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+            <td>{{ r.payment_method|payment_label }}</td>
+            <td class="money" style="font-size:12px;color:var(--mut)">{{ r.beam_charge_id|default:"—" }}</td>
+            <td class="r money" style="font-weight:660">฿{{ r.total|floatformat:2|intcomma }}</td>
+            <td class="r" style="white-space:nowrap">
+              <form method="post" action="{% url 'backoffice:late_payment_settle' r.id 'make-order' %}" style="display:inline"
+                    onsubmit="return confirm('Make the order for {{ r.reference }}? The slip prints on the till and stock is taken.')">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="btn btn-sm" type="submit">Make the order</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:late_payment_settle' r.id 'refunded' %}" style="display:inline"
+                    onsubmit="return confirm('Mark {{ r.reference }} as refunded? Refund ฿{{ r.total|floatformat:2 }} in the Beam dashboard first — this only records it.')">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="btn btn-sm btn-blue" type="submit">Refunded</button>
+              </form>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="8" class="empty">
+            <svg><use href="#i-inbox"/></svg>
+            Nothing to refund. Late self-order payments appear here.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">Settled in the last {{ settled_days }} days</div>
+    <div class="panel-scroll">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:150px">Reference</th><th>Branch</th><th class="r">Amount</th>
+            <th>Outcome</th><th>By</th><th style="width:130px">When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in settled_rows %}
+          <tr>
+            <td class="money">{{ r.reference }}</td>
+            <td>{{ r.branch_name }}</td>
+            <td class="r money">฿{{ r.total|floatformat:2|intcomma }}</td>
+            <td>{% if r.resolution == 'ordered' %}<span class="tag t-ok">Order made{% if r.order_number %} · #{{ r.order_number }}{% endif %}</span>{% else %}<span class="tag t-red">Refunded</span>{% endif %}</td>
+            <td>{{ r.resolved_by|default:"—" }}</td>
+            <td class="money">{{ r.resolved_at|iso_dt|date:"d M, H:i" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="empty">None yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

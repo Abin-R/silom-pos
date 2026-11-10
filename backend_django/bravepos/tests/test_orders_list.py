@@ -99,3 +99,59 @@ class OrdersListWindowTests(TestCase):
             token='so-tok', branch=self.branch, order=self.today, status='paid',
         )
         self.assertEqual(self._numbers(channel='self_order'), {'T-1'})
+
+
+class OrderHistoryFilterTests(TestCase):
+    """The till's Filters sheet: status, payment, staff, amount, and a search
+    that also finds the customer."""
+
+    def setUp(self):
+        from bravepos.models import Customer
+        make_shop()
+        self.branch = make_branch()
+        staff = Staff.objects.create(
+            name='Bonus', email='bonus@test.local', password_hash='x', role='cashier')
+        staff.branches.add(self.branch)
+        sess = BranchSession.objects.create(token='tok' * 12, branch=self.branch, staff=staff)
+        self.auth = {'HTTP_AUTHORIZATION': f'Bearer {sess.token}'}
+        cust = Customer.objects.create(name='Somchai', phone='+66812345678')
+        mk = lambda n, **kw: Order.objects.create(branch=self.branch, order_number=n, **kw)
+        mk('A-1', total='50.00', payment_method='Cash', staff='Nok')
+        mk('A-2', total='150.00', payment_method='Beam QR', staff='Ploy', customer=cust)
+        mk('A-3', total='80.00', payment_method='Cash', staff='Nok', status='cancel',
+           cancel_type='void')
+        mk('A-4', total='90.00', payment_method='Beam QR', staff='Ploy', status='cancel',
+           cancel_type='refund')
+        mk('A-5', total='300.00', payment_method='Card', staff='Nok',
+           pos_tax_invoice={'no': 'T1'})
+
+    def _numbers(self, **params):
+        res = self.client.get('/api/orders', params, **self.auth)
+        self.assertEqual(res.status_code, 200)
+        return {row['order_number'] for row in res.json()}
+
+    def test_state(self):
+        self.assertEqual(self._numbers(state='paid'), {'A-1', 'A-2', 'A-5'})
+        self.assertEqual(self._numbers(state='voided'), {'A-3'})
+        self.assertEqual(self._numbers(state='refunded'), {'A-4'})
+        self.assertEqual(self._numbers(state='tax_invoice'), {'A-5'})
+        self.assertEqual(len(self._numbers(state='nonsense')), 5)
+
+    def test_payment_staff_and_amount(self):
+        self.assertEqual(self._numbers(payment='beam qr'), {'A-2', 'A-4'})
+        self.assertEqual(self._numbers(staff='Nok', state='paid'), {'A-1', 'A-5'})
+        self.assertEqual(self._numbers(min_total='85', max_total='160'), {'A-2', 'A-4'})
+        self.assertEqual(len(self._numbers(min_total='abc')), 5)
+
+    def test_channel_till(self):
+        self.assertEqual(len(self._numbers(channel='till')), 5)
+
+    def test_search_finds_the_customer_by_name_or_phone(self):
+        self.assertEqual(self._numbers(q='somch'), {'A-2'})
+        self.assertEqual(self._numbers(q='0812345'), {'A-2'})
+        self.assertEqual(self._numbers(q='A-3'), {'A-3'})
+
+    def test_filter_options_are_most_used_first(self):
+        res = self.client.get('/api/orders/filter-options', **self.auth).json()
+        self.assertEqual(res['staff'], ['Nok', 'Ploy'])
+        self.assertEqual(res['payment_methods'][0], 'Beam QR')

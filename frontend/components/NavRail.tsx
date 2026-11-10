@@ -95,6 +95,9 @@ type BodyProps = {
   collapsed?: boolean;
   /** Renders the collapse control at the top of the rail. */
   onToggleCollapse?: () => void;
+  /** Red counts on items that need someone to act, by item key (Orders ›
+   *  Refund due). Zero or missing shows nothing. */
+  badges?: Record<string, number>;
 };
 
 // First glyph of the staff name — reads as an avatar at a glance and works
@@ -114,6 +117,7 @@ function RailBody({
   showBuildInfo,
   collapsed,
   onToggleCollapse,
+  badges,
   anim,
 }: BodyProps & { anim?: Animated.Value }) {
   useT(); // re-render this screen when the language changes
@@ -197,6 +201,7 @@ function RailBody({
       >
         {items.map((it) => {
           const on = activeKey === it.key;
+          const badge = badges?.[it.key] || 0;
           return (
             <TouchableOpacity
               key={it.key}
@@ -211,6 +216,12 @@ function RailBody({
                     size={21}
                     color={on ? C.surface : C.navIcon}
                   />
+                  {/* On the icon, so it still shows with the rail collapsed. */}
+                  {badge > 0 && (
+                    <View style={s.badge} testID={`side-${it.key}-badge`}>
+                      <Text style={s.badgeText}>{badge > 99 ? "99+" : badge}</Text>
+                    </View>
+                  )}
                 </View>
                 <Animated.Text
                   style={[s.nvText, on && s.nvTextOn, { opacity: labelOpacity }]}
@@ -410,6 +421,19 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  badge: {
+    position: "absolute",
+    top: -7,
+    left: COLLAPSED_ROW / 2 + 4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: C.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: { color: "#fff", fontSize: 10.5, fontWeight: "800" },
   // With no label to read, the highlight is the only thing saying where you
   // are — so it gets a lift off the navy rather than a flat fill.
   nvOn: {

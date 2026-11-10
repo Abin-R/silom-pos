@@ -56,6 +56,7 @@ import { whileAway } from "../lib/appLock";
 import { phoneMatchKey } from "../lib/phone";
 import { permissionsOf, type Permission } from "../lib/permissions";
 import { methodLabel } from "../lib/payments";
+import { refreshRefundDue, useRefundDue, type LatePayment } from "../lib/refundDue";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
@@ -325,6 +326,8 @@ export default function Admin() {
   };
 
   const insets = useSafeAreaInsets();
+  // Late self-order payments waiting at Orders › Refund due (the rail badge).
+  const refundDue = useRefundDue();
 
   if (!authLoaded) {
     return (
@@ -341,6 +344,7 @@ export default function Admin() {
   return (
     <AppShell
       nav={{
+        badges: { transactions: refundDue.count },
         staff: staff || "Admin",
         role: role || "",
         branchName: activeBranchName || undefined,
@@ -375,6 +379,7 @@ export default function Admin() {
             isWide={isWide}
             reprint={reprintReceipt}
             staff={staff || "Admin"}
+            canSettleLate={can("settle_late_payments")}
           />
         )}
         {section === "inventory" && (
@@ -930,18 +935,44 @@ type ReprintFn = (
   shop: any,
 ) => Promise<{ ok: true } | { ok: false; error: string }>;
 
-type DateFilter = "today" | "yesterday" | "week" | "all";
+type DateFilter = "today" | "yesterday" | "week" | "month30" | "this_month" | "all" | "custom";
 type ProductRef = { image: string; barcode: string };
+
+// Everything on the Filters sheet. Empty string = not filtering on it.
+type OrderFilters = {
+  state: "" | "paid" | "voided" | "refunded" | "not_refunded" | "tax_invoice";
+  payment: string;
+  channel: "" | "till" | "self_order";
+  staff: string;
+  min: string;
+  max: string;
+};
+const NO_FILTERS: OrderFilters = { state: "", payment: "", channel: "", staff: "", min: "", max: "" };
+const ORDER_STATES: { key: OrderFilters["state"]; label: string }[] = [
+  { key: "", label: "orders.any" },
+  { key: "paid", label: "orders.paid" },
+  { key: "voided", label: "orders.voided" },
+  { key: "refunded", label: "orders.refunded" },
+  { key: "not_refunded", label: "orders.not_refunded" },
+  { key: "tax_invoice", label: "orders.tax_invoice" },
+];
+const ORDER_CHANNELS: { key: OrderFilters["channel"]; label: string }[] = [
+  { key: "", label: "orders.any" },
+  { key: "till", label: "orders.till" },
+  { key: "self_order", label: "orders.self_order" },
+];
 
 // Translate a date chip into the ``from``/``to`` window the server filters on.
 // Boundaries are the *device's* local day so "Today" matches the wall clock the
 // cashier reads; they go over the wire as absolute UTC instants, so the server
 // never has to guess the till's timezone.  ``to`` is exclusive.
-function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
+function dateFilterRange(filter: DateFilter, range?: DateRange): { from?: string; to?: string } {
   if (filter === "all") return {};
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const dayMs = 24 * 60 * 60 * 1000;
+  const daysBack = (n: number) =>
+    new Date(startOfToday.getFullYear(), startOfToday.getMonth(), startOfToday.getDate() - n);
   if (filter === "today") return { from: startOfToday.toISOString() };
   if (filter === "yesterday") {
     return {
@@ -949,15 +980,28 @@ function dateFilterRange(filter: DateFilter): { from?: string; to?: string } {
       to: startOfToday.toISOString(),
     };
   }
-  return { from: new Date(startOfToday.getTime() - 6 * dayMs).toISOString() };
+  if (filter === "month30") return { from: daysBack(29).toISOString() };
+  if (filter === "this_month") {
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString() };
+  }
+  if (filter === "custom") {
+    if (!range?.start) return {};
+    const [y1, m1, d1] = range.start.split("-").map(Number);
+    const [y2, m2, d2] = (range.end || range.start).split("-").map(Number);
+    return {
+      from: new Date(y1, m1 - 1, d1).toISOString(),
+      to: new Date(y2, m2 - 1, d2 + 1).toISOString(),  // through the end day
+    };
+  }
+  return { from: daysBack(6).toISOString() };
 }
 
 // One screenful plus a little, so the pager is reachable without a long scroll
 // but a busy day is still a handful of pages rather than dozens.
 const PAGE_SIZE = 50;
 
-function Transactions({ isWide, reprint, staff }: {
-  isWide: boolean; reprint: ReprintFn; staff: string;
+function Transactions({ isWide, reprint, staff, canSettleLate }: {
+  isWide: boolean; reprint: ReprintFn; staff: string; canSettleLate: boolean;
 }) {
   useT(); // re-render this screen when the language changes
   const [orders, setOrders] = useState<Order[]>([]);
@@ -969,8 +1013,15 @@ function Transactions({ isWide, reprint, staff }: {
   // every visit, which left the screen on a spinner for seconds.  The cashier
   // almost always wants the current day; the other buckets refetch on tap.
   const [dateFilter, setDateFilter] = useState<DateFilter>("today");
-  // Only bills customers placed themselves from the self-order QR.
-  const [selfOrderOnly, setSelfOrderOnly] = useState(false);
+  const [range, setRange] = useState<DateRange>({ start: "", end: "" });
+  const [showRange, setShowRange] = useState(false);
+  // The Filters sheet: status, payment, channel, staff, amount.
+  const [filters, setFilters] = useState<OrderFilters>(NO_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  // Orders › Refund due replaces the bill list: those payments have no bill.
+  const [refundView, setRefundView] = useState(false);
+  const refundDue = useRefundDue();
+  const filterKey = JSON.stringify(filters);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   // Debounced copy of `query` — the search now goes to the server, so firing
@@ -1025,12 +1076,17 @@ function Transactions({ isWide, reprint, staff }: {
     let stale = false;
     setLoading(true);
     (async () => {
-      const { from, to } = dateFilterRange(dateFilter);
+      const { from, to } = dateFilterRange(dateFilter, range);
       const params = new URLSearchParams();
       if (from) params.set("from", from);
       if (to) params.set("to", to);
       if (debouncedQuery) params.set("q", debouncedQuery);
-      if (selfOrderOnly) params.set("channel", "self_order");
+      if (filters.channel) params.set("channel", filters.channel);
+      if (filters.state) params.set("state", filters.state);
+      if (filters.payment) params.set("payment", filters.payment);
+      if (filters.staff) params.set("staff", filters.staff);
+      if (filters.min) params.set("min_total", filters.min);
+      if (filters.max) params.set("max_total", filters.max);
       // Only page against a server that can. An older one ignores `offset`
       // and would hand back page 1 forever while the pager claimed otherwise,
       // so there we fall back to the previous behaviour: one large fetch.
@@ -1060,7 +1116,8 @@ function Transactions({ isWide, reprint, staff }: {
       }
     })();
     return () => { stale = true; };
-  }, [dateFilter, isWide, page, debouncedQuery, serverPaged, selfOrderOnly]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filters
+  }, [dateFilter, range, isWide, page, debouncedQuery, serverPaged, filterKey]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -1069,7 +1126,7 @@ function Transactions({ isWide, reprint, staff }: {
 
   // Changing the date bucket or the search restarts at page 1 — staying on
   // page 4 of a filter that now has one page shows an empty list.
-  useEffect(() => { setPage(0); }, [dateFilter, debouncedQuery, selfOrderOnly]);
+  useEffect(() => { setPage(0); }, [dateFilter, range, debouncedQuery, filterKey]);
 
   // Filter by order number (case-insensitive substring) and the chosen
   // date bucket.  Buckets are computed from the local-day boundary of the
@@ -1138,6 +1195,39 @@ function Transactions({ isWide, reprint, staff }: {
     [filteredOrders],
   );
 
+  // What the Filters sheet is narrowing on, as removable chips.
+  const activeChips = useMemo(() => {
+    const chips: { key: string; label: string; clear: () => void }[] = [];
+    const drop = (patch: Partial<OrderFilters>) => () => setFilters((f) => ({ ...f, ...patch }));
+    if (filters.state) {
+      const st = ORDER_STATES.find((x) => x.key === filters.state);
+      chips.push({ key: "state", label: tr(st?.label || "orders.status"), clear: drop({ state: "" }) });
+    }
+    if (filters.payment) {
+      chips.push({ key: "payment", label: methodLabel(filters.payment), clear: drop({ payment: "" }) });
+    }
+    if (filters.channel) {
+      chips.push({
+        key: "channel",
+        label: tr(filters.channel === "till" ? "orders.till" : "orders.self_order"),
+        clear: drop({ channel: "" }),
+      });
+    }
+    if (filters.staff) chips.push({ key: "staff", label: filters.staff, clear: drop({ staff: "" }) });
+    if (filters.min || filters.max) {
+      chips.push({
+        key: "amount",
+        label: filters.min && filters.max
+          ? tr("orders.amount_between", { min: filters.min, max: filters.max })
+          : filters.min ? tr("orders.amount_from", { n: filters.min }) : tr("orders.amount_to", { n: filters.max }),
+        clear: drop({ min: "", max: "" }),
+      });
+    }
+    return chips;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filters
+  }, [filterKey]);
+  const activeFilterCount = activeChips.length;
+
   // Mobile drill-down: show list OR detail
   if (!isWide && showDetail && selected) {
     return (
@@ -1163,18 +1253,21 @@ function Transactions({ isWide, reprint, staff }: {
       style={!isWide && { paddingHorizontal: 14 }}
       testID="transactions-section"
     >
-      {/* Filters, then a search that narrows what the filter returned. */}
-      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+      {/* Row 1: when. Row 2: what (Filters sheet), Refund due, and search.
+          Row 3: whatever is filtered on, each removable on its own. */}
+      {!refundView && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={{ flexGrow: 0, flexShrink: 1 }}
-          contentContainerStyle={{ gap: 10 }}
+          style={{ flexGrow: 0, marginBottom: 10 }}
+          contentContainerStyle={{ gap: 8 }}
         >
           {([
             { key: "today", label: tr("admin.today") },
             { key: "yesterday", label: tr("admin.yesterday") },
             { key: "week", label: tr("admin.last_7_days") },
+            { key: "month30", label: tr("orders.last_30_days") },
+            { key: "this_month", label: tr("orders.this_month") },
             { key: "all", label: tr("admin.all") },
           ] as { key: DateFilter; label: string }[]).map((opt) => (
             <Pill
@@ -1186,23 +1279,102 @@ function Transactions({ isWide, reprint, staff }: {
             />
           ))}
           <Pill
-            label={tr("admin.self_order")}
-            active={selfOrderOnly}
-            onPress={() => setSelfOrderOnly((v) => !v)}
-            testID="tx-self-order"
+            label={dateFilter === "custom" && range.start ? rangeLabel(range) : tr("orders.custom")}
+            active={dateFilter === "custom"}
+            onPress={() => setShowRange(true)}
+            testID="tx-date-custom"
           />
         </ScrollView>
+      )}
+
+      <View style={[styles.filterRow, !isWide && { flexWrap: "wrap" }]}>
+        {!refundView && (
+          <TouchableOpacity
+            style={[styles.txToolBtn, activeFilterCount > 0 && styles.txToolBtnOn]}
+            onPress={() => setShowFilters(true)}
+            testID="tx-filters"
+          >
+            <Ionicons name="options-outline" size={18} color={activeFilterCount > 0 ? C.brand : C.ink2} />
+            <Text style={[styles.txToolText, activeFilterCount > 0 && { color: C.brand }]}>
+              {tr("orders.filters")}
+            </Text>
+            {activeFilterCount > 0 && (
+              <View style={styles.txCount}><Text style={styles.txCountText}>{activeFilterCount}</Text></View>
+            )}
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={[
+            styles.txToolBtn,
+            refundDue.count > 0 && styles.txToolBtnAlert,
+            refundView && styles.txToolBtnOn,
+          ]}
+          onPress={() => { setRefundView((v) => !v); refreshRefundDue(); }}
+          testID="tx-refund-due"
+        >
+          <Ionicons
+            name={refundView ? "close" : "cash-outline"}
+            size={18}
+            color={refundView ? C.brand : refundDue.count > 0 ? C.danger : C.ink2}
+          />
+          <Text style={[
+            styles.txToolText,
+            refundDue.count > 0 && { color: C.danger },
+            refundView && { color: C.brand },
+          ]}>
+            {tr("orders.refund_due")}
+          </Text>
+          {refundDue.count > 0 && (
+            <View style={[styles.txCount, { backgroundColor: C.danger }]}>
+              <Text style={styles.txCountText}>{refundDue.count}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
         <Spacer />
-        <SearchField
-          value={query}
-          onChangeText={setQuery}
-          placeholder={tr("admin.order_no")}
-          height={40}
-          style={{ width: isWide ? 230 : "100%" }}
-          testID="tx-search"
-        />
+        {!refundView && (
+          <SearchField
+            value={query}
+            onChangeText={setQuery}
+            placeholder={tr("orders.search_placeholder")}
+            height={40}
+            style={{ width: isWide ? 280 : "100%" }}
+            testID="tx-search"
+          />
+        )}
       </View>
 
+      {!refundView && activeChips.length > 0 && (
+        <View style={styles.txChips}>
+          {activeChips.map((c) => (
+            <TouchableOpacity key={c.key} style={styles.txChip} onPress={c.clear} testID={`tx-chip-${c.key}`}>
+              <Text style={styles.txChipText} numberOfLines={1}>{c.label}</Text>
+              <Ionicons name="close" size={14} color={C.brand} />
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity onPress={() => setFilters(NO_FILTERS)} testID="tx-clear-all">
+            <Text style={styles.txClearAll}>{tr("orders.clear_all")}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <DateRangeModal
+        visible={showRange}
+        initial={range}
+        onClose={() => setShowRange(false)}
+        onApply={(r) => { setRange(r); setDateFilter("custom"); setShowRange(false); }}
+      />
+      {showFilters && (
+        <OrderFiltersSheet
+          visible
+          value={filters}
+          onClose={() => setShowFilters(false)}
+          onApply={(f) => { setFilters(f); setShowFilters(false); }}
+        />
+      )}
+
+      {refundView ? (
+        <RefundDuePanel rows={refundDue.rows} canSettle={canSettleLate} isWide={isWide} />
+      ) : (
       <View style={[styles.twoCol, !isWide && styles.stackedCol]}>
         <Panel style={{ flex: 1, minWidth: 0 }}>
           {/* Takings sit in the panel header, so the number that matters is
@@ -1401,7 +1573,210 @@ function Transactions({ isWide, reprint, staff }: {
           </View>
         )}
       </View>
+      )}
     </Body>
+  );
+}
+
+function FilterSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={styles.docFieldLabel}>{title}</Text>
+      <View style={styles.txSheetChips}>{children}</View>
+    </View>
+  );
+}
+
+// ── Orders › Filters sheet ──
+// Draft state inside the sheet; nothing reaches the list until "Show results",
+// so tapping through options doesn't fire a request per tap.
+function OrderFiltersSheet({ visible, value, onClose, onApply }: {
+  visible: boolean;
+  value: OrderFilters;
+  onClose: () => void;
+  onApply: (f: OrderFilters) => void;
+}) {
+  useT(); // re-render this screen when the language changes
+  // Mounted only while open (see its use), so the draft starts from what is
+  // applied each time without an effect copying it across.
+  const [draft, setDraft] = useState<OrderFilters>(value);
+  const [options, setOptions] = useState<{ payment_methods: string[]; staff: string[] }>({
+    payment_methods: [], staff: [],
+  });
+  // Payment methods and staff actually seen at this branch lately, most used
+  // first — a fixed list would offer "Card" to a shop that never takes cards.
+  useEffect(() => {
+    if (!visible) return;
+    apiFetch(`${API}/orders/filter-options`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setOptions({ payment_methods: d.payment_methods || [], staff: d.staff || [] }); })
+      .catch(() => {});
+  }, [visible]);
+  const set = (patch: Partial<OrderFilters>) => setDraft((d) => ({ ...d, ...patch }));
+  const money = (v: string) => v.replace(/[^0-9.]/g, "");
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.txSheet} testID="tx-filters-sheet">
+          <View style={styles.modalHead}>
+            <TouchableOpacity onPress={onClose}><Ionicons name="close" size={22} color={C.ink2} /></TouchableOpacity>
+            <Text style={styles.modalTitle}>{tr("orders.filters")}</Text>
+            <TouchableOpacity onPress={() => setDraft(NO_FILTERS)} testID="tx-filters-reset">
+              <Text style={{ color: C.brand, fontWeight: "700" }}>{tr("orders.reset")}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 18 }} keyboardShouldPersistTaps="handled">
+            <FilterSection title={tr("orders.status")}>
+              {ORDER_STATES.map((o) => (
+                <Pill key={o.key || "any"} label={tr(o.label)} active={draft.state === o.key}
+                  onPress={() => set({ state: o.key })} testID={`tx-f-state-${o.key || "any"}`} />
+              ))}
+            </FilterSection>
+            <FilterSection title={tr("orders.payment")}>
+              <Pill label={tr("orders.any")} active={!draft.payment} onPress={() => set({ payment: "" })} />
+              {options.payment_methods.map((m) => (
+                <Pill key={m} label={methodLabel(m)} active={draft.payment === m}
+                  onPress={() => set({ payment: m })} testID={`tx-f-pay-${m}`} />
+              ))}
+            </FilterSection>
+            <FilterSection title={tr("orders.channel")}>
+              {ORDER_CHANNELS.map((o) => (
+                <Pill key={o.key || "any"} label={tr(o.label)} active={draft.channel === o.key}
+                  onPress={() => set({ channel: o.key })} testID={`tx-f-channel-${o.key || "any"}`} />
+              ))}
+            </FilterSection>
+            {options.staff.length > 0 && (
+              <FilterSection title={tr("orders.staff")}>
+                <Pill label={tr("orders.any")} active={!draft.staff} onPress={() => set({ staff: "" })} />
+                {options.staff.map((n) => (
+                  <Pill key={n} label={n} active={draft.staff === n} onPress={() => set({ staff: n })} />
+                ))}
+              </FilterSection>
+            )}
+            <View style={{ gap: 8 }}>
+              <Text style={styles.docFieldLabel}>{tr("orders.amount")}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <TextInput
+                  style={[styles.docInput, { flex: 1 }]}
+                  value={draft.min}
+                  onChangeText={(v) => set({ min: money(v) })}
+                  placeholder={tr("orders.min")}
+                  keyboardType="decimal-pad"
+                  testID="tx-f-min"
+                />
+                <Text style={{ color: C.ink3 }}>–</Text>
+                <TextInput
+                  style={[styles.docInput, { flex: 1 }]}
+                  value={draft.max}
+                  onChangeText={(v) => set({ max: money(v) })}
+                  placeholder={tr("orders.max")}
+                  keyboardType="decimal-pad"
+                  testID="tx-f-max"
+                />
+              </View>
+            </View>
+          </ScrollView>
+          <View style={{ padding: 16, paddingTop: 0 }}>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => onApply(draft)} testID="tx-filters-apply">
+              <Text style={styles.primaryBtnText}>{tr("orders.show_results")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Orders › Refund due ──
+// Self-orders paid after their 3 minutes: no bill, no stock moved. Staff make
+// the order after all, or refund in the Beam dashboard and record it here.
+function RefundDuePanel({ rows, canSettle, isWide }: {
+  rows: LatePayment[]; canSettle: boolean; isWide: boolean;
+}) {
+  useT(); // re-render this screen when the language changes
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const settle = async (row: LatePayment, action: "make-order" | "refunded") => {
+    const ok = action === "make-order"
+      ? await confirmDialog(tr("orders.make_order_confirm_title"),
+          tr("orders.make_order_confirm", { ref: row.reference }), tr("orders.make_order"), false)
+      : await confirmDialog(tr("orders.refunded_confirm_title"),
+          tr("orders.refunded_confirm", { amount: row.total.toFixed(2) }), tr("orders.mark_refunded"), false);
+    if (!ok) return;
+    setBusy(row.id);
+    try {
+      const res = await apiFetch(`${API}/self-orders/${row.id}/${action}`, { method: "POST" });
+      if (!res.ok) {
+        showAlert(tr("orders.could_not_settle"), await apiErrorMessage(res));
+      } else if (action === "make-order") {
+        const data = await res.json();
+        showAlert(tr("orders.order_made", { number: data.order_number || "" }));
+      }
+    } catch {
+      showAlert(tr("orders.could_not_settle"));
+    } finally {
+      setBusy(null);
+      refreshRefundDue();
+    }
+  };
+
+  const when = (iso: string | null) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return `${formatShortDate(d)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  return (
+    <Panel style={{ flex: 1, minWidth: 0 }}>
+      <PanelHead title={tr("orders.refund_due_title")} />
+      <View style={styles.txRefundNote}>
+        <Ionicons name="information-circle-outline" size={18} color={C.ink2} />
+        <Text style={styles.txRefundNoteText}>{tr("orders.refund_due_note")}</Text>
+      </View>
+      {!canSettle && rows.length > 0 && (
+        <View style={[styles.txRefundNote, { backgroundColor: C.warnTint }]}>
+          <Ionicons name="lock-closed-outline" size={16} color={C.warnDark} />
+          <Text style={[styles.txRefundNoteText, { color: C.warnDark }]}>{tr("orders.no_permission")}</Text>
+        </View>
+      )}
+      {rows.length === 0 ? (
+        <Empty icon="checkmark-circle-outline" title={tr("orders.nothing_to_refund")}
+          note={tr("orders.nothing_to_refund_note")} />
+      ) : (
+        <FlatList
+          data={rows}
+          keyExtractor={(r) => r.id}
+          renderItem={({ item: r }) => (
+            <View style={[styles.txRefundRow, !isWide && { flexDirection: "column", alignItems: "stretch" }]}
+              testID={`refund-${r.reference}`}>
+              <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 10 }}>
+                  <Money style={styles.txRefundRef}>{r.reference}</Money>
+                  <Money style={styles.txRefundAmt}>{THB(r.total)}</Money>
+                </View>
+                <Text style={styles.txRefundMeta} numberOfLines={2}>
+                  {r.items.map((it) => `${it.name} ×${it.qty}`).join(", ")}
+                </Text>
+                <Text style={styles.txRefundMeta}>
+                  {`${tr("orders.time_ran_out", { time: when(r.ended_at) })} · ${methodLabel(r.payment_method)}`}
+                </Text>
+              </View>
+              {canSettle && (
+                <View style={{ flexDirection: "row", gap: 8, marginTop: isWide ? 0 : 10 }}>
+                  <Btn label={tr("orders.make_order")} icon="bag-check-outline" height={40}
+                    disabled={busy === r.id} onPress={() => settle(r, "make-order")}
+                    testID={`refund-make-${r.reference}`} />
+                  <Btn label={tr("orders.mark_refunded")} icon="checkmark" variant="blue" height={40}
+                    disabled={busy === r.id} onPress={() => settle(r, "refunded")}
+                    testID={`refund-done-${r.reference}`} />
+                </View>
+              )}
+            </View>
+          )}
+        />
+      )}
+    </Panel>
   );
 }
 
@@ -7293,6 +7668,42 @@ const styles = StyleSheet.create({
   dsecEmpty: { fontSize: 14, color: C.ink3 },
 
   filterRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  txToolBtn: {
+    height: 40, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface, flexDirection: "row", alignItems: "center", gap: 6,
+  },
+  txToolBtnOn: { borderColor: C.brand, backgroundColor: C.brandTintSoft },
+  txToolBtnAlert: { borderColor: C.dangerSoft, backgroundColor: C.dangerTint },
+  txToolText: { fontSize: 14, fontWeight: "700", color: C.ink2 },
+  txCount: {
+    minWidth: 20, height: 20, paddingHorizontal: 5, borderRadius: 10,
+    backgroundColor: C.brand, alignItems: "center", justifyContent: "center",
+  },
+  txCountText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  txChips: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 10 },
+  txChip: {
+    flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 220,
+    paddingHorizontal: 10, height: 30, borderRadius: 15, backgroundColor: C.brandTint,
+  },
+  txChipText: { fontSize: 13, fontWeight: "600", color: C.brandDark },
+  txClearAll: { fontSize: 13, fontWeight: "700", color: C.ink2, paddingHorizontal: 6 },
+  txSheet: {
+    width: "94%", maxWidth: 560, maxHeight: "88%", backgroundColor: C.surface,
+    borderRadius: 16, overflow: "hidden",
+  },
+  txSheetChips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  txRefundNote: {
+    flexDirection: "row", gap: 8, alignItems: "flex-start", backgroundColor: C.bgSoft,
+    borderRadius: 10, padding: 10, marginHorizontal: 14, marginBottom: 8,
+  },
+  txRefundNoteText: { flex: 1, fontSize: 13, color: C.ink2, lineHeight: 18 },
+  txRefundRef: { fontSize: 14, color: C.ink, fontWeight: "700" },
+  txRefundAmt: { fontSize: 15, color: C.danger, fontWeight: "800" },
+  txRefundMeta: { fontSize: 12.5, color: C.ink2 },
+  txRefundRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: 1, borderTopColor: C.line2,
+  },
   twoCol: { flex: 1, minHeight: 0, flexDirection: "row", gap: 16 },
   stackedCol: { flexDirection: "column" },
   detailCol: { width: 400, flexGrow: 0, flexShrink: 0 },

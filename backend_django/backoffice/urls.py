@@ -46,6 +46,8 @@ urlpatterns = [
 
     path("transactions", views.transactions, name="transactions"),
     path("transactions/export", views.transactions_export, name="transactions_export"),
+    path("transactions/late/<uuid:draft_id>/<str:action>", views.late_payment_settle,
+         name="late_payment_settle"),
     path("receipt/<str:order_number>/print", views.receipt_print, name="receipt_print"),
 
     # Sales reports

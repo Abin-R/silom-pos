@@ -340,13 +340,33 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         clearInterval(polling);
         stopTimer();
         show("late");
-      } else if (data.status === "failed" || data.status === "expired") {
+      } else if (data.status === "expired") {
+        // Time ran out, but a QR saved in a banking app can still be paid.
+        // Keep looking, more slowly, so that money turns this screen into the
+        // "refund at the counter" one instead of leaving a customer who has
+        // paid looking at "payment ended".
+        stopTimer();
+        show("failed");
+        watchForLatePayment();
+      } else if (data.status === "failed") {
         clearInterval(polling);
         stopTimer();
         show("failed");
       }
       // 'pending' → keep polling; the cron sweeper is the backstop if this tab dies.
     } catch { /* transient — retry next tick */ }
+  }
+  // Beam keeps a PromptPay QR payable for about 15 minutes whatever expiry we
+  // ask for, so that is how long a late payment is worth watching for.
+  const LATE_WATCH_MS = 15 * 60 * 1000;
+  const LATE_POLL_MS = 10000;
+  let lateWatch = false;
+  function watchForLatePayment() {
+    if (lateWatch) return;
+    lateWatch = true;
+    clearInterval(polling);
+    polling = setInterval(poll, LATE_POLL_MS);
+    setTimeout(() => clearInterval(polling), LATE_WATCH_MS);
   }
   function startPolling() { if (!polling) { poll(); polling = setInterval(poll, POLL_MS); } }
 

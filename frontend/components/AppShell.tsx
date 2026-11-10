@@ -81,6 +81,7 @@ type NavProps = {
   activeKey: string | null;
   onNavigate: (key: string) => void;
   onLogout: () => void;
+  badges?: Record<string, number>;
 };
 
 export function AppShell({

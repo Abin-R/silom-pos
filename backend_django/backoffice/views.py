@@ -46,6 +46,7 @@ from bravepos.models import (
     PaymentType,
     Product,
     ProductSaleWindow,
+    SelfOrder,
     Settings,
     Shift,
     Staff,
@@ -913,6 +914,9 @@ def transactions(request):
     branches, branch, dfrom, dto, qs = _transactions_qs(request)
     tax_percent, tax_mode, service_charge_pct = _tax_settings()
 
+    if (request.GET.get("status") or "") == "refund_due":
+        return _refund_due_page(request, branches, branch)
+
     paginator = Paginator(qs, 25)
     page_obj = paginator.get_page(request.GET.get("page"))
 
@@ -959,7 +963,7 @@ def transactions(request):
         "channel": request.GET.get("channel") or "",
         "channels": [("", "All channels"), ("till", "Till"), ("self_order", "Self-order")],
         "status": request.GET.get("status") or "all",
-        "statuses": [("all", "All"), ("paid", "Paid"), ("voided", "Voided")],
+        "statuses": _TRX_STATUSES,
         "payment": request.GET.get("payment") or "",
         "payments": ["Cash", "PromptPay", "Card"],
         "query": (request.GET.get("q") or "").strip(),
@@ -969,6 +973,72 @@ def transactions(request):
         "window_vat": window_totals["vat"] or Decimal(0),
     }
     return render(request, "backoffice/transactions.html", context)
+
+
+_TRX_STATUSES = [("all", "All"), ("paid", "Paid"), ("voided", "Voided"),
+                 ("refund_due", "Refund due")]
+LATE_PAYMENT_SETTLED_DAYS = 30
+
+
+def _refund_due_page(request, branches, branch):
+    """Transactions › Refund due: self-orders paid after their time ran out.
+
+    No bill exists for these, so they are not Orders and the date window does
+    not apply: every unsettled one is listed until someone settles it.  Every
+    branch, not just the one picked in the header: money owed to a customer is
+    the shop's problem wherever it happened, and the rail's badge counts them
+    all.  The last 30 days of settled ones sit underneath, for who-did-what.
+    """
+    from bravepos import selforder
+
+    due = selforder.refund_due()
+    settled = (
+        SelfOrder.objects.filter(
+            resolved_at__gte=timezone.now() - timedelta(days=LATE_PAYMENT_SETTLED_DAYS))
+        .exclude(resolution="")
+        .select_related("branch", "order")
+        .order_by("-resolved_at")
+    )
+    return render(request, "backoffice/transactions.html", {
+        "active": "transactions",
+        "page_title": "Transactions",
+        "branches": branches,
+        "branch": branch,
+        "refund_due_view": True,
+        "status": "refund_due",
+        "statuses": _TRX_STATUSES,
+        "due_rows": [selforder.late_payment_row(d) for d in due],
+        "settled_rows": [selforder.late_payment_row(d) for d in settled[:100]],
+        "settled_days": LATE_PAYMENT_SETTLED_DAYS,
+    })
+
+
+@login_required
+def late_payment_settle(request, draft_id, action):
+    """Backoffice › Transactions › Refund due: Refunded / Make the order."""
+    from bravepos import selforder
+
+    if request.method != "POST":
+        return redirect(f"{reverse('backoffice:transactions')}?status=refund_due")
+    by = getattr(request.user, "name", "") or getattr(request.user, "login_id", "") or "Backoffice"
+    try:
+        if action == "refunded":
+            row = selforder.late_payment_row(selforder.mark_refunded(draft_id, by))
+            messages.success(request, f"{row['reference']} marked as refunded.")
+        elif action == "make-order":
+            order = selforder.make_order(draft_id, by)
+            messages.success(
+                request, f"Order #{order.order_number} made. Its slip prints on the till.")
+        else:
+            raise Http404
+    except selforder.LatePaymentNotFound:
+        raise Http404
+    except selforder.LatePaymentError as e:
+        messages.error(request, str(e))
+    back = request.POST.get("next") or ""
+    if not back.startswith("/"):
+        back = f"{reverse('backoffice:transactions')}?status=refund_due"
+    return redirect(back)
 
 
 # English column headers — same column order and semantics as the

@@ -110,6 +110,10 @@ urlpatterns = [
     # Self-orders (POS side).  The customer-facing half is public and lives at
     # the URL root — see bravepos_api/urls.py.
     path('self-orders/pending', views.self_orders_pending),
+    path('self-orders/refund-due', views.self_orders_refund_due),
+    path('orders/filter-options', views.order_filter_options),
+    path('self-orders/<uuid:draft_id>/refunded', views.self_order_mark_refunded),
+    path('self-orders/<uuid:draft_id>/make-order', views.self_order_make_order),
 
     # Printer
     path('printers/detect', views.printer_detect),

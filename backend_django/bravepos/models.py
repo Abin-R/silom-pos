@@ -990,7 +990,11 @@ class SelfOrder(models.Model):
         ("failed", "Failed"),      # gateway said expired/voided/refunded
         ("expired", "Expired"),    # never paid; aged out by the sweeper
         ("late_paid", "Paid late"),  # money came after the payment ended: no
-                                     # sale, refund it in the Beam dashboard
+                                     # sale yet. "Refund due" on the till and
+                                     # backoffice until staff resolve it, as
+                                     # "refunded" or by making the order (→ paid)
+        ("refunded", "Refunded"),    # a late payment staff gave back (in the
+                                     # Beam dashboard; nothing here calls Beam)
     ]
     METHOD_QR = "Beam QR"
     METHOD_CARD = "Beam Card"
@@ -1055,6 +1059,13 @@ class SelfOrder(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+
+    # How a late payment was settled: who did it and when.  Set together with
+    # the move out of ``late_paid`` (to ``refunded``, or to ``paid`` when staff
+    # made the order instead).  Blank on every other draft.
+    resolution = models.CharField(max_length=16, blank=True, default="")
+    resolved_by = models.CharField(max_length=120, blank=True, default="")
+    resolved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
