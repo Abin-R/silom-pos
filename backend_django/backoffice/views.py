@@ -3404,22 +3404,12 @@ def product_list(request):
     paginator = Paginator(qs, 50)
     page_obj = paginator.get_page(request.GET.get("page"))
 
-    # Sold in the last 30 days, so a row shows whether it earns its listing.
     products = list(page_obj.object_list)
-    month_start, month_end = _date_window(
-        timezone.localdate() - timedelta(days=29), timezone.localdate())
-    sold = {
-        row["product_id"]: row["qty"] or 0
-        for row in OrderItem.objects.filter(
-            product__in=products, order__created_at__range=(month_start, month_end),
-        ).exclude(order__status="cancel").values("product_id").annotate(qty=Sum("qty"))
-    }
     windows = {}
     for w in ProductSaleWindow.objects.filter(product__in=products):
         windows.setdefault(w.product_id, []).append(w)
     today = sale_windows.today()
     for p in products:
-        p.sold_30d = sold.get(p.id, 0)
         p.margin = float((p.price - p.cost) / p.price * 100) if p.price else 0
         p.schedule = sale_windows.status(windows.get(p.id, []), today)
 
@@ -3578,9 +3568,9 @@ def _apply_product_form(product, post, branch, errors):
     # means keep nothing back.
     if "counter_stock" in post:
         product.counter_stock = _product_int(
-            post, "counter_stock", "Stock for counter order", errors)
+            post, "counter_stock", "Minimum stock for counter", errors)
         if product.counter_stock < 0:
-            errors.append("Stock for counter order can't be negative.")
+            errors.append("Minimum stock for counter can't be negative.")
             product.counter_stock = 0
     # Blank stays blank rather than becoming 0: 0 days means "same day".
     if (post.get("shelf_life") or "").strip():
@@ -4127,6 +4117,7 @@ def product_bulk_edit(request):
     if request.method == "POST":
         ids = request.POST.getlist("id")
         shelf_lives = request.POST.getlist("shelf_life")
+        counter_stocks = request.POST.getlist("counter_stock")
         sync_all = bool(request.POST.get("sync_all"))
         saved = 0
         synced = set()
@@ -4154,6 +4145,12 @@ def product_bulk_edit(request):
                     p.shelf_life = None
                 elif raw.isdigit():
                     p.shelf_life = int(raw)
+            # Same rule for the counter minimum, except blank keeps it: the
+            # field is not nullable.
+            if idx < len(counter_stocks):
+                raw = counter_stocks[idx].strip()
+                if raw.isdigit():
+                    p.counter_stock = int(raw)
             with transaction.atomic():
                 p.save()
                 if sync_all:

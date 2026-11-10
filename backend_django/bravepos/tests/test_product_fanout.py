@@ -421,6 +421,27 @@ class BulkEditTests(FanoutTestCase):
             self.assertEqual(copy.shelf_life, 2)
         self.assertContains(response, "Also synced to BIO HOUSE, Silom.")
 
+    def test_counter_stock_is_saved(self):
+        self.bulk(counter_stock="5")
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.counter_stock, 5)
+
+    def test_blank_or_bad_counter_stock_keeps_it(self):
+        Product.objects.filter(pk=self.product.pk).update(counter_stock=4)
+        for raw in ("", "-1", "x"):
+            self.bulk(counter_stock=raw)
+            self.product.refresh_from_db()
+            self.assertEqual(self.product.counter_stock, 4, raw)
+
+    def test_counter_column_only_at_a_self_order_branch(self):
+        url = f"{reverse('backoffice:product_bulk_edit')}?branch={self.branch.id}"
+        for ticked in (False, True):
+            type(self.branch).objects.filter(pk=self.branch.pk).update(
+                self_order_enabled=ticked)
+            page = self.client.get(url)
+            (self.assertContains if ticked else self.assertNotContains)(
+                page, "Minimum stock for counter")
+
     def test_the_grid_shows_the_column_and_the_toggle(self):
         response = self.client.get(
             f"{reverse('backoffice:product_bulk_edit')}?branch={self.branch.id}")

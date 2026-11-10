@@ -356,7 +356,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             for url in (list_url, form_url):
                 page = self.client.get(url, scope)
                 (self.assertContains if ticked else self.assertNotContains)(
-                    page, "Stock for counter", msg_prefix=f"{url} ticked={ticked}: ")
+                    page, "Minimum stock for counter", msg_prefix=f"{url} ticked={ticked}: ")
         self.assertIsNone(created.category_id, "clearing the category failed")
 
         # And the catalogue still renders it with no category.

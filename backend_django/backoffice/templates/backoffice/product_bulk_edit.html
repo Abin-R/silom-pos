@@ -38,6 +38,9 @@
             <th>Category</th><th>Unit</th>
             <th class="r">Price</th><th class="r">Cost</th>
             <th class="r">Shelf life (days)</th>
+            {% if branch.self_order_enabled %}
+            <th class="r" title="Kept for counter orders; QR self-order cannot buy these">Minimum stock for counter</th>
+            {% endif %}
           </tr>
         </thead>
         <tbody>
@@ -80,9 +83,20 @@
             <td><input type="number" min="0" step="1" name="shelf_life"
                        value="{{ p.shelf_life|default_if_none:'' }}" placeholder="—"
                        class="inp money" style="height:34px;text-align:right;width:90px"></td>
+            {% if branch.self_order_enabled %}
+            {% comment %}Every row posts one value so the lists stay aligned by row.{% endcomment %}
+            <td class="r">
+              {% if p.product_type == 'P' %}
+              <input type="number" min="0" step="1" name="counter_stock" value="{{ p.counter_stock }}"
+                     class="inp money" style="height:34px;text-align:right;width:90px">
+              {% else %}
+              <input type="hidden" name="counter_stock" value="{{ p.counter_stock }}">—
+              {% endif %}
+            </td>
+            {% endif %}
           </tr>
           {% empty %}
-          <tr><td colspan="9" class="empty">
+          <tr><td colspan="{% if branch.self_order_enabled %}10{% else %}9{% endif %}" class="empty">
             <svg><use href="#i-box"/></svg>
             No products to edit.
           </td></tr>
