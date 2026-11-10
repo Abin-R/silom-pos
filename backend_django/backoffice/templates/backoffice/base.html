@@ -118,6 +118,8 @@
         <svg><use href="#i-dl"/></svg>App releases</a>
       <a class="nv {% if active == 'ninja_windows' %}on{% endif %}" href="{% url 'backoffice:ninja_windows' %}">
         <svg><use href="#i-truck"/></svg>Ninja windows</a>
+      <a class="nv {% if active == 'payment_types' %}on{% endif %}" href="{% url 'backoffice:payment_types' %}">
+        <svg><use href="#i-card"/></svg>Payment types</a>
       {% endif %}
 
       {% comment %}

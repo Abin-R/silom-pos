@@ -6,7 +6,10 @@ from django.dispatch import receiver
 
 from . import audit
 from .gateways import seed_branch_payment
-from .models import DEFAULT_STOCK_OUT_REASONS, Branch, StockOutReason
+from .models import (
+    DEFAULT_PAYMENT_TYPES, DEFAULT_STOCK_OUT_REASONS, Branch, PaymentType,
+    StockOutReason,
+)
 from .staff_provisioning import ensure_branch_staff
 
 # Audit capture — hooks post_save/post_delete on the models listed in
@@ -60,4 +63,16 @@ def seed_new_branch_stock_out_reasons(sender, instance, created, raw=False, **kw
         StockOutReason.objects.get_or_create(
             branch=instance, name=name,
             defaults={"name_th": name_th, "sort_order": i},
+        )
+
+
+@receiver(post_save, sender=Branch)
+def seed_new_branch_payment_types(sender, instance, created, raw=False, **kwargs):
+    """Give a new branch the default Custom Pay list, so its till opens with
+    the same options every other branch started from."""
+    if not created or raw:
+        return
+    for i, name in enumerate(DEFAULT_PAYMENT_TYPES):
+        PaymentType.objects.get_or_create(
+            branch=instance, name=name, defaults={"sort_order": i},
         )

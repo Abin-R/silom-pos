@@ -26,6 +26,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
+from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
 from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
 from .peak import flag_branch_day_for_reissue
@@ -750,6 +751,19 @@ def discount_types(request):
     return Response({
         'enabled': True,
         'discount_types': discounts.preset_feed(branch, request.query_params.get('v')),
+    })
+
+
+@api_view(['GET'])
+@require_session
+def payment_types(request):
+    """The Custom Pay options for this till's branch, in display order.
+
+    Hidden types are left out.  The till asks each time Checkout opens, so a
+    change in the backoffice reaches it on the next sale.
+    """
+    return Response({
+        'payment_types': payment_type_rules.feed(request.session_obj.branch),
     })
 
 

@@ -41,7 +41,9 @@ from bravepos.models import (
     DiscountType,
     Order,
     OrderItem,
+    PAYMENT_TYPE_NAME_MAX,
     ParentCategory,
+    PaymentType,
     Product,
     ProductSaleWindow,
     Settings,
@@ -54,6 +56,7 @@ from bravepos.models import (
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
+from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
@@ -3031,6 +3034,130 @@ def stock_out_type_delete(request, type_id):
         row.delete()
         messages.success(request, f"Deleted “{row.name}”.")
     return redirect(reverse("backoffice:stock_out_types") + f"?branch={row.branch_id}")
+
+
+# ─── Custom Pay types ───────────────────────────────────────────────────
+def _payment_types_url(branch, sync=False):
+    url = reverse("backoffice:payment_types") + f"?branch={branch.id}"
+    return url + "&sync=1" if sync else url
+
+
+def _payment_type_name_error(branch, name, row=None):
+    """Why ``name`` can't be saved at ``branch``, or None."""
+    if not name:
+        return "Enter a payment type name."
+    if len(name) > PAYMENT_TYPE_NAME_MAX:
+        return f"Keep the name to {PAYMENT_TYPE_NAME_MAX} characters."
+    clash = payment_type_rules.find(branch, name)
+    if clash is not None and (row is None or clash.pk != row.pk):
+        return f"“{name}” is already a payment type."
+    return None
+
+
+def _payment_types_page(request, branches, branch, *, editing=None, error=None):
+    return render(request, "backoffice/payment_types.html", {
+        "active": "payment_types",
+        "branches": branches,
+        "branch": branch,
+        "types": PaymentType.objects.filter(branch=branch) if branch else [],
+        "editing": editing,
+        "error": error,
+        "posted": request.POST if error else None,
+        "name_max": PAYMENT_TYPE_NAME_MAX,
+        "sync_branches": _fanout_branch_names(branch) if branch else [],
+        "sync_rows": bool(request.GET.get("sync")),
+        "hide_dates": True,
+    })
+
+
+@login_required
+def payment_types(request):
+    """The options under Custom Pay on the till, for one branch.
+
+    Saved sales keep the name as text, so editing or deleting a type here
+    never changes history.  The till re-reads the list each time Checkout
+    opens, which is what keeps the website and the POS in step.
+    """
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        name = (request.POST.get("name") or "").strip()
+        error = _payment_type_name_error(branch, name)
+        if error is None:
+            with transaction.atomic():
+                row = payment_type_rules.create(branch, name)
+                fanout = (payment_type_rules.fanout_save(row)
+                          if request.POST.get("sync_all") else None)
+            messages.success(request, f"Added “{name}”." + _fanout_message(fanout))
+            return redirect(_payment_types_url(branch))
+    return _payment_types_page(request, branches, branch, error=error)
+
+
+@login_required
+def payment_type_edit(request, type_id):
+    row = get_object_or_404(PaymentType, id=type_id)
+    branches, _branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST":
+        name = (request.POST.get("name") or "").strip()
+        error = _payment_type_name_error(row.branch, name, row)
+        if error is None:
+            previous_name = row.name
+            row.name = name
+            with transaction.atomic():
+                row.save(update_fields=["name"])
+                fanout = (payment_type_rules.fanout_save(row, previous_name=previous_name)
+                          if request.POST.get("sync_all") else None)
+            messages.success(request, f"Saved “{name}”." + _fanout_message(fanout))
+            return redirect(_payment_types_url(row.branch))
+    return _payment_types_page(request, branches, row.branch, editing=row, error=error)
+
+
+@login_required
+def payment_type_toggle(request, type_id):
+    """Hide a type from the till, or show it again."""
+    row = get_object_or_404(PaymentType, id=type_id)
+    if request.method == "POST":
+        row.active = not row.active
+        with transaction.atomic():
+            row.save(update_fields=["active"])
+            fanout = (payment_type_rules.fanout_save(row)
+                      if request.POST.get("sync_all") else None)
+        verb = "Showing" if row.active else "Hid"
+        messages.success(request, f"{verb} “{row.name}” on the till." + _fanout_message(fanout))
+    return redirect(_payment_types_url(row.branch))
+
+
+@login_required
+def payment_type_delete(request, type_id):
+    row = get_object_or_404(PaymentType, id=type_id)
+    if request.method == "POST":
+        sync_all = request.POST.get("sync_all")
+        with transaction.atomic():
+            row.delete()
+            others = (payment_type_rules.fanout_delete(row.branch, row.name)
+                      if sync_all else [])
+        also = " Also deleted at " + ", ".join(others) + "." if others else ""
+        messages.success(request, f"Deleted “{row.name}”.{also}")
+    return redirect(_payment_types_url(row.branch))
+
+
+@login_required
+def payment_type_move(request, type_id, direction):
+    """Move a type one place up or down the till's list."""
+    if direction not in ("up", "down"):
+        raise Http404
+    row = get_object_or_404(PaymentType, id=type_id)
+    sync_all = bool(request.POST.get("sync_all"))
+    if request.method == "POST":
+        with transaction.atomic():
+            moved = payment_type_rules.move(row, -1 if direction == "up" else 1)
+            others = (payment_type_rules.fanout_order(row.branch)
+                      if moved and sync_all else [])
+        if others:
+            messages.success(request, "Also reordered at " + ", ".join(others) + ".")
+    # Moving a type several places is several clicks: keep the box ticked.
+    return redirect(_payment_types_url(row.branch, sync=sync_all))
 
 
 # ─── Check stock ────────────────────────────────────────────────────────

@@ -1,0 +1,99 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  The options under Custom Pay on the till, for the branch in the header.  The
+  edit page is this same screen with the top form filled in, so there is one
+  place to learn.
+
+  The table is a single form so the "all branches" tick can serve every row
+  button; each button picks its own URL with `formaction`.  Enter in the name
+  box can't reach them: that input lives in the separate form above.
+{% endcomment %}
+
+{% block title %}Payment types{% endblock %}
+{% block page_title %}Payment types{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Custom Pay on the till · {{ types|length }} type{{ types|length|pluralize }}{% if branch %} · {{ branch.name }}{% endif %}</div>
+{% endblock %}
+
+{% block content %}
+{% if not branch %}
+  <div class="panel"><div class="empty">Add a branch first — payment types belong to one.</div></div>
+{% else %}
+<form method="post" class="panel" style="flex:none"
+      action="{% if editing %}{% url 'backoffice:payment_type_edit' editing.id %}{% else %}{% url 'backoffice:payment_types' %}?branch={{ branch.id }}{% endif %}">
+  {% csrf_token %}
+  <div class="panel-h">{% if editing %}Edit “{{ editing.name }}”{% else %}Add payment type{% endif %}</div>
+  {% if error %}<div class="banner b-red" role="alert" style="margin:0 20px 6px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
+  <div class="form-grid">
+    <div class="field">
+      <label for="f-name">Name</label>
+      <input id="f-name" type="text" name="name" maxlength="{{ name_max }}" required
+             value="{% if posted %}{{ posted.name }}{% elif editing %}{{ editing.name }}{% endif %}" placeholder="e.g. Grab">
+      <span class="hint">Shown to the cashier, and on the receipt and reports for each sale.</span>
+    </div>
+    {% if sync_branches %}
+    <div class="field">
+      <label>Other branches</label>
+      <label class="check">
+        <input type="checkbox" name="sync_all" value="1" {% if posted.sync_all %}checked{% endif %}>
+        Sync to all branches
+      </label>
+      <span class="hint">{% if editing %}Renames it at {{ sync_branches|join:", " }} too, and adds it where it's missing.{% else %}Adds it at {{ sync_branches|join:", " }} too.{% endif %}</span>
+    </div>
+    {% endif %}
+  </div>
+  <div class="form-actions">
+    {% if editing %}
+    <a class="btn" href="{% url 'backoffice:payment_types' %}?branch={{ branch.id }}">Cancel</a>
+    <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save</button>
+    {% else %}
+    <button type="submit" class="btn btn-blue"><svg><use href="#i-plus"/></svg> Add type</button>
+    {% endif %}
+  </div>
+</form>
+
+<form method="post" class="panel panel-grow" style="margin-top:14px">
+  {% csrf_token %}
+  <div class="panel-h" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <span>Till order</span>
+    {% if sync_branches %}
+    <label class="check" style="margin-left:auto;font-weight:400">
+      <input type="checkbox" name="sync_all" value="1" {% if sync_rows %}checked{% endif %}>
+      Apply hide/show, delete and order to all branches
+    </label>
+    {% endif %}
+  </div>
+  <div class="panel-scroll">
+    <table class="tbl">
+      <thead><tr><th style="width:96px">Order</th><th>Name</th><th style="width:110px">On the till</th><th style="width:150px"></th></tr></thead>
+      <tbody>
+        {% for t in types %}
+        <tr>
+          <td style="white-space:nowrap">
+            <button type="submit" formaction="{% url 'backoffice:payment_type_move' t.id 'up' %}"
+                    class="ico-btn{% if forloop.first %} dis{% endif %}" {% if forloop.first %}disabled{% endif %}
+                    aria-label="Move {{ t.name }} up"><svg><use href="#i-up"/></svg></button>
+            <button type="submit" formaction="{% url 'backoffice:payment_type_move' t.id 'down' %}"
+                    class="ico-btn{% if forloop.last %} dis{% endif %}" {% if forloop.last %}disabled{% endif %}
+                    aria-label="Move {{ t.name }} down"><svg><use href="#i-down"/></svg></button>
+          </td>
+          <td><b style="font-weight:620">{{ t.name }}</b></td>
+          <td>{% if t.active %}<span class="tag t-ok">Shown</span>{% else %}<span class="tag t-out">Hidden</span>{% endif %}</td>
+          <td class="r">
+            <a class="ico-btn" href="{% url 'backoffice:payment_type_edit' t.id %}?branch={{ branch.id }}" aria-label="Edit {{ t.name }}" title="Edit"><svg><use href="#i-pencil"/></svg></a>
+            <button type="submit" formaction="{% url 'backoffice:payment_type_toggle' t.id %}" class="ico-btn"
+                    aria-label="{% if t.active %}Hide{% else %}Show{% endif %} {{ t.name }}" title="{% if t.active %}Hide from the till{% else %}Show on the till{% endif %}"><svg><use href="{% if t.active %}#i-slash{% else %}#i-eye{% endif %}"/></svg></button>
+            <button type="submit" formaction="{% url 'backoffice:payment_type_delete' t.id %}" class="ico-btn danger"
+                    aria-label="Delete {{ t.name }}" title="Delete"
+                    onclick="var all=this.form.sync_all&&this.form.sync_all.checked;return confirm('Delete “{{ t.name|escapejs }}”'+(all?' at every branch':'')+'? Past sales keep it.');"><svg><use href="#i-trash"/></svg></button>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="empty">No payment types yet — add one above. Until then, Custom Pay on this branch's tills has nothing to pick.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

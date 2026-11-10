@@ -1242,6 +1242,53 @@ class StockOutReason(models.Model):
 
 
 # ─── Discount presets ────────────────────────────────────────────────────────
+# What the till's Custom Pay list offered before it could be configured.  Every
+# branch starts from these (migration 0083, `signals.seed_new_branch_payment_types`)
+# so nothing a cashier relies on disappears.  frontend/lib/payments.ts keeps the
+# same list for a till that cannot reach the server.
+DEFAULT_PAYMENT_TYPES = [
+    "EDC Kbank", "EDC Bangkok", "Brave Brand Co.,Ltd",
+    "Thai Dot Com Pay", "คนละครึ่ง", "EDC SCB", "QR",
+]
+
+# ``Order.payment_method`` is 64 characters and the till prefixes "Custom · ",
+# so a longer name would fail the sale at the moment it is rung up.
+PAYMENT_TYPE_NAME_MAX = 50
+
+
+class PaymentType(models.Model):
+    """An entry in the till's Custom Pay list — money taken outside the till's
+    own rails, such as a bank terminal or a delivery platform.
+
+    Branch-scoped because which platforms a shop sells through is a fact about
+    that shop; the backoffice's "Sync to all branches" covers a list that is
+    meant to be the same everywhere.
+
+    A sale keeps the name as text in ``Order.payment_method``, so renaming or
+    deleting a row here leaves past sales and reports exactly as they were.
+    ``active`` is the backoffice's hide/show: a hidden type stays listed there
+    and leaves the till.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="payment_types",
+    )
+    name = models.CharField(max_length=PAYMENT_TYPE_NAME_MAX)
+    sort_order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "name"], name="uniq_payment_type_per_branch",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class DiscountType(models.Model):
     """A discount the cashier can pick from the till's dropdown.
 

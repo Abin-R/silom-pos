@@ -37,6 +37,13 @@ urlpatterns = [
 
     path("", views.dashboard, name="home"),
     path("dashboard", views.dashboard, name="dashboard"),
+    # Custom Pay options on the till
+    path("payment-types", views.payment_types, name="payment_types"),
+    path("payment-types/<uuid:type_id>/edit", views.payment_type_edit, name="payment_type_edit"),
+    path("payment-types/<uuid:type_id>/toggle", views.payment_type_toggle, name="payment_type_toggle"),
+    path("payment-types/<uuid:type_id>/delete", views.payment_type_delete, name="payment_type_delete"),
+    path("payment-types/<uuid:type_id>/move/<str:direction>", views.payment_type_move, name="payment_type_move"),
+
     path("transactions", views.transactions, name="transactions"),
     path("transactions/export", views.transactions_export, name="transactions_export"),
     path("receipt/<str:order_number>/print", views.receipt_print, name="receipt_print"),

@@ -649,6 +649,7 @@ const en = {
     open_shift_2: "OPEN SHIFT",
     open_shift_to_continue: "Open shift to continue",
     opening: "Opening…",
+    no_custom_payment_types: "No payment types for this branch. Add them on the website under Manage → Payment types.",
     optional: "Optional",
     or_choose_bank: "or choose a bank",
     order_not_saved: "Order NOT saved",

@@ -42,3 +42,17 @@ export function methodLabel(stored?: string | null): string {
   const base = LABELS[head] ?? head;
   return rest.length ? `${base} · ${rest.join(" · ")}` : base;
 }
+
+// Custom Pay's options are set per branch in the backoffice (Payment types).
+// This is only for a till that has not reached the server yet this session —
+// the same list every branch was seeded with, see DEFAULT_PAYMENT_TYPES.
+export const FALLBACK_CUSTOM_TYPES = [
+  "EDC Kbank", "EDC Bangkok", "Brave Brand Co.,Ltd",
+  "Thai Dot Com Pay", "คนละครึ่ง", "EDC SCB", "QR",
+];
+
+/** The names in a /payment-types response; null if it isn't one. */
+export function customTypeNames(body: any): string[] | null {
+  if (!Array.isArray(body?.payment_types)) return null;
+  return body.payment_types.map((t: any) => t?.name).filter(Boolean);
+}

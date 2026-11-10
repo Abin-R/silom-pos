@@ -641,6 +641,7 @@ const th = {
     open_shift_2: "เปิดรอบขาย",
     open_shift_to_continue: "เปิดรอบขายเพื่อดำเนินการต่อ",
     opening: "กำลังเปิด…",
+    no_custom_payment_types: "สาขานี้ยังไม่มีประเภทการชำระเงิน เพิ่มได้ที่เว็บไซต์ เมนูจัดการ → Payment types",
     optional: "ไม่บังคับ",
     or_choose_bank: "หรือ เลือกธนาคาร",
     order_not_saved: "ออเดอร์ยังไม่ถูกบันทึก",

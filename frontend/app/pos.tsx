@@ -34,7 +34,7 @@ import qrcode from "qrcode-generator";
 import { C, MONO, R } from "../lib/theme";
 import { showAlert, confirmDialog, showToast } from "../lib/dialog";
 import { Btn, Empty, Money, SearchField, Tag } from "../lib/ui";
-import { methodLabel } from "../lib/payments";
+import { FALLBACK_CUSTOM_TYPES, customTypeNames, methodLabel } from "../lib/payments";
 import {
   useLoyalty,
   meetsMinimum,
@@ -2386,10 +2386,23 @@ function PaymentModal({
     // { key: PAYMENT_METHODS.EDC, icon: "print-outline" as const },
   ];
 
-  const customOptions = [
-    "EDC Kbank", "EDC Bangkok", "Brave Brand Co.,Ltd",
-    "Thai Dot Com Pay", "คนละครึ่ง", "EDC SCB", "QR",
-  ];
+  // Custom Pay's list comes from the backoffice, read each time Checkout opens
+  // so a change there reaches the next sale.  `null` until the first answer; a
+  // failed read keeps the list already on screen.
+  const [customOptions, setCustomOptions] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    (async () => {
+      let names: string[] | null = null;
+      try {
+        const res = await apiFetch(`${API}/payment-types`);
+        if (res.ok) names = customTypeNames(await safeJson<any>(res, null));
+      } catch {}
+      if (alive) setCustomOptions((cur) => names ?? cur ?? FALLBACK_CUSTOM_TYPES);
+    })();
+    return () => { alive = false; };
+  }, [visible]);
   const [customPick, setCustomPick] = useState("");
   const [orderRef, setOrderRef] = useState("");
   const [cardLast4, setCardLast4] = useState("");
@@ -2752,7 +2765,8 @@ function PaymentModal({
   // Derived flags for the right-panel tr("pos.payment_confirm") button — extracted so
   // the JSX below stays readable.
   const isQrLikeMethod = method === PAYMENT_METHODS.QR_KBANK || method === PAYMENT_METHODS.PROMPTPAY || method === PAYMENT_METHODS.BEAM;
-  const isCustomReady = method === PAYMENT_METHODS.CUSTOM && !!customPick;
+  const isCustomReady =
+    method === PAYMENT_METHODS.CUSTOM && !!customOptions?.includes(customPick);
   const isCreditReady = method === PAYMENT_METHODS.CREDIT && !!(cardType || bankPick);
   const isBeamBusy =
     method === PAYMENT_METHODS.BEAM &&
@@ -3309,21 +3323,29 @@ function PaymentModal({
                   <Text style={styles.customAmountLabel}>{tr("common.amount")}</Text>
                   <Text style={styles.customAmountVal}>{THB(total)}</Text>
                 </View>
-                <View style={styles.customGrid}>
-                  {customOptions.map((opt) => (
-                    <TouchableOpacity
-                      key={opt}
-                      style={[styles.customOption, customPick === opt && styles.customOptionActive]}
-                      onPress={() => setCustomPick(opt)}
-                      testID={`custom-${opt}`}
-                    >
-                      <View style={[styles.radio, customPick === opt && styles.radioActive]}>
-                        {customPick === opt && <View style={styles.radioInner} />}
-                      </View>
-                      <Text style={styles.customOptionText}>{opt}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                {customOptions === null ? (
+                  <ActivityIndicator color={C.brand} testID="custom-loading" />
+                ) : customOptions.length === 0 ? (
+                  <Text style={styles.customEmpty} testID="custom-empty">
+                    {tr("pos.no_custom_payment_types")}
+                  </Text>
+                ) : (
+                  <View style={styles.customGrid}>
+                    {customOptions.map((opt) => (
+                      <TouchableOpacity
+                        key={opt}
+                        style={[styles.customOption, customPick === opt && styles.customOptionActive]}
+                        onPress={() => setCustomPick(opt)}
+                        testID={`custom-${opt}`}
+                      >
+                        <View style={[styles.radio, customPick === opt && styles.radioActive]}>
+                          {customPick === opt && <View style={styles.radioInner} />}
+                        </View>
+                        <Text style={styles.customOptionText}>{opt}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
               </View>
             ) : method === PAYMENT_METHODS.CREDIT ? (
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.creditPane} testID="credit-pane">
@@ -6303,6 +6325,7 @@ const styles = StyleSheet.create({
     borderColor: C.line,
   },
   customOptionActive: { borderColor: C.brand, backgroundColor: C.brandTint },
+  customEmpty: { fontSize: 13, color: C.ink2, textAlign: "center", paddingVertical: 20 },
   radio: {
     width: 18,
     height: 18,
