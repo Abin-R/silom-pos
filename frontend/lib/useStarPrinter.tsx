@@ -89,8 +89,11 @@ export function useStarPrinter() {
       // decode.  Race the logo wait against a 2s timeout as a safety net.
       await new Promise((r) => setTimeout(r, LAYOUT_SETTLE_MS));
       if (cancelled) return;
+      // The packer slip carries no logo, so there is nothing to wait for.
       await Promise.race([
-        logoReadyRef.current?.promise ?? Promise.resolve(),
+        active.order.doc_type === "packer"
+          ? Promise.resolve()
+          : logoReadyRef.current?.promise ?? Promise.resolve(),
         new Promise<void>((r) => setTimeout(r, 2000)),
       ]);
       if (cancelled) return;

@@ -120,8 +120,8 @@ export type ReceiptOrder = {
   // buyer-named full tax invoice: it drops the queue number and the receipt QR,
   // adds the buyer block, and adds the two signature blocks.  ``tax_invoice``
   // is required for 'full' and ignored otherwise.  'packer' is the second slip
-  // a self-order prints for whoever packs the bag: queue number, logo, order
-  // details, items, totals and payment — no company header, QR or footer.
+  // a self-order prints for whoever packs the bag: order type, queue number,
+  // product names with quantities, and the date — nothing else.
   doc_type?: 'abbreviated' | 'full' | 'packer';
   tax_invoice?: TaxInvoiceParty;
 

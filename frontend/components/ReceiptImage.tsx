@@ -168,8 +168,6 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
   // back to the abbreviated layout rather than printing an unusable document.
   const party = order.tax_invoice;
   const isFull = order.doc_type === "full" && !!party;
-  // Packer slip for self-orders: the abbreviated slip minus the company
-  // header, receipt title, QR and footer.
   const isPacker = order.doc_type === "packer";
 
   // The abbreviated slip stays Thai-only (unchanged for every existing call
@@ -205,6 +203,37 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
   const paid = Number(order.paid_amount ?? order.total) || 0;
   const change = Number(order.change) || 0;
 
+  // ─── Packer slip ──────────────────────────────────────────────────────
+  // What whoever packs the bag needs and nothing else: order type, queue
+  // number, each product with its quantity, then the date and time.  No logo,
+  // prices, VAT or payment.  A long product name wraps onto further lines at
+  // word boundaries and never runs into the quantity column, which keeps its
+  // own fixed width on the right.
+  if (isPacker) {
+    return (
+      <View
+        ref={ref}
+        collapsable={false}
+        style={[s.root, typeof rightPad === "number" ? { paddingRight: rightPad } : null]}
+      >
+        {!!orderType && <Text style={s.orderType} numberOfLines={1}>{orderType}</Text>}
+        <Text style={s.queue} numberOfLines={1}>คิวที่ {queue}</Text>
+
+        {order.items.map((it, i) => (
+          <View key={i} style={s.packerRow}>
+            <Text style={[s.packerText, s.itemName]} textBreakStrategy="simple">{it.name}</Text>
+            <Text style={[s.packerText, s.packerQty]} numberOfLines={1}>{it.qty}</Text>
+          </View>
+        ))}
+
+        <Dash />
+
+        <Text style={s.line}>Order Ref:</Text>
+        <Text style={s.line}>วันที่: {order.created_at_local ?? ""}</Text>
+      </View>
+    );
+  }
+
   return (
     <View
       ref={ref}
@@ -226,7 +255,6 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       />
 
       {/* ─── Branch + company info ────────────────────────────────── */}
-      {!isPacker && (<>
       <Text style={s.branchLine} numberOfLines={1}>{lbl("สาขา", "Branch")}: {sh.branch}</Text>
       <Text style={s.companyCenter}>{sh.company}</Text>
       {sh.address.map((line, i) => (
@@ -252,7 +280,6 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       {/* Void marker — same position/styling as the reference void copy.
           The only difference from a normal receipt is this single line. */}
       {order.voided && <Text style={s.voidMark}>ยกเลิกการขาย</Text>}
-      </>)}
 
       <Dash />
 
@@ -378,7 +405,7 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
         </View>
       )}
 
-      {isPacker ? null : isFull ? (
+      {isFull ? (
         // ─── Signature blocks ───────────────────────────────────────
         // A full tax invoice doubles as the delivery/receipt document, so it
         // carries the two acknowledgement blocks from the reference printout.
@@ -398,14 +425,12 @@ export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady,
       )}
 
       {/* ─── Footer ───────────────────────────────────────────────── */}
-      {!isPacker && (<>
       <Text style={s.smallCenter}>
         {lbl("ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว", "Prices include VAT")}
       </Text>
       <Text style={s.thankYou}>THANK YOU FOR YOUR SHOPPING</Text>
       <Text style={s.centerText}>Tel. {sh.phone}</Text>
       <Text style={s.poweredBy}>Powered by Brave POS</Text>
-      </>)}
     </View>
   );
 });
@@ -565,6 +590,23 @@ const s = StyleSheet.create({
     flex: 1,
     textAlign: "right",
     marginRight: 8,
+  },
+  // Packer slip item line: bigger than the receipt's so it reads at arm's
+  // length while packing.  Quantity sits in a fixed right-hand column.
+  packerRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginVertical: 6,
+  },
+  packerText: {
+    fontFamily: FONT,
+    fontSize: 22,
+    color: "#000000",
+  },
+  packerQty: {
+    width: 70,
+    textAlign: "right",
+    marginLeft: 16,
   },
   grandTotal: {
     fontFamily: BOLD,
