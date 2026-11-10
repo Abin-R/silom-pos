@@ -107,3 +107,33 @@ class BranchScopeStickyTests(TestCase):
         self.assertEqual(audit.status_code, 200)
 
         self.assertEqual(self._branch_on("transactions"), self.chosen)
+
+
+class BranchEditPickerTests(BranchScopeStickyTests):
+    """On a branch's edit page the header picker opens that branch's edit page.
+
+    It used to submit `?branch=` back to the same URL, which reloaded the
+    branch already open — picking another branch looked like it did nothing,
+    and the picker showed the report scope rather than the branch on screen.
+    """
+
+    def _detail(self, b):
+        return reverse("backoffice:branch_detail", args=[b.id])
+
+    def test_picker_shows_the_branch_being_edited(self):
+        self.client.get(reverse("backoffice:dashboard"), {"branch": str(self.chosen.id)})
+        response = self.client.get(self._detail(self.default))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["branch"], self.default)
+        self.assertEqual(response.context["branch_obj"], self.default)
+
+    def test_picking_another_branch_opens_its_edit_page(self):
+        response = self.client.get(self._detail(self.default), {"branch": str(self.chosen.id)})
+        self.assertRedirects(response, self._detail(self.chosen))
+        # And it is the scope the reports follow from now on.
+        self.assertEqual(self._branch_on("dashboard"), self.chosen)
+
+    def test_picking_the_same_branch_just_renders(self):
+        response = self.client.get(self._detail(self.default), {"branch": str(self.default.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["branch_obj"], self.default)

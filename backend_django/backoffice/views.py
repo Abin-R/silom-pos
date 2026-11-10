@@ -6241,6 +6241,18 @@ def branch_list(request):
 @login_required
 def branch_detail(request, branch_id):
     b = get_object_or_404(Branch, id=branch_id)
+    topbar = _branch_topbar_context(request)
+    # On this page the header picker means "edit that branch instead". Without
+    # this it submitted `?branch=` back to the same URL and the form simply
+    # reloaded the branch already open, so the choice appeared to do nothing.
+    picked = topbar["branch"]
+    if (request.method == "GET" and request.GET.get("branch")
+            and picked is not None and picked.id != b.id):
+        return redirect("backoffice:branch_detail", branch_id=picked.id)
+    # The picker shows the branch being edited, not whichever one the reports
+    # were last scoped to — an archived branch isn't in the list, so leave it.
+    if any(x.id == b.id for x in topbar["branches"]):
+        topbar["branch"] = b
     errors, form_errors = [], []
     if request.method == "POST":
         _apply_branch_form(b, request.POST, request.user)
@@ -6265,7 +6277,7 @@ def branch_detail(request, branch_id):
         "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
         **_crm_context(b, request.POST if request.method == "POST" else None),
-        **_branch_topbar_context(request),
+        **topbar,
     }
     return render(request, "backoffice/branch_form.html", context)
 
