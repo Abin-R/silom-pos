@@ -396,6 +396,7 @@ def preview(branch, raw_items: list[dict]) -> dict:
         return {'id': p['id'], 'name': p['name'], 'value': value,
                 'detail': discount_rules.preset_details(p)}
 
+    free_stock = free_item_stock(branch, items)
     lines = []
     for it in items:
         if it.get('is_free'):
@@ -407,7 +408,9 @@ def preview(branch, raw_items: list[dict]) -> dict:
             'discount': it['discount'],
             'discount_type_id': it['discount_type_id'],
             'discount_label': it['discount_label'],
-            'free': [{'name': f['name'], 'qty': f['qty']} for f in items
+            'free': [{'name': f['name'], 'qty': f['qty'],
+                      'stock': free_stock.get(f['product_id'], 'ok')}
+                     for f in items
                      if f.get('is_free') and f['free_of'] == it['product_id']],
             'options': [option(p) for p in
                         discount_rules.offered(rule_lines, presets, it['product_id'])],
@@ -420,6 +423,34 @@ def preview(branch, raw_items: list[dict]) -> dict:
         'rounding': float(goods_total - net),
         'total': float(goods_total),
     }
+
+
+def free_item_stock(branch, items: list[dict], exclude_pk=None) -> dict[str, str]:
+    """Whether each free item in a priced cart can be given online.
+
+    ``'ok'``; ``'counter'`` when the shelf is down to the units kept for the
+    counter (the customer can still get it there); ``'sold_out'`` when there is
+    none at all.  The same product on a paid line of the cart counts too, as it
+    does when the payment holds the stock.
+    """
+    free_pids = {it['product_id'] for it in items if it.get('is_free')}
+    if not free_pids:
+        return {}
+    wanted = _line_quantities(items)
+    held = held_quantities(branch, exclude_pk=exclude_pk)
+    out: dict[str, str] = {}
+    for p in Product.objects.filter(pk__in=free_pids, branch=branch, product_type='P'):
+        out[str(p.id)] = _free_status(p, wanted[str(p.id)], held.get(str(p.id), 0))
+    return out
+
+
+def _free_status(product, wanted: int, held: int) -> str:
+    on_shelf = int(product.stock or 0) - held
+    if on_shelf <= 0:
+        return 'sold_out'
+    if wanted > on_shelf - counter_floor(product):
+        return 'counter'
+    return 'ok'
 
 
 def create_draft(branch, raw_items: list[dict]) -> SelfOrder:
@@ -561,6 +592,7 @@ def _hold_stock(draft: SelfOrder) -> None:
         )
 
     wanted = _line_quantities(draft.items)
+    free_pids = {str(it.get('product_id')) for it in draft.items if it.get('is_free')}
     with transaction.atomic():
         locked = SelfOrder.objects.select_for_update().get(pk=draft.pk)
         if locked.status != 'pending':
@@ -576,6 +608,9 @@ def _hold_stock(draft: SelfOrder) -> None:
             floor = counter_floor(p)
             left = on_shelf - floor
             if wanted[str(p.id)] > left:
+                if str(p.id) in free_pids:
+                    raise SelfOrderError(_free_short_message(
+                        p.name, _free_status(p, wanted[str(p.id)], held.get(str(p.id), 0))))
                 raise SelfOrderError(_short_message(
                     p.name, max(left, 0), floor > 0 and on_shelf > 0))
 
@@ -584,6 +619,19 @@ def _hold_stock(draft: SelfOrder) -> None:
         )
         locked.save(update_fields=['hold_expires_at'])
     draft.hold_expires_at = locked.hold_expires_at
+
+
+def _free_short_message(name: str, status: str) -> str:
+    """A free item that can't be given online: sold out, or counter-only."""
+    if status == 'sold_out':
+        return (f'ขออภัย ของแถม {name} หมดแล้ว '
+                f'กรุณากลับไปเลือกโปรโมชันอื่น หรือ "ไม่มีส่วนลด" / '
+                f'Sorry, the free {name} is out of stock. '
+                f'Please go back and pick another promotion, or No discount.')
+    return (f'ขออภัย ของแถม {name} รับออนไลน์ไม่ได้ในขณะนี้ '
+            f'กรุณาสั่งที่เคาน์เตอร์ หรือกลับไปเลือก "ไม่มีส่วนลด" / '
+            f"Sorry, the free {name} can't be claimed online right now. "
+            f'Please order at the counter, or go back and pick No discount.')
 
 
 def _short_message(name: str, left: int, at_counter: bool = False) -> str:

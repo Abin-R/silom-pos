@@ -416,6 +416,47 @@ class SelfOrderDiscountTests(TestCase):
         self.assertEqual(self.cookie.stock, 9)
         self.assertTrue(StockDocument.objects.filter(ref_no=order.order_number).exists())
 
+    def _free_cookie(self):
+        return self._preset([self.latte], name='Free cookie', kind='free', value=0,
+                            applies_to=DiscountType.APPLIES_PRODUCTS, free_product=self.cookie)
+
+    def _free_stock(self, free):
+        line = selforder.preview(self.branch, self._items((self.latte, 1, free)))['lines'][0]
+        return line['free'][0]['stock']
+
+    def test_free_item_in_stock_is_ok(self):
+        Product.objects.filter(pk=self.cookie.pk).update(stock=4, counter_stock=3)
+        self.assertEqual(self._free_stock(self._free_cookie()), 'ok')
+
+    def test_free_item_down_to_the_counter_stock_points_to_the_counter(self):
+        Product.objects.filter(pk=self.cookie.pk).update(stock=3, counter_stock=3)
+        free = self._free_cookie()
+        self.assertEqual(self._free_stock(free), 'counter')
+        with StubGateway() as gw:
+            d = selforder.create_draft(self.branch, self._items((self.latte, 1, free)))
+            with self.assertRaisesRegex(selforder.SelfOrderError, 'free Cookie .*at the counter'):
+                selforder.start_payment(d, 'qr', redirect_url='https://x/')
+        self.assertEqual(gw.created_charges, [])
+
+    def test_free_item_with_no_stock_is_out_of_stock(self):
+        for stock in (0, -2):
+            with self.subTest(stock=stock):
+                Product.objects.filter(pk=self.cookie.pk).update(stock=stock, counter_stock=3)
+                free = self._free_cookie()
+                self.assertEqual(self._free_stock(free), 'sold_out')
+                with StubGateway():
+                    d = selforder.create_draft(self.branch, self._items((self.latte, 1, free)))
+                    with self.assertRaisesRegex(selforder.SelfOrderError,
+                                                'free Cookie is out of stock'):
+                        selforder.start_payment(d, 'qr', redirect_url='https://x/')
+
+    def test_free_item_counts_the_same_product_bought_in_the_cart(self):
+        Product.objects.filter(pk=self.cookie.pk).update(stock=4, counter_stock=3)
+        free = self._free_cookie()
+        line = selforder.preview(self.branch, self._items(
+            (self.latte, 1, free), (self.cookie, 1, None)))['lines'][0]
+        self.assertEqual(line['free'][0]['stock'], 'counter')
+
     def test_pay_page_shows_the_discount(self):
         d = self._preset([self.cake], name='Cake 15%', kind='percent', value=15,
                          applies_to=DiscountType.APPLIES_PRODUCTS)

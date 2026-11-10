@@ -269,6 +269,20 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   // keeps the quantity but sends the customer to the counter.
   const maxQty = (p) => p.shelf || 999;
   const overOnline = (p, qty) => qty > (p.stock || 999);
+  // A promotion's free item the shop can't give online: sold out, or down to
+  // the units kept for the counter.  Checkout waits until it is sorted.
+  const freeBlocked = () => ((priced && priced.lines) || [])
+    .some((l) => (l.free || []).some((f) => f.stock && f.stock !== "ok"));
+  function freeNote(f) {
+    const n = esc(f.name);
+    if (f.stock === "sold_out") {
+      return `ขออภัย ของแถม ${n} หมดแล้ว กรุณาเลือกโปรโมชันอื่น หรือ "ไม่มีส่วนลด"<br>Sorry, the free ${n} is out of stock. Please pick another promotion, or No discount.`;
+    }
+    if (f.stock === "counter") {
+      return `ของแถม ${n} รับออนไลน์ไม่ได้ในขณะนี้ กรุณาสั่งที่เคาน์เตอร์ หรือเลือก "ไม่มีส่วนลด"<br>The free ${n} can't be claimed online right now. Please order at the counter, or pick No discount.`;
+    }
+    return "";
+  }
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -491,7 +505,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     document.getElementById("sum-rounding").hidden = !(ok && priced.rounding);
     document.getElementById("sheet-rounding").textContent = ok ? baht(priced.rounding) : "";
     const checkout = document.getElementById("checkout");
-    checkout.disabled = !ok || items.some((i) => overOnline(i.p, i.qty));
+    checkout.disabled = !ok || items.some((i) => overOnline(i.p, i.qty)) || freeBlocked();
     if (count === 0) closeSheet();
     renderLines(items);
     renderBar();
@@ -555,6 +569,14 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
         d.className = "freebie";
         d.textContent = `🎁 ฟรี · Free: ${f.name} × ${f.qty}`;
         wrap.appendChild(d);
+        const note = freeNote(f);
+        if (note) {
+          const n = document.createElement("div");
+          n.className = "over-online";
+          n.style.margin = "4px 0 0";
+          n.innerHTML = note;
+          wrap.appendChild(n);
+        }
       }
       el.appendChild(wrap);
     }
