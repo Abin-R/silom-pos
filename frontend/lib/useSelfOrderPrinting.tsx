@@ -12,8 +12,8 @@
 // and a second physical receipt with the same queue number is a customer
 // dispute at the counter. A missing one is recoverable via admin Reprint.
 //
-// Mount this ONCE, in pos.tsx only. admin.tsx also mounts useStarPrinter, and
-// in an expo-router stack both screens can be mounted at the same time.
+// Mount this ONCE, in pos.tsx only: in an expo-router stack /pos and /admin can
+// be mounted at the same time, and two pollers would print every slip twice.
 
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api";
@@ -78,9 +78,9 @@ function toReceiptOrder(o: ApiOrder): ReceiptOrder {
 }
 
 /**
- * @param printReceipt  from the screen's existing useStarPrinter() — do NOT
- *                      mount a second one, it would create a second hidden
- *                      overlay and receiptRef for view-shot to fight over.
+ * @param printReceipt  from usePrinter(), the app's one printer in the root
+ *                      layout — do NOT mount a second useStarPrinter, it would
+ *                      create a second hidden overlay for view-shot to fight over.
  * @returns             whether this is a high-volume branch (self_order_enabled),
  *                      so the cashier's checkout can print a packer slip too
  *                      without asking the server a second time.

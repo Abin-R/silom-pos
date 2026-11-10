@@ -21,7 +21,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { phoneMatchKey } from "../lib/phone";
-import { useStarPrinter } from "../lib/useStarPrinter";
+import { usePrinter } from "../lib/printerHost";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { useSuggestions, type Suggestion } from "../lib/useSuggestions";
 import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "../lib/localPrinterConfig";
@@ -174,10 +174,9 @@ export default function POS() {
   useT(); // re-render this screen when the language changes
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  // Receipt-printing hook.  printReceipt renders ReceiptImage to a PNG
-  // and ships it via the native module's printImage().  ReceiptOverlay
-  // is the off-screen component that gets captured — must be in JSX.
-  const { printReceipt, retryQueuedNow, ReceiptOverlay } = useStarPrinter();
+  // The app's one receipt printer, mounted in the root layout (printerHost),
+  // so a self-order printing while Stock or Orders is open still gets its logo.
+  const { printReceipt, retryQueuedNow } = usePrinter();
   // The URL is just a display hint.  Real auth state lives in AsyncStorage and
   // gets loaded on mount, so manual URL edits can't desync role / branch from
   // the actual session token.
@@ -189,9 +188,9 @@ export default function POS() {
   const isAdmin = role === "admin";
 
   // Customers ordering on their own phones can't print their own slip — the
-  // printer is here.  Poll for orders they've paid for and print them.  Reuses
-  // the printReceipt above rather than mounting a second useStarPrinter, which
-  // would give view-shot two hidden overlays to fight over.  Mounted only here,
+  // printer is here.  Poll for orders they've paid for and print them.  This
+  // screen stays mounted under /admin, so the poll keeps running there; the
+  // slips go to the root printer, which is on the display either way.  Mounted only here,
   // never in admin.tsx: both screens can be mounted at once, and that would
   // double every receipt.  Waits for auth — the endpoint is session-scoped.
   // Gated on the branch's self_order_enabled flag inside the hook — a branch
@@ -1472,9 +1471,6 @@ export default function POS() {
         }}
       />
       {/* The rail handles its own drawer on phone — see AppShell. */}
-      {/* Off-screen receipt rendering target for view-shot capture.
-          Only mounts when a print is in flight; invisible to the user. */}
-      <ReceiptOverlay />
 
     </AppShell>
   );

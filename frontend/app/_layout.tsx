@@ -11,6 +11,7 @@ import { DialogHost, showAlert, ToastHost } from "../lib/dialog";
 import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
 import { endSession, startAppLock } from "../lib/appLock";
+import { PrinterHost } from "../lib/printerHost";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
 // .env.production, so it only lands in release bundles) *and* a non-dev build.
@@ -99,17 +100,21 @@ function RootLayout() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: "fade",
-          contentStyle: { backgroundColor: C.bg },
-        }}
-      />
-      {/* Confirmations and error messages. Mounted once, above the stack, so
-          a dialog raised from any screen renders over it. */}
-      <DialogHost />
-      <ToastHost />
+      {/* The receipt printer, with its hidden slip view beside the stack so
+          it stays on the display whichever screen is open.  See printerHost. */}
+      <PrinterHost>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: "fade",
+            contentStyle: { backgroundColor: C.bg },
+          }}
+        />
+        {/* Confirmations and error messages. Mounted once, above the stack, so
+            a dialog raised from any screen renders over it. */}
+        <DialogHost />
+        <ToastHost />
+      </PrinterHost>
     </SafeAreaProvider>
   );
 }

@@ -34,7 +34,7 @@ import {
   type PrinterConfig,
   type ReceiptOrder,
 } from "../lib/starPrinter";
-import { useStarPrinter } from "../lib/useStarPrinter";
+import { usePrinter } from "../lib/printerHost";
 import { useShiftSummaryPrint } from "../lib/useShiftSummaryPrint";
 import { usePrinterStatus } from "../lib/usePrinterStatus";
 import { useCrmEnabled, useCrmViewer } from "../lib/loyalty";
@@ -290,12 +290,9 @@ export default function Admin() {
     navParams.sidebar === "open" && width < 720,
   );
 
-  // Receipt-printing context for the Admin screen.  The same hook also
-  // runs on /pos — both instances share the on-disk print queue, so a
-  // failed print from POS gets auto-retried even if the cashier is
-  // sitting on Admin/Transactions when the printer comes back online.
-  // reprint() is exposed to Transactions for the per-row Reprint button.
-  const { reprint: reprintReceipt, ReceiptOverlay: PrinterOverlay } = useStarPrinter();
+  // The app's one receipt printer (root layout, see printerHost).  reprint()
+  // is exposed to Transactions for the per-row Reprint button.
+  const { reprint: reprintReceipt } = usePrinter();
 
   // The rail is the single source of truth for labels — this screen only needs
   // them to title the header, and a second list is how "Orders" in the rail
@@ -405,9 +402,6 @@ export default function Admin() {
           />
         )}
       </View>
-
-      {/* Off-screen receipt render target — view-shot captures this. */}
-      <PrinterOverlay />
     </AppShell>
   );
 }
