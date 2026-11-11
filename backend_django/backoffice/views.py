@@ -1022,9 +1022,14 @@ def late_payment_settle(request, draft_id, action):
         return redirect(f"{reverse('backoffice:transactions')}?status=refund_due")
     by = getattr(request.user, "name", "") or getattr(request.user, "login_id", "") or "Backoffice"
     try:
-        if action == "refunded":
-            row = selforder.late_payment_row(selforder.mark_refunded(draft_id, by))
-            messages.success(request, f"{row['reference']} marked as refunded.")
+        if action in ("refunded", "refunded-by-hand"):
+            by_hand = action == "refunded-by-hand"
+            row = selforder.late_payment_row(
+                selforder.mark_refunded(draft_id, by, by_hand=by_hand))
+            messages.success(
+                request,
+                f"{row['reference']} marked as refunded." if by_hand else
+                f"฿{row['total']:,.2f} refunded to the customer through Beam ({row['reference']}).")
         elif action == "make-order":
             order = selforder.make_order(draft_id, by)
             messages.success(
@@ -1033,6 +1038,11 @@ def late_payment_settle(request, draft_id, action):
             raise Http404
     except selforder.LatePaymentNotFound:
         raise Http404
+    except selforder.RefundFailed as e:
+        messages.error(
+            request,
+            f"Beam did not refund it: {e} Refund it in the Beam dashboard or in cash, "
+            "then use \"Refunded by hand\".")
     except selforder.LatePaymentError as e:
         messages.error(request, str(e))
     back = request.POST.get("next") or ""

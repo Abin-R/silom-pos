@@ -2826,6 +2826,18 @@ def self_orders_refund_due(request):
     return Response([selforder.late_payment_row(d) for d in rows])
 
 
+def _by_hand(request) -> bool:
+    """Only ``{"via": "beam"}`` sends the money back through Beam.  A bare POST
+    is a till on an older bundle, whose button said "this only records it", so
+    it still only records it: refunding again there could pay the customer
+    twice."""
+    try:
+        data = request.data
+    except Exception:  # noqa: BLE001 — unparseable or non-JSON body
+        return True
+    return not (hasattr(data, 'get') and data.get('via') == 'beam')
+
+
 def _settle_late_payment(request, draft_id, action):
     if request.method != 'POST':
         return Response({'detail': 'POST required'}, status=405)
@@ -2836,12 +2848,16 @@ def _settle_late_payment(request, draft_id, action):
     branch = request.session_obj.branch
     try:
         if action == 'refunded':
-            draft = selforder.mark_refunded(draft_id, staff.name, branch=branch)
+            draft = selforder.mark_refunded(
+                draft_id, staff.name, branch=branch, by_hand=_by_hand(request))
         else:
             order = selforder.make_order(draft_id, staff.name, branch=branch)
             draft = order.self_order
     except selforder.LatePaymentNotFound as e:
         return Response({'detail': str(e)}, status=404)
+    except selforder.RefundFailed as e:
+        # Beam said no; nothing recorded.  The till offers "Refunded by hand".
+        return Response({'detail': str(e), 'refund_failed': True}, status=502)
     except selforder.LatePaymentError as e:
         return Response({'detail': str(e)}, status=409)
     return Response(selforder.late_payment_row(draft))

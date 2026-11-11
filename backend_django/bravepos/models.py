@@ -1040,6 +1040,9 @@ class SelfOrder(models.Model):
     payment_method = models.CharField(max_length=64, blank=True, default="")
     beam_charge_id = models.CharField(max_length=128, blank=True, default="")
     beam_link_id = models.CharField(max_length=128, blank=True, default="")
+    # Set when "Refunded" on a late payment sent the money back through Beam;
+    # blank on a late payment staff refunded by hand.
+    beam_refund_id = models.CharField(max_length=128, blank=True, default="")
 
     # Beam hands back the QR image / checkout URL exactly once, when the charge
     # or link is *created* — the status endpoint doesn't repeat them.  Cached

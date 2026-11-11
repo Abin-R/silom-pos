@@ -1691,7 +1691,8 @@ function OrderFiltersSheet({ visible, value, onClose, onApply }: {
 
 // ── Orders › Refund due ──
 // Self-orders paid after their 3 minutes: no bill, no stock moved. Staff make
-// the order after all, or refund in the Beam dashboard and record it here.
+// the order after all, or refund it through Beam (or record a hand refund
+// when Beam refuses).
 function RefundDuePanel({ rows, canSettle, isWide }: {
   rows: LatePayment[]; canSettle: boolean; isWide: boolean;
 }) {
@@ -1703,17 +1704,36 @@ function RefundDuePanel({ rows, canSettle, isWide }: {
       ? await confirmDialog(tr("orders.make_order_confirm_title"),
           tr("orders.make_order_confirm", { ref: row.reference }), tr("orders.make_order"), false)
       : await confirmDialog(tr("orders.refunded_confirm_title"),
-          tr("orders.refunded_confirm", { amount: row.total.toFixed(2) }), tr("orders.mark_refunded"), false);
+          tr("orders.refunded_confirm", { amount: row.total.toFixed(2) }), tr("orders.mark_refunded"), true);
     if (!ok) return;
     setBusy(row.id);
+    const post = (byHand = false) => apiFetch(`${API}/self-orders/${row.id}/${action}`, {
+      method: "POST", body: JSON.stringify(action === "refunded" && !byHand ? { via: "beam" } : {}),
+    });
     try {
-      const res = await apiFetch(`${API}/self-orders/${row.id}/${action}`, { method: "POST" });
-      if (!res.ok) {
-        showAlert(tr("orders.could_not_settle"), await apiErrorMessage(res));
-      } else if (action === "make-order") {
-        const data = await res.json();
-        showAlert(tr("orders.order_made", { number: data.order_number || "" }));
+      const res = await post();
+      if (res.ok) {
+        if (action === "make-order") {
+          const data = await res.json();
+          showAlert(tr("orders.order_made", { number: data.order_number || "" }));
+        } else {
+          showAlert(tr("orders.refund_done", { amount: row.total.toFixed(2) }));
+        }
+        return;
       }
+      // Beam refused (often: the charge was already paid out). Nothing was
+      // recorded; once staff refund it another way they can close it here.
+      const body = await res.clone().json().catch(() => ({} as { detail?: string; refund_failed?: boolean }));
+      if (action === "refunded" && body.refund_failed) {
+        const byHand = await confirmDialog(tr("orders.beam_refused_title"),
+          tr("orders.beam_refused", { reason: body.detail || "" }), tr("orders.refunded_by_hand"), false);
+        if (byHand) {
+          const again = await post(true);
+          if (!again.ok) showAlert(tr("orders.could_not_settle"), await apiErrorMessage(again));
+        }
+        return;
+      }
+      showAlert(tr("orders.could_not_settle"), await apiErrorMessage(res));
     } catch {
       showAlert(tr("orders.could_not_settle"));
     } finally {
@@ -1768,7 +1788,7 @@ function RefundDuePanel({ rows, canSettle, isWide }: {
                   <Btn label={tr("orders.make_order")} icon="bag-check-outline" height={40}
                     disabled={busy === r.id} onPress={() => settle(r, "make-order")}
                     testID={`refund-make-${r.reference}`} />
-                  <Btn label={tr("orders.mark_refunded")} icon="checkmark" variant="blue" height={40}
+                  <Btn label={tr("orders.mark_refunded")} icon="arrow-undo-outline" variant="blue" height={40}
                     disabled={busy === r.id} onPress={() => settle(r, "refunded")}
                     testID={`refund-done-${r.reference}`} />
                 </View>

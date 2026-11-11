@@ -2,8 +2,8 @@
 {% comment %}
   Transactions › Refund due.  A self-order whose money reached Beam after the
   customer's 3 minutes ran out: no bill was made and no stock moved.  Staff
-  either give the money back (in the Beam dashboard — this page only records
-  it) or make the order after all, which prints the slip on the till.
+  either give the money back (Refund sends it back through Beam; "Refunded by
+  hand" only records one made elsewhere) or make the order after all, which prints the slip on the till.
 {% endcomment %}
 <div class="row" style="flex:1;flex-direction:column;gap:14px;align-items:stretch">
   <div class="panel">
@@ -17,7 +17,7 @@
           <tr>
             <th style="width:150px">Reference</th><th style="width:130px">Time ran out</th><th>Branch</th>
             <th>Items</th><th>Payment</th><th>Beam charge</th><th class="r">Amount</th>
-            <th class="r" style="width:260px"></th>
+            <th class="r" style="width:380px"></th>
           </tr>
         </thead>
         <tbody>
@@ -36,10 +36,15 @@
                 {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
                 <button class="btn btn-sm" type="submit">Make the order</button>
               </form>
-              <form method="post" action="{% url 'backoffice:late_payment_settle' r.id 'refunded' %}" style="display:inline"
-                    onsubmit="return confirm('Mark {{ r.reference }} as refunded? Refund ฿{{ r.total|floatformat:2 }} in the Beam dashboard first — this only records it.')">
+              <form method="post" action="{% url 'backoffice:late_payment_settle' r.id 'refunded-by-hand' %}" style="display:inline"
+                    onsubmit="return confirm('Mark {{ r.reference }} as refunded? Only if you already gave ฿{{ r.total|floatformat:2 }} back another way (Beam dashboard or cash). Nothing is sent to Beam.')">
                 {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
-                <button class="btn btn-sm btn-blue" type="submit">Refunded</button>
+                <button class="btn btn-sm" type="submit">Refunded by hand</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:late_payment_settle' r.id 'refunded' %}" style="display:inline"
+                    onsubmit="return confirm('Refund ฿{{ r.total|floatformat:2 }} to the customer through Beam for {{ r.reference }}? This cannot be undone.')">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="btn btn-sm btn-blue" type="submit">Refund</button>
               </form>
             </td>
           </tr>
@@ -70,7 +75,7 @@
             <td class="money">{{ r.reference }}</td>
             <td>{{ r.branch_name }}</td>
             <td class="r money">฿{{ r.total|floatformat:2|intcomma }}</td>
-            <td>{% if r.resolution == 'ordered' %}<span class="tag t-ok">Order made{% if r.order_number %} · #{{ r.order_number }}{% endif %}</span>{% else %}<span class="tag t-red">Refunded</span>{% endif %}</td>
+            <td>{% if r.resolution == 'ordered' %}<span class="tag t-ok">Order made{% if r.order_number %} · #{{ r.order_number }}{% endif %}</span>{% elif r.beam_refund_id %}<span class="tag t-red">Refunded via Beam</span>{% else %}<span class="tag t-red">Refunded by hand</span>{% endif %}</td>
             <td>{{ r.resolved_by|default:"—" }}</td>
             <td class="money">{{ r.resolved_at|iso_dt|date:"d M, H:i" }}</td>
           </tr>

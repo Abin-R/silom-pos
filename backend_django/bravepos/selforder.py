@@ -885,6 +885,12 @@ class LatePaymentNotFound(LatePaymentError):
     """No such late payment (at this branch)."""
 
 
+class RefundFailed(LatePaymentError):
+    """Beam would not refund it (often: the charge was already paid out and
+    the Beam balance is short).  Nothing was recorded; staff can refund by hand
+    and then mark it refunded with ``by_hand``."""
+
+
 def refund_due(branch=None):
     """Late payments nobody has settled yet, newest first."""
     qs = SelfOrder.objects.filter(status='late_paid').select_related('branch')
@@ -914,6 +920,7 @@ def late_payment_row(d: SelfOrder) -> dict:
         'resolution': d.resolution,
         'resolved_by': d.resolved_by,
         'resolved_at': d.resolved_at.isoformat() if d.resolved_at else None,
+        'beam_refund_id': d.beam_refund_id,
         'order_number': d.order.order_number if d.order_id else None,
     }
 
@@ -935,13 +942,34 @@ def _settle(draft_id, by: str, resolution: str, branch=None) -> SelfOrder:
     return locked
 
 
-def mark_refunded(draft_id, by: str, branch=None) -> SelfOrder:
-    """Staff gave the money back (in the Beam dashboard).  Records it only:
-    nothing here calls Beam."""
+def mark_refunded(draft_id, by: str, branch=None, by_hand: bool = False) -> SelfOrder:
+    """Give a late payment back.
+
+    Refunds the full Beam charge, then records it.  The row stays locked
+    across the Beam call, so two taps cannot refund twice.  If Beam refuses,
+    nothing is recorded and ``RefundFailed`` carries Beam's reason.
+
+    ``by_hand`` records a refund staff made some other way (Beam dashboard,
+    cash) without calling Beam.
+    """
     with transaction.atomic():
         locked = _settle(draft_id, by, 'refunded', branch)
+        fields = ['status', 'resolution', 'resolved_by', 'resolved_at']
+        if not by_hand:
+            try:
+                locked.beam_refund_id = gateways.beam_refund_order(
+                    locked,
+                    reason=f'Self-order SELF-{locked.token[:12]} paid late, refunded by {by}',
+                )
+            except gateways.GatewayConfigError as e:
+                raise RefundFailed(str(e)) from e
+            except gateways.GatewayError as e:
+                raise RefundFailed(e.detail) from e
+            fields.append('beam_refund_id')
         locked.status = 'refunded'
-        locked.save(update_fields=['status', 'resolution', 'resolved_by', 'resolved_at'])
+        locked.save(update_fields=fields)
+    logger.info('late self-order refunded token=%s by=%s beam_refund=%s',
+                locked.token[:8], by, locked.beam_refund_id or 'by hand')
     return locked
 
 
