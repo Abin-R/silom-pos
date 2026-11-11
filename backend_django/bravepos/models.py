@@ -444,6 +444,12 @@ class Product(models.Model):
     # for "not set" the way par_level's 0 does.
     shelf_life = models.PositiveIntegerField(null=True, blank=True)
     sku = models.CharField(max_length=64, blank=True, default="")
+    # The Shopster product ID (labelled so everywhere a person sees it).  It is
+    # what matches one branch's copy of a product to another's, ahead of the
+    # name, so it is unique among a branch's on-sale products — see
+    # ``product_barcode_unique_on_sale``.  Removed rows are exempt: old
+    # duplicates live there and keep their history.  Blank is allowed by the
+    # database for rows from before it was required; every form requires it.
     barcode = models.CharField(max_length=64, blank=True, default="")
     image_url = models.TextField(blank=True, default="")
     image_base64 = models.TextField(blank=True, default="")
@@ -462,6 +468,13 @@ class Product(models.Model):
         indexes = [
             models.Index(fields=["category"]),
             models.Index(fields=["branch"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "barcode"],
+                condition=models.Q(active=True) & ~models.Q(barcode=""),
+                name="product_barcode_unique_on_sale",
+            ),
         ]
 
     def __str__(self) -> str:

@@ -7,6 +7,7 @@ Run:
 from __future__ import annotations
 
 import base64
+import itertools
 import io
 from datetime import date
 from unittest import mock
@@ -27,6 +28,9 @@ def _png_b64(size=(40, 30)) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+_shopster_ids = itertools.count(1)
+
+
 class ShopsterCreateProductTests(TestCase):
 
     def setUp(self):
@@ -35,6 +39,9 @@ class ShopsterCreateProductTests(TestCase):
         self.cat = Category.objects.create(branch=self.branch, name="Bakery")
 
     def _post(self, body):
+        # The Shopster product ID is required here; tests about other fields
+        # get a fresh one unless they send their own.
+        body = {"barcode": f"S{next(_shopster_ids)}", **body}
         return self.client.post(URL, body, content_type="application/json")
 
     def test_creates_product_at_bio_house_without_auth(self):

@@ -9,14 +9,9 @@ branch's list match a first one's, and it backs two callers:
   gets its menu and how a product added at one shop reaches the others;
 * ``manage.py sync_products``, the same job from a terminal.
 
-The two differ in exactly one respect, and it is the important one:
-
-**The page adds; it does not overwrite.**  A product the target branch already
-has is left completely alone — its price, its cost, its photo, its stock.  That
-is what makes the page safe to press twice, and safe to press on a branch that
-has been running its own prices for a month: the worst it can do is add rows
-that were missing.  The command keeps its older ``update_existing`` behaviour,
-because pushing a price change out of a terminal is what it was written for.
+Both add what is missing, edit what is already there to match, and take off
+sale what the source has removed.  Products the target sells that the source
+has never had are left alone — a branch may carry items of its own.
 
 Three things are never copied either way:
 
@@ -29,8 +24,11 @@ Three things are never copied either way:
   category would mean renaming a category at one branch silently moved a
   product at another.
 
-Matching is by name, case-insensitively, which is what makes "already there"
-mean what an admin means by it: the name is what they read on the till.
+Matching is by **Shopster product ID** (``barcode``) first, then by name,
+case-insensitively.  The ID is unique among a branch's on-sale products, so
+it survives a rename; the name is the fallback for rows that have no ID yet.
+An edit passes the ID and name the product had *before* the save as well, so
+changing both at once still finds every copy.
 """
 from __future__ import annotations
 
@@ -68,7 +66,8 @@ def source_catalogue(branch):
     """
     cats = list(branch.categories.select_related("parent_category"))
     prods = list(
-        branch.products.filter(active=True).select_related("category", "unit")
+        branch.products.filter(active=True)
+        .select_related("category", "unit").prefetch_related("sale_windows")
     )
     return cats, prods
 
@@ -85,13 +84,62 @@ def removed_catalogue(branch):
     it simply dropped out of the payload, so the target's copy was never looked
     at and stayed on sale.
     """
-    return list(branch.products.filter(active=False).only("id", "name"))
+    selling = branch.products.filter(active=True)
+    ids = {b for b in selling.values_list("barcode", flat=True) if b}
+    names = {(n or "").strip().lower() for n in selling.values_list("name", flat=True)}
+    # A removed row that shares an ID or a name with one still on sale is an
+    # old duplicate (a rename left behind, a double save), not a decision to
+    # stop selling — retiring by it would take the live product off sale at
+    # every other branch.
+    return [
+        p for p in branch.products.filter(active=False).only("id", "name", "barcode")
+        if not (p.barcode and p.barcode in ids)
+        and (p.name or "").strip().lower() not in names
+    ]
 
 
 # ── Matching ────────────────────────────────────────────────────────────────
 def _find(qs, name):
     name = (name or "").strip()
     return qs.filter(name__iexact=name).first() if name else None
+
+
+def find_product(qs, barcodes=(), names=()):
+    """The row in ``qs`` that is this product: by Shopster ID, then by name.
+
+    Each list is tried in order, so callers pass the value from before an
+    edit first.  An on-sale row is preferred over a removed one with the same
+    key — removed duplicates are common, and the live row is the one meant.
+    """
+    for code in barcodes:
+        code = (code or "").strip()
+        if code:
+            row = qs.filter(barcode=code).order_by("-active").first()
+            if row is not None:
+                return row
+    for name in names:
+        name = (name or "").strip()
+        if name:
+            row = qs.filter(name__iexact=name).order_by("-active").first()
+            if row is not None:
+                return row
+    return None
+
+
+def barcode_taken(branch, barcode, exclude_pk=None):
+    """The on-sale product at ``branch`` already using ``barcode``, or None.
+
+    The Shopster product ID is unique among a branch's on-sale products
+    (``product_barcode_unique_on_sale``); this is the check every writer makes
+    first, so the database constraint is a backstop and not an error page.
+    """
+    barcode = (barcode or "").strip()
+    if not barcode or branch is None:
+        return None
+    qs = Product.objects.filter(branch=branch, barcode=barcode, active=True)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    return qs.first()
 
 
 def _diff(dest, src, fields):
@@ -171,7 +219,7 @@ def unit_for(target, unit):
 
 def upsert_product(target, prod, category, *, update_existing, copy_stock=False):
     """Give ``target`` a product matching ``prod``.  Returns (row, action, changed)."""
-    dest = _find(target.products, prod.name)
+    dest = find_product(target.products, [prod.barcode], [prod.name])
     if dest is None:
         unit = unit_for(target, prod.unit)
         dest = Product(branch=target, name=prod.name)
@@ -214,7 +262,7 @@ def upsert_product(target, prod, category, *, update_existing, copy_stock=False)
 def retire_removed(target, removed):
     """Take off sale at ``target`` the products the source has removed.
 
-    Matched by name, exactly the way `upsert_product` matches, so this retires
+    Matched by Shopster ID then name, the way `upsert_product` matches, so this retires
     the same row an earlier sync would have created — no more.
 
     Only rows already on sale are touched, and nothing is ever created: a
@@ -223,7 +271,8 @@ def retire_removed(target, removed):
     """
     retired = []
     for prod in removed:
-        dest = _find(target.products.filter(active=True), prod.name)
+        dest = find_product(target.products.filter(active=True),
+                            [prod.barcode], [prod.name])
         if dest is None:
             continue
         dest.active = False
@@ -233,8 +282,13 @@ def retire_removed(target, removed):
 
 
 def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
-                   catalogue=None, removed=None, retire=False):
+                   catalogue=None, removed=None, retire=False, mirror=False):
     """Copy ``source``'s catalogue onto ``target``.  Returns a per-item report.
+
+    ``mirror`` is the Sync products page: every source product is added or
+    edited to match through `push_product` (Shopster ID, then name), exactly
+    as "Sync to all branches" does for one product.  Without it this is the
+    older ``manage.py sync_products`` behaviour, kept for that command.
 
     ``catalogue`` is the ``(cats, prods)`` pair from `source_catalogue`, passed
     in when several targets are being done in one go so the source is read once
@@ -273,6 +327,15 @@ def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
         )
 
     for prod in prods:
+        if mirror:
+            action, changes = push_product(target, prod)
+            report["products"].append({
+                "name": prod.name,
+                "action": {"create": "created", "update": "updated",
+                           "same": "skipped"}.get(action, action),
+                "changed": [f for f, _, _ in changes],
+            })
+            continue
         dest, action, changed = upsert_product(
             target, prod, cat_map.get(prod.category_id) if prod.category_id else None,
             update_existing=update_existing, copy_stock=copy_stock,
@@ -288,17 +351,14 @@ def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
 
 # ── Preview ─────────────────────────────────────────────────────────────────
 def preview(source, target, catalogue=None, removed=None):
-    """What a sync would add to ``target``, writing nothing.
+    """What a sync would do to ``target``, writing nothing.
 
-    Names the products rather than only counting them: "18 products will be
-    added" is not something an admin can check, and this page's one dangerous
-    property is that it writes to a branch nobody is looking at.
+    Names the products and, for an edit, what changes on each — "18 products
+    will be updated" is not something an admin can check, and this page writes
+    to branches nobody is looking at.  Built from `plan_product`, the same
+    function the sync acts on.
     """
     cats, prods = catalogue if catalogue is not None else source_catalogue(source)
-    existing = {
-        n.strip().lower()
-        for n in target.products.values_list("name", flat=True) if n
-    }
     have_cats = {
         n.strip().lower()
         for n in target.categories.values_list("name", flat=True) if n
@@ -309,24 +369,31 @@ def preview(source, target, catalogue=None, removed=None):
     }
     parents = {c.parent_category.name for c in cats if c.parent_category_id}
 
-    adding = [p.name for p in prods if (p.name or "").strip().lower() not in existing]
+    adding, updating, conflicts, same = [], [], [], 0
+    for prod in prods:
+        dest, action, changes = plan_product(target, prod)
+        if action == "create":
+            adding.append(prod.name)
+        elif action == "update":
+            updating.append({"name": prod.name, "changes": describe_changes(changes)})
+        elif action == "conflict":
+            conflicts.append(prod.name)
+        else:
+            same += 1
 
-    # Only rows the target is currently selling can be retired, so the preview
-    # counts those and not every name that happens to match.
-    on_sale = {
-        n.strip().lower()
-        for n in target.products.filter(active=True).values_list("name", flat=True) if n
-    }
+    on_sale = target.products.filter(active=True)
     retiring = [
         p.name for p in (removed or [])
-        if (p.name or "").strip().lower() in on_sale
+        if find_product(on_sale, [p.barcode], [p.name]) is not None
     ]
 
     return {
         "branch": target,
         "adding": adding,
+        "updating": updating,
+        "conflicts": conflicts,
         "retiring": retiring,
-        "already": len(prods) - len(adding),
+        "already": same,
         "categories_adding": [
             c.name for c in cats if (c.name or "").strip().lower() not in have_cats
         ],
@@ -351,101 +418,160 @@ FANOUT_FIELDS = (
     "is_favorite", "image_url", "image_base64", "shelf_life",
 )
 
+# How a change reads in the Sync page's preview.  Photos are compared but not
+# printed: a base64 image is not something to show in a table cell.
+FIELD_LABELS = {
+    "name": "name", "barcode": "Shopster ID", "price": "price", "cost": "cost",
+    "name_th": "description", "sku": "SKU", "tax_type": "tax",
+    "is_favorite": "favourite", "image_url": "photo", "image_base64": "photo",
+    "shelf_life": "shelf life", "category": "category", "unit": "unit",
+    "sale_windows": "sale dates",
+}
+_QUIET_FIELDS = {"image_url", "image_base64", "sale_windows"}
 
-def _fanout_match(target, product, previous_name):
-    """``target``'s copy of ``product``, or None.
 
-    The name the product *had* when the form was opened is tried first, so a
-    rename lands on the copies that already exist instead of walking past them
-    — matching on the new name alone would leave every branch holding the old
-    name and add a second row beside it.  The new name is tried second, for the
-    branch somebody had already renamed by hand; updating that is better than
-    duplicating it.
+def _windows(product):
+    return sorted(
+        ((w.launch_date, w.discontinue_date) for w in product.sale_windows.all()),
+        key=lambda pair: (str(pair[0]), str(pair[1])),
+    )
+
+
+def _label(row, attr):
+    obj = getattr(row, attr) if getattr(row, f"{attr}_id") else None
+    return obj.name if obj is not None else ""
+
+
+def plan_product(target, product, *, previous_barcode=None, previous_name=None):
+    """What pushing ``product`` to ``target`` would do — writing nothing.
+
+    Returns ``(dest, action, changes)``.  ``action`` is ``"create"``,
+    ``"update"``, ``"same"``, ``"skip"`` (an off-sale product the target never
+    had: it is never born dead somewhere else) or ``"conflict"`` (the target
+    already sells a *different* product under this Shopster ID).  ``changes``
+    is a list of ``(field, before, after)``.
+
+    `push_product` acts on exactly this, so the Sync page's preview and the
+    sync itself cannot disagree.
     """
-    for name in (previous_name, product.name):
-        dest = _find(target.products, name)
-        if dest is not None:
-            return dest
-    return None
+    dest = find_product(
+        target.products,
+        [previous_barcode, product.barcode], [previous_name, product.name],
+    )
+    if dest is None:
+        if not product.active:
+            return None, "skip", []
+        return None, "create", []
+
+    changes = [(f, getattr(dest, f), getattr(product, f))
+               for f in FANOUT_FIELDS if getattr(dest, f) != getattr(product, f)]
+    for attr in ("category", "unit"):
+        before, after = _label(dest, attr), _label(product, attr)
+        if before.strip().lower() != after.strip().lower():
+            changes.append((attr, before, after))
+    if _windows(dest) != _windows(product):
+        changes.append(("sale_windows", "", ""))
+
+    if any(f == "barcode" for f, _, _ in changes) and dest.active and barcode_taken(
+            target, product.barcode, exclude_pk=dest.pk):
+        return dest, "conflict", changes
+    return dest, ("update" if changes else "same"), changes
 
 
-def fanout_product(product, *, previous_name=None, branches=None):
+def describe_changes(changes):
+    """``[(field, before, after)]`` as short phrases for the preview."""
+    out, seen = [], set()
+    for field, before, after in changes:
+        label = FIELD_LABELS.get(field, field)
+        if label in seen:
+            continue
+        seen.add(label)
+        if field in _QUIET_FIELDS:
+            out.append(f"{label} changed")
+        else:
+            out.append(f"{label} {before if before not in (None, '') else '—'} → "
+                       f"{after if after not in (None, '') else '—'}")
+    return out
+
+
+def push_product(target, product, *, previous_barcode=None, previous_name=None):
+    """Make ``target``'s copy of ``product`` match it.  Returns ``(action, changes)``.
+
+    Creates the copy if the target has none, otherwise overwrites
+    `FANOUT_FIELDS`, category, unit and sale dates — never stock, par level or
+    the counter minimum, which are each shop's own.  A ``"conflict"`` writes
+    nothing.  The caller owns the transaction.
+    """
+    dest, action, changes = plan_product(
+        target, product,
+        previous_barcode=previous_barcode, previous_name=previous_name,
+    )
+    if action in ("skip", "conflict"):
+        return action, changes
+
+    windows = _windows(product)
+    category = None
+    if product.category_id:
+        category, _, _ = upsert_category(
+            target, product.category, update_existing=False,
+        )
+
+    if action == "create":
+        dest, _, _ = upsert_product(target, product, category, update_existing=False)
+        sale_windows.replace(dest, windows)
+        sale_windows.apply(dest)
+        return action, changes
+
+    if action == "same":
+        return action, changes
+
+    unit = unit_for(target, product.unit)
+    fields = [f for f, _, _ in changes if f in FANOUT_FIELDS]
+    for field in fields:
+        setattr(dest, field, getattr(product, field))
+    if dest.category_id != (category.pk if category else None):
+        dest.category = category
+        fields.append("category")
+    if dest.unit_id != (unit.pk if unit else None):
+        dest.unit = unit
+        fields.append("unit")
+    if fields:
+        # update_fields, so this cannot clobber a column it was not asked to
+        # touch — stock above all, which a cashier may be moving now.
+        dest.save(update_fields=fields)
+    sale_windows.replace(dest, windows)
+    sale_windows.apply(dest)
+    return action, changes
+
+
+def fanout_product(product, *, previous_name=None, previous_barcode=None,
+                   branches=None):
     """Push one product out to every other active branch.  Returns a report.
 
-    This is the product form's "Sync to all branches" toggle, and it is the
-    single-product counterpart of `copy_catalogue`: same matching, same
-    per-branch category and unit resolution, same refusal to move stock.  The
-    difference is which way it leans.  `copy_catalogue` runs over a whole
-    catalogue at an admin's request and therefore only ever *adds*; this runs
-    on one product the admin is looking at and has just typed, so for that one
-    row an overwrite is what they asked for — of `FANOUT_FIELDS`, category and
-    unit, never stock or par level.
+    The product form's and Quick edit's "Sync to all branches".  Each branch's
+    copy is found by Shopster ID, then by name — the values from *before* this
+    save first, so a rename, a new ID, or both at once land on the copies that
+    already exist instead of adding a second row beside them.  See
+    `push_product` for what is written.
 
-    A branch that does not have the product gets it, which is what makes the
-    toggle mean what it says on a product created before the toggle existed.
-    The exception is a product that is off sale here: that one is never born
-    dead somewhere else.  `retire_removed` draws the same line — a branch that
-    never had the product has no business gaining a row it cannot sell.
-
-    ``previous_name`` is the name in the database before this save; without it
-    a rename cannot find its own copies.  The caller wraps this and the
-    product's own save in one transaction, because a fan-out that half ran is
-    worse than none: nothing on screen would say where it stopped.
+    The caller wraps this and the product's own save in one transaction,
+    because a fan-out that half ran is worse than none.
     """
-    report = {"created": [], "updated": [], "unchanged": []}
+    report = {"created": [], "updated": [], "unchanged": [], "conflicts": []}
     targets = other_branches(product.branch) if branches is None else branches
-    # Launch and discontinue dates travel with the rest of the form, and each
-    # copy is then taken on or off sale by them exactly as this one is.
-    windows = [(w.launch_date, w.discontinue_date)
-               for w in product.sale_windows.all()]
-
     for target in targets:
-        dest = _fanout_match(target, product, previous_name)
-
-        if dest is None:
-            if not product.active:
-                continue
-            category = None
-            if product.category_id:
-                category, _, _ = upsert_category(
-                    target, product.category, update_existing=False,
-                )
-            dest, _, _ = upsert_product(target, product, category,
-                                        update_existing=False)
-            sale_windows.replace(dest, windows)
-            sale_windows.apply(dest)
+        action, _ = push_product(
+            target, product,
+            previous_barcode=previous_barcode, previous_name=previous_name,
+        )
+        if action == "create":
             report["created"].append(target.name)
-            continue
-
-        category = None
-        if product.category_id:
-            category, _, _ = upsert_category(
-                target, product.category, update_existing=False,
-            )
-        unit = unit_for(target, product.unit)
-
-        changed = _diff(dest, product, FANOUT_FIELDS)
-        for field in changed:
-            setattr(dest, field, getattr(product, field))
-        if dest.category_id != (category.pk if category else None):
-            dest.category = category
-            changed.append("category")
-        if dest.unit_id != (unit.pk if unit else None):
-            dest.unit = unit
-            changed.append("unit")
-        if changed:
-            # update_fields, so this cannot clobber a column it was not asked
-            # to touch — stock above all, which a cashier may be moving now.
-            dest.save(update_fields=changed)
-        if sale_windows.replace(dest, windows):
-            changed.append("sale_windows")
-        if sale_windows.apply(dest):
-            changed.append("active")
-        if not changed:
+        elif action == "update":
+            report["updated"].append(target.name)
+        elif action == "conflict":
+            report["conflicts"].append(target.name)
+        elif action == "same":
             report["unchanged"].append(target.name)
-            continue
-        report["updated"].append(target.name)
-
     return report
 
 
@@ -560,16 +686,21 @@ def fanout_active(product, *, branches=None):
     The Remove and Restore buttons' "at all branches too" box.  Only copies
     that exist are touched: removing never needs to create anything, and a
     restore that created rows would be the Sync page's job done by the wrong
-    button.  Matched by name, the way every other sync here matches.
+    button.  Matched by Shopster ID then name, the way every other sync here
+    matches.  A restore is skipped (``conflicts``) at a branch already selling
+    a different product under the same ID.
     """
-    report = {"updated": [], "unchanged": []}
+    report = {"updated": [], "unchanged": [], "conflicts": []}
     targets = other_branches(product.branch) if branches is None else branches
     for target in targets:
-        dest = _find(target.products, product.name)
+        dest = find_product(target.products, [product.barcode], [product.name])
         if dest is None:
             continue
         if dest.active == product.active:
             report["unchanged"].append(target.name)
+            continue
+        if product.active and barcode_taken(target, dest.barcode, exclude_pk=dest.pk):
+            report["conflicts"].append(target.name)
             continue
         if product.active:
             # Restored the way the original was, so the copy's own dates do

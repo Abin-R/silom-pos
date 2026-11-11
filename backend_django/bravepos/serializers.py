@@ -118,6 +118,48 @@ class ProductSerializer(serializers.ModelSerializer):
     def validate_image_base64(self, value):
         return images.normalize(value)
 
+    # The Shopster product ID (``barcode``): unique among the branch's on-sale
+    # products, because every sync matches copies by it.  Required when it is
+    # sent at all, and on create for callers that opt in — Shopster always,
+    # the till once ``TILL_REQUIRES_PRODUCT_BARCODE`` is on.  That switch
+    # exists because installed till builds without the field must keep being
+    # able to add products until the app update with the field has reached
+    # them.  An old build's edit never sends ``barcode``, so it is unaffected.
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        from django.conf import settings
+        from . import catalog
+
+        creating = self.instance is None
+        if 'barcode' in attrs:
+            attrs['barcode'] = (attrs['barcode'] or '').strip()
+        sent = 'barcode' in attrs
+        barcode = attrs['barcode'] if sent else getattr(self.instance, 'barcode', '')
+        require = self.context.get('require_barcode')
+        if require is None:
+            require = getattr(settings, 'TILL_REQUIRES_PRODUCT_BARCODE', False)
+        # Missing is refused when this caller requires it, or when an edit
+        # sends it blank (clearing it).  An edit that does not send it is fine.
+        if not barcode and ((creating and require) or (sent and not creating)):
+            raise serializers.ValidationError(
+                {'barcode': ['Shopster product ID is required.']})
+
+        active = attrs.get('active', getattr(self.instance, 'active', True))
+        branch = self.context.get('branch') or getattr(self.instance, 'branch', None)
+        if branch is None:
+            request = self.context.get('request')
+            sess = getattr(request, 'session_obj', None) if request else None
+            branch = getattr(sess, 'branch', None)
+        if barcode and active and branch is not None:
+            other = catalog.barcode_taken(
+                branch, barcode,
+                exclude_pk=self.instance.pk if self.instance else None)
+            if other is not None:
+                raise serializers.ValidationError({'barcode': [
+                    f'Shopster product ID {barcode} is already used by '
+                    f'"{other.name}" in this branch.']})
+        return attrs
+
     # ``stock`` is the opening count on create and nothing after.  Stock moves
     # through stock movements / documents so every change is on record; the
     # till's Edit Product form used to send back the number it loaded, which

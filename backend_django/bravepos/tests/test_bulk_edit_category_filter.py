@@ -80,7 +80,7 @@ class BulkEditCategoryFilterTests(TestCase):
         url = (reverse("backoffice:product_bulk_edit")
                + f"?branch={self.branch.id}&cat={self.cake.id}")
         response = self.client.post(url, {
-            "id": [str(product.id)], "barcode": [""], "name": ["Lily Cake"],
+            "id": [str(product.id)], "barcode": ["LC-1"], "name": ["Lily Cake"],
             "description": [""], "price": ["2"], "cost": ["0"],
             "category": [str(self.cake.id)], "unit": [""],
         })

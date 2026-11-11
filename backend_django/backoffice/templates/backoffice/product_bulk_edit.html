@@ -54,7 +54,7 @@
         <thead>
           <tr>
             <th style="width:60px"></th>
-            <th>Barcode</th><th>Name</th><th>Description</th>
+            <th>Shopster ID</th><th>Name</th><th>Description</th>
             <th>Category</th><th>Unit</th>
             <th class="r">Price</th><th class="r">Cost</th>
             <th class="r">Shelf life (days)</th>
@@ -75,7 +75,7 @@
                 {% else %}{{ p.name|initial }}{% endif %}
               </span>
             </td>
-            <td><input type="text" name="barcode" value="{{ p.barcode }}" class="inp" style="height:34px"></td>
+            <td><input type="text" name="barcode" value="{{ p.barcode }}" class="inp" style="height:34px" required maxlength="64"></td>
             <td><input type="text" name="name" value="{{ p.name }}" class="inp" style="height:34px"></td>
             <td><input type="text" name="description" value="{{ p.name_th }}" class="inp" style="height:34px"
                        placeholder="Thai name or detail"></td>

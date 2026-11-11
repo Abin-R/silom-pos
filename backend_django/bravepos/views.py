@@ -608,7 +608,8 @@ def shopster_create_product(request):
 
     # The id is ours to mint; an outside id would collide or overwrite.
     data.pop('id', None)
-    serializer = ProductSerializer(data=data)
+    serializer = ProductSerializer(
+        data=data, context={'branch': branch, 'require_barcode': True})
     serializer.is_valid(raise_exception=True)
     with transaction.atomic():
         product = serializer.save(branch=branch)

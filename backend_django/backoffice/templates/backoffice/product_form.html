@@ -168,8 +168,10 @@
           </div>
           <div class="field">
             <label for="f-barcode">Shopster product ID</label>
-            <input id="f-barcode" type="text" name="barcode" maxlength="64"
+            <input id="f-barcode" type="text" name="barcode" maxlength="64" required
                    value="{{ product.barcode }}">
+            <span class="hint">Required, and unique in this branch. Every branch's copy is
+              matched by it first, so it can change along with the name in one save.</span>
           </div>
 
           <div class="field wide">

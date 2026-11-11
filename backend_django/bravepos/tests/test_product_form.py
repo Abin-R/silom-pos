@@ -19,12 +19,15 @@ Run:
 """
 from __future__ import annotations
 
+import itertools
 from decimal import Decimal
 
 from django.test import TestCase
 from django.urls import reverse
 
 from bravepos.models import Branch, Product, Settings, Staff
+
+_shopster_ids = itertools.count(1000)
 
 
 class ProductFormTestCase(TestCase):
@@ -52,7 +55,10 @@ class ProductFormTestCase(TestCase):
 
     def form(self, **overrides):
         """A minimally valid product form, before the field under test."""
-        data = {"name": "Cherry Mousse Pop", "price": "120.00"}
+        # A fresh Shopster ID each call: it is required and unique, and these
+        # tests are about names and fields, so each POST is its own product.
+        data = {"name": "Cherry Mousse Pop", "price": "120.00",
+                "barcode": f"T{next(_shopster_ids)}"}
         data.update(overrides)
         return data
 

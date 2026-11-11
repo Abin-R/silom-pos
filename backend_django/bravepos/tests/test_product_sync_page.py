@@ -4,13 +4,14 @@ The page exists for two moments: a branch that has just opened has an empty
 product list, and a product added at one shop has to reach the others.  Both
 are "make that branch's list look like this one".
 
-The property the whole screen is built around is that it **only adds**.  A
-product the target already has keeps its own price, cost, photo and stock —
-that is what makes it safe to press on a branch that has been trading for a
-month with prices of its own, and safe to press twice.  Most of what is pinned
-here is that promise, plus the two ways a copy could quietly corrupt a branch:
-by inventing a stock figure, or by pointing the copy at the source branch's own
-category row.
+Since 2026-11-11 the page **adds, edits and removes**: every product the
+source sells is added where missing and edited to match where present (found
+by Shopster ID, then name), and what the source removed is taken off sale.
+Products only the target sells, and every branch's stock, are left alone.
+``CopyCatalogueTests`` pins the older add-only ``copy_catalogue`` that
+``manage.py sync_products`` still uses; the page tests pin the new behaviour,
+plus the two ways a copy could quietly corrupt a branch: by inventing a stock
+figure, or by pointing the copy at the source branch's own category row.
 
 Run:
     python manage.py test bravepos.tests.test_product_sync_page \\
@@ -141,8 +142,14 @@ class CopyCatalogueTests(TestCase):
         result = catalog.preview(self.source, self.target)
 
         self.assertEqual(result["adding"], ["Brownie"])
-        self.assertEqual(result["already"], 1)
+        # The target's copy is at 70, the source at 95: an edit, with its
+        # before and after named.
+        self.assertEqual(result["already"], 0)
+        self.assertEqual([u["name"] for u in result["updating"]], ["Sexy Back Cookie"])
+        self.assertIn("price 70.00 → 95.00", result["updating"][0]["changes"])
         self.assertEqual(Product.objects.filter(branch=self.target).count(), 1)
+        self.assertEqual(
+            Product.objects.get(branch=self.target).price, Decimal("70.00"))
 
 
 class ProductSyncPageTests(TestCase):
@@ -240,7 +247,7 @@ class ProductSyncPageTests(TestCase):
         res = self.client.post(self.url, self._params(), follow=True)
 
         self.assertContains(res, "1 product taken off sale")
-        self.assertContains(res, "BIO HOUSE has removed it")
+        self.assertContains(res, "BIO HOUSE removed it")
 
     def test_unticking_the_box_leaves_the_copy_on_sale(self):
         """The escape hatch: a branch that still sells something the source has
@@ -300,8 +307,8 @@ class ProductSyncPageTests(TestCase):
 
     def test_the_message_says_what_was_left_alone(self):
         res = self.client.post(self.url, self._params(), follow=True)
-        self.assertContains(res, "2 products copied")
-        self.assertContains(res, "left exactly as they were")
+        self.assertContains(res, "2 products added")
+        self.assertContains(res, "Products only those branches sell were left as they were")
 
     def test_a_second_press_reports_that_there_was_nothing_to_do(self):
         self.client.post(self.url, self._params(), follow=True)
@@ -310,20 +317,25 @@ class ProductSyncPageTests(TestCase):
         self.assertContains(res, "Nothing was changed")
         self.assertEqual(Product.objects.filter(branch=self.silom).count(), 2)
 
-    def test_a_new_product_added_later_is_the_only_thing_copied(self):
-        """The second job this page does: one product added at BIO HOUSE, and
-        the branch's own prices must survive the sync that carries it."""
+    def test_a_later_sync_adds_the_new_product_and_edits_the_old_to_match(self):
+        """One product added at BIO HOUSE, and a price the branch changed on
+        its own: the sync carries the new one and puts the price back to
+        BIO HOUSE's — the page now makes the copies match."""
         self.client.post(self.url, self._params(), follow=True)
         theirs = Product.objects.get(branch=self.silom, name="Brownie")
         theirs.price = Decimal("80.00")
+        theirs.stock = 6
         theirs.save()
 
         make_product(self.source, name="Lemon Tart", price="85.00")
-        self.client.post(self.url, self._params(), follow=True)
+        res = self.client.post(self.url, self._params(), follow=True)
 
         self.assertEqual(Product.objects.filter(branch=self.silom).count(), 3)
         theirs.refresh_from_db()
-        self.assertEqual(theirs.price, Decimal("80.00"))
+        self.assertEqual(theirs.price, Decimal("75.00"))
+        self.assertEqual(theirs.stock, 6, "stock is each shop's own")
+        self.assertContains(res, "1 product added")
+        self.assertContains(res, "1 product edited to match BIO HOUSE")
 
     def test_a_branch_cannot_be_told_to_sync_onto_itself(self):
         """The ids come from a form anyone can edit, and a branch reading and

@@ -3063,6 +3063,15 @@ def stock_in_new(request):
     })
 
 
+def _add_stock_out_type(branch, name, name_th):
+    """A new stock-out type at ``branch``, last in its list."""
+    last = StockOutReason.objects.filter(branch=branch).order_by("-sort_order").first()
+    return StockOutReason.objects.create(
+        branch=branch, name=name, name_th=name_th,
+        sort_order=(last.sort_order + 1) if last else 0,
+    )
+
+
 @login_required
 def stock_out_types(request):
     """The branch's stock-out reasons — what the Type dropdown offers here and
@@ -3079,18 +3088,35 @@ def stock_out_types(request):
         elif existing.filter(name__iexact=name).exists():
             error = f"“{name}” is already a type."
         else:
-            last = existing.order_by("-sort_order").first()
-            StockOutReason.objects.create(
-                branch=branch, name=name, name_th=name_th,
-                sort_order=(last.sort_order + 1) if last else 0,
-            )
-            messages.success(request, f"Added “{name}”.")
+            with transaction.atomic():
+                _add_stock_out_type(branch, name, name_th)
+                added, updated = [], []
+                if request.POST.get("sync_all"):
+                    for other in catalog.other_branches(branch):
+                        row = StockOutReason.objects.filter(
+                            branch=other, name__iexact=name).first()
+                        if row is None:
+                            _add_stock_out_type(other, name, name_th)
+                            added.append(other.name)
+                        elif name_th and row.name_th != name_th:
+                            row.name_th = name_th
+                            row.save(update_fields=["name_th"])
+                            updated.append(other.name)
+            msg = f"Added “{name}”."
+            if added:
+                msg += " Also added to " + ", ".join(added) + "."
+            if updated:
+                msg += " Thai name updated at " + ", ".join(updated) + "."
+            if request.POST.get("sync_all") and not added and not updated:
+                msg += " Every other branch already had it."
+            messages.success(request, msg)
             return redirect(reverse("backoffice:stock_out_types") + f"?branch={branch.id}")
     return render(request, "backoffice/stock_out_types.html", {
         "active": "stock_out_new",
         "branches": branches,
         "branch": branch,
         "types": StockOutReason.objects.filter(branch=branch) if branch else [],
+        "sync_branches": _fanout_branch_names(branch) if branch else [],
         "error": error,
         "posted": request.POST if error else None,
         "hide_dates": True,
@@ -3101,8 +3127,21 @@ def stock_out_types(request):
 def stock_out_type_delete(request, type_id):
     row = get_object_or_404(StockOutReason, id=type_id)
     if request.method == "POST":
-        row.delete()
-        messages.success(request, f"Deleted “{row.name}”.")
+        # "Sync to all branches": the type with the same name goes everywhere.
+        # Saved documents keep the reason as text, so no history moves.
+        with transaction.atomic():
+            others = []
+            if request.POST.get("sync_all") and row.branch_id:
+                for other in catalog.other_branches(row.branch):
+                    n, _ = StockOutReason.objects.filter(
+                        branch=other, name__iexact=row.name).delete()
+                    if n:
+                        others.append(other.name)
+            row.delete()
+        msg = f"Deleted “{row.name}”."
+        if others:
+            msg += " Also deleted at " + ", ".join(others) + "."
+        messages.success(request, msg)
     return redirect(reverse("backoffice:stock_out_types") + f"?branch={row.branch_id}")
 
 
@@ -3729,7 +3768,25 @@ def product_errors(product) -> list[str]:
     errors = []
     if not product.name:
         errors.append("Product name is required.")
+    errors += product_barcode_errors(product)
     return errors
+
+
+def product_barcode_errors(product) -> list[str]:
+    """The Shopster product ID is required, and unique among the branch's
+    on-sale products — it is how every sync finds a product's copies.  A
+    removed product is exempt from the second rule, as in the database."""
+    product.barcode = (product.barcode or "").strip()
+    if not product.barcode:
+        return ["Shopster product ID is required."]
+    if product.active:
+        other = catalog.barcode_taken(product.branch, product.barcode,
+                                      exclude_pk=product.pk)
+        if other is not None:
+            where = product.branch.name if product.branch else "this branch"
+            return [f"Shopster product ID {product.barcode} is already used by "
+                    f"\u201c{other.name}\u201d at {where}."]
+    return []
 
 
 def product_duplicate(product):
@@ -3793,18 +3850,26 @@ def _fanout_message(report) -> str:
         parts.append("added to " + ", ".join(report["created"]))
     if report["updated"]:
         parts.append("updated at " + ", ".join(report["updated"]))
+    conflicts = report.get("conflicts") or []
+    tail = (" Not synced to " + ", ".join(conflicts) + ": "
+            + ("it already sells" if len(conflicts) == 1 else "they already sell")
+            + " a different product with this Shopster product ID."
+            if conflicts else "")
     if not parts:
-        return " Every other branch already matched it."
-    return " Also " + "; ".join(parts) + "."
+        return (" Every other branch already matched it." if not conflicts else "") + tail
+    return " Also " + "; ".join(parts) + "." + tail
 
 
 def _active_fanout_message(report, verb) -> str:
     """`_fanout_message` for the Remove and Restore buttons."""
     if report is None:
         return ""
+    conflicts = report.get("conflicts") or []
+    tail = (" Not restored at " + ", ".join(conflicts) + ": a different product "
+            "there is on sale with this Shopster product ID." if conflicts else "")
     if report["updated"]:
-        return f" Also {verb} at " + ", ".join(report["updated"]) + "."
-    return " No other branch needed changing."
+        return f" Also {verb} at " + ", ".join(report["updated"]) + "." + tail
+    return (" No other branch needed changing." if not conflicts else "") + tail
 
 
 @login_required
@@ -3829,6 +3894,7 @@ def product_detail(request, product_id):
     # Read before the form overwrites it: a rename can only find the other
     # branches' copies under the name they still hold.
     previous_name = product.name
+    previous_barcode = product.barcode
 
     window_rows = _sale_window_rows(product)
     if request.method == "POST":
@@ -3842,7 +3908,8 @@ def product_detail(request, product_id):
                 product.save()
                 sale_windows.replace(product, windows)
                 fanout = (
-                    catalog.fanout_product(product, previous_name=previous_name)
+                    catalog.fanout_product(product, previous_name=previous_name,
+                                           previous_barcode=previous_barcode)
                     if sync_all else None
                 )
                 change = sale_windows.apply(product)
@@ -3928,6 +3995,18 @@ def product_restore(request, product_id):
     if request.method != "POST":
         return redirect("backoffice:product_detail", product_id=product.id)
 
+    # Two on sale under one Shopster ID is what the database refuses; say who
+    # holds it instead of failing on the constraint.
+    holder = catalog.barcode_taken(product.branch, product.barcode,
+                                   exclude_pk=product.pk)
+    if holder is not None:
+        messages.error(
+            request,
+            f"“{product.name}” was not restored: “{holder.name}” "
+            f"is on sale with the same Shopster product ID ({product.barcode}). "
+            f"Remove that one or change this one's ID first.")
+        return redirect(reverse("backoffice:product_list") + f"?{_filter_qs(request)}")
+
     with transaction.atomic():
         extended = sale_windows.restore(product)
         product.save(update_fields=["active", "removed_by_schedule"])
@@ -3998,47 +4077,47 @@ def product_new(request):
 
 
 def _sync_message(source, targets, results):
-    """What the sync did, in a sentence.
+    """What the sync did, in a sentence: added, edited, taken off sale, and
+    anything that could not be done."""
+    def count(action):
+        return sum(1 for r in results for p in r["products"] if p["action"] == action)
 
-    Says what was left alone as well as what was added: an admin pressing this
-    on a branch that has been trading for a month needs to hear that its own
-    prices survived, and hearing it only in the docs is too late.
-    """
-    added = sum(1 for r in results for p in r["products"] if p["action"] == "created")
+    added, updated, conflicts = count("created"), count("updated"), count("conflict")
     retired = sum(len(r.get("retired") or []) for r in results)
     where = ", ".join(t.name for t in targets)
 
-    if not added and not retired:
-        return (f"{where} already matched {source.name}'s catalogue. "
-                f"Nothing was changed.")
+    def n(k):
+        return f"{k} product{'' if k == 1 else 's'}"
 
     parts = []
     if added:
-        parts.append(f"{added} product{'' if added == 1 else 's'} copied from "
-                     f"{source.name} to {where}")
+        parts.append(f"{n(added)} added")
+    if updated:
+        parts.append(f"{n(updated)} edited to match {source.name}")
     if retired:
-        parts.append(f"{retired} product{'' if retired == 1 else 's'} taken off "
-                     f"sale there because {source.name} has removed "
+        parts.append(f"{n(retired)} taken off sale because {source.name} removed "
                      f"{'it' if retired == 1 else 'them'}")
-    return ("; ".join(parts) + ". Products those branches already had and still "
-            "sell were left exactly as they were.")
+    if not parts and not conflicts:
+        return f"{where} already matched {source.name}'s catalogue. Nothing was changed."
+    msg = (f"At {where}: " + "; ".join(parts) + "." if parts
+           else f"Nothing was changed at {where}.")
+    if conflicts:
+        msg += (f" {n(conflicts)} skipped: a different product there is on sale "
+                f"with the same Shopster product ID.")
+    return msg + (" Products only those branches sell were left as they were.")
 
 
 @login_required
 def product_sync(request):
-    """Copy one branch's catalogue onto others — the new-branch and new-product path.
+    """Make other branches' catalogues match one branch's.
 
-    Two jobs, one screen.  A branch that has just opened has an empty product
-    list and nobody is going to retype forty-four cakes into it; and a product
-    added at BIO HOUSE has to reach the other shops without an admin editing
-    each one by hand.  Both are "make that branch's list look like this one".
-
-    **It only adds.**  A product the target already has is left exactly as it
-    is — its price, its cost, its photo, its stock, untouched.  That is what
-    makes this safe to press on a branch that has been trading for a month with
-    prices of its own, and safe to press twice.  Overwriting is deliberately
-    not on this page; ``manage.py sync_products`` is where that lives, because
-    it needs someone who knows they are doing it.
+    Three things, for every product the source sells: **add** it where it is
+    missing, **edit** the copy that is there to match (name, Shopster ID,
+    price, cost, category, unit, photo, description, SKU, shelf life, tax,
+    sale dates), and **take off sale** the copies of what the source has
+    removed.  Copies are found by Shopster ID, then by name.  Products a
+    target sells that the source has never had are left alone, and stock, par
+    level and the counter minimum are never touched — they are each shop's own.
 
     ``source`` and ``targets``, not ``from`` and ``to``: the latter are the
     date-range filter every other page uses, and `_filter_qs` carries them.
@@ -4078,7 +4157,7 @@ def product_sync(request):
                 results = [
                     catalog.copy_catalogue(
                         source, t, catalogue=catalogue,
-                        removed=removed, retire=retire,
+                        removed=removed, retire=retire, mirror=True,
                     )
                     for t in targets
                 ]
@@ -4119,6 +4198,7 @@ def product_bulk_add(request):
 
     if request.method == "POST":
         names = request.POST.getlist("name")
+        refused = []
         for idx, name in enumerate(names):
             name = (name or "").strip()
             if not name:
@@ -4130,8 +4210,19 @@ def product_bulk_add(request):
             p.category_id = cat or None
             unit = request.POST.getlist("unit")[idx] or ""
             p.unit_id = unit or None
+            # Checked against what is already saved, which includes the rows
+            # above this one — so two rows with one ID cannot both go in.
+            problems = product_barcode_errors(p)
+            if problems:
+                refused.append(f"{name}: {problems[0]}")
+                continue
             p.save()
             saved += 1
+        if refused:
+            messages.error(
+                request,
+                f"{len(refused)} row{'' if len(refused) == 1 else 's'} not added — "
+                + " ".join(refused))
         if saved:
             messages.success(
                 request,
@@ -4200,13 +4291,14 @@ def product_bulk_edit(request):
         counter_stocks = request.POST.getlist("counter_stock")
         sync_all = bool(request.POST.get("sync_all"))
         saved = 0
-        synced = set()
+        synced, conflicts, refused = set(), set(), []
         for idx, pid in enumerate(ids):
             try:
                 p = Product.objects.get(id=pid)
             except Product.DoesNotExist:
                 continue
             previous_name = p.name
+            previous_barcode = p.barcode
             p.barcode = (request.POST.getlist("barcode")[idx] or "").strip()
             p.name = (request.POST.getlist("name")[idx] or p.name).strip()
             p.name_th = (request.POST.getlist("description")[idx] or "").strip()
@@ -4231,18 +4323,34 @@ def product_bulk_edit(request):
                 raw = counter_stocks[idx].strip()
                 if raw.isdigit():
                     p.counter_stock = int(raw)
+            # One row's bad ID is reported and skipped, not allowed to fail
+            # the other nine rows on the page.
+            problems = product_barcode_errors(p)
+            if problems:
+                refused.append(f"{p.name or previous_name}: {problems[0]}")
+                continue
             with transaction.atomic():
                 p.save()
                 if sync_all:
                     report = catalog.fanout_product(
-                        p, previous_name=previous_name)
+                        p, previous_name=previous_name,
+                        previous_barcode=previous_barcode)
                     synced.update(report["created"] + report["updated"])
+                    conflicts.update(report["conflicts"])
             saved += 1
+        if refused:
+            messages.error(
+                request,
+                f"{len(refused)} row{'' if len(refused) == 1 else 's'} not saved — "
+                + " ".join(refused))
         if saved:
             msg = f"{saved} product{'' if saved == 1 else 's'} saved."
             if sync_all:
                 msg += (" Also synced to " + ", ".join(sorted(synced)) + "."
                         if synced else " Every other branch already matched.")
+                if conflicts:
+                    msg += (" Some rows were not synced to " + ", ".join(sorted(conflicts))
+                            + ": a different product there has the same Shopster product ID.")
             messages.success(request, msg)
         return redirect(reverse("backoffice:product_bulk_edit") + f"?{filter_qs}")
 

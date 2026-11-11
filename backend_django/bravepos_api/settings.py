@@ -211,6 +211,13 @@ CORS_EXPOSE_HEADERS = ['X-Total-Count']
 # ── Misc ────────────────────────────────────────────────────────────────────
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Bangkok'
+
+# Whether the till's own Add product must send a Shopster product ID.  Off
+# until the app update that adds the field has reached every till: installed
+# builds without it would otherwise be unable to add a product at all.  The
+# backoffice and the Shopster API require it regardless.
+TILL_REQUIRES_PRODUCT_BARCODE = os.environ.get(
+    'TILL_REQUIRES_PRODUCT_BARCODE', '').lower() in ('1', 'true', 'yes')
 USE_I18N = True
 USE_TZ = True
 STATIC_URL = 'static/'

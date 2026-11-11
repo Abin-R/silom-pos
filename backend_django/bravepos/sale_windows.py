@@ -51,6 +51,15 @@ def next_launch(windows, day):
     return min(upcoming) if upcoming else None
 
 
+def _barcode_in_use(product) -> bool:
+    """Whether another on-sale product at this branch has ``product``'s ID."""
+    if not product.barcode:
+        return False
+    return (Product.objects.filter(branch_id=product.branch_id,
+                                   barcode=product.barcode, active=True)
+            .exclude(pk=product.pk).exists())
+
+
 def apply(product, day=None) -> str | None:
     """Bring ``product.active`` in line with its dates.
 
@@ -76,6 +85,11 @@ def apply(product, day=None) -> str | None:
         product.save(update_fields=["active", "removed_by_schedule"])
         return "removed"
     if not product.active and selling and product.removed_by_schedule:
+        if _barcode_in_use(product):
+            # Another product at this branch went on sale under the same
+            # Shopster ID while this one was off.  Two on sale under one ID
+            # is what the database refuses, so this one waits in Removed.
+            return None
         product.active = True
         product.removed_by_schedule = False
         product.save(update_fields=["active", "removed_by_schedule"])

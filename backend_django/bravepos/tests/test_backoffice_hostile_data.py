@@ -316,7 +316,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             {"name": "New Cookie", "price": "45", "cost": "12", "stock": "10",
              "par_level": "20", "category": str(self.category.id),
              "unit": str(self.unit.id), "tax_type": "V",
-             "sku": "CK-999", "barcode": "", "name_th": "", "image_url": ""},
+             "sku": "CK-999", "barcode": "39991", "name_th": "", "image_url": ""},
         )
         created = Product.objects.get(name="New Cookie")
         self.assertEqual(created.par_level, 20, "par level was not saved")
@@ -326,7 +326,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
             reverse("backoffice:product_detail", args=[created.id]) + self.scope,
             {"name": "Renamed Cookie", "price": "50", "cost": "12",
              "stock": "10", "par_level": "8", "category": "", "unit": "",
-             "tax_type": "V", "sku": "", "barcode": "",
+             "tax_type": "V", "sku": "", "barcode": "39991",
              "name_th": "", "image_url": ""},
         )
         created.refresh_from_db()
@@ -340,7 +340,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
                 {"name": "Renamed Cookie", "price": "50", "cost": "12",
                  "par_level": "8", "counter_stock": typed, "category": "",
                  "unit": "", "tax_type": "V", "sku": "",
-                 "barcode": "", "name_th": "", "image_url": ""},
+                 "barcode": "39991", "name_th": "", "image_url": ""},
             )
             created.refresh_from_db()
             if typed != "-2":
@@ -476,7 +476,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
     def test_bulk_add_and_bulk_edit(self):
         self._post(reverse("backoffice:product_bulk_add") + self.scope, {
             "branch": str(self.branch.id),
-            "barcode": ["", ""], "name": ["Bulk One", ""],
+            "barcode": ["39992", ""], "name": ["Bulk One", ""],
             "description": ["", ""], "category": ["", ""], "unit": ["", ""],
             "price": ["12", "0"],
         })
@@ -484,7 +484,7 @@ class HostileFormTests(HostileDataMixin, TestCase):
                         "bulk add saved nothing")
 
         self._post(reverse("backoffice:product_bulk_edit") + self.scope, {
-            "id": [str(self.good.id)], "barcode": [""],
+            "id": [str(self.good.id)], "barcode": ["39993"],
             "name": ["Butter Croissant"], "description": [""],
             "category": [str(self.category.id)], "unit": [str(self.unit.id)],
             "price": ["80"], "cost": ["28"],
@@ -693,7 +693,7 @@ class CataloguePageWeightTests(HostileDataMixin, TestCase):
         self.client.post(
             reverse("backoffice:product_bulk_edit")
             + f"?branch={self.branch.id}",
-            {"id": [str(self.photo.id)], "barcode": [""],
+            {"id": [str(self.photo.id)], "barcode": ["39994"],
              "name": ["Has A Photo"], "description": [""], "category": [""],
              "unit": [""], "price": ["99"], "cost": ["5"]},
         )

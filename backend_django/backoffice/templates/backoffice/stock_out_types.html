@@ -34,6 +34,16 @@
       <label for="f-name-th">Name (TH)</label>
       <input id="f-name-th" type="text" name="name_th" maxlength="120" value="{{ posted.name_th|default:'' }}" placeholder="เช่น ยืม">
     </div>
+    {% if sync_branches %}
+    <div class="field wide">
+      <label class="check">
+        <input type="checkbox" name="sync_all" value="1" {% if not posted or posted.sync_all %}checked{% endif %}>
+        Sync to all branches
+      </label>
+      <span class="hint">Also adds this type at {{ sync_branches|join:", " }} — unless a
+        branch already has one with this name.</span>
+    </div>
+    {% endif %}
   </div>
   <div class="form-actions">
     <button type="submit" class="btn btn-blue"><svg><use href="#i-plus"/></svg> Add type</button>
@@ -41,7 +51,14 @@
 </form>
 
 <div class="panel panel-grow" style="margin-top:14px">
-  <div class="panel-h">All types</div>
+  <div class="panel-h">All types
+    {% if sync_branches %}
+    <label class="check" style="margin-left:auto;font-weight:500;font-size:13px">
+      <input type="checkbox" id="delSyncAll" checked>
+      Delete at all branches too
+    </label>
+    {% endif %}
+  </div>
   <div class="panel-scroll">
     <table class="tbl">
       <thead><tr><th style="width:50px">#</th><th>Type name</th><th>Name (TH)</th><th style="width:60px"></th></tr></thead>
@@ -53,8 +70,9 @@
           <td>{{ t.name_th|default:"—" }}</td>
           <td class="r">
             <form method="post" action="{% url 'backoffice:stock_out_type_delete' t.id %}" style="display:inline"
-                  onsubmit="return confirm('Delete “{{ t.name|escapejs }}”? Documents already saved keep it.');">
+                  onsubmit="var all=document.getElementById('delSyncAll');this.sync_all.value=all&&all.checked?'1':'';return confirm('Delete “{{ t.name|escapejs }}”'+(all&&all.checked?' at every branch':'')+'? Documents already saved keep it.');">
               {% csrf_token %}
+              <input type="hidden" name="sync_all" value="">
               <button type="submit" class="ico-btn" aria-label="Delete {{ t.name }}"><svg><use href="#i-trash"/></svg></button>
             </form>
           </td>

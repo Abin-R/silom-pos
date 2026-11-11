@@ -6,11 +6,12 @@
   product added at one shop needs to reach the others. Both are "make that
   branch's list look like this one".
 
-  The page only ever *adds*. A product the target already has keeps its own
-  price, cost, photo and stock. That is said three times on purpose — in the
-  banner, in the preview column, and beside the button — because the one thing
-  an admin must be sure of before pressing this on a live branch is that it
-  cannot rewrite the prices that branch is trading on.
+  It adds, edits and removes: every product the source sells is added where
+  missing or edited to match where present (found by Shopster ID, then name),
+  and what the source removed is taken off sale.  Products only the target
+  sells are left alone; stock, par level and counter minimum are never
+  touched.  Because it now rewrites prices at branches nobody is looking at,
+  the preview lists every edit with its before → after.
 
   Two forms, not one. Choosing branches is a GET that only previews; the copy
   is a separate POST carrying the same choices as hidden fields. So the write
@@ -26,8 +27,8 @@
 {% block title %}Sync products{% endblock %}
 {% block page_title %}Sync products{% endblock %}
 {% block page_sub %}
-  <div class="tb-sub">Copy a branch's catalogue onto another · missing products
-    are added, existing ones are never touched</div>
+  <div class="tb-sub">Make other branches match one branch · products are added,
+    edited and removed to match</div>
 {% endblock %}
 
 {% block topbar_end %}
@@ -39,9 +40,10 @@
 
 <div class="banner b-blue">
   <svg><use href="#i-zap"/></svg>
-  <span>This only adds what is missing.
-    <b>A product the target branch already has keeps its own price, cost, photo
-      and stock — nothing it is already selling is rewritten.</b></span>
+  <span>Every product <b>Copy from</b> sells will be <b>added</b> to the target
+    if missing, or <b>edited to match exactly</b> — name, Shopster ID, price, cost,
+    category, photo and the rest. Products the target sells on its own are left
+    alone, and stock is never copied. Check the preview before you sync.</span>
 </div>
 
 {# ── Choosing branches: a GET, so it can only ever preview ───────────── #}
@@ -111,8 +113,9 @@
     <thead>
       <tr>
         <th>Branch</th>
-        <th class="r" style="width:120px">Will be added</th>
-        <th class="r" style="width:130px">Left as-is</th>
+        <th class="r" style="width:110px">Will be added</th>
+        <th class="r" style="width:110px">Will be edited</th>
+        <th class="r" style="width:110px">Already match</th>
         <th class="r" style="width:140px">Taken off sale</th>
         <th>What changes there</th>
       </tr>
@@ -130,13 +133,31 @@
           {% if p.adding %}<b style="color:var(--blue)">{{ p.adding|length }}</b>
           {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
         </td>
+        <td class="r money">
+          {% if p.updating %}<b style="color:var(--amber-d,#b45309)">{{ p.updating|length }}</b>
+          {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
+        </td>
         <td class="r money" style="color:var(--mut2)">{{ p.already }}</td>
         <td class="r money">
           {% if p.retiring %}<b style="color:var(--red-d)">{{ p.retiring|length }}</b>
           {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
         </td>
         <td style="color:var(--txt2)">
-          {% if p.adding %}<div>{{ p.adding|join:", " }}</div>{% endif %}
+          {% if p.adding %}<div><b>Add:</b> {{ p.adding|join:", " }}</div>{% endif %}
+          {% if p.updating %}
+          <div style="{% if p.adding %}margin-top:6px{% endif %}"><b>Edit:</b>
+            <ul style="margin:2px 0 0 18px;padding:0">
+              {% for u in p.updating %}
+              <li>{{ u.name }} — {{ u.changes|join:"; " }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          {% if p.conflicts %}
+          <div style="color:var(--red-d);margin-top:4px">
+            Skipped — a different product there already has this Shopster ID:
+            {{ p.conflicts|join:", " }}</div>
+          {% endif %}
           {% if p.retiring %}
           <div style="color:var(--red-d);{% if p.adding %}margin-top:4px{% endif %}">
             Off sale: {{ p.retiring|join:", " }}</div>
@@ -145,7 +166,7 @@
           <div style="color:var(--mut2);margin-top:4px">
             New parent categories: {{ p.parents_adding|join:", " }}</div>
           {% endif %}
-          {% if not p.adding and not p.retiring and not p.parents_adding %}
+          {% if not p.adding and not p.updating and not p.conflicts and not p.retiring and not p.parents_adding %}
           <span style="color:var(--mut2)">Nothing — this branch already matches
             {{ source.name }}'s catalogue.</span>
           {% endif %}
@@ -164,7 +185,7 @@
   so nothing is taken off sale unseen.
 {% endcomment %}
 <form method="post" action="{% url 'backoffice:product_sync' %}"
-      onsubmit="return confirm('Sync {{ source.name|escapejs }} onto the branches above?\n\nPrices and stock they already have are not touched.');">
+      onsubmit="return confirm('Sync {{ source.name|escapejs }} onto the branches above?\n\nProducts there will be added and edited to match. Stock is not touched.');">
   {% csrf_token %}
   <input type="hidden" name="source" value="{{ source.id }}">
   {% for t in targets %}
@@ -192,7 +213,7 @@
     <span class="sm">
       <b>Pick the branches to copy onto</b>
       <u>Tick one or more branches above and this page will list exactly which
-        products each of them would gain, before anything is written.</u>
+        products each of them would gain, change or lose, before anything is written.</u>
     </span>
   </div>
 </div>

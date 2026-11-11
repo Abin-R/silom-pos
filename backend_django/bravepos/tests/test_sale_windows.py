@@ -47,7 +47,7 @@ class SaleWindowTestCase(TestCase):
         self.addCleanup(patcher.stop)
 
     def create(self, windows=(), follow=False, **extra):
-        data = {"name": "Pumpkin Tart", "price": "95.00",
+        data = {"name": "Pumpkin Tart", "price": "95.00", "barcode": "PT-1",
                 "launch_date": [a for a, _ in windows],
                 "discontinue_date": [b for _, b in windows]}
         data.update(extra)
@@ -118,7 +118,7 @@ class CreatingWithDatesTests(SaleWindowTestCase):
         product = self.product()
         self.client.post(
             reverse("backoffice:product_detail", args=[product.id]),
-            {"name": "Pumpkin Tart", "price": "95.00",
+            {"name": "Pumpkin Tart", "price": "95.00", "barcode": "PT-1",
              "launch_date": ["2027-01-01", "2027-01-20"],
              "discontinue_date": ["2027-01-12", ""]})
         self.assertEqual(self.windows(), [

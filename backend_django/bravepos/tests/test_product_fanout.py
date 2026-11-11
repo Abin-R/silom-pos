@@ -55,7 +55,9 @@ class FanoutTestCase(TestCase):
     # ── helpers ─────────────────────────────────────────────────────────────
 
     def form(self, **overrides):
-        data = {"name": "Cherry Mousse Pop", "price": "120.00"}
+        # The Shopster ID is required; one fixed value, so an edit of the
+        # product created here keeps its ID unless a test changes it.
+        data = {"name": "Cherry Mousse Pop", "price": "120.00", "barcode": "39000"}
         data.update(overrides)
         return data
 
@@ -244,7 +246,9 @@ class RefusedSaveTests(FanoutTestCase):
     def test_the_duplicate_warning_holds_the_fanout_too(self):
         self.create(sync=False)
         product = self.at(self.branch)
-        response = self.create(name="Cherry Mousse Pop")
+        # A different ID, so it is the name warning that stops it, not the
+        # Shopster ID rule.
+        response = self.create(name="Cherry Mousse Pop", barcode="39001")
         self.assertContains(response, "may already exist")
         self.assertEqual(Product.objects.count(), 1)
         self.assertEqual(Product.objects.get().pk, product.pk)
@@ -384,7 +388,7 @@ class BulkEditTests(FanoutTestCase):
 
     def bulk(self, *, sync=False, follow=False, **overrides):
         data = {
-            "id": [str(self.product.id)], "barcode": [""],
+            "id": [str(self.product.id)], "barcode": ["39000"],
             "name": ["Cherry Mousse Pop"], "description": [""],
             "category": [""], "unit": [""],
             "price": ["120.00"], "cost": ["0"], "shelf_life": [""],
