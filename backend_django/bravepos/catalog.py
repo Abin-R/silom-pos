@@ -501,6 +501,59 @@ def fanout_parent(parent, *, previous_name=None, branches=None):
     return report
 
 
+def fanout_category(category, *, previous_name=None, branches=None):
+    """The category form's "Sync to all branches".  Returns a report.
+
+    At every other active branch the category with this name is created, or
+    renamed and updated to match — ``previous_name`` finds it through a
+    rename, as in `fanout_product`.  Its parent follows too: filed under that
+    branch's parent of the same name (created there if missing, as
+    `fanout_parent` would), or ungrouped if it is ungrouped here.  Products are
+    not touched; they keep pointing at the same category row, which is now
+    renamed or recoloured in place.
+
+    The caller wraps this and the category's own save in one transaction.
+    """
+    report = {"created": [], "updated": [], "unchanged": []}
+    targets = other_branches(category.branch) if branches is None else branches
+    parent = category.parent_category
+
+    for target in targets:
+        dest = None
+        for name in (previous_name, category.name):
+            dest = _find(target.categories, name)
+            if dest is not None:
+                break
+
+        if dest is None:
+            dest, _, _ = upsert_category(target, category, update_existing=False)
+            created, changed = True, []
+        else:
+            created = False
+            changed = _diff(dest, category, ("name", *CATEGORY_FIELDS))
+            for field in changed:
+                setattr(dest, field, getattr(category, field))
+            if changed:
+                dest.save(update_fields=changed)
+
+        dest_parent = None
+        if parent is not None:
+            dest_parent, _, _ = upsert_parent(target, parent, update_existing=False)
+        if dest.parent_category_id != (dest_parent.pk if dest_parent else None):
+            dest.parent_category = dest_parent
+            dest.save(update_fields=["parent_category"])
+            changed.append("parent_category")
+
+        if created:
+            report["created"].append(target.name)
+        elif changed:
+            report["updated"].append(target.name)
+        else:
+            report["unchanged"].append(target.name)
+
+    return report
+
+
 def fanout_active(product, *, branches=None):
     """Carry ``product``'s on-sale status to the other branches' copies.
 

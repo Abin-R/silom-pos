@@ -4296,6 +4296,18 @@ def _apply_category_form(category, post, branch):
     return category
 
 
+def _save_category(request, category, previous_name, verb):
+    """Save ``category`` and, if "Sync to all branches" was ticked, push it to
+    the other branches in the same transaction.  A category with no branch is
+    shared by every branch already, so there is nothing to sync."""
+    fanout = None
+    with transaction.atomic():
+        category.save()
+        if request.POST.get("sync_all") and category.branch_id:
+            fanout = catalog.fanout_category(category, previous_name=previous_name)
+    messages.success(request, f"{verb} \u201c{category.name}\u201d." + _fanout_message(fanout))
+
+
 @login_required
 def category_list(request):
     """Category management grid for the selected branch — mirrors the
@@ -4326,8 +4338,9 @@ def category_detail(request, category_id):
     category = get_object_or_404(Category, id=category_id)
 
     if request.method == "POST":
+        previous_name = category.name
         _apply_category_form(category, request.POST, category.branch or branch)
-        category.save()
+        _save_category(request, category, previous_name, "Saved")
         return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
 
     context = {
@@ -4336,6 +4349,8 @@ def category_detail(request, category_id):
         "branch": branch,
         "category": category,
         "parent_categories": _parent_category_choices(category.branch or branch),
+        "sync_branches": (_fanout_branch_names(category.branch)
+                          if category.branch else []),
         "mode": "edit",
         "hide_dates": True,
         "qs": _filter_qs(request),
@@ -4351,7 +4366,7 @@ def category_new(request):
     if request.method == "POST":
         category = Category()
         _apply_category_form(category, request.POST, branch)
-        category.save()
+        _save_category(request, category, None, "Added")
         return redirect(reverse("backoffice:category_list") + f"?{_filter_qs(request)}")
 
     context = {
@@ -4360,6 +4375,7 @@ def category_new(request):
         "branch": branch,
         "category": Category(branch=branch, active=True),
         "parent_categories": _parent_category_choices(branch),
+        "sync_branches": _fanout_branch_names(branch) if branch else [],
         "mode": "new",
         "hide_dates": True,
         "qs": _filter_qs(request),
