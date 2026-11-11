@@ -277,7 +277,9 @@ export default function POS() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [activeCat, setActiveCat] = useState<string>("favorite");
+  // "all" is every product in the branch's order (dragged in the backoffice
+  // catalogue's "Till order" view); a category shows its part of that list.
+  const [activeCat, setActiveCat] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
   // The branch's discount presets, or null when the branch doesn't use them —
@@ -472,6 +474,8 @@ export default function POS() {
     if (search.trim()) {
       const s = search.toLowerCase();
       list = list.filter((p) => p.name.toLowerCase().includes(s) || p.name_th?.includes(search));
+    } else if (activeCat === "all") {
+      // already in the backend's order
     } else if (activeCat === "favorite") {
       list = list.filter((p) => p.is_favorite);
     } else {
@@ -496,6 +500,7 @@ export default function POS() {
   // you are looking at, which matters once the strip became a column.
   const activeCatName = useMemo(() => {
     if (search.trim()) return tr("pos.results_for", { q: search.trim() });
+    if (activeCat === "all") return tr("pos.all_products");
     if (activeCat === "favorite") return tr("pos.favorites");
     return categories.find((c) => c.id === activeCat)?.name || tr("common.products");
   }, [activeCat, categories, search]);
@@ -1127,6 +1132,17 @@ export default function POS() {
                   testID="category-rail"
                 >
                   <CatRow
+                    label={tr("pos.all_products")}
+                    emoji="▦"
+                    count={products.length}
+                    active={activeCat === "all" && !search.trim()}
+                    onPress={() => {
+                      setActiveCat("all");
+                      setSearch("");
+                    }}
+                    testId="cat-all"
+                  />
+                  <CatRow
                     label={tr("pos.favorites")}
                     emoji="★"
                     count={catCounts.favorite}
@@ -1181,6 +1197,15 @@ export default function POS() {
                     }}
                     testID="category-rail"
                   >
+                    <CatChip
+                      label={tr("pos.all_products")}
+                      active={activeCat === "all"}
+                      onPress={() => {
+                        setActiveCat("all");
+                        setSearch("");
+                      }}
+                      testId="cat-all"
+                    />
                     <CatChip
                       label={tr("pos.favorites")}
                       active={activeCat === "favorite"}

@@ -593,6 +593,7 @@ const th = {
     delivery_menu: "เมนูเดลิเวอรี",
     delivery_on_off: "เปิด/ปิด เดลิเวอรี",
     favorites: "รายการโปรด",
+    all_products: "ทั้งหมด",
     generating_payment_link: "กำลังสร้างลิงก์ชำระเงิน…",
     generating_qr_code: "กำลังสร้าง QR code…",
     goods_vat_incl: "มูลค่าสินค้า (รวม VAT)",

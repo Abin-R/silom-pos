@@ -599,6 +599,7 @@ const en = {
     delivery_menu: "Delivery Menu",
     delivery_on_off: "Delivery ON/OFF",
     favorites: "Favorites",
+    all_products: "All",
     generating_payment_link: "Generating payment link…",
     generating_qr_code: "Generating QR code…",
     goods_vat_incl: "Goods (VAT incl.)",

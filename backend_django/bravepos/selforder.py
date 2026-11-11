@@ -40,7 +40,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
@@ -190,12 +190,10 @@ def menu_for(branch) -> list[dict]:
         Product.objects
         .filter(branch=branch, active=True)
         .select_related('category')
-        # The till's order: its category column (``Category.order``), then
-        # each product's place in its category — dragged in the backoffice
-        # catalogue's "Till order" view.  The page groups by category in the
-        # order it meets them, so this decides the sections' order too.
-        .order_by(F('category__order').asc(nulls_last=True), 'category__name',
-                  'sort_order', 'name')
+        # The till's order — the branch's one list, dragged in the backoffice
+        # catalogue's "Till order" view.  The page's "All" shows it as is; a
+        # category pill shows that category's part of it.
+        .order_by('sort_order', 'name')
     )
     held = held_quantities(branch)
     out = []
@@ -212,6 +210,8 @@ def menu_for(branch) -> list[dict]:
             'price': float(p.price),
             'category_id': str(p.category_id) if p.category_id else '',
             'category_name': p.category.name if p.category else 'Other',
+            # Orders the pills like the till's category column.
+            'category_order': p.category.order if p.category else 1_000_000,
             'image_url': menu_image_ref(branch, p),
             # Neither number is shown.  ``shelf`` caps the + button; past
             # ``stock`` the cart sends the customer to the counter instead.

@@ -14,6 +14,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from bravepos import selforder
+from bravepos.tests.factories import open_shift
 from bravepos.models import Branch, BranchSession, Category, Product, Settings, Staff
 
 
@@ -44,9 +45,12 @@ class ReorderTests(TestCase):
         return Product.objects.create(branch=branch or self.bio, name=name, barcode=barcode,
                                       category=category or self.cakes, stock=10, **kw)
 
-    def reorder(self, products, category=None):
+    def reorder(self, products, category="cakes"):
+        """``category=None`` drags "All"."""
+        if category == "cakes":
+            category = self.cakes
         return self.client.post(reverse("backoffice:product_reorder"), {
-            "branch": str(self.bio.id), "category": str((category or self.cakes).id),
+            "branch": str(self.bio.id), "category": str(category.id) if category else "",
             "ids": [str(p.id) for p in products]})
 
     def till_names(self):
@@ -72,12 +76,25 @@ class ReorderTests(TestCase):
                 if m["category_id"] == str(self.cakes.id)]
         self.assertEqual(menu, expected)
 
-    def test_self_order_sections_follow_the_till_category_order(self):
-        self.make("Zebra cookie", "9", category=self.cookies, sort_order=50)
-        self.reorder([self.c, self.a, self.b])
-        names = [m["category_name"] for m in selforder.menu_for(self.bio)]
-        # Cookie (order 1) before Cake (order 2), whatever the products' numbers.
-        self.assertEqual(names[0], "Cookie")
+    def test_dragging_all_sets_the_order_across_categories(self):
+        z = self.make("Zebra cookie", "9", category=self.cookies)
+        self.assertEqual(self.reorder([self.b, z, self.c, self.a], category=None).status_code, 200)
+        expected = ["Banana cake", "Zebra cookie", "Carrot cake", "Apple cake"]
+        self.assertEqual([m["name"] for m in selforder.menu_for(self.bio)], expected)
+        # The category is that list without the cookie.
+        self.assertEqual(self.till_names(), ["Banana cake", "Carrot cake", "Apple cake"])
+
+    def test_a_category_drag_keeps_other_products_in_place(self):
+        z = self.make("Zebra cookie", "9", category=self.cookies)
+        self.reorder([self.a, z, self.b, self.c], category=None)
+        self.reorder([self.c, self.b, self.a])
+        self.assertEqual([m["name"] for m in selforder.menu_for(self.bio)],
+                         ["Carrot cake", "Zebra cookie", "Banana cake", "Apple cake"])
+
+    def test_self_order_pills_follow_the_till_category_order(self):
+        self.make("Zebra cookie", "9", category=self.cookies)
+        ranks = {m["category_name"]: m["category_order"] for m in selforder.menu_for(self.bio)}
+        self.assertLess(ranks["Cookie"], ranks["Cake"])
 
     def test_a_list_that_is_out_of_date_is_refused(self):
         response = self.reorder([self.c, self.a])  # Banana missing
@@ -97,11 +114,28 @@ class ReorderTests(TestCase):
         self.assertNotEqual(self.reorder([self.c, self.a, self.b]).status_code, 200)
         self.assertEqual(set(Product.objects.values_list("sort_order", flat=True)), {0})
 
-    def test_the_catalogue_shows_handles_only_for_one_category(self):
+    def test_the_catalogue_shows_handles_for_all_and_for_a_category(self):
         url = reverse("backoffice:product_list")
+        self.make("Zebra cookie", "9", category=self.cookies)
         page = self.client.get(url, {"branch": str(self.bio.id), "sort": "till",
                                      "cat": str(self.cakes.id)})
         self.assertContains(page, 'class="drag-handle"', count=3)
         page = self.client.get(url, {"branch": str(self.bio.id), "sort": "till"})
+        self.assertContains(page, 'class="drag-handle"', count=4)
+        page = self.client.get(url, {"branch": str(self.bio.id), "sort": "till", "q": "cake"})
         self.assertNotContains(page, 'class="drag-handle"')
-        self.assertContains(page, "Pick a category on the left")
+
+    def test_the_self_order_page_renders(self):
+        self.bio.self_order_enabled = True
+        self.bio.save()
+        open_shift(self.bio)
+        z = self.make("Zebra cookie", "9", category=self.cookies)
+        self.reorder([self.b, z, self.c, self.a], category=None)
+        page = self.client_class().get(f"/order/{self.bio.id}/")
+        import os
+        out = os.environ.get("MENU_HTML_OUT")
+        if out:
+            with open(out, "w") as fh:
+                fh.write(page.content.decode())
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "category_order")

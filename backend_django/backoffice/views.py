@@ -3474,11 +3474,9 @@ def product_list(request):
         "price_max": "-price",  # Product price → highest first
     }
     if sort == "till":
-        # The order the till's Sale screen and the self-order menu show:
-        # categories in their own order, then each product's place in its
-        # category.  See ``product_reorder``.
-        qs = qs.order_by(F("category__order").asc(nulls_last=True),
-                         "category__name", "sort_order", "name")
+        # The order the till's "All" and the self-order menu's "All" show; a
+        # category on either is its part of this list.  See ``product_reorder``.
+        qs = qs.order_by("sort_order", "name")
     else:
         qs = qs.order_by(sort_map.get(sort, "name"), "name")
 
@@ -3528,8 +3526,9 @@ def product_list(request):
 
     # Dragging needs the whole category on one page: a product cannot be
     # dropped onto a row that is on the next page.
-    reorderable = bool(sort == "till" and branch and selected_category
-                       and selected_category != "none" and not archived and not q)
+    # All, or one category — not a parent group, a search or Uncategorised.
+    reorderable = bool(sort == "till" and branch and not archived and not q
+                       and not selected_parent and selected_category != "none")
     paginator = Paginator(qs, 1000 if reorderable else 50)
     page_obj = paginator.get_page(request.GET.get("page"))
 
@@ -3595,32 +3594,47 @@ def _uuid_or_none(value):
 
 @login_required
 def product_reorder(request):
-    """Save the drag-and-drop order of one category's products at one branch.
+    """Save the drag-and-drop order of a branch's products.
 
-    The body is every on-sale product of the category, top first.  Each gets
-    its index as ``sort_order``, which the till's Sale screen and the
-    self-order menu both sort by, so the three lists match row for row.  The
-    page must send the whole category: if a product was added or removed
-    since it loaded, nothing is saved and the page is asked to reload, rather
-    than numbering a list that is no longer the real one.
+    A branch has one order — what "All" shows on the till and the self-order
+    menu — and a category there is its part of that list.  So the body is the
+    whole list top first (no ``category``), or one category's products: those
+    are shuffled among the places they already hold, and nothing else moves.
+    Either way the branch is renumbered 0..n as ``sort_order``.
+
+    The page must send the whole list it shows: if a product was added or
+    removed since it loaded, nothing is saved and the page is asked to
+    reload, rather than numbering a list that is no longer the real one.
     """
     if request.method != "POST":
         return JsonResponse({"error": "POST only."}, status=405)
     branch = Branch.objects.filter(id=_uuid_or_none(request.POST.get("branch"))).first()
-    category = Category.objects.filter(id=_uuid_or_none(request.POST.get("category"))).first()
-    if branch is None or category is None:
-        return JsonResponse({"error": "Pick a branch and a category first."}, status=400)
+    if branch is None:
+        return JsonResponse({"error": "Pick a branch first."}, status=400)
+    category = None
+    if request.POST.get("category"):
+        category = Category.objects.filter(
+            id=_uuid_or_none(request.POST.get("category"))).first()
+        if category is None:
+            return JsonResponse({"error": "That category no longer exists."}, status=400)
     ids = request.POST.getlist("ids")
-    rows = {str(p.id): p for p in Product.objects.filter(
-        branch=branch, category=category, active=True)}
+    everything = list(Product.objects.filter(branch=branch, active=True)
+                      .order_by("sort_order", "name", "id"))
+    shown = [p for p in everything if category is None or p.category_id == category.id]
+    rows = {str(p.id): p for p in shown}
     if len(ids) != len(set(ids)) or set(ids) != set(rows):
         return JsonResponse({
-            "error": "This category changed since the page loaded. "
+            "error": "This list changed since the page loaded. "
                      "Reload the page and drag again."}, status=409)
+    # The category's products keep the places they hold in the branch's list,
+    # in their new order.
+    places = [i for i, p in enumerate(everything) if str(p.id) in rows]
+    order = list(everything)
+    for place, pid in zip(places, ids):
+        order[place] = rows[pid]
     moved = 0
     with transaction.atomic():
-        for position, pid in enumerate(ids):
-            product = rows[pid]
+        for position, product in enumerate(order):
             if product.sort_order != position:
                 product.sort_order = position
                 product.save(update_fields=["sort_order"])

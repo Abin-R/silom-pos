@@ -1,6 +1,6 @@
 {% extends "selforder/base.html" %}
 {% comment %}
-Food-delivery-style menu (think Swiggy / KFC kiosk): sticky category pills,
+Food-delivery-style menu: sticky category pills ("All" first, the default),
 image cards, and a slide-up cart sheet.
 
 The cart lives in JS, but its money doesn't: every change is sent to /price/,
@@ -119,7 +119,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     display: flex; align-items: center; justify-content: center;
   }
   .sheet .head .sheet-close:active { background: #e5e5ea; }
-  #scroll-pad { height: 0; }
   .sheet .lines { overflow-y: auto; padding: 0 18px; }
   .line { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
   .line .l-name { flex: 1; min-width: 0; font-weight: 600; }
@@ -208,8 +207,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   <div id="menu"></div>
   <div class="no-match" id="no-match" hidden>ไม่พบเมนู · Nothing matches that search</div>
   <div class="no-match" id="no-items" hidden>ขณะนี้ไม่มีเมนูให้สั่งออนไลน์ กรุณาสั่งที่เคาน์เตอร์<br>Nothing is available online right now. Please order at the counter.</div>
-  {% comment %}Sized in JS so the last (short) category can scroll to the top.{% endcomment %}
-  <div id="scroll-pad" aria-hidden="true"></div>
 
   <div class="cartbar" id="cartbar">
     <div class="fbt-bar" id="fbt-bar" hidden>
@@ -297,39 +294,50 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     return "🍽️";
   }
 
+  // MENU arrives in the till's order (the branch's one list).  "All" shows it
+  // as is; a category pill shows that category's part of it, so every view
+  // matches the till row for row.  Pills follow the till's category column.
+  const ALL = "__all__";
   const byCat = new Map();
+  const rank = new Map();
   for (const p of MENU) {
     if (!byCat.has(p.category_name)) byCat.set(p.category_name, []);
     byCat.get(p.category_name).push(p);
+    rank.set(p.category_name, p.category_order);
   }
-  const cats = [...byCat.keys()];
-
-  function catId(c) { return "cat-" + c.replace(/\W+/g, "-"); }
+  const cats = [...byCat.keys()].sort((a, b) =>
+    (rank.get(a) - rank.get(b)) || a.localeCompare(b));
+  let view = ALL;
 
   function renderPills() {
     const el = document.getElementById("pills");
     el.innerHTML = "";
-    cats.forEach((c, i) => {
+    [ALL, ...cats].forEach((c) => {
       const b = document.createElement("button");
-      b.className = "pill" + (i === 0 ? " active" : "");
-      b.textContent = c;
-      b.onclick = () => document.getElementById(catId(c)).scrollIntoView({ behavior: "smooth", block: "start" });
+      b.className = "pill" + (c === view ? " active" : "");
+      b.textContent = c === ALL ? "ทั้งหมด · All" : c;
+      b.onclick = () => {
+        view = c;
+        document.getElementById("search").value = "";
+        renderPills();
+        renderMenu();
+        applySearch();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
       b.dataset.cat = c;
       el.appendChild(b);
+      if (c === view) b.scrollIntoView({ inline: "center", block: "nearest" });
     });
   }
 
   function renderMenu() {
     const root = document.getElementById("menu");
     root.innerHTML = "";
-    for (const c of cats) {
-      const sec = document.createElement("div");
-      sec.className = "section";
-      sec.id = catId(c);
-      sec.innerHTML = `<h2>${esc(c)}</h2>`;
-      for (const p of byCat.get(c)) sec.appendChild(cardFor(p));
-      root.appendChild(sec);
-    }
+    const sec = document.createElement("div");
+    sec.className = "section";
+    sec.innerHTML = `<h2>${esc(view === ALL ? "ทั้งหมด · All" : view)}</h2>`;
+    for (const p of (view === ALL ? MENU : byCat.get(view))) sec.appendChild(cardFor(p));
+    root.appendChild(sec);
   }
 
   function cardFor(p) {
@@ -359,25 +367,19 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     return card;
   }
 
-  // Search narrows the menu in place: cards that don't match, and categories
-  // left with none, are hidden.  English or Thai name, any part of it.
+  // Search looks through the whole menu: typing switches to "All", and cards
+  // that don't match are hidden.  English or Thai name, any part of it.
   function applySearch() {
     const q = document.getElementById("search").value.trim().toLowerCase();
+    if (q && view !== ALL) { view = ALL; renderPills(); renderMenu(); }
     let shown = 0;
-    for (const c of cats) {
-      const sec = document.getElementById(catId(c));
-      let inSec = 0;
-      for (const card of sec.querySelectorAll(".card")) {
-        const hit = !q || card.dataset.find.includes(q);
-        card.hidden = !hit;
-        if (hit) inSec++;
-      }
-      sec.hidden = inSec === 0;
-      document.querySelector(`.pill[data-cat="${CSS.escape(c)}"]`).hidden = inSec === 0;
-      shown += inSec;
+    for (const card of document.querySelectorAll("#menu .card")) {
+      const hit = !q || card.dataset.find.includes(q);
+      card.hidden = !hit;
+      if (hit) shown++;
     }
+    document.querySelector("#menu .section").hidden = shown === 0;
     document.getElementById("no-match").hidden = shown > 0 || !MENU.length;
-    sizeScrollPad();
   }
   document.getElementById("search").addEventListener("input", applySearch);
 
@@ -682,41 +684,6 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     });
   })();
 
-  // Give the last category enough room below it to scroll up to the top when
-  // its pill is tapped (otherwise a short final section can't reach the top).
-  function sizeScrollPad() {
-    const pad = document.getElementById("scroll-pad");
-    if (!pad || !cats.length) return;
-    const lastSec = document.getElementById(catId(cats[cats.length - 1]));
-    const pills = document.getElementById("pills");
-    if (!lastSec || !pills) return;
-    const stickyH = document.querySelector(".appbar").offsetHeight
-      + document.querySelector(".search").offsetHeight + pills.offsetHeight;
-    pad.style.height = Math.max(0, window.innerHeight - stickyH - lastSec.offsetHeight - 24) + "px";
-  }
-  window.addEventListener("resize", sizeScrollPad);
-
-  // Scroll-spy: highlight the pill for the section in view.
-  const spy = () => {
-    let active = cats[0];
-    for (const c of cats) {
-      const sec = document.getElementById(catId(c));
-      if (sec && !sec.hidden && sec.getBoundingClientRect().top <= 180) active = c;
-    }
-    // At the very bottom, force the last pill active — a short final section
-    // may never cross the 180px line.
-    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
-      active = cats[cats.length - 1];
-    }
-    const pillsEl = document.getElementById("pills");
-    document.querySelectorAll(".pill").forEach((b) => {
-      const on = b.dataset.cat === active;
-      b.classList.toggle("active", on);
-      // Keep the active pill visible in the horizontal strip.
-      if (on) b.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-    });
-  };
-  window.addEventListener("scroll", spy, { passive: true });
 
   document.getElementById("checkout").onclick = async (e) => {
     const btn = e.currentTarget;
@@ -743,10 +710,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   }
   renderPills();
   renderMenu();
-  sizeScrollPad();
   syncCart();
-  // Re-measure once images/fonts settle (they change section heights).
-  window.addEventListener("load", sizeScrollPad);
 </script>
 {% endif %}
 {% endblock %}

@@ -136,14 +136,19 @@
       <svg><use href="#i-zap"/></svg>
       <span id="reorderNote">
         {% if reorderable %}
-          Drag a row by <b>⋮⋮</b> to move it. Each drop saves at once, and the
-          till and the self-order menu show {{ branch.name }}'s products in this order.
+          Drag a row by <b>⋮⋮</b> to move it. Each drop saves at once.
+          {% if selected_category %}The till and the self-order menu show this
+          category at {{ branch.name }} in this order; its products swap places
+          among themselves, so “All” keeps every other product where it is.
+          {% else %}This is the order of “All” on {{ branch.name }}'s till and
+          self-order menu, and each category there lists its products in this
+          order too.{% endif %}
         {% elif not branch %}
-          Pick a branch, then a category, to drag products into order.
+          Pick a branch to drag products into order.
         {% elif q %}
           Clear the search to drag products into order.
         {% else %}
-          Pick a category on the left to drag its products into order.
+          Pick “All” or one category (not a parent group) to drag products into order.
         {% endif %}
       </span>
     </div>
