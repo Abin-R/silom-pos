@@ -3417,12 +3417,14 @@ def product_list(request):
     sort = request.GET.get("sort", "name")
     sort_map = {
         "name": "name",
-        "newest": "-id",
+        # Products from before created_at existed have none, so they follow
+        # every dated one, alphabetically.
+        "newest": F("created_at").desc(nulls_last=True),
         "category": "category__name",
         "price_min": "price",   # Product price → lowest first
         "price_max": "-price",  # Product price → highest first
     }
-    qs = qs.order_by(sort_map.get(sort, "name"))
+    qs = qs.order_by(sort_map.get(sort, "name"), "name")
 
     # The left column of the catalogue: every category with how much is in it,
     # counted before the category filter is applied so the numbers don't all

@@ -406,6 +406,10 @@ class Unit(models.Model):
 
 class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # What the catalogue's "Newest" sort orders by — the id is a random UUID,
+    # so it says nothing about age.  Null for every product that existed
+    # before this column did (2026-11-11): their creation was never recorded.
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     branch = models.ForeignKey(
         "Branch", on_delete=models.CASCADE, related_name="products",
         null=True, blank=True,
