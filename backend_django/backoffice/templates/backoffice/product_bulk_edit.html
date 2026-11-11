@@ -26,6 +26,26 @@
     Page through first, then save each page you edited.</span>
 </div>
 
+{% comment %}
+  Its own GET form, carrying the branch and dates across, so picking a
+  category starts again from page 1 of that category.
+{% endcomment %}
+<form method="get" class="filters" style="margin-bottom:16px">
+  {% if request.GET.branch %}<input type="hidden" name="branch" value="{{ request.GET.branch }}">{% endif %}
+  {% if request.GET.from %}<input type="hidden" name="from" value="{{ request.GET.from }}">{% endif %}
+  {% if request.GET.to %}<input type="hidden" name="to" value="{{ request.GET.to }}">{% endif %}
+  <div class="ctl">
+    <select name="cat" onchange="this.form.submit()" aria-label="Category">
+      <option value="">All categories</option>
+      <option value="none" {% if selected_category == "none" %}selected{% endif %}>Uncategorised</option>
+      {% for c in categories %}
+        <option value="{{ c.id }}" {% if selected_category == c.id|stringformat:"s" %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+</form>
+
 <div class="panel">
   <form method="post" id="bulkEditForm">
     {% csrf_token %}

@@ -4178,7 +4178,21 @@ def product_bulk_edit(request):
     )
     if branch:
         qs = qs.filter(branch=branch)
+
+    # Category filter. ``cat`` is the same parameter the catalogue uses, so
+    # "Bulk edit prices" opened from a category lands on that category.  An
+    # id that is not one of this branch's categories (stale link, another
+    # branch's category) is dropped rather than showing an empty grid.
+    categories = _product_form_categories(branch)
+    selected_category = request.GET.get("cat") or ""
+    if selected_category == "none":
+        qs = qs.filter(category__isnull=True)
+    elif selected_category in {str(c.id) for c in categories}:
+        qs = qs.filter(category_id=selected_category)
+    else:
+        selected_category = ""
     qs = qs.order_by("name")
+    filter_qs = _filter_qs(request, cat=selected_category or None)
 
     if request.method == "POST":
         ids = request.POST.getlist("id")
@@ -4230,7 +4244,7 @@ def product_bulk_edit(request):
                 msg += (" Also synced to " + ", ".join(sorted(synced)) + "."
                         if synced else " Every other branch already matched.")
             messages.success(request, msg)
-        return redirect(reverse("backoffice:product_bulk_edit") + f"?{_filter_qs(request)}")
+        return redirect(reverse("backoffice:product_bulk_edit") + f"?{filter_qs}")
 
     paginator = Paginator(qs, 10)  # SilomPOS shows 10/page on this view
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -4242,10 +4256,11 @@ def product_bulk_edit(request):
         "products": page_obj.object_list,
         "page_obj": page_obj,
         "paginator": paginator,
-        "categories": _product_form_categories(branch),
+        "categories": categories,
+        "selected_category": selected_category,
         "units": _product_form_units(branch),
         "sync_branches": _fanout_branch_names(branch) if branch else [],
-        "qs": _filter_qs(request),
+        "qs": filter_qs,
     }
     return render(request, "backoffice/product_bulk_edit.html", context)
 
