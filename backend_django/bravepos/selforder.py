@@ -40,7 +40,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
@@ -190,7 +190,12 @@ def menu_for(branch) -> list[dict]:
         Product.objects
         .filter(branch=branch, active=True)
         .select_related('category')
-        .order_by('sort_order', 'name')
+        # The till's order: its category column (``Category.order``), then
+        # each product's place in its category — dragged in the backoffice
+        # catalogue's "Till order" view.  The page groups by category in the
+        # order it meets them, so this decides the sections' order too.
+        .order_by(F('category__order').asc(nulls_last=True), 'category__name',
+                  'sort_order', 'name')
     )
     held = held_quantities(branch)
     out = []

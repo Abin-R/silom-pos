@@ -3473,7 +3473,14 @@ def product_list(request):
         "price_min": "price",   # Product price → lowest first
         "price_max": "-price",  # Product price → highest first
     }
-    qs = qs.order_by(sort_map.get(sort, "name"), "name")
+    if sort == "till":
+        # The order the till's Sale screen and the self-order menu show:
+        # categories in their own order, then each product's place in its
+        # category.  See ``product_reorder``.
+        qs = qs.order_by(F("category__order").asc(nulls_last=True),
+                         "category__name", "sort_order", "name")
+    else:
+        qs = qs.order_by(sort_map.get(sort, "name"), "name")
 
     # The left column of the catalogue: every category with how much is in it,
     # counted before the category filter is applied so the numbers don't all
@@ -3519,7 +3526,11 @@ def product_list(request):
     elif selected_parent:
         qs = qs.filter(category__parent_category_id=selected_parent)
 
-    paginator = Paginator(qs, 50)
+    # Dragging needs the whole category on one page: a product cannot be
+    # dropped onto a row that is on the next page.
+    reorderable = bool(sort == "till" and branch and selected_category
+                       and selected_category != "none" and not archived and not q)
+    paginator = Paginator(qs, 1000 if reorderable else 50)
     page_obj = paginator.get_page(request.GET.get("page"))
 
     products = list(page_obj.object_list)
@@ -3550,6 +3561,7 @@ def product_list(request):
         "page_obj": page_obj,
         "paginator": paginator,
         "sort": sort,
+        "reorderable": reorderable,
         "view": view,
         "archived": archived,
         # The count keeps removed products findable — an unlabelled tab nobody
@@ -3571,6 +3583,49 @@ def product_list(request):
         ),
     }
     return render(request, "backoffice/product_list.html", context)
+
+
+def _uuid_or_none(value):
+    import uuid
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+@login_required
+def product_reorder(request):
+    """Save the drag-and-drop order of one category's products at one branch.
+
+    The body is every on-sale product of the category, top first.  Each gets
+    its index as ``sort_order``, which the till's Sale screen and the
+    self-order menu both sort by, so the three lists match row for row.  The
+    page must send the whole category: if a product was added or removed
+    since it loaded, nothing is saved and the page is asked to reload, rather
+    than numbering a list that is no longer the real one.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only."}, status=405)
+    branch = Branch.objects.filter(id=_uuid_or_none(request.POST.get("branch"))).first()
+    category = Category.objects.filter(id=_uuid_or_none(request.POST.get("category"))).first()
+    if branch is None or category is None:
+        return JsonResponse({"error": "Pick a branch and a category first."}, status=400)
+    ids = request.POST.getlist("ids")
+    rows = {str(p.id): p for p in Product.objects.filter(
+        branch=branch, category=category, active=True)}
+    if len(ids) != len(set(ids)) or set(ids) != set(rows):
+        return JsonResponse({
+            "error": "This category changed since the page loaded. "
+                     "Reload the page and drag again."}, status=409)
+    moved = 0
+    with transaction.atomic():
+        for position, pid in enumerate(ids):
+            product = rows[pid]
+            if product.sort_order != position:
+                product.sort_order = position
+                product.save(update_fields=["sort_order"])
+                moved += 1
+    return JsonResponse({"saved": True, "moved": moved})
 
 
 def _product_form_categories(branch):

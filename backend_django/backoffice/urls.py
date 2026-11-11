@@ -91,6 +91,7 @@ urlpatterns = [
     path("products/<uuid:product_id>", views.product_detail, name="product_detail"),
     path("products/<uuid:product_id>/archive", views.product_archive, name="product_archive"),
     path("products/<uuid:product_id>/restore", views.product_restore, name="product_restore"),
+    path("products/reorder", views.product_reorder, name="product_reorder"),
 
     # Categories
     path("categories", views.category_list, name="category_list"),

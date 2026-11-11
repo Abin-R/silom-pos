@@ -123,12 +123,36 @@
         <a class="{% if sort == 'name' %}on{% endif %}" href="?{% qs_replace request sort='name' page=None %}">A–Z</a>
         <a class="{% if sort == 'price_max' %}on{% endif %}" href="?{% qs_replace request sort='price_max' page=None %}">Price</a>
         <a class="{% if sort == 'newest' %}on{% endif %}" href="?{% qs_replace request sort='newest' page=None %}">Newest</a>
+        <a class="{% if sort == 'till' %}on{% endif %}" href="?{% qs_replace request sort='till' page=None %}"
+           title="The order the till and the self-order menu show">Till order</a>
       </div>
     </div>
+    {% if sort == 'till' and not archived %}
+    {% comment %}
+      Dragging works on one category at one branch: that is the list a
+      cashier scrolls on the till and a customer scrolls on the QR menu.
+    {% endcomment %}
+    <div class="banner b-blue" style="margin:12px 18px 0">
+      <svg><use href="#i-zap"/></svg>
+      <span id="reorderNote">
+        {% if reorderable %}
+          Drag a row by <b>⋮⋮</b> to move it. Each drop saves at once, and the
+          till and the self-order menu show {{ branch.name }}'s products in this order.
+        {% elif not branch %}
+          Pick a branch, then a category, to drag products into order.
+        {% elif q %}
+          Clear the search to drag products into order.
+        {% else %}
+          Pick a category on the left to drag its products into order.
+        {% endif %}
+      </span>
+    </div>
+    {% endif %}
     <div class="panel-scroll">
       <table class="tbl">
         <thead>
           <tr>
+            {% if reorderable %}<th style="width:34px"></th>{% endif %}
             <th style="width:28%">Product</th><th>Category</th>
             <th class="r">Price</th><th class="r">Cost</th><th class="r">Margin</th>
             <th class="r">On hand</th>
@@ -140,9 +164,14 @@
             <th class="r" style="width:96px">{% if archived %}{% else %}On tills{% endif %}</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody {% if reorderable %}id="reorderBody" data-url="{% url 'backoffice:product_reorder' %}"
+               data-branch="{{ branch.id }}" data-category="{{ selected_category }}"{% endif %}>
           {% for p in products %}
-          <tr>
+          <tr {% if reorderable %}data-id="{{ p.id }}"{% endif %}>
+            {% if reorderable %}
+            <td class="drag-handle" draggable="true" title="Drag to move"
+                style="cursor:grab;color:var(--mut2);font-size:18px;user-select:none;text-align:center">⋮⋮</td>
+            {% endif %}
             <td>
               <div style="display:flex;align-items:center;gap:12px">
                 {% comment %}
@@ -193,7 +222,7 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="{% if branch.self_order_enabled %}9{% else %}8{% endif %}" class="empty">
+          <tr><td colspan="{% if branch.self_order_enabled %}{% if reorderable %}10{% else %}9{% endif %}{% elif reorderable %}9{% else %}8{% endif %}" class="empty">
             <svg><use href="#i-box"/></svg>
             {% if q %}No product matches “{{ q }}”.{% elif archived %}Nothing has been removed from this catalogue.{% else %}No products in this catalogue yet.{% endif %}
           </td></tr>
@@ -204,4 +233,69 @@
     {% include "backoffice/_pagination.html" %}
   </div>
 </div>
+{% if reorderable %}{% csrf_token %}{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if reorderable %}
+<script>
+(function () {
+  // Drag by the handle; each drop posts the category's whole order.  On any
+  // failure the page reloads, so it never shows an order that was not saved.
+  const body = document.getElementById('reorderBody');
+  if (!body) return;
+  const token = (document.querySelector('input[name=csrfmiddlewaretoken]') || {}).value || '';
+  const note = document.getElementById('reorderNote');
+  let dragging = null;
+
+  body.addEventListener('dragstart', function (e) {
+    const handle = e.target.closest && e.target.closest('.drag-handle');
+    if (!handle) { e.preventDefault(); return; }
+    dragging = handle.closest('tr');
+    dragging.style.opacity = '0.45';
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragging.dataset.id);
+    e.dataTransfer.setDragImage(dragging, 20, 20);
+  });
+  body.addEventListener('dragover', function (e) {
+    if (!dragging) return;
+    e.preventDefault();
+    const row = e.target.closest('tr[data-id]');
+    if (!row || row === dragging) return;
+    const box = row.getBoundingClientRect();
+    const after = e.clientY > box.top + box.height / 2;
+    body.insertBefore(dragging, after ? row.nextSibling : row);
+  });
+  body.addEventListener('drop', function (e) { e.preventDefault(); });
+  body.addEventListener('dragend', function () {
+    if (!dragging) return;
+    dragging.style.opacity = '';
+    dragging = null;
+    save();
+  });
+
+  function save() {
+    const form = new URLSearchParams();
+    form.append('branch', body.dataset.branch);
+    form.append('category', body.dataset.category);
+    body.querySelectorAll('tr[data-id]').forEach(function (tr) { form.append('ids', tr.dataset.id); });
+    note.textContent = 'Saving…';
+    fetch(body.dataset.url, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': token, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form,
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.error || 'Not saved.');
+        note.textContent = 'Saved. The till and the self-order menu now show this order.';
+      })
+      .catch(function (err) {
+        alert((err && err.message) || 'The new order was not saved.');
+        location.reload();
+      });
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}
