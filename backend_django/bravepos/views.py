@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from django.conf import settings as django_settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djtz
 from PIL import Image as PILImage
@@ -69,7 +69,15 @@ def get_session(request):
         sess = BranchSession.objects.select_related('staff', 'branch').get(token=token)
     except BranchSession.DoesNotExist:
         return None
-    sess.save(update_fields=['last_seen_at'])
+    # A filtered update, not ``sess.save(update_fields=...)``: a logout or a
+    # newer login on the same branch can delete this row between the read
+    # above and this write, and ``save`` then raises DatabaseError — the till
+    # saw a 500 where it should have seen the 401 (PYTHON-DJANGO-1A, 155
+    # events, mostly from the tablets' pollers).  Zero rows touched means
+    # exactly what DoesNotExist means.
+    sess.last_seen_at = djtz.now()
+    if not BranchSession.objects.filter(pk=sess.pk).update(last_seen_at=sess.last_seen_at):
+        return None
     # Single choke point for POS API auth — tell the audit log who is acting
     # so writes made further down the view stack are attributed to this staff
     # member rather than landing as anonymous.
@@ -777,7 +785,13 @@ class BranchViewSet(viewsets.ModelViewSet):
     serializer_class = BranchSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        # BranchSerializer.cashier_email reads each branch's cashiers; fetch
+        # them for the whole list in one query (PYTHON-DJANGO-1G).
+        qs = super().get_queryset().prefetch_related(Prefetch(
+            'staff',
+            queryset=Staff.objects.filter(role='cashier').order_by('created_at'),
+            to_attr='cashiers_by_age',
+        ))
         if self.request.query_params.get('active') == 'true':
             qs = qs.filter(active=True)
         return qs
@@ -903,6 +917,9 @@ class BranchViewSet(viewsets.ModelViewSet):
 
         if getattr(instance, '_prefetched_objects_cache', None):
             instance._prefetched_objects_cache = {}
+        # The to_attr prefetch isn't in that cache; drop it so a renamed or
+        # newly-created cashier shows up in the response.
+        instance.__dict__.pop('cashiers_by_age', None)
 
         return Response(self.get_serializer(instance).data)
 

@@ -51,7 +51,13 @@ class BranchSerializer(serializers.ModelSerializer):
         validators = []
 
     def get_cashier_email(self, obj):
-        s = obj.staff.filter(role='cashier').order_by('created_at').first()
+        # BranchViewSet prefetches these for list views; a lone branch (create,
+        # update, other callers) still queries for itself.
+        cashiers = getattr(obj, 'cashiers_by_age', None)
+        if cashiers is not None:
+            s = cashiers[0] if cashiers else None
+        else:
+            s = obj.staff.filter(role='cashier').order_by('created_at').first()
         return s.email if s else ''
 
     def validate_pos_id(self, value):

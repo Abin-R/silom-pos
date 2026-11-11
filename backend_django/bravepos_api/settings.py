@@ -41,7 +41,14 @@ SENTRY_DSN = os.environ.get('SENTRY_DSN')
 # consolidate_daily crons especially), because nobody is watching those run.
 _INTERACTIVE_SHELL = len(sys.argv) > 1 and sys.argv[1] == 'shell'
 
-if SENTRY_DSN and not DEBUG and not _INTERACTIVE_SHELL:
+# A test run raises errors on purpose.  settings_test already blanks the DSN,
+# but a plain `manage.py test` on a machine whose .env carries the real DSN
+# with DEBUG off (shrihari-PC, 2026-11-10) filed eleven fixture faults —
+# "seatalk down", "blocked by guard", SQLite UNIQUE errors — as production
+# issues.  Gate on the command itself so that can't happen again.
+_TEST_RUN = len(sys.argv) > 1 and sys.argv[1] == 'test'
+
+if SENTRY_DSN and not DEBUG and not _INTERACTIVE_SHELL and not _TEST_RUN:
     import sentry_sdk
     from django.core.exceptions import DisallowedHost
 
