@@ -5063,16 +5063,24 @@ function ProductEditModal({
   const [imgBase64, setImgBase64] = useState<string>("");   // data URI if picked from device
   const [pickingImage, setPickingImage] = useState(false);
   const [fav, setFav] = useState(false);
+  // The Shopster product ID.  Required: every branch's copy of a product is
+  // matched by it, and the server refuses a blank or one already on sale here.
+  const [barcode, setBarcode] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
   const isNew = product === "new";
 
   useEffect(() => {
+    setSaveError("");
     if (product && product !== "new") {
+      setBarcode(product.barcode || "");
       setName(product.name); setPrice(String(product.price));
       setCost(String(product.cost)); setStock(String(product.stock));
       setCatId(product.category_id); setImg(product.image_url);
       setImgBase64(product.image_base64 || "");
       setFav(product.is_favorite);
     } else if (product === "new") {
+      setBarcode("");
       setName(""); setPrice(""); setCost("0"); setStock("0");
       setCatId(defaultCat); setImg(""); setImgBase64(""); setFav(false);
     }
@@ -5129,8 +5137,13 @@ function ProductEditModal({
 
   const save = async () => {
     if (!name.trim() || !price || !catId) return;
+    if (!barcode.trim()) {
+      setSaveError(tr("admin.shopster_id_required"));
+      return;
+    }
     const body: Record<string, any> = {
-      name, price: parseFloat(price), cost: parseFloat(cost || "0"),
+      name, barcode: barcode.trim(),
+      price: parseFloat(price), cost: parseFloat(cost || "0"),
       category_id: catId,
       image_url: img || "",
       image_base64: imgBase64 || "",
@@ -5145,16 +5158,28 @@ function ProductEditModal({
     // / Adjust so every change leaves a movement behind — and a save from a
     // form opened before a sale would otherwise put the sold units back.
     if (isNew) body.stock = parseInt(stock || "0");
-    if (isNew) {
-      await apiFetch(`${API}/products`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-    } else if (product) {
-      await apiFetch(`${API}/products/${(product as Product).id}`, {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
+    // The response is checked now: a refused save (a Shopster ID already in
+    // use) used to close the form as if it had worked.
+    setSaving(true);
+    setSaveError("");
+    try {
+      const res = isNew
+        ? await apiFetch(`${API}/products`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          })
+        : await apiFetch(`${API}/products/${(product as Product).id}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          });
+      if (!res.ok) {
+        setSaveError(await apiErrorMessage(res));
+        return;
+      }
+      onSaved();
+    } catch {
+      setSaveError(tr("admin.save_failed_network"));
+    } finally {
+      setSaving(false);
     }
-    onSaved();
   };
 
   return (
@@ -5170,6 +5195,8 @@ function ProductEditModal({
             <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
               <Text style={styles.formLabel}>{tr("common.name")}</Text>
               <TextInput style={styles.formInput} value={name} onChangeText={setName} placeholder={tr("admin.product_name")} testID="prod-name" />
+              <Text style={styles.formLabel}>{tr("admin.shopster_id")}</Text>
+              <TextInput style={styles.formInput} value={barcode} onChangeText={setBarcode} autoCapitalize="none" autoCorrect={false} placeholder="e.g. 39722" testID="prod-barcode" />
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <View style={{ flex: 1, gap: 6 }}>
                   <Text style={styles.formLabel}>{tr("admin.price_thb")}</Text>
@@ -5245,7 +5272,10 @@ function ProductEditModal({
                   {fav ? tr("common.favorite") : tr("admin.mark_as_favorite")}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.primaryBtn} onPress={save} testID="prod-save">
+              {!!saveError && (
+                <Text style={{ color: C.danger, fontSize: 13 }} testID="prod-save-error">{saveError}</Text>
+              )}
+              <TouchableOpacity style={[styles.primaryBtn, saving && { opacity: 0.6 }]} onPress={save} disabled={saving} testID="prod-save">
                 <Text style={styles.primaryBtnText}>{isNew ? tr("admin.create") : tr("admin.save_changes")}</Text>
               </TouchableOpacity>
               {/*
