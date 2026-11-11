@@ -398,6 +398,7 @@ export default function Admin() {
           <SettingsView
             isWide={isWide}
             canManage={can("manage_settings")}
+            isAdmin={isAdmin}
             branchId={activeBranchId}
             branchName={activeBranchName}
             onBranchChanged={async () => {
@@ -6004,10 +6005,11 @@ function SelfOrderQrView({ branchId, branchName }: { branchId: string; branchNam
 }
 
 function SettingsView({
-  isWide, canManage, branchId, branchName, onBranchChanged,
+  isWide, canManage, isAdmin, branchId, branchName, onBranchChanged,
 }: {
   isWide: boolean;
   canManage: boolean;
+  isAdmin: boolean;
   branchId: string;
   branchName: string;
   onBranchChanged: () => Promise<void>;
@@ -6170,7 +6172,7 @@ function SettingsView({
           </TouchableOpacity>
         )}
         {active === "Suggestions" ? (
-          <SuggestionsSection />
+          <SuggestionsSection isAdmin={isAdmin} />
         ) : active === "Self-Order QR" ? (
           <SelfOrderQrView branchId={branchId} branchName={branchName} />
         ) : active === "Store profile" && s ? (
@@ -6625,7 +6627,7 @@ type SuggestionStatus = {
 // legitimately find nothing, and without it "the strip is empty" is
 // indistinguishable from "the strip is broken".  Showing the counts makes the
 // honest answer visible.
-function SuggestionsSection() {
+function SuggestionsSection({ isAdmin }: { isAdmin: boolean }) {
   useT(); // re-render this screen when the language changes
   const [rows, setRows] = useState<SuggestionOverride[]>([]);
   const [status, setStatus] = useState<SuggestionStatus | null>(null);
@@ -6641,7 +6643,11 @@ function SuggestionsSection() {
     try {
       const [o, s, p] = await Promise.all([
         apiFetch(`${API}/suggestion-overrides`).then((r) => safeJson<SuggestionOverride[]>(r, [])),
-        apiFetch(`${API}/suggestions/status`).then((r) => safeJson<SuggestionStatus | null>(r, null)),
+        // Admin-only on the server.  Cashiers see this screen too, and asking
+        // anyway was a guaranteed 403 every visit — REACT-NATIVE-4, 564 events.
+        isAdmin
+          ? apiFetch(`${API}/suggestions/status`).then((r) => safeJson<SuggestionStatus | null>(r, null))
+          : Promise.resolve(null),
         apiFetch(`${API}/products?active=true`).then((r) => safeJson<Product[]>(r, [])),
       ]);
       setRows(Array.isArray(o) ? o : []);
