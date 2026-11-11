@@ -34,6 +34,20 @@
         <input id="f-nameth" type="text" name="name_th" value="{{ parent.name_th }}"
                placeholder="ชื่อหมวดหมู่หลัก">
       </div>
+      {% if sync_branches %}
+      <div class="field wide">
+        <label>Other branches</label>
+        <label class="check">
+          <input type="checkbox" name="sync_all" value="1">
+          Sync to all branches
+        </label>
+        <span class="hint">
+          Creates or updates this parent category at {{ sync_branches|join:", " }},
+          and at each of them files the categories listed below under it — matched
+          by name. Categories a branch does not have are not created there.
+        </span>
+      </div>
+      {% endif %}
     </div>
     <div class="form-actions">
       <button type="submit" class="btn btn-blue">

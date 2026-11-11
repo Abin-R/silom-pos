@@ -35,7 +35,7 @@ mean what an admin means by it: the name is what they read on the till.
 from __future__ import annotations
 
 from . import sale_windows
-from .models import Branch, Category, Product, Unit
+from .models import Branch, Category, ParentCategory, Product, Unit
 
 # Copied verbatim from source to target.  Everything absent from this list is
 # either identity (id, branch), a foreign key resolved per-branch below
@@ -48,6 +48,9 @@ PRODUCT_FIELDS = (
 )
 
 CATEGORY_FIELDS = ("name_th", "color", "order", "source", "active")
+
+# A parent category's own fields.  Its name is the match key, so it is not here.
+PARENT_FIELDS = ("name_th", "order")
 
 
 def other_branches(branch):
@@ -63,7 +66,7 @@ def source_catalogue(branch):
     the shop has decided to stop selling, and seeding a new branch with it
     would undo that decision at the new shop.
     """
-    cats = list(branch.categories.all())
+    cats = list(branch.categories.select_related("parent_category"))
     prods = list(
         branch.products.filter(active=True).select_related("category", "unit")
     )
@@ -116,6 +119,42 @@ def upsert_category(target, cat, *, update_existing):
         dest.save(update_fields=changed)
         return dest, "updated", changed
     return dest, "skipped", []
+
+
+def upsert_parent(target, parent, *, update_existing):
+    """Give ``target`` a parent category matching ``parent``, by name.
+    Returns (row, action, changed) like `upsert_category`."""
+    dest = _find(target.parent_categories, parent.name)
+    if dest is None:
+        dest = ParentCategory(branch=target, name=parent.name)
+        for field in PARENT_FIELDS:
+            setattr(dest, field, getattr(parent, field))
+        dest.save()
+        return dest, "created", []
+
+    if not update_existing:
+        return dest, "skipped", []
+
+    changed = _diff(dest, parent, PARENT_FIELDS)
+    if changed:
+        for field in changed:
+            setattr(dest, field, getattr(parent, field))
+        dest.save(update_fields=changed)
+        return dest, "updated", changed
+    return dest, "skipped", []
+
+
+def _file_under(dest_cat, dest_parent, *, overwrite):
+    """File ``dest_cat`` under ``dest_parent``.  Without ``overwrite`` only an
+    ungrouped category is filed — one the target branch has already put in a
+    group of its own stays there.  Returns True if it moved."""
+    if dest_parent is None or dest_cat.parent_category_id == dest_parent.pk:
+        return False
+    if dest_cat.parent_category_id is not None and not overwrite:
+        return False
+    dest_cat.parent_category = dest_parent
+    dest_cat.save(update_fields=["parent_category"])
+    return True
 
 
 def unit_for(target, unit):
@@ -207,11 +246,27 @@ def copy_catalogue(source, target, *, update_existing=False, copy_stock=False,
     cats, prods = catalogue if catalogue is not None else source_catalogue(source)
     report = {"branch": target, "categories": [], "products": []}
 
+    # Parents first, so each category can be filed under the target's copy of
+    # its parent.  Only the parents some travelling category sits under go —
+    # an empty group is not part of the menu.
+    parent_map = {}
+    for cat in cats:
+        parent = cat.parent_category
+        if parent is not None and parent.id not in parent_map:
+            parent_map[parent.id], _, _ = upsert_parent(
+                target, parent, update_existing=update_existing,
+            )
+
     cat_map = {}
     for cat in cats:
         dest, action, changed = upsert_category(
             target, cat, update_existing=update_existing,
         )
+        if _file_under(dest, parent_map.get(cat.parent_category_id),
+                       overwrite=update_existing or action == "created"):
+            changed = [*changed, "parent_category"]
+            if action == "skipped":
+                action = "updated"
         cat_map[cat.id] = dest
         report["categories"].append(
             {"name": cat.name, "action": action, "changed": changed},
@@ -248,6 +303,11 @@ def preview(source, target, catalogue=None, removed=None):
         n.strip().lower()
         for n in target.categories.values_list("name", flat=True) if n
     }
+    have_parents = {
+        n.strip().lower()
+        for n in target.parent_categories.values_list("name", flat=True) if n
+    }
+    parents = {c.parent_category.name for c in cats if c.parent_category_id}
 
     adding = [p.name for p in prods if (p.name or "").strip().lower() not in existing]
 
@@ -270,6 +330,9 @@ def preview(source, target, catalogue=None, removed=None):
         "categories_adding": [
             c.name for c in cats if (c.name or "").strip().lower() not in have_cats
         ],
+        "parents_adding": sorted(
+            n for n in parents if (n or "").strip().lower() not in have_parents
+        ),
         "product_total": target.products.count(),
     }
 
@@ -382,6 +445,58 @@ def fanout_product(product, *, previous_name=None, branches=None):
             report["unchanged"].append(target.name)
             continue
         report["updated"].append(target.name)
+
+    return report
+
+
+def fanout_parent(parent, *, previous_name=None, branches=None):
+    """The parent category form's "Sync to all branches".  Returns a report.
+
+    At every other active branch: the parent with this name is created, or
+    renamed and updated to match (``previous_name`` finds it through a rename,
+    as in `fanout_product`).  Then each category filed under ``parent`` here is
+    looked up by name at that branch and filed under its copy.  A category the
+    branch does not have is not created — that is the Sync products page's job
+    — and categories the branch has under this parent but this branch does not
+    are left where they are: this only adds to a group, never empties one.
+
+    The caller wraps this and the parent's own save in one transaction.
+    """
+    report = {"created": [], "updated": [], "unchanged": [], "filed": 0}
+    targets = other_branches(parent.branch) if branches is None else branches
+    children = list(parent.categories.values_list("name", flat=True))
+
+    for target in targets:
+        dest = None
+        for name in (previous_name, parent.name):
+            dest = _find(target.parent_categories, name)
+            if dest is not None:
+                break
+
+        if dest is None:
+            dest, _, _ = upsert_parent(target, parent, update_existing=False)
+            created, changed = True, []
+        else:
+            created = False
+            changed = _diff(dest, parent, ("name", *PARENT_FIELDS))
+            for field in changed:
+                setattr(dest, field, getattr(parent, field))
+            if changed:
+                dest.save(update_fields=changed)
+
+        filed = 0
+        for name in children:
+            cat = _find(target.categories, name)
+            if cat is not None and _file_under(cat, dest, overwrite=True):
+                filed += 1
+        report["filed"] += filed
+
+        if created:
+            report["created"].append(target.name)
+        elif changed or filed:
+            report["updated"].append(target.name)
+        else:
+            report["unchanged"].append(target.name)
 
     return report
 

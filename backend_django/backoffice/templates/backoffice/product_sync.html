@@ -141,7 +141,11 @@
           <div style="color:var(--red-d);{% if p.adding %}margin-top:4px{% endif %}">
             Off sale: {{ p.retiring|join:", " }}</div>
           {% endif %}
-          {% if not p.adding and not p.retiring %}
+          {% if p.parents_adding %}
+          <div style="color:var(--mut2);margin-top:4px">
+            New parent categories: {{ p.parents_adding|join:", " }}</div>
+          {% endif %}
+          {% if not p.adding and not p.retiring and not p.parents_adding %}
           <span style="color:var(--mut2)">Nothing — this branch already matches
             {{ source.name }}'s catalogue.</span>
           {% endif %}

@@ -4374,6 +4374,21 @@ def _apply_parent_category_form(parent, post):
     return parent
 
 
+def _save_parent_category(request, parent, previous_name, verb):
+    """Save ``parent`` and, if "Sync to all branches" was ticked, push it and
+    its categories' filing out to the other branches in the same transaction."""
+    fanout = None
+    with transaction.atomic():
+        parent.save()
+        if request.POST.get("sync_all"):
+            fanout = catalog.fanout_parent(parent, previous_name=previous_name)
+    message = f"{verb} “{parent.name}”." + _fanout_message(fanout)
+    if fanout and fanout["filed"]:
+        n = fanout["filed"]
+        message += f" Filed {n} {'category' if n == 1 else 'categories'} under it there."
+    messages.success(request, message)
+
+
 @login_required
 def parent_category_list(request):
     """The branch's parent categories, each with the categories under it."""
@@ -4399,8 +4414,9 @@ def parent_category_detail(request, parent_id):
     parent = get_object_or_404(ParentCategory, id=parent_id, branch=branch)
 
     if request.method == "POST":
+        previous_name = parent.name
         _apply_parent_category_form(parent, request.POST)
-        parent.save()
+        _save_parent_category(request, parent, previous_name, "Saved")
         return redirect(reverse("backoffice:parent_category_list") + f"?{_filter_qs(request)}")
 
     context = {
@@ -4409,6 +4425,7 @@ def parent_category_detail(request, parent_id):
         "branch": branch,
         "parent": parent,
         "children": parent.categories.order_by("order", "name"),
+        "sync_branches": _fanout_branch_names(branch),
         "mode": "edit",
         "hide_dates": True,
         "qs": _filter_qs(request),
@@ -4426,7 +4443,7 @@ def parent_category_new(request):
     if request.method == "POST":
         parent = ParentCategory(branch=branch)
         _apply_parent_category_form(parent, request.POST)
-        parent.save()
+        _save_parent_category(request, parent, None, "Added")
         return redirect(reverse("backoffice:parent_category_list") + f"?{_filter_qs(request)}")
 
     last = branch.parent_categories.aggregate(m=Max("order"))["m"]
@@ -4435,6 +4452,7 @@ def parent_category_new(request):
         "branches": branches,
         "branch": branch,
         "parent": ParentCategory(branch=branch, order=(last or 0) + 1),
+        "sync_branches": _fanout_branch_names(branch),
         "mode": "new",
         "hide_dates": True,
         "qs": _filter_qs(request),

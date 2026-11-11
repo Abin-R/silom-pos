@@ -124,3 +124,91 @@ class ParentCategoryTests(TestCase):
                 page = self.client.get(url + f"&pcat={junk}")
                 self.assertEqual(page.status_code, 200)
                 self.assertEqual(len(page.context["products"]), 2)
+
+
+class ParentCategorySyncTests(TestCase):
+    """"Sync to all branches" on the parent category form, and parents
+    travelling with `catalog.copy_catalogue`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.password = "correct-horse-battery"
+        cls.admin = Staff(
+            name="Admin", username="parentsync", email="parentsync@therollingpinn.com",
+            role="admin", active=True, backoffice_access=True,
+        )
+        cls.admin.set_password(cls.password)
+        cls.admin.save()
+        Settings.objects.get_or_create(id="shop")
+        cls.main = Branch.objects.create(name="Main")
+        cls.silom = Branch.objects.create(name="Silom")
+        cls.closed = Branch.objects.create(name="Closed", active=False)
+        cls.admin.branches.add(cls.main, cls.silom)
+
+    def setUp(self):
+        self.assertTrue(self.client.login(username="parentsync", password=self.password))
+        self.scope = f"?branch={self.main.id}"
+
+    def test_new_parent_without_the_box_stays_here(self):
+        self.client.post(reverse("backoffice:parent_category_new") + self.scope,
+                         {"name": "Bakery", "order": "1"})
+        self.assertFalse(ParentCategory.objects.filter(branch=self.silom).exists())
+
+    def test_new_parent_syncs_to_other_active_branches(self):
+        page = self.client.post(
+            reverse("backoffice:parent_category_new") + self.scope,
+            {"name": "Bakery", "name_th": "เบเกอรี่", "order": "3", "sync_all": "1"},
+            follow=True)
+        copy = ParentCategory.objects.get(branch=self.silom)
+        self.assertEqual((copy.name, copy.name_th, copy.order), ("Bakery", "เบเกอรี่", 3))
+        self.assertFalse(ParentCategory.objects.filter(branch=self.closed).exists())
+        message = [str(m) for m in page.context["messages"]][0]
+        self.assertIn("Also added to", message)
+        self.assertIn("Silom", message)
+        self.assertNotIn("Closed", message)
+
+    def test_edit_renames_the_copy_and_files_matching_categories(self):
+        here = ParentCategory.objects.create(branch=self.main, name="Bakery")
+        there = ParentCategory.objects.create(branch=self.silom, name="bakery")
+        drinks = ParentCategory.objects.create(branch=self.silom, name="Drinks")
+        Category.objects.create(branch=self.main, name="Croissants", parent_category=here)
+        Category.objects.create(branch=self.main, name="Cookies", parent_category=here)
+        far_croissants = Category.objects.create(branch=self.silom, name="croissants",
+                                                 parent_category=drinks)
+        far_only = Category.objects.create(branch=self.silom, name="Tea",
+                                           parent_category=there)
+
+        self.client.post(
+            reverse("backoffice:parent_category_detail", args=[here.id]) + self.scope,
+            {"name": "Pastry", "order": "2", "sync_all": "1"})
+
+        there.refresh_from_db()
+        self.assertEqual((there.name, there.order), ("Pastry", 2))
+        self.assertEqual(ParentCategory.objects.filter(branch=self.silom).count(), 2)
+        far_croissants.refresh_from_db()
+        self.assertEqual(far_croissants.parent_category, there)
+        # Not created at Silom, and Silom's own child is left in the group.
+        self.assertFalse(Category.objects.filter(branch=self.silom, name="Cookies").exists())
+        far_only.refresh_from_db()
+        self.assertEqual(far_only.parent_category, there)
+
+    def test_copy_catalogue_brings_parents(self):
+        from bravepos import catalog
+        here = ParentCategory.objects.create(branch=self.main, name="Bakery", order=4)
+        Category.objects.create(branch=self.main, name="Croissants", parent_category=here)
+        Category.objects.create(branch=self.main, name="Cookies", parent_category=here)
+        ParentCategory.objects.create(branch=self.main, name="Empty")
+        mine = ParentCategory.objects.create(branch=self.silom, name="Mine")
+        kept = Category.objects.create(branch=self.silom, name="Cookies", parent_category=mine)
+
+        self.assertEqual(catalog.preview(self.main, self.silom)["parents_adding"], ["Bakery"])
+        catalog.copy_catalogue(self.main, self.silom)
+
+        copy = ParentCategory.objects.get(branch=self.silom, name="Bakery")
+        self.assertEqual(copy.order, 4)
+        self.assertEqual(Category.objects.get(branch=self.silom, name="Croissants")
+                         .parent_category, copy)
+        # The page only adds: Silom's own filing of Cookies is left alone.
+        kept.refresh_from_db()
+        self.assertEqual(kept.parent_category, mine)
+        self.assertFalse(ParentCategory.objects.filter(branch=self.silom, name="Empty").exists())
