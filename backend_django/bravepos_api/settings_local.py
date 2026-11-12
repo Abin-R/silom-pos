@@ -34,5 +34,6 @@ if _base:
 
 SENTRY_DSN = None
 SENTRY_SELFORDER_DSN = None
+GA_SELFORDER_ID = None
 DEBUG = True
 ALLOWED_HOSTS = ['*']

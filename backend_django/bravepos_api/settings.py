@@ -34,6 +34,10 @@ SENTRY_DSN = os.environ.get('SENTRY_DSN')
 # The customer self-order site reports to a separate project (server errors
 # under /order/ plus the page's browser errors).  See sentry_filters.
 SENTRY_SELFORDER_DSN = os.environ.get('SENTRY_SELFORDER_DSN')
+# Google Analytics 4 measurement ID (G-XXXXXXX) for the customer self-order
+# pages: the scan → cart → checkout → pay funnel.  Unset or DEBUG on means no
+# tag, same gate as the browser Sentry.  See context_processors.selforder_ga.
+GA_SELFORDER_ID = os.environ.get('GA_SELFORDER_ID')
 
 # An interactive `manage.py shell` is a person at a prompt, and their typos are
 # not the product's bugs.  PYTHON-DJANGO-6 was four copies of `SyntaxError:
@@ -162,6 +166,8 @@ TEMPLATES = [
                 'backoffice.context_processors.nav',
                 # Browser Sentry config for the self-order pages.
                 'bravepos_api.context_processors.selforder_sentry',
+                # Google Analytics funnel for the self-order pages.
+                'bravepos_api.context_processors.selforder_ga',
             ],
         },
     },

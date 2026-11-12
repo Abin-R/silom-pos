@@ -35,4 +35,5 @@ DATABASES = {
 # Keep the test run self-contained: no error reporting, faster password hashing.
 SENTRY_DSN = None
 SENTRY_SELFORDER_DSN = None
+GA_SELFORDER_ID = None
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']

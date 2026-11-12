@@ -273,6 +273,27 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
   const CANCEL_URL = "{{ cancel_url }}";
   const POLL_MS = 3000;
 
+  // ── Funnel analytics (no-op without a GA ID; see base.html) ──
+  // The poll answers 'expired' on every tick of the late-payment watch, so the
+  // end-of-payment events go out once per page load.
+  const GA_VALUE = Number("{{ draft.goods_total|stringformat:'s' }}") || 0;
+  const gaSent = new Set();
+  const gaOnce = (name, params) => {
+    if (gaSent.has(name)) return;
+    gaSent.add(name);
+    soTrack(name, Object.assign({ currency: "THB", value: GA_VALUE }, params || {}));
+  };
+  // A reload of the paid screen polls 'paid' again; count the sale once.
+  const gaPurchase = (data) => {
+    const key = "ga-purchase-" + data.order_number;
+    try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, "1"); } catch (e) {}
+    gaOnce("purchase", {
+      transaction_id: String(data.order_number),
+      value: Number(data.total) || GA_VALUE,
+      payment_type: picked || undefined,
+    });
+  };
+
   const show = (id) => {
     for (const s of ["choose", "paying", "done", "failed", "late"])
       document.getElementById("state-" + s).hidden = (s !== id);
@@ -336,10 +357,12 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         showSlip(data.receipt_url);
         stopTimer();
         show("done");
+        gaPurchase(data);
       } else if (data.status === "late_paid") {
         clearInterval(polling);
         stopTimer();
         show("late");
+        gaOnce("late_paid");
       } else if (data.status === "expired") {
         // Time ran out, but a QR saved in a banking app can still be paid.
         // Keep looking, more slowly, so that money turns this screen into the
@@ -347,11 +370,13 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         // paid looking at "payment ended".
         stopTimer();
         show("failed");
+        gaOnce("payment_expired");
         watchForLatePayment();
       } else if (data.status === "failed") {
         clearInterval(polling);
         stopTimer();
         show("failed");
+        gaOnce("payment_failed");
       }
       // 'pending' → keep polling; the cron sweeper is the backstop if this tab dies.
     } catch { /* transient — retry next tick */ }
@@ -381,6 +406,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       clearInterval(polling);
       stopTimer();
       show("failed");
+      gaOnce("payment_cancelled");
     } catch {
       btn.disabled = false;
       fail("Could not cancel. Please try again.");
@@ -409,6 +435,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
   cont.addEventListener("click", async () => {
     if (!picked) return;
     cont.disabled = true;
+    soTrack("add_payment_info", { currency: "THB", value: GA_VALUE, payment_type: picked });
     document.getElementById("err").hidden = true;
     try {
       const res = await fetch(PAY_URL, {
@@ -424,6 +451,7 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
       // wallets answer a desktop browser with a QR instead.
       if (data.payment_uri) {
         show("paying");
+        soTrack("payment_started", { currency: "THB", value: GA_VALUE, payment_type: picked, payment_flow: "redirect" });
         document.getElementById("redirecting").hidden = false;
         showReopen(data.payment_uri);
         startTimer(data.seconds_left);
@@ -435,9 +463,11 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
           if (document.hidden) return;   // the app opened
           document.getElementById("redirecting").hidden = true;
           document.getElementById("noapp").hidden = false;
+          soTrack("bank_app_missing", { payment_type: picked });
         }, 4000);
       } else if (data.qr_image) {
         show("paying");
+        soTrack("payment_started", { currency: "THB", value: GA_VALUE, payment_type: picked, payment_flow: "qr" });
         showQr(data.qr_image);
         startTimer(data.seconds_left);
         startPolling();
@@ -445,9 +475,15 @@ sweeper poll too), so closing this tab after paying cannot lose the order.
         throw new Error("The payment provider didn’t return anything to pay with.");
       }
     } catch (e) {
+      soTrack("payment_error", { payment_type: picked, error_message: String(e.message).slice(0, 100) });
       fail(e.message);
       cont.disabled = false;
     }
+  });
+
+  soTrack("view_payment_page", {
+    currency: "THB", value: GA_VALUE,
+    state: "{% if payment_closed %}closed{% elif draft.beam_charge_id or draft.beam_link_id %}paying{% else %}new{% endif %}",
   });
 
   // Returning from a card checkout, or reloading a payment already under way.

@@ -402,9 +402,27 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     }
   }
 
+  // ── Funnel analytics (no-op without a GA ID; see base.html) ──
+  const gaItem = (p, qty) => ({
+    item_id: p.id, item_name: p.name, item_category: p.category_name,
+    price: p.price, quantity: qty,
+  });
+  const gaCart = () => {
+    const items = cartArray();
+    const value = (priced && !priced.error) ? Number(priced.total)
+      : items.reduce((s, i) => s + i.p.price * i.qty, 0);
+    return { currency: "THB", value, items: items.map((i) => gaItem(i.p, i.qty)) };
+  };
+
   function setQty(p, n) {
     const max = maxQty(p);
     n = Math.max(0, Math.min(n, max));
+    const before = cart.get(p.id) || 0;
+    if (n > before) {
+      soTrack("add_to_cart", { currency: "THB", value: p.price * (n - before), items: [gaItem(p, n - before)] });
+    } else if (n < before) {
+      soTrack("remove_from_cart", { currency: "THB", value: p.price * (before - n), items: [gaItem(p, before - n)] });
+    }
     if (n === 0) { cart.delete(p.id); picks.delete(p.id); suggestedIds.delete(p.id); } else cart.set(p.id, n);
     // Re-render just this product's control + the cart chrome.
     const host = document.querySelector(`[data-ctl="${p.id}"]`);
@@ -648,10 +666,11 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   const scrim = document.getElementById("scrim");
   function openSheet() { sheet.classList.add("show"); scrim.classList.add("show"); document.body.classList.add("sheet-open"); }
   function closeSheet() { sheet.classList.remove("show"); scrim.classList.remove("show"); document.body.classList.remove("sheet-open"); }
-  document.getElementById("open-cart").onclick = openSheet;
+  document.getElementById("open-cart").onclick = () => { soTrack("view_cart", gaCart()); openSheet(); };
   scrim.onclick = closeSheet;
   document.getElementById("sheet-close").onclick = closeSheet;
   document.getElementById("clear").onclick = () => {
+    soTrack("cart_cleared", gaCart());
     cart.clear(); picks.clear(); suggestedIds.clear(); renderMenu(); applySearch(); syncCart();
   };
 
@@ -688,6 +707,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
   document.getElementById("checkout").onclick = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "กำลังดำเนินการ…";
+    soTrack("begin_checkout", gaCart());
     try {
       const res = await fetch(START_URL, {
         method: "POST",
@@ -698,6 +718,7 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
       if (!res.ok) throw new Error(data.error || "Could not start your order.");
       window.location.href = data.pay_url;
     } catch (err) {
+      soTrack("checkout_error", { error_message: String(err.message).slice(0, 100) });
       alert(err.message);
       btn.disabled = false; btn.textContent = "ชำระเงิน · Checkout";
     }
@@ -707,10 +728,15 @@ line may pick.  /start/ prices it again, so nothing this page shows is trusted.
     document.querySelector(".search").hidden = true;
     document.getElementById("pills").hidden = true;
     document.getElementById("no-items").hidden = false;
+    soTrack("menu_closed", { reason: "empty" });
+  } else {
+    soTrack("view_item_list", { item_list_name: "self_order_menu", item_count: MENU.length });
   }
   renderPills();
   renderMenu();
   syncCart();
 </script>
+{% else %}
+<script>soTrack("menu_closed", { reason: "closed" });</script>
 {% endif %}
 {% endblock %}
