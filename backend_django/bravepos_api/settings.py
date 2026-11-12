@@ -31,6 +31,9 @@ ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
 # To check reporting from your machine, run once with DJANGO_DEBUG=0 and set
 # SENTRY_ENV to something other than `production` so it stays filterable.
 SENTRY_DSN = os.environ.get('SENTRY_DSN')
+# The customer self-order site reports to a separate project (server errors
+# under /order/ plus the page's browser errors).  See sentry_filters.
+SENTRY_SELFORDER_DSN = os.environ.get('SENTRY_SELFORDER_DSN')
 
 # An interactive `manage.py shell` is a person at a prompt, and their typos are
 # not the product's bugs.  PYTHON-DJANGO-6 was four copies of `SyntaxError:
@@ -52,7 +55,24 @@ if SENTRY_DSN and not DEBUG and not _INTERACTIVE_SHELL and not _TEST_RUN:
     import sentry_sdk
     from django.core.exceptions import DisallowedHost
 
-    from .sentry_filters import before_send as _sentry_before_send
+    from .sentry_filters import make_router as _sentry_router
+
+    # Customer self-order site (/order/...) → its own Sentry project.  Unset,
+    # those events stay in the backend project as before.  Integrations are
+    # off on this client: the main client already hooks Django, and this one
+    # only ever receives finished events handed over by the router.
+    _selforder_client = None
+    if SENTRY_SELFORDER_DSN:
+        _selforder_client = sentry_sdk.Client(
+            dsn=SENTRY_SELFORDER_DSN,
+            environment=os.environ.get('SENTRY_ENV', 'production'),
+            release=os.environ.get('SENTRY_RELEASE') or None,
+            send_default_pii=False,
+            default_integrations=False,
+            auto_enabling_integrations=False,
+            integrations=[],
+        )
+    _sentry_before_send, _sentry_before_send_txn = _sentry_router(_selforder_client)
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,
@@ -71,6 +91,7 @@ if SENTRY_DSN and not DEBUG and not _INTERACTIVE_SHELL and not _TEST_RUN:
         # a storm onto a log scale (~11 events for that same outage) without
         # muting a fault that only fires once.  See sentry_filters.
         before_send=_sentry_before_send,
+        before_send_transaction=_sentry_before_send_txn,
         # Tie every event to the commit actually running, so "is this fixed
         # yet?" is answerable from the issue page.  The deploy script exports
         # it; falling back to unset is fine (Sentry just omits the field).
@@ -139,6 +160,8 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 # Shop name + the counts the backoffice rail carries.
                 'backoffice.context_processors.nav',
+                # Browser Sentry config for the self-order pages.
+                'bravepos_api.context_processors.selforder_sentry',
             ],
         },
     },

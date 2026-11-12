@@ -38,8 +38,10 @@ mean Redis, and the point here is to blunt a firehose, not to be exact.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
+from urllib.parse import urlsplit
 
 
 # Occurrence numbers that actually get sent. Past the last explicit step we
@@ -140,3 +142,66 @@ def before_send(event, hint):
     except Exception:
         # Never let the filter itself swallow a report.
         return event
+
+
+# ── Self-order routing ───────────────────────────────────────────────────────
+# The customer self-order site (`/order/...`) reports to its own Sentry
+# project, so a customer's phone failing to pay never sits in the same issue
+# list as the tills' API errors.  The SDK takes one DSN per process, so the
+# main client keeps capturing everything and its before_send hands self-order
+# events to a second client (built in settings) instead of sending them.
+# The till's own /api/self-orders/... endpoints stay in the backend project:
+# those are staff calls, not the customer site.
+SELFORDER_PREFIX = "/order/"
+
+# /order/s/<token>/ — the token is the customer's handle on their order, so
+# it is masked before an event leaves the server.
+_TOKEN_RE = re.compile(r"(/order/s/)[^/?#]+")
+
+
+def is_selforder_event(event) -> bool:
+    if (event.get("transaction") or "").startswith(SELFORDER_PREFIX):
+        return True
+    url = (event.get("request") or {}).get("url") or ""
+    try:
+        return urlsplit(url).path.startswith(SELFORDER_PREFIX)
+    except ValueError:
+        return False
+
+
+def _mask_token(event) -> None:
+    request = event.get("request")
+    if isinstance(request, dict) and isinstance(request.get("url"), str):
+        request["url"] = _TOKEN_RE.sub(r"\1[token]", request["url"])
+    if isinstance(event.get("transaction"), str):
+        event["transaction"] = _TOKEN_RE.sub(r"\1[token]", event["transaction"])
+
+
+def make_router(selforder_client):
+    """before_send / before_send_transaction hooks for the main client.
+
+    With no self-order client (DSN unset) events go to the main project
+    exactly as before.  If handing an event over fails, it falls back to the
+    main project rather than being lost.
+    """
+
+    def _hand_over(event, hint):
+        if selforder_client is None or not is_selforder_event(event):
+            return event
+        try:
+            _mask_token(event)
+            selforder_client.capture_event(event, hint)
+            return None
+        except Exception:
+            return event
+
+    def route_event(event, hint):
+        event = before_send(event, hint)
+        if event is None:
+            return None
+        return _hand_over(event, hint)
+
+    def route_transaction(event, hint):
+        return _hand_over(event, hint)
+
+    return route_event, route_transaction

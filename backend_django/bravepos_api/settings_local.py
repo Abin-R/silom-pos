@@ -33,5 +33,6 @@ if _base:
     BRAVEPOS = {**BRAVEPOS, 'PUBLIC_BASE_URL': _base.rstrip('/')}  # noqa: F405
 
 SENTRY_DSN = None
+SENTRY_SELFORDER_DSN = None
 DEBUG = True
 ALLOWED_HOSTS = ['*']
