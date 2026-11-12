@@ -66,19 +66,23 @@ one webfont is loaded from a CDN; everything else is inline.
       // reach Google.  Same mask as the Sentry block above.
       var mask = function (s) { return typeof s === 'string' ? s.replace(/(\/order\/s\/)[^\/?#]+/g, '$1[token]') : s; };
       function gtag() { window.dataLayer.push(arguments); }
-      gtag('js', new Date());
-      gtag('set', {
-        allow_google_signals: false,
-        allow_ad_personalization_signals: false
-      });
-      var base = {
-        branch_id: "{{ branch.id|default:'' }}",
-        branch_name: nameEl ? JSON.parse(nameEl.textContent) : ''
-      };
-      gtag('config', id, Object.assign({
+      // A page_location given only to 'config' is ignored (the tag reads
+      // document.location), so it is set globally *and* repeated on every hit.
+      var where = {
         page_location: mask(location.origin + location.pathname),
         page_referrer: mask(document.referrer)
-      }, base));
+      };
+      gtag('js', new Date());
+      gtag('set', Object.assign({
+        allow_google_signals: false,
+        allow_ad_personalization_signals: false
+      }, where));
+      var base = Object.assign({
+        branch_id: "{{ branch.id|default:'' }}",
+        branch_name: nameEl ? JSON.parse(nameEl.textContent) : ''
+      }, where);
+      gtag('config', id, Object.assign({ send_page_view: false }, base));
+      gtag('event', 'page_view', base);
       window.soTrack = function (name, params) {
         try { gtag('event', name, Object.assign({}, base, params || {})); } catch (e) {}
       };
