@@ -57,6 +57,7 @@ from bravepos.models import (
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
+from bravepos import branch_sync as sync_sections
 from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
@@ -3073,15 +3074,6 @@ def stock_in_new(request):
     })
 
 
-def _add_stock_out_type(branch, name, name_th):
-    """A new stock-out type at ``branch``, last in its list."""
-    last = StockOutReason.objects.filter(branch=branch).order_by("-sort_order").first()
-    return StockOutReason.objects.create(
-        branch=branch, name=name, name_th=name_th,
-        sort_order=(last.sort_order + 1) if last else 0,
-    )
-
-
 @login_required
 def stock_out_types(request):
     """The branch's stock-out reasons — what the Type dropdown offers here and
@@ -3099,14 +3091,14 @@ def stock_out_types(request):
             error = f"“{name}” is already a type."
         else:
             with transaction.atomic():
-                _add_stock_out_type(branch, name, name_th)
+                sync_sections.add_stock_out_type(branch, name, name_th)
                 added, updated = [], []
                 if request.POST.get("sync_all"):
                     for other in catalog.other_branches(branch):
                         row = StockOutReason.objects.filter(
                             branch=other, name__iexact=name).first()
                         if row is None:
-                            _add_stock_out_type(other, name, name_th)
+                            sync_sections.add_stock_out_type(other, name, name_th)
                             added.append(other.name)
                         elif name_th and row.name_th != name_th:
                             row.name_th = name_th
@@ -4188,85 +4180,125 @@ def _sync_message(source, targets, results):
 
 @login_required
 def product_sync(request):
-    """Make other branches' catalogues match one branch's.
+    """The old Catalogue → Sync to branch address.  Sync moved out of the
+    Catalogue to its own page, which copies more than products; old links
+    and bookmarks land there with Products ticked, as before."""
+    query = request.GET.copy()
+    if not query.getlist("sections"):
+        query.setlist("sections", ["products"])
+    return redirect(reverse("backoffice:branch_sync") + "?" + query.urlencode(),
+                    permanent=True)
 
-    Three things, for every product the source sells: **add** it where it is
-    missing, **edit** the copy that is there to match (name, Shopster ID,
-    price, cost, category, unit, photo, description, SKU, shelf life, tax,
-    sale dates), and **take off sale** the copies of what the source has
-    removed.  Copies are found by Shopster ID, then by name.  Products a
-    target sells that the source has never had are left alone, and stock, par
-    level and the counter minimum are never touched — they are each shop's own.
+
+def _branch_sync_message(source, targets, sections, results):
+    """One sentence per section, for the banner after a sync."""
+    where = ", ".join(t.name for t in targets)
+    lines = []
+    for s in sections:
+        reports = [r[s.key] for r in results]
+        if s.key == "products":
+            lines.append(_sync_message(source, targets, reports))
+            continue
+        created = sum(r.get("created", 0) for r in reports)
+        updated = sum(r.get("updated", 0) for r in reports)
+        skipped = [x for r in reports for x in r.get("skipped", [])]
+        label = s.label.lower()
+        if not created and not updated:
+            line = f"{s.label}: {where} already matched {source.name}."
+        else:
+            line = f"{s.label}: {created} added, {updated} edited to match."
+        if skipped:
+            line += f" Skipped {len(skipped)} {label}: " + "; ".join(skipped) + "."
+        lines.append(line)
+    return " ".join(lines)
+
+
+@login_required
+def branch_sync(request):
+    """Make other branches match one branch — products, categories,
+    promotions, stock-out types; whichever are ticked.
+
+    The sections and what each one does live in `bravepos.branch_sync`; this
+    is the page around them.  Every section adds what the target is missing
+    and edits what it has to match, and leaves rows only the target has alone.
 
     ``source`` and ``targets``, not ``from`` and ``to``: the latter are the
     date-range filter every other page uses, and `_filter_qs` carries them.
 
-    GET previews — naming the products, because "18 will be added" is not
+    GET previews — naming the rows, because "18 will be added" is not
     something an admin can check, and this page writes to branches nobody is
-    looking at.  POST does it.
+    looking at.  POST does it, every section and every target in one
+    transaction: a half-synced branch is worse than none.
     """
     branches, branch, _, _ = _common_filters(request)
     all_branches = list(Branch.objects.filter(active=True).order_by("name"))
+    data = request.POST if request.method == "POST" else request.GET
 
     by_id = {str(b.id): b for b in all_branches}
-    source = by_id.get(request.POST.get("source") or request.GET.get("source") or "")
+    source = by_id.get(data.get("source") or "")
     if source is None:
         source = branch if branch in all_branches else (all_branches[0] if all_branches else None)
 
-    posted = request.POST.getlist("targets") or request.GET.getlist("targets")
     # Filtered against the branches actually offered rather than trusted from
     # the request: these ids arrive from a form anyone can edit, and a branch
     # syncing onto itself would read and write the same rows.
-    targets = [by_id[t] for t in posted if t in by_id and (not source or t != str(source.id))]
+    targets = [by_id[t] for t in data.getlist("targets")
+               if t in by_id and (not source or t != str(source.id))]
 
-    # Removals travel too, unless the box is unticked. Without this a product
-    # taken off sale at the source stayed on sale at every branch it had been
-    # copied to, and no amount of re-syncing fixed it — the removed row simply
-    # dropped out of the payload.
-    retire = (request.POST.get("retire", "on") if request.method == "POST"
-              else request.GET.get("retire", "on")) == "on"
+    # Nothing in the request yet (first visit) means everything is ticked.
+    # After that the boxes say what travels: ``picked`` marks a submitted
+    # form, so unticking every box is not read as "first visit".
+    if data.get("picked"):
+        keys = [k for k in sync_sections.SECTION_KEYS if k in data.getlist("sections")]
+    else:
+        keys = [k for k in sync_sections.SECTION_KEYS
+                if k in data.getlist("sections")] or list(sync_sections.SECTION_KEYS)
+    sections = sync_sections.chosen(keys)
 
-    previews, results = [], []
-    if source and targets:
-        catalogue = catalog.source_catalogue(source)
-        removed = catalog.removed_catalogue(source) if retire else []
+    # Removed products travel too, unless the box is unticked. Without this a
+    # product taken off sale at the source stayed on sale at every branch it
+    # had been copied to, and no amount of re-syncing fixed it.
+    retire = data.get("retire", "on") == "on"
 
+    previews = []
+    if source and targets and sections:
+        ctx = sync_sections.context(source, keys, retire=retire)
         if request.method == "POST":
             with transaction.atomic():
-                results = [
-                    catalog.copy_catalogue(
-                        source, t, catalogue=catalogue,
-                        removed=removed, retire=retire, mirror=True,
-                    )
-                    for t in targets
-                ]
-            messages.success(request, _sync_message(source, targets, results))
+                results = [sync_sections.apply(source, t, ctx) for t in targets]
+            messages.success(request, _branch_sync_message(source, targets, sections, results))
             return redirect(
-                reverse("backoffice:product_sync") + "?" + urlencode(
-                    [("source", str(source.id))]
+                reverse("backoffice:branch_sync") + "?" + urlencode(
+                    [("source", str(source.id)), ("picked", "1")]
                     + [("targets", str(t.id)) for t in targets]
+                    + [("sections", k) for k in keys]
                     + ([] if retire else [("retire", "off")]),
                 )
             )
-
+        rows = {t.id: sync_sections.preview(source, t, ctx) for t in targets}
         previews = [
-            catalog.preview(source, t, catalogue, removed=removed) for t in targets
+            {"section": s,
+             "rows": [{"branch": t, **dict(rows[t.id])[s]} for t in targets]}
+            for s in sections
         ]
 
     context = {
-        "active": "products",
+        "active": "branch_sync",
         "branches": branches,
         "branch": branch,
         "all_branches": all_branches,
         "source": source,
         "targets": targets,
         "target_ids": {str(t.id) for t in targets},
+        "all_sections": sync_sections.SECTIONS,
+        "sections": sections,
+        "section_keys": keys,
         "previews": previews,
         "retire": retire,
         "source_count": source.products.filter(active=True).count() if source else 0,
         "qs": _filter_qs(request),
     }
-    return render(request, "backoffice/product_sync.html", context)
+    return render(request, "backoffice/branch_sync.html", context)
 
 
 @login_required

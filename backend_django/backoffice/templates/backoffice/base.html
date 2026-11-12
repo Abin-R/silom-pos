@@ -110,6 +110,8 @@
         <svg><use href="#i-tag"/></svg>Discounts</a>
       <a class="nv {% if active == 'branches' %}on{% endif %}" href="{% url 'backoffice:branch_list' %}">
         <svg><use href="#i-store"/></svg>Branches{% if nav_branches %}<u>{{ nav_branches }}</u>{% endif %}</a>
+      <a class="nv {% if active == 'branch_sync' %}on{% endif %}" href="{% url 'backoffice:branch_sync' %}">
+        <svg><use href="#i-stack"/></svg>Sync branches</a>
       <a class="nv {% if active == 'staff' %}on{% endif %}" href="{% url 'backoffice:staff_list' %}">
         <svg><use href="#i-users"/></svg>Staff &amp; shifts</a>
       <a class="nv {% if active == 'customers' %}on{% endif %}" href="{% url 'backoffice:customer_list' %}">

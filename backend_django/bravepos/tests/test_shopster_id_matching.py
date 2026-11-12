@@ -76,7 +76,7 @@ class TheIncidentTests(ShopsterIdTestCase):
     def test_renaming_then_running_the_sync_page_renames_the_copies(self):
         self.client.post(reverse("backoffice:product_detail", args=[self.here.id]),
                          self.form(name=NEW))
-        self.client.post(reverse("backoffice:product_sync"), {
+        self.client.post(reverse("backoffice:branch_sync"), {
             "source": str(self.bio.id),
             "targets": [str(self.westgate.id), str(self.pinklao.id)],
         })
@@ -142,7 +142,7 @@ class MatchingTests(ShopsterIdTestCase):
     def test_products_only_the_target_sells_are_left_alone(self):
         self.make(self.bio)
         mine = self.make(self.westgate, name="Westgate Special", barcode="777")
-        self.client.post(reverse("backoffice:product_sync"), {
+        self.client.post(reverse("backoffice:branch_sync"), {
             "source": str(self.bio.id), "targets": [str(self.westgate.id)]})
         mine.refresh_from_db()
         self.assertTrue(mine.active)

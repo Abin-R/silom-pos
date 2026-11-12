@@ -173,12 +173,13 @@ class ProductSyncPageTests(TestCase):
         })
         self.assertEqual(signed_in.status_code, 302, "admin could not sign in")
 
-        self.url = reverse("backoffice:product_sync")
+        self.url = reverse("backoffice:branch_sync")
 
     def _params(self, targets=None):
         return {
             "source": str(self.source.id),
             "targets": [str(b.id) for b in (targets or [self.silom])],
+            "sections": ["products"],
         }
 
     # ── Removals travel too ─────────────────────────────────────────────

@@ -259,8 +259,6 @@ def sync_promotion(dt, targets):
     "skipped": [(branch name, reason), ...]}``.  The caller runs this in the
     same transaction as the source's own save.
     """
-    from .models import DiscountType
-
     report = {"created": [], "updated": [], "removed": [], "skipped": []}
     target_ids = {t.pk for t in targets if t.pk != dt.branch_id}
 
@@ -271,34 +269,68 @@ def sync_promotion(dt, targets):
     for target in targets:
         if target.pk == dt.branch_id:
             continue
-        plan, missing = _translate(dt, target)
-        if missing:
-            report["skipped"].append((target.name, "doesn't have " + ", ".join(sorted(set(missing)))))
-            continue
-        if dt.kind == DiscountType.KIND_FIXED and plan["rows"]:
-            cheapest = _cheapest(target, plan["rows"], dt.combo_match)
-            if cheapest is None or dt.value >= cheapest:
-                report["skipped"].append((
-                    target.name,
-                    "its cheapest combination is ฿%s, not more than the ฿%s discount"
-                    % (f"{cheapest:,.2f}" if cheapest is not None else "0.00", f"{dt.value:,.2f}")))
-                continue
-
-        copy = DiscountType.objects.filter(group_id=dt.group_id, branch=target).first()
-        created = copy is None
-        if created:
-            copy = DiscountType(branch=target, group_id=dt.group_id)
-        for f in COPIED_FIELDS:
-            setattr(copy, f, getattr(dt, f))
-        copy.free_product = plan["free"]
-        copy.free_category = plan["free_category"]
-        if created:
-            copy.created_by = dt.updated_by or dt.created_by
-        copy.updated_by = dt.updated_by or dt.created_by
-        copy.save()
-        apply_targets(copy, plan["products"], plan["categories"], plan["rows"])
-        report["created" if created else "updated"].append(target.name)
+        action, reason = copy_promotion_to(dt, target)
+        if action == "skipped":
+            report["skipped"].append((target.name, reason))
+        else:
+            report[action].append(target.name)
     return report
+
+
+def promotion_blocker(dt, target, *, assume=()):
+    """Why ``dt`` cannot run at ``target``, or None if it can.
+
+    The two rules `sync_promotion` has always applied: ``target`` must have
+    every product and category the promotion names (by name), and a fixed
+    combination discount must stay below the cheapest combination there.
+
+    ``assume`` is a set of lower-cased names to treat as present although
+    ``target`` does not have them yet — the Sync branches preview, when the
+    same run is also copying products and categories.  The price check is
+    skipped for those: the price is not known until the product exists.
+    """
+    from .models import DiscountType
+
+    plan, missing = _translate(dt, target)
+    missing = sorted({m for m in missing if (m or "").strip().lower() not in assume})
+    if missing:
+        return "doesn't have " + ", ".join(missing)
+    if dt.kind == DiscountType.KIND_FIXED and plan["rows"] and all(
+            r["product"] or r["category"] for r in plan["rows"]):
+        cheapest = _cheapest(target, plan["rows"], dt.combo_match)
+        if cheapest is None or dt.value >= cheapest:
+            return ("its cheapest combination is ฿%s, not more than the ฿%s discount"
+                    % (f"{cheapest:,.2f}" if cheapest is not None else "0.00",
+                       f"{dt.value:,.2f}"))
+    return None
+
+
+def copy_promotion_to(dt, target):
+    """Give ``target`` its own copy of ``dt`` (same ``group_id``), or update
+    the copy it has.  Returns ``(action, reason)`` — action is ``"created"``,
+    ``"updated"`` or ``"skipped"`` (reason says why).  Writes nothing on a
+    skip.  The caller owns the transaction."""
+    from .models import DiscountType
+
+    reason = promotion_blocker(dt, target)
+    if reason:
+        return "skipped", reason
+    plan, _ = _translate(dt, target)
+
+    copy = DiscountType.objects.filter(group_id=dt.group_id, branch=target).first()
+    created = copy is None
+    if created:
+        copy = DiscountType(branch=target, group_id=dt.group_id)
+    for f in COPIED_FIELDS:
+        setattr(copy, f, getattr(dt, f))
+    copy.free_product = plan["free"]
+    copy.free_category = plan["free_category"]
+    if created:
+        copy.created_by = dt.updated_by or dt.created_by
+    copy.updated_by = dt.updated_by or dt.created_by
+    copy.save()
+    apply_targets(copy, plan["products"], plan["categories"], plan["rows"])
+    return ("created" if created else "updated"), None
 
 
 def preset_feed(branch, version=None, self_order=False) -> list:
