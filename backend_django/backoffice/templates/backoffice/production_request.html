@@ -1,0 +1,185 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Request production — what one branch wants from the central kitchen on one
+  delivery date.  Every active product of the branch, grouped by category,
+  with one number box each: the supervisor goes down the list typing numbers.
+  Enter moves to the next box rather than submitting a half-filled list.
+
+  One request per branch per date, so opening a branch and date that already
+  has one shows its numbers to change.  Editable until the cut-off (the day
+  before delivery, Shop settings); after that it is shown read only.
+
+  No packed quantities here on purpose — see bravepos.production.
+{% endcomment %}
+
+{% block title %}Request production{% endblock %}
+{% block page_title %}Request production{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">{% if branch %}{{ branch.name }} · {% endif %}Delivery {{ day|date:"D d M Y" }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <div class="ctl" title="Delivery date">
+    <svg><use href="#i-cal"/></svg>
+    <input type="date" name="date" value="{{ day|date:'Y-m-d' }}" min="{{ earliest|date:'Y-m-d' }}"
+           form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
+  </div>
+  {% if branch and is_open %}
+  <button type="submit" form="prForm" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save request</button>
+  {% endif %}
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  .pr-qty { width: 96px; height: 40px; text-align: right; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  .pr-qty.has { border-color: var(--blue); background: var(--blue-soft); }
+  .pr-cat td { background: var(--sunk); font-size: 11.5px; font-weight: 700; letter-spacing: .05em;
+               text-transform: uppercase; color: var(--mut); padding-top: 14px; }
+  .pr-total { margin-left: auto; font-size: 13.5px; color: var(--mut); font-weight: 550; }
+  .pr-total b { color: var(--txt); font-family: var(--mono); }
+  .pr-search { max-width: 260px; }
+  .pr-empty { padding: 48px 20px; text-align: center; color: var(--mut2); font-size: 15px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not branch %}
+  <div class="panel"><div class="pr-empty">There is no branch to request for yet.</div></div>
+{% else %}
+  {% if error %}
+  <div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>
+  {% endif %}
+  {% if is_open %}
+  <div class="banner b-blue" style="margin-bottom:14px"><svg><use href="#i-clock"/></svg>
+    <span>You can change this request until <b>{{ deadline|date:"D d M H:i" }}</b>. After that the kitchen starts from these numbers and it can't be changed.</span></div>
+  {% else %}
+  <div class="banner b-amber" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg>
+    <span>Requests for {{ day|date:"D d M" }} closed at <b>{{ deadline|date:"D d M H:i" }}</b>.
+      {% if req %}This request can no longer be changed.{% else %}{{ branch.name }} didn't request anything.{% endif %}
+      The first date you can still request for is
+      <a href="?branch={{ branch.id }}&amp;date={{ earliest|date:'Y-m-d' }}">{{ earliest|date:"D d M" }}</a>.</span></div>
+  {% endif %}
+
+  {% if is_open %}
+  <form method="post" id="prForm" class="panel" style="flex:none">
+    {% csrf_token %}
+    <div class="panel-h">
+      Products
+      <div class="ctl ctl-search pr-search">
+        <svg><use href="#i-search"/></svg>
+        <input type="search" id="prSearch" placeholder="Find a product" autocomplete="off">
+      </div>
+      <span class="pr-total" id="prTotal" aria-live="polite"></span>
+    </div>
+    <table class="tbl">
+      <thead><tr><th>Product</th><th class="r" style="width:130px">Quantity</th></tr></thead>
+      {% for g in groups %}
+      <tbody class="pr-group">
+        <tr class="pr-cat"><td colspan="2">{{ g.name }}</td></tr>
+        {% for r in g.rows %}
+        <tr class="pr-row" data-name="{{ r.name|lower }} {{ r.name_th|lower }}">
+          <td>
+            <label for="q-{{ r.key }}" style="font-weight:560">{{ r.name }}</label>
+            {% if r.name_th %}<div class="sub">{{ r.name_th }}</div>{% endif %}
+            {% if r.gone %}<div class="sub amber">No longer in this branch's catalogue — set 0 to remove it</div>{% endif %}
+          </td>
+          <td class="r">
+            <input class="inp pr-qty" id="q-{{ r.key }}" name="qty_{{ r.key }}" type="number"
+                   inputmode="numeric" min="0" max="{{ max_qty }}" step="1" placeholder="0"
+                   value="{{ r.shown }}" aria-label="Quantity of {{ r.name }}">
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% empty %}
+      <tbody><tr><td colspan="2" class="pr-empty">{{ branch.name }} has no active products.</td></tr></tbody>
+      {% endfor %}
+      <tbody id="prNoMatch" hidden><tr><td colspan="2" class="pr-empty">No products match.</td></tr></tbody>
+    </table>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save request</button>
+      <span class="sub">Leave a box empty or 0 for products you don't need.</span>
+    </div>
+  </form>
+  {% elif req %}
+  <div class="panel" style="flex:none">
+    <div class="panel-h">Requested <span class="pr-total"><b>{{ total }}</b> pieces · <b>{{ lines }}</b> products</span></div>
+    <table class="tbl">
+      <thead><tr><th>Product</th><th class="r" style="width:130px">Quantity</th></tr></thead>
+      {% for g in groups %}
+      <tbody>
+        {% for r in g.rows %}{% if r.qty %}
+        {% ifchanged g.name %}<tr class="pr-cat"><td colspan="2">{{ g.name }}</td></tr>{% endifchanged %}
+        <tr><td>{{ r.name }}</td><td class="r money" style="font-weight:620">{{ r.qty }}</td></tr>
+        {% endif %}{% endfor %}
+      </tbody>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var form = document.getElementById("prForm");
+  if (!form) return;
+  var boxes = Array.prototype.slice.call(form.querySelectorAll(".pr-qty"));
+  var total = document.getElementById("prTotal");
+  var search = document.getElementById("prSearch");
+  var noMatch = document.getElementById("prNoMatch");
+  var saved = boxes.map(function (b) { return b.value; });
+  var submitting = false;
+
+  function refresh() {
+    var pieces = 0, products = 0;
+    boxes.forEach(function (b) {
+      var n = parseInt(b.value, 10);
+      var has = n > 0;
+      b.classList.toggle("has", has);
+      if (has) { pieces += n; products += 1; }
+    });
+    total.innerHTML = "<b>" + pieces.toLocaleString() + "</b> piece" + (pieces === 1 ? "" : "s") +
+      " · <b>" + products + "</b> product" + (products === 1 ? "" : "s");
+  }
+  function visible() { return boxes.filter(function (b) { return !b.closest("tr").hidden; }); }
+
+  form.addEventListener("input", refresh);
+  // Enter goes to the next box: going down a long list typing numbers, an
+  // Enter that submitted would save half an order.
+  form.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    if (e.target === search) { e.preventDefault(); var first = visible()[0]; if (first) first.focus(); return; }
+    if (!e.target.classList.contains("pr-qty")) return;
+    e.preventDefault();
+    var list = visible();
+    var next = list[list.indexOf(e.target) + (e.shiftKey ? -1 : 1)];
+    if (next) { next.focus(); next.select(); }
+  });
+  form.addEventListener("focusin", function (e) {
+    if (e.target.classList.contains("pr-qty")) e.target.select();
+  });
+  if (search) search.addEventListener("input", function () {
+    var q = search.value.trim().toLowerCase();
+    var shown = 0;
+    form.querySelectorAll(".pr-group").forEach(function (g) {
+      var any = false;
+      g.querySelectorAll(".pr-row").forEach(function (r) {
+        var show = !q || r.dataset.name.indexOf(q) !== -1;
+        r.hidden = !show;
+        if (show) { any = true; shown++; }
+      });
+      g.hidden = !any;
+    });
+    noMatch.hidden = shown !== 0;
+  });
+  form.addEventListener("submit", function () { submitting = true; });
+  window.addEventListener("beforeunload", function (e) {
+    if (submitting) return;
+    if (boxes.some(function (b, i) { return b.value !== saved[i]; })) { e.preventDefault(); e.returnValue = ""; }
+  });
+  refresh();
+})();
+</script>
+{% endblock %}

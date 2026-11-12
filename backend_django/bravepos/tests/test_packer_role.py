@@ -62,14 +62,14 @@ class PackerBackofficeTests(TestCase):
             with self.subTest(name=name):
                 response = self.client.get(reverse(f"backoffice:{name}"))
                 self.assertEqual(response.status_code, 403)
-                self.assertContains(response, "Check stock only", status_code=403)
+                self.assertContains(response, "Check stock and Packing only", status_code=403)
 
     def test_writes_elsewhere_refused(self):
         self.assertEqual(self.client.post(reverse("backoffice:product_new")).status_code, 403)
 
     def test_rail_shows_only_dashboard_and_check_stock(self):
         # The rail only — the dashboard body links into reports, which then
-        # explain the account is Check stock only.
+        # explain the account is Check stock and Packing only.
         response = self.client.get(reverse("backoffice:check_stock"))
         self.assertContains(response, reverse("backoffice:check_stock"))
         for name in ("transactions", "report_daily", "inventory", "product_list", "shop_settings"):

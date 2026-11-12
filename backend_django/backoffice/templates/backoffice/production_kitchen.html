@@ -1,0 +1,83 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Kitchen totals — how many of each product every branch together asked for
+  on one delivery date: what to bake.  Read only.  The chips narrow it to one
+  product group (parent category); the date defaults to the soonest delivery
+  whose requests have already locked.
+
+  Branches line up by barcode (the Shopster id), or by name without one — see
+  bravepos.production.
+{% endcomment %}
+
+{% block title %}Kitchen totals{% endblock %}
+{% block page_title %}Kitchen totals{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Delivery {{ day|date:"D d M Y" }} · {{ data.branches }} branch{{ data.branches|pluralize:"es" }}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  <div class="ctl" title="Delivery date">
+    <svg><use href="#i-cal"/></svg>
+    <input type="date" name="date" value="{{ day|date:'Y-m-d' }}" form="filterForm"
+           onchange="this.form.submit()" aria-label="Delivery date">
+  </div>
+  <a class="btn" href="{% url 'backoffice:production_kitchen_export' %}?{{ export_qs }}">
+    <svg><use href="#i-dl"/></svg> Export</a>
+{% endblock %}
+
+{% block filter_extra %}{% if raw_group %}<input type="hidden" name="group" value="{{ raw_group }}">{% endif %}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .kt-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .kt-chips a { padding: 7px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; text-decoration: none;
+                border: 1.5px solid var(--line-strong); background: var(--card); color: var(--txt2); }
+  .kt-chips a:hover { border-color: var(--blue); color: var(--blue); }
+  .kt-chips a.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .kt-tbl .kt-total { font-size: 15px; font-weight: 700; }
+  .kt-tbl tr.kt-first td { border-top: 2px solid var(--line); }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if is_open %}
+<div class="banner b-amber" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg>
+  <span>Not final — branches can still change these numbers until <b>{{ deadline|date:"D d M H:i" }}</b>.</span></div>
+{% else %}
+<div class="banner b-green" style="margin-bottom:14px"><svg><use href="#i-check"/></svg>
+  <span>Final — requests closed at {{ deadline|date:"D d M H:i" }}.</span></div>
+{% endif %}
+
+<div class="kt-chips" role="navigation" aria-label="Product group">
+  <a href="?date={{ day|date:'Y-m-d' }}" class="{% if group is None %}on{% endif %}">All</a>
+  {% for g in groups %}
+  <a href="?date={{ day|date:'Y-m-d' }}&amp;group={{ g.param|urlencode }}" class="{% if raw_group == g.param %}on{% endif %}">{{ g.name }}</a>
+  {% endfor %}
+</div>
+
+<div class="panel panel-grow">
+  <div class="panel-h">{% if group is None %}All products{% else %}{{ group|default:"Ungrouped" }}{% endif %}</div>
+  <div class="panel-scroll">
+    <table class="tbl kt-tbl">
+      <thead><tr><th style="width:26%">Category</th><th>Product</th><th class="r" style="width:110px">Branches</th><th class="r" style="width:140px">Total (pieces)</th></tr></thead>
+      <tbody>
+        {% for c in data.categories %}
+          {% for r in c.rows %}
+          <tr class="{% if forloop.first and not forloop.parentloop.first %}kt-first{% endif %}">
+            <td>{% if forloop.first %}<b>{{ c.name }}</b><div class="sub">{{ c.total }} pieces</div>{% endif %}</td>
+            <td>{{ r.name }}</td>
+            <td class="r money" style="color:var(--mut)">{{ r.branches }}</td>
+            <td class="r money kt-total">{{ r.total }}</td>
+          </tr>
+          {% endfor %}
+        {% empty %}
+        <tr><td colspan="4" class="empty">No branch has requested anything for {{ day|date:"D d M Y" }}{% if group is not None %} in this group{% endif %}.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if data.categories %}
+      <tfoot><tr><td colspan="3"><b>Total</b></td><td class="r money kt-total">{{ data.total }}</td></tr></tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+{% endblock %}

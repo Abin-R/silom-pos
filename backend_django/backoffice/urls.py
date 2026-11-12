@@ -1,7 +1,7 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
 
-from . import views
+from . import production_views, views
 
 app_name = "backoffice"
 
@@ -81,6 +81,16 @@ urlpatterns = [
     path("inventory/check-stock/new", views.check_stock_new, name="check_stock_new"),
     path("inventory/check-stock/<uuid:doc_id>", views.check_stock_document, name="check_stock_document"),
     path("inventory/check-stock/<uuid:doc_id>/delete", views.check_stock_delete, name="check_stock_delete"),
+
+    # Production requests — branches ask the central kitchen for stock
+    path("production/request", production_views.production_request, name="production_request"),
+    path("production/requests", production_views.production_requests, name="production_requests"),
+    path("production/kitchen", production_views.production_kitchen, name="production_kitchen"),
+    path("production/kitchen/export", production_views.production_kitchen_export,
+         name="production_kitchen_export"),
+    path("production/packing", production_views.production_packing, name="production_packing"),
+    path("production/packing/export", production_views.production_packing_export,
+         name="production_packing_export"),
 
     # Products
     path("products", views.product_list, name="product_list"),

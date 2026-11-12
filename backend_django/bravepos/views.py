@@ -278,8 +278,9 @@ def auth_login(request):
 
     # Cashiers must be explicitly assigned to the branch; admins can log into
     # any branch (so they don't get locked out of branch management).
-    # Viewers, packers and logistics are backoffice-only logins; they never open a till.
-    if staff.role in ('viewer', 'packer', 'logistic'):
+    # Viewers, packers, logistics and stock supervisors are backoffice-only
+    # logins; they never open a till.
+    if staff.role in Staff.BACKOFFICE_ONLY_ROLES:
         return Response({'detail': 'This account can only be used in the backoffice.'}, status=403)
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)
@@ -467,8 +468,9 @@ def auth_pin_login(request):
     except (Branch.DoesNotExist, ValueError):
         return Response({'detail': 'Branch not found.'}, status=404)
 
-    # Viewers, packers and logistics are backoffice-only logins; they never open a till.
-    if staff.role in ('viewer', 'packer', 'logistic'):
+    # Viewers, packers, logistics and stock supervisors are backoffice-only
+    # logins; they never open a till.
+    if staff.role in Staff.BACKOFFICE_ONLY_ROLES:
         return Response({'detail': 'This account can only be used in the backoffice.'}, status=403)
     if staff.role != 'admin' and not staff.branches.filter(id=branch.id).exists():
         return Response({'detail': 'This account is not allowed at this branch.'}, status=403)

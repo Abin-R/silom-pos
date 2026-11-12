@@ -67,6 +67,15 @@
           <label for="f-close">Closes</label>
           <input id="f-close" type="text" name="close_time" value="{{ settings.close_time }}">
         </div>
+        <div class="field">
+          <label for="f-cutoff">Production request cut-off</label>
+          {% if can_edit_cutoff %}
+          <input id="f-cutoff" type="time" name="production_cutoff" value="{{ settings.production_cutoff|time:'H:i' }}">
+          {% else %}
+          <b id="f-cutoff" class="money">{{ settings.production_cutoff|time:"H:i" }}</b>
+          {% endif %}
+          <span class="hint">On the day before delivery. After this time nobody, admins included, can change that day's production requests. Only admins can change the time.</span>
+        </div>
       </div>
     </div>
 

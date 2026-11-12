@@ -137,18 +137,23 @@ VIEWER_URL_NAMES = frozenset({
     "inventory", "inventory_export",
     "stock_in", "stock_in_export", "stock_in_document",
     "stock_out", "stock_out_export", "stock_out_document",
+    # The kitchen's production totals — read only, like everything above.
+    "production_kitchen", "production_kitchen_export",
 })
 
-# What a "packer" account may open: the dashboard and Check stock. Unlike a
-# viewer it may write, but only on the Check stock pages — a check document
-# never moves stock, so this can't change what the shop has on hand.
+# What a "packer" account may open: the dashboard, Check stock and Packing.
+# Unlike a viewer it may write, but only on those pages — neither a check
+# document nor a packed quantity moves stock, so this can't change what the
+# shop has on hand.
 PACKER_URL_NAMES = frozenset({
     "login", "logout", "app_css", "favicon", "apple_touch_icon", "product_image",
     "home", "dashboard",
     "check_stock", "check_stock_new", "check_stock_document", "check_stock_delete",
+    "production_packing", "production_packing_export",
 })
 PACKER_WRITE_URL_NAMES = frozenset({
     "logout", "check_stock_new", "check_stock_document", "check_stock_delete",
+    "production_packing",
 })
 
 # What a "logistic" account may open: the Ninja delivery windows page, which
@@ -159,22 +164,33 @@ LOGISTIC_URL_NAMES = frozenset({
 })
 LOGISTIC_WRITE_URL_NAMES = frozenset({"logout", "ninja_windows"})
 
+# What a "stock_supervisor" account may open: the production request form,
+# which it may save, and the history of its branches' requests. No dashboard —
+# "home" and "dashboard" send it to the form.
+STOCK_SUPERVISOR_URL_NAMES = frozenset({
+    "login", "logout", "app_css", "favicon", "apple_touch_icon", "product_image",
+    "production_request", "production_requests",
+})
+STOCK_SUPERVISOR_WRITE_URL_NAMES = frozenset({"logout", "production_request"})
+
 # role -> (pages it may open, pages it may also POST to)
 LIMITED_ROLES = {
     "viewer": (VIEWER_URL_NAMES, frozenset({"logout"})),
     "packer": (PACKER_URL_NAMES, PACKER_WRITE_URL_NAMES),
     "logistic": (LOGISTIC_URL_NAMES, LOGISTIC_WRITE_URL_NAMES),
+    "stock_supervisor": (STOCK_SUPERVISOR_URL_NAMES, STOCK_SUPERVISOR_WRITE_URL_NAMES),
 }
 
 # role -> where signing in (or opening the dashboard) lands, for a role that
 # may not see the dashboard.
-LANDING_URL_NAMES = {"logistic": "ninja_windows"}
+LANDING_URL_NAMES = {"logistic": "ninja_windows", "stock_supervisor": "production_request"}
 
 
 class ViewerAccessMiddleware:
     """Keeps a ``role == "viewer"`` account to read-only reports, a
-    ``role == "packer"`` account to the dashboard and Check stock, and a
-    ``role == "logistic"`` account to the Ninja delivery windows page.
+    ``role == "packer"`` account to the dashboard, Check stock and Packing, a
+    ``role == "logistic"`` account to the Ninja delivery windows page, and a
+    ``role == "stock_supervisor"`` account to Request production.
 
     Enforced here rather than per view because the backoffice has ~70 views
     that only say ``@login_required``; one gate in front of all of them can't

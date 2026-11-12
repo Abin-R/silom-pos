@@ -123,11 +123,13 @@ def admin_required(view):
 
 def viewer_forbidden(request):
     """The page `ViewerAccessMiddleware` shows a viewer outside the reports,
-    a packer outside Check stock, or a logistic outside Ninja windows."""
+    a packer outside Check stock and Packing, a logistic outside Ninja
+    windows, or a stock supervisor outside Request production."""
     return render(request, "backoffice/forbidden.html", {
         "reports_only": getattr(request.user, "role", "") == "viewer",
         "check_stock_only": getattr(request.user, "role", "") == "packer",
         "ninja_only": getattr(request.user, "role", "") == "logistic",
+        "production_only": getattr(request.user, "role", "") == "stock_supervisor",
         "hide_dates": True,
         **_branch_topbar_context(request),
     }, status=403)
@@ -6707,6 +6709,15 @@ def shop_settings(request):
         except Exception:
             pass
         s.service_charge_enabled = s.service_charge_percent > 0
+        # Admins only, like the payment template below: moving the cut-off
+        # moves when every branch's production requests lock.  A blank or
+        # unreadable value keeps what was there.
+        if getattr(request.user, "role", "") == "admin":
+            try:
+                s.production_cutoff = time.fromisoformat(
+                    (request.POST.get("production_cutoff") or "").strip())
+            except ValueError:
+                pass
         # Payment credentials on the Settings row are a *template*: they seed
         # branches created from here on and are never read at charge time, so
         # editing them cannot disturb a branch that is already trading.
@@ -6752,6 +6763,7 @@ def shop_settings(request):
         "branches": branches,
         "branch": branch,
         "hide_dates": True,
+        "can_edit_cutoff": getattr(request.user, "role", "") == "admin",
         **_payment_context(s, request.user),
     }
     return render(request, "backoffice/shop_settings.html", context)
@@ -6807,7 +6819,7 @@ def _user_form_errors(post, instance=None) -> list[str]:
 
 def _user_role(value) -> str:
     """A submitted Users-page role, defaulting to Manager (stored "cashier")."""
-    return value if value in ("admin", "viewer", "packer", "logistic") else "cashier"
+    return value if value in ("admin",) + Staff.BACKOFFICE_ONLY_ROLES else "cashier"
 
 
 def _apply_user_form(member: Staff, post, *, is_new: bool) -> tuple[Staff, str]:

@@ -1,0 +1,266 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Packing — what went into each branch's delivery, entered by the packer.
+
+  One grid per category (or just the chosen one): a row per branch, a column
+  per product.  On the left what the branch requested, then a box per product
+  for what was packed, each block with its own totals — laid out the way the
+  packing team asked for, so a row reads as one branch's crate.  A box only
+  where the branch asked for that product.
+
+  "Fill from requested" copies the requested number into every empty box,
+  which is most of the work on a normal day; the packer then corrects the
+  few that differ.  A box goes green when it matches the request and amber
+  when it doesn't.  One Save sends the grid.
+
+  Packed history shows the packed numbers only, for dates already packed.
+  Nothing here moves stock or reaches a branch's stock-in.
+{% endcomment %}
+
+{% block title %}Packing{% endblock %}
+{% block page_title %}Packing{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Delivery {{ day|date:"D d M Y" }}{% if category is not None %} · {{ category|default:"Uncategorised" }}{% endif %}</div>
+{% endblock %}
+
+{% block topbar_end %}
+  {% if view == 'packed' %}
+    {% if dates %}
+    <div class="ctl" title="Delivery date">
+      <svg><use href="#i-cal"/></svg>
+      <select name="date" form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
+        {% for d in dates %}<option value="{{ d|date:'Y-m-d' }}" {% if d == day %}selected{% endif %}>{{ d|date:"D d M Y" }}</option>{% endfor %}
+      </select>
+      <svg class="cv"><use href="#i-chev"/></svg>
+    </div>
+    {% endif %}
+  {% else %}
+  <div class="ctl" title="Delivery date">
+    <svg><use href="#i-cal"/></svg>
+    <input type="date" name="date" value="{{ day|date:'Y-m-d' }}" form="filterForm"
+           onchange="this.form.submit()" aria-label="Delivery date">
+  </div>
+  {% endif %}
+  <a class="btn" href="{% url 'backoffice:production_packing_export' %}?{{ export_qs }}"><svg><use href="#i-dl"/></svg> Export</a>
+  {% if view == 'live' and tables %}
+  <button type="submit" form="pkForm" class="btn btn-blue" id="pkSave"><svg><use href="#i-check"/></svg> <span>Save</span></button>
+  {% endif %}
+{% endblock %}
+
+{% block filter_extra %}{% if view == 'packed' %}<input type="hidden" name="view" value="packed">{% endif %}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .pk-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .pk-bar .spacer { flex: 1; }
+  .pk-tbl th, .pk-tbl td { padding-left: 10px; padding-right: 10px; }
+  .pk-tbl td { white-space: nowrap; }
+  /* Headers wrap rather than truncate: "Red Velvet C…" and "Red Velvet M…"
+     are different products, and the packer has to tell them apart. */
+  .pk-tbl thead th { white-space: normal; vertical-align: bottom; line-height: 1.25;
+                     min-width: 76px; max-width: 104px; text-transform: none; font-size: 12px; }
+  .pk-tbl thead th:first-child { max-width: none; }
+  .pk-tbl th:first-child, .pk-tbl td:first-child {
+    position: sticky; left: 0; z-index: 1; background: var(--card);
+    border-right: 2px solid var(--line); min-width: 150px;
+  }
+  .pk-tbl thead th:first-child, .pk-tbl tfoot td:first-child { background: var(--sunk); }
+  .pk-tbl .pk-name { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .pk-tbl th.pk-p { color: var(--amber); }
+  .pk-tbl .pk-sep { border-left: 2px solid var(--line); }
+  .pk-tbl .pk-req { color: var(--txt2); }
+  .pk-tbl .pk-tot { font-weight: 700; }
+  .pk-tbl .pk-ptot { font-weight: 700; color: var(--amber); }
+  .pk-in { width: 64px; height: 34px; text-align: center; font-family: var(--mono); font-size: 14px; font-weight: 600; padding: 0 4px; }
+  .pk-in.ok { border-color: var(--green); background: var(--green-soft); color: var(--green-d); }
+  .pk-in.diff { border-color: var(--amber-line); background: var(--amber-soft); color: var(--amber-d); }
+  .pk-none { color: var(--mut2); }
+  .pk-legend { font-size: 12.5px; color: var(--mut); display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .pk-key { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; border: 1.5px solid; }
+  .pk-key.ok { background: var(--green-soft); border-color: var(--green); }
+  .pk-key.diff { background: var(--amber-soft); border-color: var(--amber-line); }
+  .pk-panel { flex: none; margin-bottom: 18px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pk-bar">
+  <div class="seg">
+    <a href="?date={{ day|date:'Y-m-d' }}" class="{% if view == 'live' %}on{% endif %}">Packing</a>
+    <a href="?view=packed" class="{% if view == 'packed' %}on{% endif %}">Packed history</a>
+  </div>
+  {% if categories %}
+  <div class="ctl" title="Category">
+    <svg><use href="#i-filter"/></svg>
+    <select name="category" form="filterForm" onchange="this.form.submit()" aria-label="Category">
+      <option value="">All categories</option>
+      {% for c in categories %}<option value="{{ c.param }}" {% if raw_category == c.param %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  {% endif %}
+  <div class="spacer"></div>
+  {% if view == 'live' and tables %}
+  <div class="pk-legend">
+    <span><i class="pk-key ok"></i>matches request</span>
+    <span><i class="pk-key diff"></i>differs</span>
+  </div>
+  <button type="button" class="btn btn-sm" id="pkFill"><svg><use href="#i-down"/></svg> Fill from requested</button>
+  <button type="button" class="btn btn-sm btn-danger" id="pkClear"><svg><use href="#i-x"/></svg> Clear all</button>
+  {% endif %}
+</div>
+
+{% if error %}
+<div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>
+{% endif %}
+{% if view == 'live' and is_open and tables %}
+<div class="banner b-amber" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg>
+  <span>Not final — branches can still change their requests until <b>{{ deadline|date:"D d M H:i" }}</b>.</span></div>
+{% endif %}
+{% if view == 'packed' %}
+<div class="sub" style="margin:-4px 0 12px;font-size:12.5px">These are the numbers the packer entered as sent, not what the branches requested.</div>
+{% endif %}
+
+{% if view == 'packed' and not dates %}
+  <div class="panel"><div class="empty">Nothing has been packed yet.</div></div>
+{% elif view == 'packed' and not tables %}
+  <div class="panel"><div class="empty">Nothing was packed for {{ day|date:"D d M Y" }}{% if category is not None %} in this category{% endif %}.</div></div>
+{% else %}
+<form method="post" id="pkForm">
+  {% csrf_token %}
+  {% for t in tables %}
+  <div class="panel pk-panel" data-table>
+    <div class="panel-h">{{ t.name }}
+      <span class="sub" style="margin:0 0 0 auto">{{ t.rows|length }} branch{{ t.rows|length|pluralize:"es" }}</span></div>
+    <div class="panel-scroll" style="overflow-x:auto">
+      <table class="tbl pk-tbl">
+        <thead>
+          <tr>
+            <th>Branch</th>
+            {% if view == 'live' %}
+              {% for name in t.columns %}<th class="r" title="{{ name }}"><span class="pk-name">{{ name }}</span></th>{% endfor %}
+              <th class="r">Total requested</th>
+              {% for name in t.columns %}<th class="r pk-p {% if forloop.first %}pk-sep{% endif %}" title="Packed: {{ name }}"><span class="pk-name">✓ {{ name }}</span></th>{% endfor %}
+              <th class="r pk-p">Total packed</th>
+            {% else %}
+              {% for name in t.columns %}<th class="r pk-p" title="{{ name }}"><span class="pk-name">{{ name }}</span></th>{% endfor %}
+              <th class="r pk-p">Total packed</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in t.rows %}
+          <tr data-row>
+            <td><b style="font-weight:620">{{ forloop.counter }}. {{ row.branch.name }}</b></td>
+            {% if view == 'live' %}
+              {% for cell in row.cells %}<td class="r money pk-req">{% if cell %}{{ cell.requested_qty }}{% else %}<span class="pk-none">—</span>{% endif %}</td>{% endfor %}
+              <td class="r money pk-tot">{{ row.requested }}</td>
+              {% for cell in row.cells %}
+              <td class="r {% if forloop.first %}pk-sep{% endif %}">
+                {% if cell %}
+                <input class="inp pk-in" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1"
+                       name="packed_{{ cell.id }}" value="{{ cell.shown }}" data-req="{{ cell.requested_qty }}"
+                       data-col="{{ forloop.counter0 }}" data-saved="{{ cell.saved }}"
+                       aria-label="Packed {{ t.columns|slice:forloop.counter|last }} for {{ row.branch.name }}"
+                       {% if cell.packed_by_name %}title="{{ cell.packed_by_name }} · {{ cell.packed_at|date:'d/m H:i' }}"{% endif %}>
+                {% else %}<span class="pk-none">—</span>{% endif %}
+              </td>
+              {% endfor %}
+              <td class="r money pk-ptot" data-rowtot>{% if row.any_packed %}{{ row.packed }}{% else %}—{% endif %}</td>
+            {% else %}
+              {% for cell in row.cells %}<td class="r money" style="color:var(--amber)">{% if cell and cell.packed_qty is not None %}{{ cell.packed_qty }}{% else %}<span class="pk-none">—</span>{% endif %}</td>{% endfor %}
+              <td class="r money pk-ptot">{{ row.packed }}</td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td><b>Total</b></td>
+            {% if view == 'live' %}
+              {% for n in t.col_requested %}<td class="r money">{{ n }}</td>{% endfor %}
+              <td class="r money pk-tot">{{ t.requested }}</td>
+              {% for n in t.col_packed %}<td class="r money pk-ptot {% if forloop.first %}pk-sep{% endif %}" data-coltot="{{ forloop.counter0 }}">{{ n }}</td>{% endfor %}
+              <td class="r money pk-ptot" data-alltot style="font-size:15px">{{ t.packed }}</td>
+            {% else %}
+              {% for n in t.col_packed %}<td class="r money pk-ptot">{{ n }}</td>{% endfor %}
+              <td class="r money pk-ptot" style="font-size:15px">{{ t.packed }}</td>
+            {% endif %}
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+  {% empty %}
+  <div class="panel"><div class="empty">No branch has requested anything for {{ day|date:"D d M Y" }}{% if category is not None %} in this category{% endif %}.</div></div>
+  {% endfor %}
+</form>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var form = document.getElementById("pkForm");
+  var boxes = form ? Array.prototype.slice.call(form.querySelectorAll(".pk-in")) : [];
+  if (!boxes.length) return;
+  var save = document.getElementById("pkSave");
+  var submitting = false;
+
+  function num(b) { var n = parseInt(b.value, 10); return isNaN(n) ? null : n; }
+  function dirty(b) { return b.value !== b.dataset.saved; }
+
+  function refresh() {
+    form.querySelectorAll("[data-table]").forEach(function (table) {
+      var cols = {}, all = 0;
+      table.querySelectorAll("tr[data-row]").forEach(function (tr) {
+        var sum = 0, any = false;
+        tr.querySelectorAll(".pk-in").forEach(function (b) {
+          var n = num(b);
+          b.classList.toggle("ok", n !== null && n === parseInt(b.dataset.req, 10));
+          b.classList.toggle("diff", n !== null && n !== parseInt(b.dataset.req, 10));
+          if (n !== null) { sum += n; any = true; cols[b.dataset.col] = (cols[b.dataset.col] || 0) + n; }
+        });
+        all += sum;
+        tr.querySelector("[data-rowtot]").textContent = any ? sum : "—";
+      });
+      table.querySelectorAll("[data-coltot]").forEach(function (td) { td.textContent = cols[td.dataset.coltot] || 0; });
+      table.querySelector("[data-alltot]").textContent = all;
+    });
+    var n = boxes.filter(dirty).length;
+    save.disabled = n === 0;
+    save.querySelector("span").textContent = n ? "Save " + n + " change" + (n === 1 ? "" : "s") : "Save";
+  }
+
+  form.addEventListener("input", refresh);
+  form.addEventListener("focusin", function (e) { if (e.target.classList.contains("pk-in")) e.target.select(); });
+  // Enter moves along the row, then down to the next branch, rather than
+  // saving a half-entered grid.
+  form.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || !e.target.classList.contains("pk-in")) return;
+    e.preventDefault();
+    var next = boxes[boxes.indexOf(e.target) + (e.shiftKey ? -1 : 1)];
+    if (next) next.focus();
+  });
+  document.getElementById("pkFill").addEventListener("click", function () {
+    boxes.forEach(function (b) { if (b.value === "") b.value = b.dataset.req; });
+    refresh();
+  });
+  document.getElementById("pkClear").addEventListener("click", function () {
+    if (!confirm("Clear every packed number on this page? Nothing is saved until you press Save.")) return;
+    boxes.forEach(function (b) { b.value = ""; });
+    refresh();
+  });
+  // Only changed boxes are sent, so another packer's numbers on other rows
+  // are not overwritten with what this page loaded.
+  form.addEventListener("submit", function () {
+    submitting = true;
+    boxes.forEach(function (b) { if (!dirty(b)) b.disabled = true; });
+  });
+  window.addEventListener("beforeunload", function (e) {
+    if (!submitting && boxes.some(dirty)) { e.preventDefault(); e.returnValue = ""; }
+  });
+  refresh();
+})();
+</script>
+{% endblock %}

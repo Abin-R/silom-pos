@@ -121,6 +121,7 @@
                 {% elif m.role == 'viewer' %}<span class="tag t-out">Viewer</span>
                 {% elif m.role == 'packer' %}<span class="tag t-out">Packer</span>
                 {% elif m.role == 'logistic' %}<span class="tag t-out">Logistic</span>
+                {% elif m.role == 'stock_supervisor' %}<span class="tag t-out">Stock supervisor</span>
                 {% else %}<span class="tag t-out">Cashier</span>{% endif %}
                 {# Taken away from the role's usual till permissions. #}
                 {% if m.perm_missing %}

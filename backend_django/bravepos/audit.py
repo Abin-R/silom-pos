@@ -41,6 +41,7 @@ AUDITED = {
     "Product", "ProductSaleWindow", "ParentCategory", "Category", "Unit", "DrawerCategory",
     "StockOutReason", "PaymentType",
     "StockMovement", "StockDocument", "StockDocumentItem",
+    "ProductionRequest", "ProductionRequestItem",
     "Shift", "ShiftMovement",
     "Customer", "PeakProductMap", "SuggestionOverride", "AppRelease",
     "Order", "OrderItem", "SelfOrder", "DiscountType",

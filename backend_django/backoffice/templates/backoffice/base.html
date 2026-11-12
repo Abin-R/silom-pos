@@ -38,7 +38,7 @@
 <div class="shell">
   {# ══ RAIL ══════════════════════════════════════════════════════════════ #}
   <nav id="sidebar" class="side">
-    <a class="side-logo" href="{% if user.role == 'logistic' %}{% url 'backoffice:ninja_windows' %}{% else %}{% url 'backoffice:dashboard' %}{% endif %}">
+    <a class="side-logo" href="{% if user.role == 'logistic' %}{% url 'backoffice:ninja_windows' %}{% elif user.role == 'stock_supervisor' %}{% url 'backoffice:production_request' %}{% else %}{% url 'backoffice:dashboard' %}{% endif %}">
       <img class="side-logo-img" src="{% url 'backoffice:apple_touch_icon' %}" alt="">
       <div>
         <b>{{ shop_name|default:"Brave POS" }}</b>
@@ -51,10 +51,33 @@
       <div class="grp">Logistics</div>
       <a class="nv {% if active == 'ninja_windows' %}on{% endif %}" href="{% url 'backoffice:ninja_windows' %}">
         <svg><use href="#i-truck"/></svg>Ninja windows</a>
+      {% elif user.role == 'stock_supervisor' %}
+      <div class="grp">Production</div>
+      <a class="nv {% if active == 'production_request' %}on{% endif %}" href="{% url 'backoffice:production_request' %}">
+        <svg><use href="#i-plus"/></svg>Request production</a>
+      <a class="nv {% if active == 'production_requests' %}on{% endif %}" href="{% url 'backoffice:production_requests' %}">
+        <svg><use href="#i-orders"/></svg>My requests</a>
       {% else %}
       <div class="grp">Overview</div>
       <a class="nv {% if active == 'dashboard' %}on{% endif %}" href="{% url 'backoffice:dashboard' %}">
         <svg><use href="#i-home"/></svg>Dashboard</a>
+
+      {# Branches ask the kitchen for stock; the kitchen reads the totals; the packer records what was sent. #}
+      <div class="grp">Production</div>
+      {% if user.role != 'viewer' and user.role != 'packer' %}
+      <a class="nv {% if active == 'production_request' %}on{% endif %}" href="{% url 'backoffice:production_request' %}">
+        <svg><use href="#i-plus"/></svg>Request production</a>
+      <a class="nv {% if active == 'production_requests' %}on{% endif %}" href="{% url 'backoffice:production_requests' %}">
+        <svg><use href="#i-orders"/></svg>Requests</a>
+      {% endif %}
+      {% if user.role != 'packer' %}
+      <a class="nv {% if active == 'production_kitchen' %}on{% endif %}" href="{% url 'backoffice:production_kitchen' %}">
+        <svg><use href="#i-stack"/></svg>Kitchen totals</a>
+      {% endif %}
+      {% if user.role != 'viewer' %}
+      <a class="nv {% if active == 'production_packing' %}on{% endif %}" href="{% url 'backoffice:production_packing' %}">
+        <svg><use href="#i-box"/></svg>Packing</a>
+      {% endif %}
 
       <div class="grp">Reports</div>
       {% if user.role != 'packer' %}
@@ -140,7 +163,7 @@
 
     <div class="side-foot">
       <div class="side-sep"></div>
-      {% if user.role != 'viewer' and user.role != 'packer' and user.role != 'logistic' %}
+      {% if user.role != 'viewer' and user.role != 'packer' and user.role != 'logistic' and user.role != 'stock_supervisor' %}
       <a class="nv {% if active == 'shop_settings' %}on{% endif %}" href="{% url 'backoffice:shop_settings' %}">
         <svg><use href="#i-cog"/></svg>Settings</a>
       {% endif %}
@@ -149,13 +172,13 @@
           <span class="av">{{ user.name|slice:":1"|default:"?" }}</span>
           <span class="nm">
             <b>{{ user.name|default:user.get_username|default:"Guest" }}</b>
-            <u>{% if user.role == 'admin' %}Admin{% elif user.role == 'viewer' %}Viewer{% elif user.role == 'packer' %}Packer{% elif user.role == 'logistic' %}Logistic{% elif user.role == 'cashier' %}Manager{% else %}Signed in{% endif %}</u>
+            <u>{% if user.role == 'admin' %}Admin{% elif user.role == 'viewer' %}Viewer{% elif user.role == 'packer' %}Packer{% elif user.role == 'logistic' %}Logistic{% elif user.role == 'stock_supervisor' %}Stock supervisor{% elif user.role == 'cashier' %}Manager{% else %}Signed in{% endif %}</u>
           </span>
           <svg><use href="#i-chev"/></svg>
         </button>
         <div class="menu-list">
           <div class="menu-head">{{ user.email|default:user.get_username }}</div>
-          {% if user.role != 'viewer' and user.role != 'packer' and user.role != 'logistic' %}<a href="{% url 'backoffice:shop_settings' %}">Shop settings</a>{% endif %}
+          {% if user.role != 'viewer' and user.role != 'packer' and user.role != 'logistic' and user.role != 'stock_supervisor' %}<a href="{% url 'backoffice:shop_settings' %}">Shop settings</a>{% endif %}
           <form method="post" action="{% url 'backoffice:logout' %}">
             {% csrf_token %}
             <button type="submit" class="danger">Sign out</button>

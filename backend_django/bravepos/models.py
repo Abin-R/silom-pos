@@ -9,6 +9,7 @@ we swap the backend.
 """
 from __future__ import annotations
 
+import datetime
 import secrets
 import uuid
 
@@ -37,14 +38,20 @@ class Staff(models.Model):
     # same kind of backoffice-only login, limited to the dashboard and the
     # Check stock documents (which it may create, edit and delete).
     # "logistic" is another backoffice-only login that opens just the Ninja
-    # delivery windows page.
+    # delivery windows page. "stock_supervisor" is a backoffice-only login
+    # that asks the central kitchen for stock — the Request production page
+    # and its history, nothing else.
     ROLE_CHOICES = [
         ("admin", "Admin"),
         ("cashier", "Cashier"),
         ("viewer", "Viewer"),
         ("packer", "Packer"),
         ("logistic", "Logistic"),
+        ("stock_supervisor", "Stock supervisor"),
     ]
+    # Roles that sign in to the backoffice only: refused by both till login
+    # endpoints and never offered on the till's PIN picker.
+    BACKOFFICE_ONLY_ROLES = ("viewer", "packer", "logistic", "stock_supervisor")
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     # Backoffice sign-in accepts EITHER this username or the email above — the
@@ -713,6 +720,13 @@ class Settings(models.Model):
     # Processing fee passed on to the customer for card payments, as a
     # percentage of the goods total (Omise Thailand's standard rate is 3.65%).
     omise_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=3.65)
+
+    # Production requests lock at this time on the day before delivery: a
+    # request for Friday can be changed until Thursday at this time and never
+    # after, by anyone.  It is what lets the kitchen start baking and the
+    # packer start packing from numbers that will not move under them.
+    # Admins change the time; nobody can reopen a locked request.
+    production_cutoff = models.TimeField(default=datetime.time(23, 30))
 
     # Printer
     printer_enabled = models.BooleanField(default=False)
@@ -1838,6 +1852,93 @@ class StockDocumentItem(models.Model):
     before_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     reconcile_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
+
+# ─── Production requests (branch → central kitchen) ─────────────────────────
+class ProductionRequest(models.Model):
+    """What one branch asks the central kitchen to make and send for one
+    delivery date.  One per branch per date: opening the same branch and date
+    again edits this row rather than adding a second order for the kitchen to
+    add up.  Editable until ``production.locks_at(delivery_date)`` — see
+    ``Settings.production_cutoff``.
+
+    Deliberately not a StockDocument.  Nothing here moves stock, and the
+    branch's stock-in must never be able to read the packed figures: the
+    person receiving the delivery is meant to count it, not copy a number.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="production_requests",
+    )
+    delivery_date = models.DateField()
+    created_by = models.ForeignKey(
+        Staff, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="production_requests",
+    )
+    # Name snapshots, so the history still reads right after a rename.
+    created_by_name = models.CharField(max_length=120, blank=True, default="")
+    updated_by_name = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-delivery_date", "branch__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "delivery_date"],
+                name="production_request_one_per_branch_date",
+            ),
+        ]
+        indexes = [models.Index(fields=["delivery_date"])]
+
+    def __str__(self) -> str:
+        return f"{self.branch_id} {self.delivery_date}"
+
+
+class ProductionRequestItem(models.Model):
+    """One product on a request: how many the branch asked for, and how many
+    the packer says went into the delivery.
+
+    Products are per-branch rows, so the kitchen and packer screens line the
+    same cookie up across branches by ``match_key``: its barcode, which holds
+    the Shopster product id and is the same at every branch whatever the
+    product is called there, or its name when it has no barcode.  Name,
+    barcode, category, group and sort position are snapshotted, so a later
+    catalogue edit never moves a request that has already been baked from.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request = models.ForeignKey(
+        ProductionRequest, on_delete=models.CASCADE, related_name="items",
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="production_request_items",
+    )
+    product_name = models.CharField(max_length=200)
+    barcode = models.CharField(max_length=64, blank=True, default="")
+    # "b:<barcode>", or "n:<lower-cased name>" for a product without one —
+    # see ``production.match_key``.
+    match_key = models.CharField(max_length=210)
+    category_name = models.CharField(max_length=120, blank=True, default="")
+    parent_category_name = models.CharField(max_length=120, blank=True, default="")
+    category_order = models.IntegerField(default=0)
+    product_order = models.IntegerField(default=0)
+    requested_qty = models.PositiveIntegerField(default=0)
+    # None = the packer has not entered a number; 0 is a real answer (none sent).
+    packed_qty = models.PositiveIntegerField(null=True, blank=True)
+    packed_by_name = models.CharField(max_length=120, blank=True, default="")
+    packed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["category_order", "category_name", "product_order", "product_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "match_key"],
+                name="production_item_one_per_product",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.product_name} ×{self.requested_qty}"
 
 
 # ─── Audit log ───────────────────────────────────────────────────────────────
