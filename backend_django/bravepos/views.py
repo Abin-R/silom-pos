@@ -2323,7 +2323,41 @@ def _gateway_response(fn, *args, **kwargs):
         return None, Response({'detail': e.detail}, status=e.status)
 
 
-def _record_till_beam_charge(request, res, reference_id):
+TILL_CHARGE_MAX_ITEMS = 100
+
+
+def _till_charge_items(raw):
+    """The till's basket as [{"product", "quantity"}], dropping anything
+    malformed — a bad line must never stop the QR being recorded."""
+    out = []
+    for line in (raw if isinstance(raw, list) else [])[:TILL_CHARGE_MAX_ITEMS]:
+        if not isinstance(line, dict):
+            continue
+        product = str(line.get('product') or '').strip()[:255]
+        try:
+            quantity = int(line.get('quantity'))
+        except (TypeError, ValueError):
+            continue
+        if product and quantity > 0:
+            out.append({'product': product, 'quantity': quantity})
+    return out
+
+
+# Beam's own limit for a charge description isn't documented; stay well short.
+BEAM_DESCRIPTION_MAX = 255
+
+
+def _basket_description(items):
+    """'2x Original Edition - Choco Gems Pop, 1x Cookie Popcorn' for Beam's
+    description, so a charge looked up in Beam says what it was for.  Cut
+    with an ellipsis if long; the full basket is on TillBeamCharge.items."""
+    text = ', '.join(f"{i['quantity']}x {i['product']}" for i in items)
+    if len(text) > BEAM_DESCRIPTION_MAX:
+        text = text[:BEAM_DESCRIPTION_MAX - 1].rstrip(', ') + '…'
+    return text
+
+
+def _record_till_beam_charge(request, res, reference_id, items):
     """Remember a till QR charge for ``check_till_beam_charges``.  Never fails
     the charge: the QR is already minted, and the customer is waiting."""
     session = request.session_obj
@@ -2335,6 +2369,7 @@ def _record_till_beam_charge(request, res, reference_id):
                 reference_id=(reference_id or '')[:128],
                 amount=res['amount'],
                 staff=session.staff.name or '',
+                items=items,
                 status=res.get('status') or 'PENDING',
             )
     except Exception:  # noqa: BLE001 — see docstring
@@ -2345,18 +2380,20 @@ def _record_till_beam_charge(request, res, reference_id):
 @require_session
 def beam_charge_create(request):
     reference_id = request.data.get('reference_id') or request.data.get('reference', '')
+    items = _till_charge_items(request.data.get('items'))
     res, err = _gateway_response(
         gateways.beam_create_promptpay_charge,
         amount=Decimal(str(request.data.get('amount', 0) or 0)),
         reference_id=reference_id,
-        description=request.data.get('description') or '',
+        # The products, when the till sent them; else the till's own text.
+        description=_basket_description(items) or request.data.get('description') or '',
         # Route into this branch's own Beam account if it has one; falls back to
         # the shop account otherwise, so single-account shops are unaffected.
         branch=request.session_obj.branch,
     )
     if err:
         return err
-    _record_till_beam_charge(request, res, reference_id)
+    _record_till_beam_charge(request, res, reference_id, items)
     return Response({
         'charge_id': res['charge_id'],
         'status': res['status'],

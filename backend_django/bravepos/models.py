@@ -1136,6 +1136,10 @@ class TillBeamCharge(models.Model):
     reference_id = models.CharField(max_length=128, blank=True, default="")
     amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     staff = models.CharField(max_length=128, blank=True, default="")
+    # What the cashier rang up for this QR: [{"product": name, "quantity": n}].
+    # The basket otherwise lives only on the tablet, so an unpaid QR could not
+    # say what it was for.  Empty from a till that predates sending it.
+    items = models.JSONField(default=list, blank=True)
     # Beam's raw charge status, as last seen by the sweep.
     status = models.CharField(max_length=32, blank=True, default="PENDING")
     # When the sweep first saw it paid.  The till saves the bill within a

@@ -56,7 +56,66 @@ class RecordTillChargeTests(TestCase):
         self.assertEqual(row.amount, Decimal('680'))
         self.assertEqual(row.reference_id, 'POS-1793365565400')
         self.assertEqual(row.staff, 'Nok')
+        self.assertEqual(row.items, [])     # this till sent no basket
         self.assertFalse(row.done)
+
+    def test_the_basket_is_recorded_with_the_qr(self):
+        with StubGateway():
+            res = self.client.post(
+                '/api/beam/charge',
+                {'amount': 1000, 'reference_id': 'POS-1', 'items': [
+                    {'product': 'Original Edition - Choco Gems Pop', 'quantity': 2},
+                    {'product': 'Cookie Popcorn', 'quantity': '1'},
+                ]},
+                content_type='application/json', **self.auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(TillBeamCharge.objects.get().items, [
+            {'product': 'Original Edition - Choco Gems Pop', 'quantity': 2},
+            {'product': 'Cookie Popcorn', 'quantity': 1},
+        ])
+
+    def _beam_description(self, payload):
+        with StubGateway():
+            spy = mock.patch.object(gateways, 'beam_create_promptpay_charge',
+                                    wraps=gateways.beam_create_promptpay_charge)
+            with spy as create:
+                res = self.client.post('/api/beam/charge', payload,
+                                       content_type='application/json', **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        return create.call_args.kwargs['description']
+
+    def test_beam_description_lists_the_products(self):
+        self.assertEqual(self._beam_description({
+            'amount': 1000, 'reference_id': 'POS-3', 'description': 'Order POS-3', 'items': [
+                {'product': 'Original Edition - Choco Gems Pop', 'quantity': 2},
+                {'product': 'Cookie Popcorn', 'quantity': 1},
+            ]}), '2x Original Edition - Choco Gems Pop, 1x Cookie Popcorn')
+
+    def test_a_long_basket_is_cut_short_for_beam(self):
+        desc = self._beam_description({'amount': 1, 'reference_id': 'POS-4', 'items': [
+            {'product': f'Product number {n}', 'quantity': 1} for n in range(40)]})
+        self.assertLessEqual(len(desc), 255)
+        self.assertTrue(desc.endswith('…'))
+        self.assertTrue(desc.startswith('1x Product number 0, '))
+
+    def test_no_basket_keeps_the_tills_description(self):
+        self.assertEqual(self._beam_description(
+            {'amount': 680, 'reference_id': 'POS-5', 'description': 'Order POS-5'}), 'Order POS-5')
+
+    def test_a_malformed_basket_still_records_the_qr(self):
+        with StubGateway():
+            res = self.client.post(
+                '/api/beam/charge',
+                {'amount': 350, 'reference_id': 'POS-2', 'items': [
+                    'junk', {'product': '', 'quantity': 1}, {'product': 'X', 'quantity': 'a'},
+                    {'product': 'Y', 'quantity': 0}, {'product': 'Mama OG Cookie', 'quantity': 1},
+                ]},
+                content_type='application/json', **self.auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(TillBeamCharge.objects.get().items,
+                         [{'product': 'Mama OG Cookie', 'quantity': 1}])
 
     def test_a_failed_charge_records_nothing(self):
         with mock.patch.object(gateways, 'beam_create_promptpay_charge',

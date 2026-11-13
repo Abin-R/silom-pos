@@ -1448,6 +1448,7 @@ export default function POS() {
         total={total}
         itemsCount={cart.length}
         cartCount={cartCount}
+        basket={cart.map((i) => ({ product: i.name, quantity: i.qty }))}
         onClose={() => setShowPayment(false)}
         onPay={handlePaySuccess}
       />
@@ -2353,6 +2354,7 @@ function PaymentModal({
   total,
   itemsCount,
   cartCount,
+  basket,
   onClose,
   onPay,
 }: {
@@ -2360,6 +2362,9 @@ function PaymentModal({
   total: number;
   itemsCount: number;
   cartCount: number;
+  // What is being rung up, sent with a Beam QR so the server can record it
+  // (TillBeamCharge.items) and show it in Beam's description for the charge.
+  basket: { product: string; quantity: number }[];
   onClose: () => void;
   onPay: (
     method: string,
@@ -2543,7 +2548,7 @@ function PaymentModal({
       const res = await apiFetch(`${API}/beam/charge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}` }),
+        body: JSON.stringify({ amount: total, reference_id: referenceId, description: `Order ${referenceId}`, items: basket }),
       });
       const data = await res.json();
       if (!res.ok) {
