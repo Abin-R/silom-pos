@@ -48,10 +48,10 @@ GREY = 0x55
 # Only used when the Settings row is empty.  Same values as SHOP_DEFAULTS in
 # ReceiptImage.tsx, and likewise no POS ID: that one is per branch.
 SHOP_DEFAULTS = {
-    'company': 'บริษัท เบรฟ แบรนด์ จำกัด',
+    'company': 'บริษัท เบรฟ แบรนด์ จำกัด (สำนักงานใหญ่)',
     'address': [
-        '55 อาคารไบโอเฮ้าส์ ชั้น5 ห้องเลขที่508 ซอยสุขุมวิท',
-        '39 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา',
+        '55 อาคารไบโอเฮ้าส์ ชั้น 5 ห้องเลขที่ 508 ซอยสุขุมวิท 39',
+        'ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา',
         'กรุงเทพมหานคร 10110',
     ],
     'branch': 'Samyan',

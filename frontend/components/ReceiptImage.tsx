@@ -74,12 +74,12 @@ const BOLD = "Sarabun-Bold";
 const SHOP_DEFAULTS = {
   shop_name: "The rolling pinn",
   branch: "Samyan",
-  company: "บริษัท เบรฟ แบรนด์ จำกัด",
+  company: "บริษัท เบรฟ แบรนด์ จำกัด (สำนักงานใหญ่)",
   // Legacy hardcoded address — only rendered when both address_line_1
   // and address_line_2 are blank.
   address: [
-    "55 อาคารไบโอเฮ้าส์ ชั้น5 ห้องเลขที่508 ซอยสุขุมวิท",
-    "39 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา",
+    "55 อาคารไบโอเฮ้าส์ ชั้น 5 ห้องเลขที่ 508 ซอยสุขุมวิท 39",
+    "ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา",
     "กรุงเทพมหานคร 10110",
   ],
   phone: "0644184887",
