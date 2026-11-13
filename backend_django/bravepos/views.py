@@ -2343,20 +2343,6 @@ def _till_charge_items(raw):
     return out
 
 
-# Beam's own limit for a charge description isn't documented; stay well short.
-BEAM_DESCRIPTION_MAX = 255
-
-
-def _basket_description(items):
-    """'2x Original Edition - Choco Gems Pop, 1x Cookie Popcorn' for Beam's
-    description, so a charge looked up in Beam says what it was for.  Cut
-    with an ellipsis if long; the full basket is on TillBeamCharge.items."""
-    text = ', '.join(f"{i['quantity']}x {i['product']}" for i in items)
-    if len(text) > BEAM_DESCRIPTION_MAX:
-        text = text[:BEAM_DESCRIPTION_MAX - 1].rstrip(', ') + '…'
-    return text
-
-
 def _record_till_beam_charge(request, res, reference_id, items):
     """Remember a till QR charge for ``check_till_beam_charges``.  Never fails
     the charge: the QR is already minted, and the customer is waiting."""
@@ -2385,8 +2371,7 @@ def beam_charge_create(request):
         gateways.beam_create_promptpay_charge,
         amount=Decimal(str(request.data.get('amount', 0) or 0)),
         reference_id=reference_id,
-        # The products, when the till sent them; else the till's own text.
-        description=_basket_description(items) or request.data.get('description') or '',
+        description=request.data.get('description') or '',
         # Route into this branch's own Beam account if it has one; falls back to
         # the shop account otherwise, so single-account shops are unaffected.
         branch=request.session_obj.branch,

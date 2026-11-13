@@ -2362,8 +2362,8 @@ function PaymentModal({
   total: number;
   itemsCount: number;
   cartCount: number;
-  // What is being rung up, sent with a Beam QR so the server can record it
-  // (TillBeamCharge.items) and show it in Beam's description for the charge.
+  // What is being rung up, sent with a Beam QR so the server's record of it
+  // (TillBeamCharge.items) can say what an unpaid QR was for.
   basket: { product: string; quantity: number }[];
   onClose: () => void;
   onPay: (
