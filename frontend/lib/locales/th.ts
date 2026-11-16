@@ -599,6 +599,7 @@ const th = {
     generating_qr_code: "กำลังสร้าง QR code…",
     goods_vat_incl: "มูลค่าสินค้า (รวม VAT)",
     grab_check_failed: "ตรวจสอบยอดที่กันไว้ให้ Grab ไม่ได้ กรุณาลองอีกครั้ง",
+    grab_checking: "กำลังตรวจสอบ…",
     grab_held: "กันไว้ให้ Grab: %{name} — เหลือขายได้เพียง %{count}",
     hold_sale: "พักการขาย",
     invalid_promptpay_id: "รหัสพร้อมเพย์ไม่ถูกต้อง",

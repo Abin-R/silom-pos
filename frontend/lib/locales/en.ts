@@ -605,6 +605,7 @@ const en = {
     generating_qr_code: "Generating QR code…",
     goods_vat_incl: "Goods (VAT incl.)",
     grab_check_failed: "Can't check Grab holds, try again",
+    grab_checking: "Checking…",
     grab_held: "Held for Grab: %{name} — only %{count} left to sell",
     hold_sale: "Hold Sale",
     invalid_promptpay_id: "Invalid PromptPay ID",

@@ -63,25 +63,65 @@ export function readTillCheck(status: number, body: any): TillCheckResult {
   return blocked.length ? { status: "blocked", blocked } : { status: "unavailable" };
 }
 
+/** How long one try may take before it is given up on and counts as failed. */
+export const TILL_CHECK_TIMEOUT_MS = 5000;
+
+type TillCheckSend = (
+  body: ReturnType<typeof buildTillCheckBody>,
+  signal?: AbortSignal,
+) => Promise<{
+  status: number;
+  json: () => Promise<any>;
+}>;
+
 /**
- * Ask the backend whether the cart can be sold.  Retries once on a network
- * error or a bad answer; if the second try fails too the result is
- * "unavailable".  `send` is the request itself (apiFetch in the app).
+ * One try, given `timeoutMs`.  The request is aborted when the time runs out
+ * (so it does not keep a connection busy), and the wait itself is raced against
+ * the clock too, so a `send` that ignores the signal still cannot hang the till.
+ */
+async function tryOnce(
+  send: TillCheckSend,
+  body: ReturnType<typeof buildTillCheckBody>,
+  timeoutMs: number,
+): Promise<TillCheckResult> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clock = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("till-check timed out"));
+    }, timeoutMs);
+  });
+  try {
+    const answer = (async () => {
+      const res = await send(body, controller.signal);
+      const json = await res.json().catch(() => null);
+      return readTillCheck(res.status, json);
+    })();
+    answer.catch(() => {}); // a late failure after the clock won is not unhandled
+    return await Promise.race([answer, clock]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Ask the backend whether the cart can be sold.  Each try is cut off after
+ * `timeoutMs`; the check retries once on a network error, a timeout or a bad
+ * answer, and if the second try fails too the result is "unavailable" — which
+ * blocks the sale (fail closed).  `send` is the request itself (apiFetch in the
+ * app); it is handed an AbortSignal to pass on.
  */
 export async function checkTillStock(
-  send: (body: ReturnType<typeof buildTillCheckBody>) => Promise<{
-    status: number;
-    json: () => Promise<any>;
-  }>,
+  send: TillCheckSend,
   cart: CartLine[],
+  timeoutMs: number = TILL_CHECK_TIMEOUT_MS,
 ): Promise<TillCheckResult> {
   const body = buildTillCheckBody(cart);
   let result: TillCheckResult = { status: "unavailable" };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await send(body);
-      const json = await res.json().catch(() => null);
-      result = readTillCheck(res.status, json);
+      result = await tryOnce(send, body, timeoutMs);
     } catch {
       result = { status: "unavailable" };
     }
