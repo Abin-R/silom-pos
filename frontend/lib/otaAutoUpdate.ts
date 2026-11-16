@@ -30,7 +30,7 @@ const RESUME_KEY = "bravepos:ota-resume:v1";
 // The marker only vouches for the launch straight after our own reload.
 const RESUME_MAX_AGE_MS = 60_000;
 
-const CHECK_EVERY_MS = 30 * 60_000;
+const CHECK_EVERY_MS = 10 * 60_000;
 // Expo asks apps not to poll in a tight loop; foregrounding a till often
 // must not turn into a check every time.
 const MIN_CHECK_GAP_MS = 5 * 60_000;
