@@ -1,0 +1,106 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+{% comment %}
+  Grab review.  A Grab order the stock sync could not settle by itself: a
+  cancel that came after the driver may have taken the food, an item that
+  matches no product at this branch, a bundle that does not add up, an order
+  that has sat open for hours, or a till sale that took units held for it.
+
+  Deduct   — a held order is deducted from stock now; a converted one is left as it is.
+  Restore  — a held order is released; a converted one gets its stock back.
+  Ignore   — close the review, no stock change (a held order is released
+             without deducting; a converted one keeps its deduction).
+
+  Follows the late self-order payments page (Transactions › Refund due): a
+  list of what is waiting, a button per decision, and who settled what below.
+{% endcomment %}
+
+{% block title %}Grab review{% endblock %}
+{% block page_title %}Grab review{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Grab orders that need a person to decide · {{ branch.name|default:"no branch" }}</div>
+{% endblock %}
+
+{% block content %}
+<div class="row" style="flex:1;flex-direction:column;gap:14px;align-items:stretch">
+  <div class="panel">
+    <div class="panel-h">Waiting for a decision
+      <div class="spacer"></div>
+      <span style="font-size:13px;color:var(--mut)">{{ open_rows|length }} open{% if open_elsewhere %} · {{ open_elsewhere }} at other branches{% endif %}</span>
+    </div>
+    <div class="panel-scroll">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:120px">Order</th><th style="width:150px">Why</th><th>Items</th>
+            <th style="width:150px">Grab state</th><th style="width:130px">Seen</th>
+            <th class="r" style="width:300px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in open_rows %}
+          <tr>
+            <td class="money" style="font-weight:650">{{ r.display_id }}
+              <div style="font-size:11px;color:var(--mut);font-weight:400">{{ r.order_id }}</div></td>
+            <td><span class="tag t-low">{{ r.reason_label }}</span>
+              <div style="font-size:12px;color:var(--mut);margin-top:4px">{{ r.reason_text }}.</div>
+              {% if r.detail_text %}<div style="font-size:11px;color:var(--mut2);margin-top:2px;word-break:break-all">{{ r.detail_text }}</div>{% endif %}
+            </td>
+            <td>{% for it in r.items %}{{ it.name }} ×{{ it.qty }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
+            <td>{{ r.grab_state|default:"—" }}
+              <div style="font-size:11px;color:var(--mut)">{{ r.status }}</div></td>
+            <td class="money">{{ r.first_seen_at|date:"d M, H:i" }}</td>
+            <td class="r" style="white-space:nowrap">
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'deduct' %}" style="display:inline"
+                    onsubmit="return confirm('Deduct {{ r.display_id }}? A held order is taken out of stock now; one already deducted is left as it is.')">
+                {% csrf_token %}<button class="btn btn-sm" type="submit">Deduct</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'restore' %}" style="display:inline"
+                    onsubmit="return confirm('Restore {{ r.display_id }}? A held order is released; one already deducted has its stock put back.')">
+                {% csrf_token %}<button class="btn btn-sm" type="submit">Restore</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'ignore' %}" style="display:inline"
+                    onsubmit="return confirm('Ignore {{ r.display_id }}? The review closes and stock is not changed.')">
+                {% csrf_token %}<button class="btn btn-sm" type="submit">Ignore</button>
+              </form>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="empty">
+            <svg><use href="#i-inbox"/></svg>
+            Nothing to review. Grab orders the sync cannot settle appear here.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">Settled in the last {{ settled_days }} days</div>
+    <div class="panel-scroll">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th style="width:120px">Order</th><th>Why</th><th>Outcome</th><th>By</th>
+            <th style="width:130px">When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in settled_rows %}
+          <tr>
+            <td class="money">{{ r.display_id }}</td>
+            <td>{{ r.reason_label }}</td>
+            <td>{% if r.resolution == 'deduct' %}<span class="tag t-ok">Deducted</span>{% elif r.resolution == 'restore' %}<span class="tag t-info">Restored</span>{% else %}<span class="tag t-out">Ignored</span>{% endif %}</td>
+            <td>{{ r.resolved_by|default:"—" }}</td>
+            <td class="money">{{ r.resolved_at|date:"d M, H:i" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="empty">None yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

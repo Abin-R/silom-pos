@@ -45,6 +45,7 @@ import {
 } from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
 import { useRefundDue } from "../lib/refundDue";
+import { checkTillStock } from "../lib/grabHolds";
 import {
   comboSetsWith,
   freeProductFor,
@@ -681,7 +682,9 @@ export default function POS() {
    * without a word, so letting this through means the reward is handed across
    * the counter with nothing recording it.
    */
-  const startPayment = (afterClose?: () => void) => {
+  const checkingRef = useRef(false);
+
+  const startPayment = async (afterClose?: () => void) => {
     const stranded = rewardsBelowMinimum(loyalty, total);
     if (stranded.length) {
       const r = stranded[0];
@@ -692,6 +695,37 @@ export default function POS() {
         }),
       );
       return;
+    }
+    // Units BravePOS is holding for Grab orders cannot be sold here. Checked
+    // before the payment screen so no money is taken for a blocked sale, for
+    // any payment method, and with no override. A check that cannot be
+    // answered blocks as well: a sale never passes unchecked.
+    if (checkingRef.current) return;
+    checkingRef.current = true;
+    try {
+      const check = await checkTillStock(
+        (body) =>
+          apiFetch(`${API}/grab/till-check`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+        cart,
+      );
+      if (check.status === "blocked") {
+        showToast(
+          check.blocked
+            .map((b) => tr("pos.grab_held", { name: b.name, count: b.can_sell }))
+            .join("\n"),
+        );
+        return;
+      }
+      if (check.status === "unavailable") {
+        showToast(tr("pos.grab_check_failed"));
+        return;
+      }
+    } finally {
+      checkingRef.current = false;
     }
     afterClose?.();
     setShowPayment(true);

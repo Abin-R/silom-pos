@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, grab_sync, images, loyalty, permissions, sale_windows, selforder
+from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder, stock_pool
 from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
 from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
@@ -625,74 +625,47 @@ def shopster_create_product(request):
     return Response(body, status=201)
 
 
-def _grab_branch_or_response(request, merchant_id):
-    """``(branch, None)``, or ``(None, Response)`` for the 404."""
-    branch = grab_sync.find_branch(merchant_id)
-    if branch is None:
-        return None, Response(
-            {'detail': 'No active branch has that Grab merchant ID.'}, status=404)
-    return branch, None
-
-
 @api_view(['POST'])
-def grab_apply_order(request):
-    """Take a Grab order's items out of a branch's stock, once per Grab order ID.
+@require_session
+def grab_till_check(request):
+    """Before the till takes payment: may it sell this cart?
 
-    Called by the Grab stock poller, not by a person: no session, an
-    ``X-API-Key`` header instead.  See ``bravepos.grab_sync`` for the rules.
+    Units held for Grab orders we know of (and, in a sync outage, whatever Grab
+    can still sell) are not the till's to sell.  ``{"items": [{product_id, qty}],
+    "free_items": [...]}`` answers ``{"ok": bool, "blocked": [{product_id, name,
+    wanted, can_sell, held_for_grab}]}``.  Only products with Grab holds (or an
+    outage figure) can ever be blocked.  The check is repeated under the lock
+    when the sale is saved; see ``orders.create_order_from_items``.
     """
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        order = grab_sync.parse_order(request.data)
-        items = grab_sync.parse_items(request.data.get('items'))
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _grab_branch_or_response(request, order['merchant_id'])
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
-    return Response(grab_sync.apply_order(
-        branch, order['order_id'], order['display_id'], items,
-        dry_run=order['dry_run'],
-    ))
-
-
-@api_view(['POST'])
-def grab_restore_order(request):
-    """Put a cancelled Grab order's stock back, once.  Same key as apply."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        order = grab_sync.parse_order(request.data)
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _grab_branch_or_response(request, order['merchant_id'])
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
-    return Response(grab_sync.restore_order(
-        branch, order['order_id'], order['display_id'], order['reason'],
-        dry_run=order['dry_run'],
-    ))
-
-
-@api_view(['GET'])
-def grab_stock(request):
-    """The branch's active, barcoded products and their stock, for the poller."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        merchant_id = grab_sync.parse_merchant_id(request.query_params.get('merchant_id'))
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _grab_branch_or_response(request, merchant_id)
-    if missing:
-        return missing
-    return Response(grab_sync.stock_for_branch(branch))
+    branch = request.session_obj.branch
+    data = request.data if isinstance(request.data, dict) else {}
+    wanted: dict[str, int] = {}
+    for key in ('items', 'free_items'):
+        lines = data.get(key) or []
+        if not isinstance(lines, list):
+            return Response({'detail': f'{key} must be a list.'}, status=400)
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            try:
+                pid = str(uuid.UUID(str(line.get('product_id') or '')))
+                qty = int(line.get('qty') or 0)
+            except (ValueError, TypeError):
+                continue
+            if qty > 0:
+                wanted[pid] = wanted.get(pid, 0) + qty
+    short = stock_pool.till_shortfalls(branch, wanted) if branch is not None else []
+    names = dict(Product.objects.filter(
+        pk__in=[row['product_id'] for row in short]).values_list('pk', 'name'))
+    for row in short:
+        row['name'] = names.get(uuid.UUID(row['product_id']), '')
+    return Response({
+        'ok': not short,
+        'blocked': [{
+            'product_id': r['product_id'], 'name': r['name'], 'wanted': r['wanted'],
+            'can_sell': r['can_sell'], 'held_for_grab': r['held_for_grab'],
+        } for r in short],
+    })
 
 
 class CustomerViewSet(TillPermissionMixin, SessionRequiredMixin, viewsets.ModelViewSet):
@@ -1604,32 +1577,36 @@ def stock_movements(request):
         denied = perm_denied(staff, 'adjust_stock')
     if denied is not None:
         return denied
-    try:
-        product = Product.objects.get(id=product_id, branch=branch)
-    except Product.DoesNotExist:
-        return Response({'detail': 'Product not found'}, status=404)
+    # The row is locked and read again inside the transaction: the till, a Grab
+    # sync call or another stock write may have moved it since the page was
+    # loaded, and a stale read here would silently undo that.
+    with transaction.atomic():
+        try:
+            product = Product.objects.select_for_update().get(id=product_id, branch=branch)
+        except Product.DoesNotExist:
+            return Response({'detail': 'Product not found'}, status=404)
 
-    if type_ == 'in':
-        product.stock = (product.stock or 0) + qty
-    elif type_ == 'out':
-        product.stock = (product.stock or 0) - qty
-    elif type_ == 'adjust':
-        product.stock = qty
-    # type_ == 'check' is a non-mutating audit entry
-    product.save(update_fields=['stock'])
+        if type_ == 'in':
+            product.stock = (product.stock or 0) + qty
+        elif type_ == 'out':
+            product.stock = (product.stock or 0) - qty
+        elif type_ == 'adjust':
+            product.stock = qty
+        # type_ == 'check' is a non-mutating audit entry
+        product.save(update_fields=['stock'])
 
-    doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
-    mv = StockMovement.objects.create(
-        branch=branch,
-        product=product,
-        product_name=product.name,
-        type=type_,
-        qty=qty,
-        note=note,
-        document_no=doc_no,
-        staff=staff,
-        created_by=staff.name or '',
-    )
+        doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
+        mv = StockMovement.objects.create(
+            branch=branch,
+            product=product,
+            product_name=product.name,
+            type=type_,
+            qty=qty,
+            note=note,
+            document_no=doc_no,
+            staff=staff,
+            created_by=staff.name or '',
+        )
     return Response(StockMovementSerializer(mv).data, status=201)
 
 
@@ -2085,6 +2062,23 @@ def dashboard_channels(request):
 
 
 # ─── Stock documents (multi-line stock-in / -out / adjust / check) ───────────
+def _uuid_key(value) -> str:
+    """A product id as ``str(product.id)`` spells it, whatever case it arrived in."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return str(value)
+
+
+def _lock_products(products):
+    """The given products' rows, locked in id order and read afresh inside the
+    caller's transaction: ``{id: Product}``.  A stock write that reads the row,
+    adds, and saves must hold this first, or it undoes a sale or a Grab
+    deduction made in between."""
+    ids = [p.pk for p in products]
+    return {p.pk: p for p in Product.objects.select_for_update().filter(pk__in=ids).order_by('id')}
+
+
 def _random_doc_suffix(n: int = 8) -> str:
     import secrets
     alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789'
@@ -2175,11 +2169,17 @@ def stock_documents(request):
             total=_dec(payload.get('total')),
             created_by=staff_name,
         )
+        # Every product the document touches, locked in id order and read now,
+        # so a sale or a Grab deduction in the meantime is kept, and two
+        # documents cannot lock the same rows in opposite orders.
+        locked = {
+            str(p.id): p for p in Product.objects.select_for_update()
+            .filter(id__in=[l.get('product_id') for l in items if l.get('product_id')],
+                    branch=branch).order_by('id')
+        }
         for line in items:
             pid = line.get('product_id')
-            product = None
-            if pid:
-                product = Product.objects.filter(id=pid, branch=branch).first()
+            product = locked.get(_uuid_key(pid)) if pid else None
             qty = _dec(line.get('qty'))           # in/out qty OR adjust update-delta
             reconcile = _dec(line.get('reconcile_qty'))
             before = _dec(line.get('before_qty'))
@@ -2284,7 +2284,9 @@ def save_stock_out_document(branch, lines, reason, receiver='', ref_no='',
             created_by=created_by,
         )
         total = Decimal(0)
+        locked = _lock_products([p for p, *_ in lines])
         for product, qty, price, discount in lines:
+            product = locked.get(product.pk, product)
             line_total = max(Decimal(0), qty * price - discount)
             total += line_total
             StockDocumentItem.objects.create(
@@ -2320,7 +2322,9 @@ def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
             ref_no=ref_no, vendor=vendor, note=note, created_by=created_by,
         )
         total = Decimal(0)
+        locked = _lock_products([p for p, *_ in lines])
         for product, qty, price, discount in lines:
+            product = locked.get(product.pk, product)
             line_total = max(Decimal(0), qty * price - discount)
             total += line_total
             StockDocumentItem.objects.create(
@@ -2658,13 +2662,18 @@ def seed_data(_request):
         ("Crystal Velvet Tanghulu Cookie", "คริสตัลเวลเว็ท", 160, 70, "Christmas Collection", IMG_COOKIE, False, 18),
     ]
     for (name, name_th, price, cost, cat_name, img, fav, stock) in products:
-        Product.objects.create(
+        seeded = Product.objects.create(
             branch=emq,
             name=name, name_th=name_th,
             price=Decimal(price), cost=Decimal(cost),
             category=cats.get(cat_name),
             image_url=img, is_favorite=fav, stock=stock,
         )
+        if stock:
+            StockMovement.objects.create(
+                branch=emq, product=seeded, product_name=seeded.name,
+                type='in' if stock > 0 else 'adjust', qty=stock, note='Opening stock',
+            )
 
     return Response({
         'ok': True,

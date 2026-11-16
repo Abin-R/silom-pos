@@ -44,7 +44,7 @@ from django.db.models import Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
-from . import discount_rules, discounts, gateways, images
+from . import discount_rules, discounts, gateways, images, stock_pool
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Branch, Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -133,33 +133,19 @@ def menu_image_ref(branch, product) -> str:
 
 
 def held_quantities(branch, exclude_pk=None) -> dict[str, int]:
-    """Units per product id under a live hold at this branch.
+    """Units per product id self-order may not sell: its own live holds, plus
+    Grab's (orders not packed yet and, while the Grab sync is down, whatever
+    Grab can still sell).  See ``stock_pool``.
 
     Free lines count: they leave the shelf like any other.  A draft stops
     counting the moment its hold lapses, it fails, or it is paid, and paying
     moves the stock in the same transaction, so a unit is never counted twice.
     """
-    drafts = SelfOrder.objects.filter(
-        branch=branch, status='pending', hold_expires_at__gt=djtz.now(),
-    )
-    if exclude_pk is not None:
-        drafts = drafts.exclude(pk=exclude_pk)
-    held: dict[str, int] = {}
-    for items in drafts.values_list('items', flat=True):
-        for pid, qty in _line_quantities(items).items():
-            held[pid] = held.get(pid, 0) + qty
-    return held
+    return stock_pool.withheld_for_other_channels(branch, exclude_pk=exclude_pk)
 
 
-def _line_quantities(items: list[dict]) -> dict[str, int]:
-    """Units per product id in one draft.  A product can sit on two lines, once
-    paid and once free."""
-    out: dict[str, int] = {}
-    for it in items:
-        pid = str(it.get('product_id') or '')
-        if pid:
-            out[pid] = out.get(pid, 0) + int(it.get('qty') or 0)
-    return out
+# Kept under its old name: other call sites in this module use it.
+_line_quantities = stock_pool.line_quantities
 
 
 def is_sold_out(product, held: int = 0) -> bool:

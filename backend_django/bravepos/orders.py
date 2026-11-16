@@ -8,6 +8,7 @@ service layer.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -16,6 +17,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import F, Max, Q
 from django.utils import timezone as djtz
 
+from . import grab_sync, stock_pool
 from .gateways import (
     BEAM_CARD_METHOD,
     BEAM_METHODS,
@@ -27,6 +29,8 @@ from .models import (
     Branch, DiscountType, Order, OrderItem, Product, Shift, StockDocument,
     StockDocumentItem, StockMovement,
 )
+
+logger = logging.getLogger('bravepos')
 
 # The reason a promotion's free item leaves stock under — what the Stock out
 # report shows and filters by.
@@ -244,6 +248,13 @@ def create_order_from_items(
                         existing.replayed = True
                         return existing
 
+                # Units held for a Grab order are not the till's to sell.  The
+                # till asked before it took payment (``grab/till-check``); this
+                # is the same check again under the lock, for a hold that landed
+                # in the seconds between.  It cannot refuse: the customer has
+                # already paid, and refusing would lose the record of the money.
+                grab_short = _grab_shortfalls(branch, items, free_items)
+
                 order = Order.objects.create(
                     branch=branch,
                     order_number=_next_order_number(),
@@ -339,6 +350,9 @@ def create_order_from_items(
                         )
                 _record_free_items(branch, order, free_items, products_by_id,
                                    promo_codes, staff)
+                if grab_short:
+                    # So someone checks the Grab bag.  Never raises.
+                    grab_sync.till_took_held(branch, order.order_number, grab_short)
                 return order
         except IntegrityError as e:
             # Almost certainly the unique order_number. Re-derive and try again.
@@ -349,6 +363,32 @@ def create_order_from_items(
         f'Could not allocate a unique order number after '
         f'{ORDER_NUMBER_MAX_RETRIES} attempts: {last_error}'
     )
+
+
+def _grab_shortfalls(branch, items, free_items) -> list[dict]:
+    """The lines of this sale that take units held for Grab, or ``[]``.
+
+    Only a branch linked to Grab has any.  A failure to find out must not lose a
+    sale that is already paid for, so it is logged and answers ``[]``; the
+    savepoint keeps a failed query from spoiling the sale's transaction.
+    """
+    if not branch.grab_merchant_id:
+        return []
+    wanted: dict[str, int] = {}
+    for it in list(items) + list(free_items):
+        try:
+            pid = str(uuid.UUID(str(it.get('product_id') or '')))
+            qty = int(it.get('qty', 1) or 1)
+        except (TypeError, ValueError):
+            continue
+        if qty > 0:
+            wanted[pid] = wanted.get(pid, 0) + qty
+    try:
+        with transaction.atomic():
+            return stock_pool.till_shortfalls(branch, wanted)
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.exception('Grab hold check failed for a sale at %s', branch.name)
+        return []
 
 
 def _bill_stock_lines(order):
