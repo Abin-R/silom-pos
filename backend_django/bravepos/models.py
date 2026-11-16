@@ -557,6 +557,11 @@ class StockMovement(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # "Movements at this branch since ...": the Grab stock read's
+            # ``target_changed_at`` and the count guard.  Built by 0093.
+            models.Index(fields=["branch", "created_at"], name="stockmov_branch_created_idx"),
+        ]
 
 
 # ─── Customers ───────────────────────────────────────────────────────────────
