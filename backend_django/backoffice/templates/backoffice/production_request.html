@@ -131,7 +131,7 @@ This request can no longer be changed.
 {% csrf_token %}
 <input type="hidden" name="branch_id" value="{{ branch.id }}">
 <input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
-<input type="hidden" name="request_id" value="{{ req.id|default:'' }}">
+<input type="hidden" name="request_id" value="{{ submitted_request_id|default:'' }}">
 <input type="hidden" name="request_revision" value="{{ request_revision }}">
 <input type="hidden" name="production_payload" id="prPayload" disabled>
 <div class="panel-h">
@@ -186,7 +186,7 @@ Quantity
 {% endif %}
 </td>
 <td class="r">
-<input class="inp pr-qty" id="q-{{ r.key }}" name="qty_{{ r.key }}" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1" placeholder="0" value="{{ r.shown }}" data-key="{{ r.key }}" data-base="{{ r.qty|default:'' }}" aria-label="Quantity of {{ r.name }}"
+<input class="inp pr-qty" id="q-{{ r.key }}" name="qty_{{ r.key }}" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1" placeholder="0" value="{{ r.shown }}" data-key="{{ r.key }}" data-base="{{ r.base }}" aria-label="Quantity of {{ r.name }}"
 {% if retained_readonly or not is_open %}
 readonly
 {% endif %}

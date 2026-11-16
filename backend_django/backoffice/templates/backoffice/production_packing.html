@@ -303,7 +303,7 @@ pk-sep
 {% endif %}
 ">
 {% if cell %}
-<input class="inp pk-in" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1" name="packed_{{ cell.id }}" value="{{ cell.shown }}" data-key="{{ cell.id }}" data-req="{{ cell.requested_qty }}" data-col="{{ forloop.counter0 }}" data-saved="{{ cell.saved }}" data-revision="{{ cell.revision }}" aria-label="Packed {{ t.columns|slice:forloop.counter|last }} for {{ row.branch.name }}"
+<input class="inp pk-in" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1" name="packed_{{ cell.id }}" value="{{ cell.shown }}" data-key="{{ cell.id }}" data-req="{{ cell.requested_qty }}" data-col="{{ forloop.counter0 }}" data-saved="{{ cell.base }}" data-revision="{{ cell.baseline_revision }}" aria-label="Packed {{ t.columns|slice:forloop.counter|last }} for {{ row.branch.name }}"
 {% if cell.conflict is not None %}
 aria-invalid="true" aria-describedby="conflict-{{ cell.id }}"
 {% endif %}

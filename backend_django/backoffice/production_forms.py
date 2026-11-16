@@ -21,6 +21,14 @@ class PayloadError(ValueError):
     """A safe, user-facing production form error."""
 
 
+class QuantityValidationError(PayloadError):
+    """A correctable quantity error with otherwise validated form metadata."""
+
+    def __init__(self, message, payload):
+        super().__init__(message)
+        self.payload = payload
+
+
 @dataclass(frozen=True)
 class Payload:
     kind: str
@@ -36,12 +44,12 @@ def _quantity(value):
     if not isinstance(value, str):
         raise PayloadError("Production form values must be strings.")
     if len(value) > 8:
-        raise PayloadError("A production quantity is too long.")
+        raise ValueError("Quantities must be whole numbers from 0 to 99,999.")
     value = value.strip()
     if not value:
         return None
     if not value.isdigit() or int(value) > 99999:
-        raise PayloadError("Quantities must be whole numbers from 0 to 99,999.")
+        raise ValueError("Quantities must be whole numbers from 0 to 99,999.")
     return int(value)
 
 
@@ -90,6 +98,7 @@ def parse_payload(request, expected_kind: str) -> Payload:
 
     seen = set()
     cleaned = []
+    quantity_error = None
     for row in rows:
         if not isinstance(row, dict):
             raise PayloadError("A production row is invalid.")
@@ -99,8 +108,15 @@ def parse_payload(request, expected_kind: str) -> Payload:
         if key in seen:
             raise PayloadError("A production row was sent more than once.")
         seen.add(key)
-        value = _quantity(row.get("value"))
-        base_value = _quantity(row.get("base_value"))
+        try:
+            value = _quantity(row.get("value"))
+        except ValueError as exc:
+            quantity_error = str(exc)
+            value = None
+        try:
+            base_value = _quantity(row.get("base_value"))
+        except ValueError as exc:
+            raise PayloadError(str(exc)) from exc
         if expected_kind == "packing":
             revision = _revision(row.get("revision"), "Packing revision")
         elif "revision" in row:
@@ -109,7 +125,10 @@ def parse_payload(request, expected_kind: str) -> Payload:
         if expected_kind == "packing":
             cleaned_row["revision"] = revision
         cleaned.append(cleaned_row)
-    return Payload(expected_kind, request_id, request_revision, cleaned)
+    payload = Payload(expected_kind, request_id, request_revision, cleaned)
+    if quantity_error:
+        raise QuantityValidationError(quantity_error, payload)
+    return payload
 
 
 def fallback_row_count(request, prefix: str) -> int:

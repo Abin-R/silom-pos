@@ -183,17 +183,21 @@ def _packing_payload(request):
     return production_forms.Payload("packing", None, None, rows)
 
 
-def _request_rows_context(branch, day, posted, conflicts):
+def _request_rows_context(branch, day, posted, conflicts, baseline_rows=None):
     req = (ProductionRequest.objects.filter(branch=branch, delivery_date=day)
            .prefetch_related("items").first())
     rows = production.request_form_rows(branch, req)
     known = {row["key"] for row in rows}
+    baseline_rows = baseline_rows or {}
     for row in rows:
         product_key = str(row["product_id"]) if row.get("product_id") else None
         if product_key:
             known.add(product_key)
+        baseline = baseline_rows.get(row["key"], baseline_rows.get(product_key, {}))
         row["saved"] = row["qty"]
         row["shown"] = posted.get(row["key"], posted.get(product_key, row["qty"] or ""))
+        base_value = baseline["base_value"] if "base_value" in baseline else row["qty"]
+        row["base"] = "" if base_value is None else str(base_value)
         row["conflict"] = conflicts.get(row["key"], conflicts.get(product_key))
     unknown_rows = [{"key": key, "value": value} for key, value in posted.items() if key not in known]
     return req, rows, unknown_rows
@@ -212,6 +216,7 @@ def production_request(request):
     retained_readonly = False
     reload_confirmation = False
     resave_blocked = False
+    retained_payload = None
 
     if request.method == "POST" and request.POST.get("confirm_reload") == "1":
         try:
@@ -245,7 +250,8 @@ def production_request(request):
             posted = production_forms.submitted_draft(request, "request")
             error = f"{exc} Nothing was saved."
             status = 400
-            resave_blocked = not str(exc).startswith("Quantities must be whole numbers")
+            retained_payload = getattr(exc, "payload", None)
+            resave_blocked = not isinstance(exc, production_forms.QuantityValidationError)
         except production.RequestLocked:
             error = f"Requests for {_day(day)} are closed. Nothing was saved."
             retained_readonly = True
@@ -269,20 +275,23 @@ def production_request(request):
 
     deadline = production.locks_at(day)
     is_open = production.is_open(day)
-    req, rows, unknown_rows = _request_rows_context(branch, day, posted, conflicts) if branch else (None, [], [])
+    retained_rows = {row["key"]: row for row in getattr(retained_payload, "rows", [])}
+    req, rows, unknown_rows = _request_rows_context(branch, day, posted, conflicts, retained_rows) if branch else (None, [], [])
     total = sum(int(row["shown"] or 0) for row in rows if str(row["shown"] or "").isdigit())
     payload_baseline = {
-        "version": 1, "kind": "request", "request_id": str(req.id) if req else None,
-        "request_revision": getattr(req, "revision", 0),
-        "rows": [{"key": row["key"], "value": str(row["qty"] or ""),
-                  "base_value": str(row["qty"] or "")} for row in rows],
+        "version": 1, "kind": "request", "request_id": retained_payload.request_id if retained_payload else (str(req.id) if req else None),
+        "request_revision": (retained_payload.request_revision if retained_payload else getattr(req, "revision", 0)),
+        "rows": [{"key": row["key"], "value": str(row["shown"] or ""),
+                  "base_value": row["base"]} for row in rows],
     }
     response = render(request, "backoffice/production_request.html", {
         "active": "production_request", "branches": branches, "branch": branch,
         "hide_dates": True, "day": day, "earliest": earliest, "is_open": is_open,
         "deadline": deadline, "req": req, "groups": production.group_by_category(rows),
         "total": total, "lines": sum(1 for row in rows if row["qty"]), "error": error,
-        "max_qty": MAX_QTY, "request_revision": getattr(req, "revision", 0),
+        "max_qty": MAX_QTY,
+        "request_revision": retained_payload.request_revision if retained_payload else getattr(req, "revision", 0),
+        "submitted_request_id": retained_payload.request_id if retained_payload else (str(req.id) if req else None),
         "payload_baseline": payload_baseline, "retained_readonly": retained_readonly,
         "conflict": status == 409, "reload_confirmation": reload_confirmation,
         "resave_blocked": resave_blocked,
@@ -373,6 +382,7 @@ def production_packing(request):
     reload_confirmation = False
     resave_blocked = False
     scope = None
+    retained_payload = None
     try:
         scope = _packing_scope(request, post=request.method == "POST")
         if request.method == "POST" and request.POST.get("confirm_reload") == "1":
@@ -402,7 +412,8 @@ def production_packing(request):
         posted = production_forms.submitted_draft(request, "packing")
         error = str(exc)
         status = 400
-        resave_blocked = not str(exc).startswith("Packed quantities must be whole numbers")
+        retained_payload = getattr(exc, "payload", None)
+        resave_blocked = not isinstance(exc, production_forms.QuantityValidationError)
         if scope is None:
             scope = _packing_scope(request)
     except getattr(production, "RevisionConflict", ()) as exc:
@@ -417,18 +428,22 @@ def production_packing(request):
         scope = _packing_scope(request, post=True)
 
     tables = _packing_presentation(scope)
+    retained_rows = {row["key"]: row for row in getattr(retained_payload, "rows", [])}
     for table in tables:
         for row in table["rows"]:
             for cell in row["cells"]:
                 if cell is not None:
                     cell.saved = "" if cell.packed_qty is None else cell.packed_qty
-                    cell.shown = posted.get(str(cell.id), cell.saved)
+                    baseline = retained_rows.get(str(cell.id), {})
+                    base_value = baseline["base_value"] if "base_value" in baseline else cell.saved
+                    cell.base = "" if base_value is None else str(base_value)
+                    cell.baseline_revision = baseline.get("revision", getattr(cell, "revision", 0))
+                    cell.shown = posted.get(str(cell.id), cell.base if retained_payload else cell.saved)
                     cell.conflict = conflicts.get(str(cell.id))
     payload_baseline = {
         "version": 1, "kind": "packing", "rows": [
-            {"key": str(cell.id), "value": "" if cell.packed_qty is None else str(cell.packed_qty),
-             "base_value": "" if cell.packed_qty is None else str(cell.packed_qty),
-             "revision": getattr(cell, "revision", 0)}
+            {"key": str(cell.id), "value": str(cell.shown),
+             "base_value": cell.base, "revision": cell.baseline_revision}
             for table in tables for row in table["rows"] for cell in row["cells"] if cell is not None
         ],
     }

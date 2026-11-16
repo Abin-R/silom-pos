@@ -143,6 +143,51 @@ class ProductionFormContextTests(TestCase):
         item.refresh_from_db()
         self.assertEqual(item.packed_qty, 0)
 
+    def test_compact_request_quantity_error_retains_the_original_revision(self):
+        request_row = production.save_request(self.branch, self.day, {str(self.product.id): 3}, self.user)
+        response = self.client.get(self.url)
+        old = response.context["payload_baseline"]
+        row = next(row for row in old["rows"] if row["key"] == f"item:{request_row.items.get().id}")
+        row.update(value="100000", base_value="3")
+        production.save_request(self.branch, self.day, {str(self.product.id): 4}, self.user)
+        invalid = self.client.post(self.url, {
+            "branch_id": str(self.branch.id), "delivery_date": self.day.isoformat(),
+            "production_payload": json.dumps(old),
+        })
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.context["request_revision"], old["request_revision"])
+        row["value"] = "5"
+        retry = self.client.post(self.url, {
+            "branch_id": str(self.branch.id), "delivery_date": self.day.isoformat(),
+            "production_payload": json.dumps(old),
+        })
+        self.assertEqual(retry.status_code, 409)
+
+    def test_compact_packing_quantity_error_retains_original_cell_revision(self):
+        request_row = production.save_request(self.branch, self.day, {str(self.product.id): 3}, self.user)
+        item = request_row.items.get()
+        packer = make_user(username="conflict-packer", email="conflict-packer@example.com", role="packer")
+        self.client.post(reverse("backoffice:logout"))
+        sign_in(self.client, packer)
+        url = reverse("backoffice:production_packing") + f"?date={self.day.isoformat()}"
+        old = self.client.get(url).context["payload_baseline"]
+        row = next(row for row in old["rows"] if row["key"] == str(item.id))
+        production.save_packed(self.day, {str(item.id): 4}, self.user)
+        row["value"] = "100000"
+        invalid = self.client.post(url, {
+            "delivery_date": self.day.isoformat(), "mode": "live", "category": "",
+            "production_payload": json.dumps(old),
+        })
+        self.assertEqual(invalid.status_code, 400)
+        error_row = next(row for row in invalid.context["payload_baseline"]["rows"] if row["key"] == str(item.id))
+        self.assertEqual(error_row["revision"], old["rows"][0]["revision"])
+        row["value"] = "5"
+        retry = self.client.post(url, {
+            "delivery_date": self.day.isoformat(), "mode": "live", "category": "",
+            "production_payload": json.dumps(old),
+        })
+        self.assertEqual(retry.status_code, 409)
+
     def test_request_small_fallback_accepts_900_rendered_input_names(self):
         Product.objects.bulk_create([
             Product(branch=self.branch, category=self.category, name=f"Cookie {number}")

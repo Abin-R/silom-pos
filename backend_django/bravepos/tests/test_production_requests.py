@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 from django.test import TestCase
 from django.urls import reverse
@@ -79,7 +80,7 @@ def post_production(client, url, changes):
             if item:
                 field = f"qty_item:{item.pk}"
         form.values[field] = value
-    return client.post(form.action or url, form.values)
+    return client.post(urljoin(url, form.action) if form.action else url, form.values)
 
 
 class Catalogue:
