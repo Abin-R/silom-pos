@@ -84,20 +84,35 @@ def _request_payload(request):
     count = production_forms.fallback_row_count(request, "qty_")
     if count > production_forms.MAX_FALLBACK_FIELDS:
         raise production_forms.PayloadError("This form is too large to save without JavaScript.")
-    request_id = request.POST.get("request_id") or None
     try:
-        revision = int(request.POST["request_revision"])
-    except (KeyError, TypeError, ValueError):
-        raise production_forms.PayloadError("This older form has no request revision. Reload before saving.")
+        baseline = json.loads(request.POST["request_baseline"])
+        if not isinstance(baseline, dict) or baseline.get("kind") != "request":
+            raise ValueError
+        request_id = baseline.get("request_id")
+        revision = baseline["request_revision"]
+        if not isinstance(revision, int) or revision < 0:
+            raise ValueError
+        bases = {row["key"]: row["base_value"] for row in baseline["rows"]
+                 if isinstance(row, dict) and isinstance(row.get("key"), str)}
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise production_forms.PayloadError("This older form has no request baseline. Reload before saving.")
     rows = []
+    quantity_error = None
     for field, raw in request.POST.items():
         if field.startswith("qty_"):
+            key = field[4:]
+            if key not in bases:
+                raise production_forms.PayloadError("The request baseline is incomplete. Reload before saving.")
             try:
                 value = _parse_qty(raw)
             except ValueError:
-                raise production_forms.PayloadError("Quantities must be whole numbers from 0 to 99,999.")
-            rows.append({"key": field[4:], "value": value, "base_value": None})
-    return production_forms.Payload("request", request_id, revision, rows)
+                quantity_error = "Quantities must be whole numbers from 0 to 99,999."
+                value = None
+            rows.append({"key": key, "value": value, "base_value": bases[key]})
+    payload = production_forms.Payload("request", request_id, revision, rows)
+    if quantity_error:
+        raise production_forms.QuantityValidationError(quantity_error, payload)
+    return payload
 
 
 def _packing_scope(request, *, post=False):
@@ -164,6 +179,7 @@ def _packing_payload(request):
         baseline = {row.get("key"): {"value": row.get("base_value"), "revision": row.get("revision")}
                     for row in baseline["rows"] if isinstance(row, dict)}
     rows = []
+    quantity_error = None
     for field, raw in request.POST.items():
         if field.startswith("packed_"):
             key = field[7:]
@@ -173,14 +189,21 @@ def _packing_payload(request):
             try:
                 value = _parse_qty(raw)
             except ValueError:
-                raise production_forms.PayloadError("Packed quantities must be whole numbers from 0 to 99,999.")
+                quantity_error = "Quantities must be whole numbers from 0 to 99,999."
+                value = None
             try:
                 base_value = _parse_qty(base.get("value"))
             except (AttributeError, ValueError):
                 raise production_forms.PayloadError("The packing baseline is invalid.")
+            revision = base.get("revision")
+            if not isinstance(revision, int) or revision < 0:
+                raise production_forms.PayloadError("The packing baseline is invalid.")
             rows.append({"key": key, "value": value,
-                         "base_value": base_value, "revision": base.get("revision")})
-    return production_forms.Payload("packing", None, None, rows)
+                         "base_value": base_value, "revision": revision})
+    payload = production_forms.Payload("packing", None, None, rows)
+    if quantity_error:
+        raise production_forms.QuantityValidationError(quantity_error, payload)
+    return payload
 
 
 def _request_rows_context(branch, day, posted, conflicts, baseline_rows=None):
@@ -292,7 +315,9 @@ def production_request(request):
         "max_qty": MAX_QTY,
         "request_revision": retained_payload.request_revision if retained_payload else getattr(req, "revision", 0),
         "submitted_request_id": retained_payload.request_id if retained_payload else (str(req.id) if req else None),
-        "payload_baseline": payload_baseline, "retained_readonly": retained_readonly,
+        "payload_baseline": payload_baseline,
+        "payload_baseline_json": json.dumps(payload_baseline, separators=(",", ":")),
+        "retained_readonly": retained_readonly,
         "conflict": status == 409, "reload_confirmation": reload_confirmation,
         "resave_blocked": resave_blocked,
         "compact_required": sum(not row.get("unavailable", False) for row in rows) > production_forms.MAX_FALLBACK_FIELDS,
@@ -452,6 +477,13 @@ def production_packing(request):
         {"key": key, "value": value}
         for key, value in posted.items() if key not in known_keys
     ]
+    canonical_packing_url = "?" + urlencode({
+        key: value for key, value in (
+            ("date", scope["day"].isoformat()),
+            ("view", "packed" if scope["view"] == "packed" else ""),
+            ("category", scope["raw_category"]),
+        ) if value
+    })
     response = render(request, "backoffice/production_packing.html", {
         "active": "production_packing", "hide_branch": True, "hide_dates": True, **scope,
         "categories": [{"name": category or production.UNCATEGORISED, "param": category or NONE_PARAM}
@@ -460,6 +492,7 @@ def production_packing(request):
         "resave_blocked": resave_blocked,
         "compact_required": len(payload_baseline["rows"]) > production_forms.MAX_FALLBACK_FIELDS,
         "unknown_rows": unknown_rows,
+        "canonical_packing_url": canonical_packing_url,
         "payload_baseline": payload_baseline, "payload_baseline_json": json.dumps(payload_baseline, separators=(",", ":")),
         "export_qs": urlencode({key: value for key, value in (
             ("date", scope["day"].isoformat()), ("category", scope["raw_category"]),

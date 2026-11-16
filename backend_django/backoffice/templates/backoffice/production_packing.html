@@ -179,12 +179,12 @@ Your complete draft remains below. Reloading saved quantities discards it only a
 {% endif %}
 </span>
 {% if reload_confirmation %}
-<form method="post" action="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}">
+<form method="post" action="{{ canonical_packing_url }}">
 {% csrf_token %}<input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}"><input type="hidden" name="mode" value="{{ view }}"><input type="hidden" name="category" value="{{ raw_category }}">
 <button class="btn btn-sm" type="submit" name="confirm_reload" value="1">Reload saved quantities</button>
 </form>
 {% else %}
-<button class="btn btn-sm" type="submit" form="pkForm" name="reload_saved" value="1" data-reload-saved data-url="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}">Reload saved quantities</button>
+<button class="btn btn-sm" type="submit" form="pkForm" name="reload_saved" value="1" data-reload-saved data-url="{{ canonical_packing_url }}">Reload saved quantities</button>
 {% endif %}
 </div>
 {% endif %}
@@ -223,7 +223,7 @@ Nothing was packed for {{ day|date:"D d M Y" }}
 </div>
 </div>
 {% else %}
-<form method="post" action="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}" enctype="multipart/form-data" id="pkForm" data-form-kind="packing">
+<form method="post" action="{{ canonical_packing_url }}" enctype="multipart/form-data" id="pkForm" data-form-kind="packing">
 {% csrf_token %}
 <input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
 <input type="hidden" name="mode" value="{{ view }}">

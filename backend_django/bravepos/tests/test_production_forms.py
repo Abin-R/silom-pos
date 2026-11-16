@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
@@ -163,6 +164,18 @@ class ProductionFormContextTests(TestCase):
         })
         self.assertEqual(retry.status_code, 409)
 
+    def test_fallback_request_quantity_error_retains_original_revision(self):
+        request_row = production.save_request(self.branch, self.day, {str(self.product.id): 3}, self.user)
+        baseline = self.client.get(self.url).context["payload_baseline"]
+        key = f"item:{request_row.items.get().id}"
+        data = {"branch_id": str(self.branch.id), "delivery_date": self.day.isoformat(),
+                "request_id": str(request_row.id), "request_revision": str(request_row.revision),
+                "request_baseline": json.dumps(baseline), f"qty_{key}": "bad"}
+        production.save_request(self.branch, self.day, {str(self.product.id): 4}, self.user)
+        self.assertEqual(self.client.post(self.url, data).status_code, 400)
+        data[f"qty_{key}"] = "5"
+        self.assertEqual(self.client.post(self.url, data).status_code, 409)
+
     def test_compact_packing_quantity_error_retains_original_cell_revision(self):
         request_row = production.save_request(self.branch, self.day, {str(self.product.id): 3}, self.user)
         item = request_row.items.get()
@@ -188,6 +201,46 @@ class ProductionFormContextTests(TestCase):
         })
         self.assertEqual(retry.status_code, 409)
 
+    def test_fallback_packing_quantity_error_retains_original_revision(self):
+        request_row = production.save_request(self.branch, self.day, {str(self.product.id): 3}, self.user)
+        item = request_row.items.get()
+        packer = make_user(username="fallback-packer", email="fallback-packer@example.com", role="packer")
+        self.client.post(reverse("backoffice:logout")); sign_in(self.client, packer)
+        url = reverse("backoffice:production_packing") + f"?date={self.day.isoformat()}"
+        baseline = self.client.get(url).context["payload_baseline"]
+        data = {"delivery_date": self.day.isoformat(), "mode": "live", "category": "",
+                "packing_baseline": json.dumps(baseline), f"packed_{item.id}": "bad"}
+        production.save_packed(self.day, {str(item.id): 4}, self.user)
+        self.assertEqual(self.client.post(url, data).status_code, 400)
+        data[f"packed_{item.id}"] = "5"
+        self.assertEqual(self.client.post(url, data).status_code, 409)
+
+    def test_packing_special_category_uses_encoded_canonical_scope_urls(self):
+        category = Category.objects.create(branch=self.branch, name="Cookies & Cakes")
+        product = Product.objects.create(branch=self.branch, category=category, name="Hash cookie")
+        request_row = production.save_request(self.branch, self.day, {str(product.id): 2}, self.user)
+        packer = make_user(username="encoded-packer", email="encoded-packer@example.com", role="packer")
+        self.client.post(reverse("backoffice:logout"))
+        sign_in(self.client, packer)
+        url = reverse("backoffice:production_packing") + "?" + urlencode({
+            "date": self.day.isoformat(), "category": category.name,
+        })
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("category=Cookies+%26+Cakes", response.context["canonical_packing_url"])
+        baseline = response.context["payload_baseline"]
+        row = next(row for row in baseline["rows"] if row["key"] == str(request_row.items.get().id))
+        row["value"] = "0"
+        saved = self.client.post(url, {
+            "delivery_date": self.day.isoformat(), "mode": "live", "category": category.name,
+            "production_payload": json.dumps(baseline),
+        })
+        self.assertEqual(saved.status_code, 302)
+        export = self.client.get(reverse("backoffice:production_packing_export") + "?" + urlencode({
+            "date": self.day.isoformat(), "category": category.name,
+        }))
+        self.assertIn(product.name, export.content.decode("utf-8-sig"))
+
     def test_request_small_fallback_accepts_900_rendered_input_names(self):
         Product.objects.bulk_create([
             Product(branch=self.branch, category=self.category, name=f"Cookie {number}")
@@ -203,6 +256,7 @@ class ProductionFormContextTests(TestCase):
             "delivery_date": self.day.isoformat(),
             "request_id": "",
             "request_revision": "0",
+            "request_baseline": json.dumps(baseline),
         }
         data.update({f"qty_{row['key']}": "" for row in baseline["rows"]})
         response = self.client.post(self.url, data)
@@ -281,7 +335,7 @@ for (const [filename, prefix] of [
   }
   restoreLegacyInputs();
   const restoredNames = boxes.concat([payload, baseline]).filter((field) => !field.disabled).map((field) => field.name);
-  const expectedRestored = filename === 'production_packing.html' ? 1004 : 1003;
+  const expectedRestored = 1004;
   if (restoredNames.length !== expectedRestored || restoredNames.filter((name) => name.startsWith(prefix)).length !== 1003) {
     throw Error(filename + ' does not restore legacy quantity fields');
   }

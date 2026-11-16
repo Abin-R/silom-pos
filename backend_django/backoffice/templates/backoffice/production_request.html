@@ -133,6 +133,7 @@ This request can no longer be changed.
 <input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
 <input type="hidden" name="request_id" value="{{ submitted_request_id|default:'' }}">
 <input type="hidden" name="request_revision" value="{{ request_revision }}">
+<input type="hidden" name="request_baseline" id="prBaseline" value="{{ payload_baseline_json }}">
 <input type="hidden" name="production_payload" id="prPayload" disabled>
 <div class="panel-h">
 Products
@@ -251,6 +252,7 @@ This form has more than 900 editable rows and needs JavaScript to save safely.
   var noMatch = document.getElementById('prNoMatch');
   var saves = [].slice.call(document.querySelectorAll('[data-compact-save]'));
   var payload = document.getElementById('prPayload');
+  var baseline = document.getElementById('prBaseline');
   var capacity = document.getElementById('prCapacity');
   var saved = boxes.map(function (box) { return box.dataset.base; });
   var retainedDraft = form.dataset.retainedDraft === 'true';
@@ -298,6 +300,7 @@ This form has more than 900 editable rows and needs JavaScript to save safely.
 
   function restoreLegacyInputs() {
     boxes.forEach(function (box) { box.disabled = false; });
+    baseline.disabled = false;
     payload.disabled = true;
     payload.value = '';
   }
@@ -306,6 +309,7 @@ This form has more than 900 editable rows and needs JavaScript to save safely.
     compact();
     payload.disabled = false;
     boxes.forEach(function (box) { box.disabled = true; });
+    baseline.disabled = true;
   }
 
   function validateCapacity() {
