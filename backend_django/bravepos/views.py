@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
+from . import audit, crm, discounts, gateways, grab_sync, images, loyalty, permissions, sale_windows, selforder
 from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
 from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
@@ -623,6 +623,76 @@ def shopster_create_product(request):
     body = ProductSerializer(product).data
     body['sale_windows'] = SaleWindowSerializer(product.sale_windows.all(), many=True).data
     return Response(body, status=201)
+
+
+def _grab_branch_or_response(request, merchant_id):
+    """``(branch, None)``, or ``(None, Response)`` for the 404."""
+    branch = grab_sync.find_branch(merchant_id)
+    if branch is None:
+        return None, Response(
+            {'detail': 'No active branch has that Grab merchant ID.'}, status=404)
+    return branch, None
+
+
+@api_view(['POST'])
+def grab_apply_order(request):
+    """Take a Grab order's items out of a branch's stock, once per Grab order ID.
+
+    Called by the Grab stock poller, not by a person: no session, an
+    ``X-API-Key`` header instead.  See ``bravepos.grab_sync`` for the rules.
+    """
+    denied = grab_sync.check_api_key(request)
+    if denied:
+        return denied
+    try:
+        order = grab_sync.parse_order(request.data)
+        items = grab_sync.parse_items(request.data.get('items'))
+    except grab_sync.BadRequest as e:
+        return Response({'detail': str(e)}, status=400)
+    branch, missing = _grab_branch_or_response(request, order['merchant_id'])
+    if missing:
+        return missing
+    grab_sync.mark_audit_source(request)
+    return Response(grab_sync.apply_order(
+        branch, order['order_id'], order['display_id'], items,
+        dry_run=order['dry_run'],
+    ))
+
+
+@api_view(['POST'])
+def grab_restore_order(request):
+    """Put a cancelled Grab order's stock back, once.  Same key as apply."""
+    denied = grab_sync.check_api_key(request)
+    if denied:
+        return denied
+    try:
+        order = grab_sync.parse_order(request.data)
+    except grab_sync.BadRequest as e:
+        return Response({'detail': str(e)}, status=400)
+    branch, missing = _grab_branch_or_response(request, order['merchant_id'])
+    if missing:
+        return missing
+    grab_sync.mark_audit_source(request)
+    return Response(grab_sync.restore_order(
+        branch, order['order_id'], order['display_id'], order['reason'],
+        dry_run=order['dry_run'],
+    ))
+
+
+@api_view(['GET'])
+def grab_stock(request):
+    """The branch's active, barcoded products and their stock, for the poller."""
+    denied = grab_sync.check_api_key(request)
+    if denied:
+        return denied
+    try:
+        merchant_id = grab_sync.parse_merchant_id(request.query_params.get('merchant_id'))
+    except grab_sync.BadRequest as e:
+        return Response({'detail': str(e)}, status=400)
+    branch, missing = _grab_branch_or_response(request, merchant_id)
+    if missing:
+        return missing
+    return Response(grab_sync.stock_for_branch(branch))
 
 
 class CustomerViewSet(TillPermissionMixin, SessionRequiredMixin, viewsets.ModelViewSet):

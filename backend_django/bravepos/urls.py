@@ -49,6 +49,11 @@ urlpatterns = [
     # Product creation from Shopster — no session; the body names the branch.
     path('shopster/create-product/', views.shopster_create_product),
 
+    # Grab stock sync — called by the poller with an X-API-Key, no session.
+    path('grab/orders/apply', views.grab_apply_order),
+    path('grab/orders/restore', views.grab_restore_order),
+    path('grab/stock', views.grab_stock),
+
     # Settings — single document, GET + PUT.
     path('settings', views.settings_view),
 

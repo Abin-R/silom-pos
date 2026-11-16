@@ -215,6 +215,10 @@ class Branch(models.Model):
     phone = models.CharField(max_length=32, blank=True, default="")
     tax_id = models.CharField(max_length=64, blank=True, default="")
     pos_id = models.CharField(max_length=64, blank=True, default="")
+    # The merchant ID this branch's Grab outlet goes by (e.g. "3-C2M2RUXENZCZGT").
+    # The Grab stock sync finds the branch from it; blank means the branch is
+    # not synced, which is also the per-branch off switch.
+    grab_merchant_id = models.CharField(max_length=32, blank=True, default="")
     logo_url = models.TextField(blank=True, default="")
     open_time = models.CharField(max_length=8, default="09:00")
     close_time = models.CharField(max_length=8, default="22:00")
@@ -325,6 +329,14 @@ class Branch(models.Model):
                 fields=["pos_id"],
                 condition=~models.Q(pos_id=""),
                 name="branch_pos_id_unique_when_set",
+            ),
+            # One Grab outlet is one POS branch, or a Grab order could be taken
+            # off the wrong branch's shelf.  Blank is exempt: most branches are
+            # not on Grab.
+            models.UniqueConstraint(
+                fields=["grab_merchant_id"],
+                condition=~models.Q(grab_merchant_id=""),
+                name="branch_grab_merchant_id_unique_when_set",
             ),
             # One CRM shop is one POS branch.  Null is exempt and is where a
             # branch starts: not every branch has to be linked, and the ones

@@ -6278,6 +6278,14 @@ def branch_errors(b: Branch) -> list[str]:
                 "Every branch needs its own Revenue Department machine number — "
                 "check the number for this branch, or clear it on the other one first."
             )
+    if b.grab_merchant_id:
+        clash = Branch.objects.filter(grab_merchant_id=b.grab_merchant_id).exclude(pk=b.pk).first()
+        if clash:
+            errors.append(
+                f'Grab merchant ID "{b.grab_merchant_id}" already belongs to {clash.name}. '
+                "One Grab outlet is one branch — check the ID for this branch, "
+                "or clear it on the other one first."
+            )
     return errors
 
 
@@ -6465,6 +6473,7 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.code = (post.get("code") or "").strip()
     b.tax_id = (post.get("tax_id") or "").strip()
     b.pos_id = (post.get("pos_id") or "").strip()
+    b.grab_merchant_id = (post.get("grab_merchant_id") or "").strip().upper()
     b.address = (post.get("address") or "").strip()
     b.phone = (post.get("phone") or "").strip()
     b.logo_url = (post.get("logo_url") or "").strip()

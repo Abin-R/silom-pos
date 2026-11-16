@@ -86,6 +86,12 @@
           can't issue a full tax invoice yet, so the till stops offering one.</span>
       </div>
       <div class="field">
+        <label for="f-grabid">Grab merchant ID</label>
+        <input id="f-grabid" type="text" name="grab_merchant_id" value="{{ branch_obj.grab_merchant_id }}">
+        <span class="hint">This branch's Grab merchant ID, used to sync stock with Grab —
+          one ID per branch, never shared. Blank means this branch is not synced.</span>
+      </div>
+      <div class="field">
         <label for="f-phone">Phone</label>
         <input id="f-phone" type="text" name="phone" value="{{ branch_obj.phone }}"
                placeholder="Blank inherits the shop phone">
