@@ -35,6 +35,13 @@
   </div>
   {% endif %}
 
+  {% if cutoff_error %}
+  <div class="banner b-red" role="alert">
+    <svg><use href="#i-alert"/></svg>
+    <span><b>Nothing was saved.</b> {{ cutoff_error }}</span>
+  </div>
+  {% endif %}
+
   <div class="cols c-2e" style="align-items:start">
 
     {# ── Business ─────────────────────────────────────────────────────── #}
@@ -71,10 +78,11 @@
           <label for="f-cutoff">Production request cut-off</label>
           {% if can_edit_cutoff %}
           <input id="f-cutoff" type="time" name="production_cutoff" value="{{ settings.production_cutoff|time:'H:i' }}">
+          <input type="hidden" name="production_cutoff_baseline" value="{{ settings.production_cutoff|time:'H:i' }}">
           {% else %}
           <b id="f-cutoff" class="money">{{ settings.production_cutoff|time:"H:i" }}</b>
           {% endif %}
-          <span class="hint">On the day before delivery. After this time nobody, admins included, can change that day's production requests. Only admins can change the time.</span>
+          <span class="hint">On the day before delivery. Changes apply only to delivery dates that are still open; closed dates never reopen. Only admins can change the time.</span>
         </div>
       </div>
     </div>

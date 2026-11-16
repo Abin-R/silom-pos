@@ -1,23 +1,8 @@
-"""Backoffice pages for production requests — the rules live in
-``bravepos.production``; this module is only the request/response side.
-
-Four screens, one per person:
-
-* **Request production** (stock supervisor) — a branch, a delivery date and
-  one number box per product, grouped by category.
-* **My requests** (stock supervisor) — what has been asked for, at every
-  branch, and whether it can still be changed.
-* **Kitchen totals** (viewer, read only) — every branch added up, per product.
-* **Packing** (packer) — a grid per category, branches down the side and
-  products across: what was requested, then a box per product for what was
-  packed.
-
-Who may open which is decided by ``backoffice.middleware`` (the role
-allowlists), like every other limited role, not here.
-"""
+"""Backoffice request/response handling for production workflows."""
 from __future__ import annotations
 
-import uuid
+import datetime
+import json
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -31,185 +16,320 @@ from django.utils import timezone
 from bravepos import production
 from bravepos.models import ProductionRequest
 
+from . import production_forms
 from .views import _csv_response, _parse_date, _select_branch
 
-# Larger than any real order, small enough that a slipped finger (an extra
-# three zeros) is refused rather than sent to the kitchen.
 MAX_QTY = 99999
-
-# How far back My requests reaches.
 HISTORY_DAYS = 60
-
-# The query value standing for "products with no group / category", which
-# are stored as "" and so cannot be told apart from "no filter" in a URL.
 NONE_PARAM = "_none"
 
 
 def _parse_qty(raw):
-    """A whole number from a box, None when it is blank.  Raises ValueError
-    for anything else — decimals, negatives, text, or more than MAX_QTY."""
     raw = (raw or "").strip()
     if raw == "":
         return None
-    if not raw.isdigit():
+    if not raw.isdigit() or int(raw) > MAX_QTY:
         raise ValueError(raw)
-    value = int(raw)
-    if value > MAX_QTY:
-        raise ValueError(raw)
-    return value
+    return int(raw)
 
 
-def _when(dt) -> str:
+def _when(dt):
     return timezone.localtime(dt).strftime("%a %d %b %H:%M")
 
 
-def _day(d) -> str:
-    return d.strftime("%a %d %b %Y")
+def _day(day):
+    return day.strftime("%a %d %b %Y")
 
 
 def _filter_param(raw):
-    """``?group=`` / ``?category=`` → None (everything), "" (none) or a name."""
     if not raw:
         return None
     return "" if raw == NONE_PARAM else raw
 
 
-# ── Request production ──────────────────────────────────────────────────────
+def _strict_day(raw):
+    if not isinstance(raw, str) or not raw:
+        raise production_forms.PayloadError("Delivery date is required for this save.")
+    try:
+        return datetime.date.fromisoformat(raw)
+    except ValueError:
+        raise production_forms.PayloadError("Delivery date must use YYYY-MM-DD.")
+
+
+def _same_query_scope(request, key, value):
+    supplied = request.GET.get(key)
+    if supplied is not None and supplied != value:
+        raise production_forms.PayloadError("The submitted form scope does not match this page. Reload before saving.")
+
+
+def _request_scope(request, branches):
+    branch_id = request.POST.get("branch_id")
+    day_text = request.POST.get("delivery_date")
+    if not branch_id:
+        raise production_forms.PayloadError("Branch is required for this save.")
+    branch = next((row for row in branches if str(row.id) == branch_id), None)
+    if branch is None:
+        raise production_forms.PayloadError("That branch is no longer active. Nothing was saved.")
+    day = _strict_day(day_text)
+    _same_query_scope(request, "branch", branch_id)
+    _same_query_scope(request, "date", day_text)
+    return branch, day
+
+
+def _request_payload(request):
+    if request.POST.get("production_payload"):
+        return production_forms.parse_payload(request, "request")
+    count = production_forms.fallback_row_count(request, "qty_")
+    if count > production_forms.MAX_FALLBACK_FIELDS:
+        raise production_forms.PayloadError("This form is too large to save without JavaScript.")
+    request_id = request.POST.get("request_id") or None
+    try:
+        revision = int(request.POST["request_revision"])
+    except (KeyError, TypeError, ValueError):
+        raise production_forms.PayloadError("This older form has no request revision. Reload before saving.")
+    rows = []
+    for field, raw in request.POST.items():
+        if field.startswith("qty_"):
+            try:
+                value = _parse_qty(raw)
+            except ValueError:
+                raise production_forms.PayloadError("Quantities must be whole numbers from 0 to 99,999.")
+            rows.append({"key": field[4:], "value": value, "base_value": None})
+    return production_forms.Payload("request", request_id, revision, rows)
+
+
+def _packing_scope(request, *, post=False):
+    now = timezone.now()
+    view = "packed" if request.GET.get("view") == "packed" else "live"
+    dates = production.packed_dates() if view == "packed" else []
+    default = dates[0] if dates else production.latest_locked_date(now)
+    day = _parse_date(request.GET.get("date"), default)
+    raw_category = request.GET.get("category") or ""
+    if post:
+        mode = request.POST.get("mode")
+        raw_day = request.POST.get("delivery_date")
+        raw_category = request.POST.get("category", "")
+        if mode not in {"live", "packed"}:
+            raise production_forms.PayloadError("Packing mode is required for this save.")
+        if mode != view:
+            raise production_forms.PayloadError("The submitted packing mode does not match this page.")
+        day = _strict_day(raw_day)
+        _same_query_scope(request, "date", raw_day)
+        query_view = request.GET.get("view")
+        if query_view is not None and ((query_view == "packed") != (mode == "packed")):
+            raise production_forms.PayloadError("The submitted packing mode does not match this page.")
+        _same_query_scope(request, "category", raw_category)
+    categories = production.packing_categories(day)
+    category = _filter_param(raw_category)
+    category_reset = category is not None and category not in categories
+    if category_reset:
+        category = None
+        raw_category = ""
+    return {
+        "view": view, "dates": dates, "day": day, "raw_category": raw_category,
+        "category": category, "categories": categories, "category_reset": category_reset,
+        "deadline": production.locks_at(day), "is_open": production.is_open(day, now),
+    }
+
+
+def _packing_presentation(scope):
+    tables = production.packing_tables(scope["day"], scope["category"])
+    if scope["view"] == "packed":
+        tables = [{**table, "rows": [row for row in table["rows"] if row["any_packed"]]}
+                  for table in tables]
+        tables = [table for table in tables if table["rows"]]
+    return tables
+
+
+def _packing_payload(request):
+    if request.POST.get("production_payload"):
+        return production_forms.parse_payload(request, "packing")
+    count = production_forms.fallback_row_count(request, "packed_")
+    if count > production_forms.MAX_FALLBACK_FIELDS:
+        raise production_forms.PayloadError("This grid is too large to save without JavaScript.")
+    # The small fallback carries one JSON revision/baseline map, avoiding one
+    # hidden field per cell while remaining well below Django's field limit.
+    try:
+        import json
+        baseline = json.loads(request.POST["packing_baseline"])
+    except (KeyError, TypeError, ValueError):
+        raise production_forms.PayloadError("This older form has no packing baseline. Reload before saving.")
+    if not isinstance(baseline, dict):
+        raise production_forms.PayloadError("The packing baseline is invalid.")
+    if isinstance(baseline.get("rows"), list):
+        baseline = {row.get("key"): {"value": row.get("base_value"), "revision": row.get("revision")}
+                    for row in baseline["rows"] if isinstance(row, dict)}
+    rows = []
+    for field, raw in request.POST.items():
+        if field.startswith("packed_"):
+            key = field[7:]
+            base = baseline.get(key)
+            if not isinstance(base, dict):
+                raise production_forms.PayloadError("The packing baseline is incomplete. Reload before saving.")
+            try:
+                value = _parse_qty(raw)
+            except ValueError:
+                raise production_forms.PayloadError("Packed quantities must be whole numbers from 0 to 99,999.")
+            try:
+                base_value = _parse_qty(base.get("value"))
+            except (AttributeError, ValueError):
+                raise production_forms.PayloadError("The packing baseline is invalid.")
+            rows.append({"key": key, "value": value,
+                         "base_value": base_value, "revision": base.get("revision")})
+    return production_forms.Payload("packing", None, None, rows)
+
+
+def _request_rows_context(branch, day, posted, conflicts):
+    req = (ProductionRequest.objects.filter(branch=branch, delivery_date=day)
+           .prefetch_related("items").first())
+    rows = production.request_form_rows(branch, req)
+    known = {row["key"] for row in rows}
+    for row in rows:
+        row["saved"] = row["qty"]
+        row["shown"] = posted.get(row["key"], row["qty"] or "")
+        row["conflict"] = conflicts.get(row["key"])
+    unknown_rows = [{"key": key, "value": value} for key, value in posted.items() if key not in known]
+    return req, rows, unknown_rows
+
+
 @login_required
 def production_request(request):
     branches = production.active_branches()
     branch = _select_branch(request, branches)
     now = timezone.now()
-    cutoff = production.cutoff_time()
-    earliest = production.earliest_open_date(now, cutoff)
+    earliest = production.earliest_open_date(now)
     day = _parse_date(request.GET.get("date"), earliest)
-    deadline = production.locks_at(day, cutoff)
-    is_open = now < deadline
-    here = reverse("backoffice:production_request") + "?" + urlencode(
-        {"branch": str(branch.id) if branch else "", "date": day.isoformat()})
-
     error = None
-    posted = {}
-    if request.method == "POST" and branch is not None:
-        wanted, bad = {}, False
-        for field, raw in request.POST.items():
-            if not field.startswith("qty_"):
-                continue
-            key = field[4:]
-            posted[key] = raw
-            try:
-                wanted[key] = _parse_qty(raw) or 0
-            except ValueError:
-                bad = True
-        if bad:
-            error = f"Quantities must be whole numbers from 0 to {MAX_QTY:,}. Nothing was saved."
-        else:
-            try:
-                saved = production.save_request(branch, day, wanted, request.user, now)
-            except production.RequestLocked:
-                error = (f"Requests for {_day(day)} closed at {_when(deadline)}. "
-                         f"Nothing was saved.")
-            else:
-                if saved is None:
-                    messages.success(request, f"{branch.name} has nothing requested for {_day(day)}.")
-                else:
-                    items = list(saved.items.filter(requested_qty__gt=0))
-                    pieces = sum(it.requested_qty for it in items)
-                    messages.success(request, (
-                        f"Saved. {branch.name} asks for {pieces:,} piece{'' if pieces == 1 else 's'} "
-                        f"({len(items)} product{'' if len(items) == 1 else 's'}) on {_day(day)}. "
-                        f"You can change it until {_when(deadline)}."))
-                return redirect(here)
+    posted, conflicts, unknown_rows = {}, {}, []
+    status = 200
+    retained_readonly = False
+    reload_confirmation = False
+    resave_blocked = False
 
-    req = None
-    if branch is not None:
-        req = (ProductionRequest.objects.filter(branch=branch, delivery_date=day)
-               .prefetch_related("items").first())
-    rows = production.request_form_rows(branch, req) if branch is not None else []
-    for r in rows:
-        r["shown"] = posted.get(r["key"], r["qty"] or "")
-    total = sum(r["qty"] for r in rows)
-    return render(request, "backoffice/production_request.html", {
-        "active": "production_request",
-        "branches": branches,
-        "branch": branch,
-        "hide_dates": True,
-        "day": day,
-        "earliest": earliest,
-        "is_open": is_open,
-        "deadline": deadline,
-        "req": req,
-        "groups": production.group_by_category(rows),
-        "total": total,
-        "lines": sum(1 for r in rows if r["qty"]),
-        "error": error,
-        "max_qty": MAX_QTY,
-    })
+    if request.method == "POST" and request.POST.get("confirm_reload") == "1":
+        try:
+            branch, day = _request_scope(request, branches)
+        except production_forms.PayloadError as exc:
+            error, status = str(exc), 400
+        else:
+            return redirect(reverse("backoffice:production_request") + "?" + urlencode({
+                "branch": str(branch.id), "date": day.isoformat()}))
+    if request.method == "POST" and request.POST.get("reload_saved") == "1":
+        try:
+            branch, day = _request_scope(request, branches)
+            posted = {field[4:]: raw for field, raw in request.POST.items() if field.startswith("qty_")}
+            reload_confirmation = True
+        except production_forms.PayloadError as exc:
+            error, status = str(exc), 400
+    elif request.method == "POST":
+        try:
+            branch, day = _request_scope(request, branches)
+            payload = _request_payload(request)
+            posted = {row["key"]: "" if row["value"] is None else str(row["value"])
+                      for row in payload.rows}
+            wanted = {row["key"]: row["value"] or 0 for row in payload.rows}
+            saved = production.save_request(
+                branch, day, wanted, request.user,
+                expected_request_id=payload.request_id,
+                expected_revision=payload.request_revision,
+                strict=True,
+            )
+        except production_forms.PayloadError as exc:
+            posted = production_forms.submitted_draft(request, "request")
+            error = f"{exc} Nothing was saved."
+            status = 400
+            resave_blocked = True
+        except production.RequestLocked:
+            error = f"Requests for {_day(day)} are closed. Nothing was saved."
+            retained_readonly = True
+        except getattr(production, "RevisionConflict", ()) as exc:
+            error = f"Nothing was saved: this request changed in another session. Review the saved quantities before reloading."
+            conflicts = getattr(exc, "conflicts", {}) or {}
+            status = 409
+        except getattr(production, "CatalogueConflict", ()) as exc:
+            error = f"{exc} Nothing was saved."
+            status = 409
+            resave_blocked = True
+        except getattr(production, "InvalidRows", ()) as exc:
+            error = f"{exc} Nothing was saved."
+            status = 409
+            resave_blocked = True
+        else:
+            pieces = sum(item.requested_qty for item in saved.items.all()) if saved else 0
+            messages.success(request, f"Saved {branch.name}'s request for {_day(day)} ({pieces:,} pieces).")
+            return redirect(reverse("backoffice:production_request") + "?" + urlencode({
+                "branch": str(branch.id), "date": day.isoformat()}))
+
+    deadline = production.locks_at(day)
+    is_open = production.is_open(day)
+    req, rows, unknown_rows = _request_rows_context(branch, day, posted, conflicts) if branch else (None, [], [])
+    total = sum(int(row["shown"] or 0) for row in rows if str(row["shown"] or "").isdigit())
+    payload_baseline = {
+        "version": 1, "kind": "request", "request_id": str(req.id) if req else None,
+        "request_revision": getattr(req, "revision", 0),
+        "rows": [{"key": row["key"], "value": str(row["qty"] or ""),
+                  "base_value": str(row["qty"] or "")} for row in rows],
+    }
+    response = render(request, "backoffice/production_request.html", {
+        "active": "production_request", "branches": branches, "branch": branch,
+        "hide_dates": True, "day": day, "earliest": earliest, "is_open": is_open,
+        "deadline": deadline, "req": req, "groups": production.group_by_category(rows),
+        "total": total, "lines": sum(1 for row in rows if row["qty"]), "error": error,
+        "max_qty": MAX_QTY, "request_revision": getattr(req, "revision", 0),
+        "payload_baseline": payload_baseline, "retained_readonly": retained_readonly,
+        "conflict": status == 409, "reload_confirmation": reload_confirmation,
+        "resave_blocked": resave_blocked,
+        "compact_required": sum(not row.get("unavailable", False) for row in rows) > production_forms.MAX_FALLBACK_FIELDS,
+        "deadline_legacy": getattr(production, "deadline_provenance", lambda value: "admin_change")(day) == "legacy_baseline",
+        "unknown_rows": unknown_rows,
+    }, status=status)
+    return response
 
 
 @login_required
 def production_requests(request):
     branches = production.active_branches()
     now = timezone.now()
-    cutoff = production.cutoff_time()
     since = timezone.localdate(now) - timedelta(days=HISTORY_DAYS)
-    qs = (ProductionRequest.objects
-          .filter(branch__in=branches, delivery_date__gte=since)
-          .select_related("branch").prefetch_related("items")
-          .order_by("-delivery_date", "branch__name"))
-    page_obj = Paginator(qs, 50).get_page(request.GET.get("page"))
+    qs = (ProductionRequest.objects.filter(branch__in=branches, delivery_date__gte=since)
+          .select_related("branch").prefetch_related("items").order_by("-delivery_date", "branch__name"))
+    visible = []
+    for request_row in qs:
+        items = [item for item in request_row.items.all() if item.requested_qty]
+        # Retained empty parents are version tombstones, not normal history.
+        if items:
+            visible.append((request_row, items))
+    page_obj = Paginator(visible, 50).get_page(request.GET.get("page"))
     rows = []
-    for r in page_obj.object_list:
-        items = [it for it in r.items.all() if it.requested_qty]
-        summary = ", ".join(f"{it.product_name} ×{it.requested_qty}" for it in items[:2])
+    for row, items in page_obj.object_list:
+        summary = ", ".join(f"{item.product_name} ×{item.requested_qty}" for item in items[:2])
         if len(items) > 2:
             summary += f" +{len(items) - 2} more"
-        rows.append({
-            "req": r,
-            "summary": summary,
-            "pieces": sum(it.requested_qty for it in items),
-            "products": len(items),
-            "status": production.request_status(r, now, cutoff),
-        })
+        rows.append({"req": row, "summary": summary, "pieces": sum(item.requested_qty for item in items),
+                     "products": len(items), "status": production.request_status(row, now)})
     return render(request, "backoffice/production_requests.html", {
-        "active": "production_requests",
-        "hide_branch": True,
-        "hide_dates": True,
-        "rows": rows,
-        "page_obj": page_obj,
-        "paginator": page_obj.paginator,
-        "since": since,
-        "qs": "",
+        "active": "production_requests", "hide_branch": True, "hide_dates": True, "rows": rows,
+        "page_obj": page_obj, "paginator": page_obj.paginator, "since": since, "qs": "",
     })
 
 
-# ── Kitchen totals ──────────────────────────────────────────────────────────
 def _kitchen_scope(request):
     now = timezone.now()
-    cutoff = production.cutoff_time()
-    day = _parse_date(request.GET.get("date"), production.latest_locked_date(now, cutoff))
+    day = _parse_date(request.GET.get("date"), production.latest_locked_date(now))
     raw_group = request.GET.get("group") or ""
-    group = _filter_param(raw_group)
-    deadline = production.locks_at(day, cutoff)
-    return day, raw_group, group, deadline, now < deadline
+    deadline = production.locks_at(day)
+    return day, raw_group, _filter_param(raw_group), deadline, production.is_open(day, now)
 
 
 @login_required
 def production_kitchen(request):
     day, raw_group, group, deadline, is_open = _kitchen_scope(request)
     groups = production.kitchen_groups(day)
-    data = production.kitchen_totals(day, group)
     return render(request, "backoffice/production_kitchen.html", {
-        "active": "production_kitchen",
-        "hide_branch": True,
-        "hide_dates": True,
-        "day": day,
-        "group": group,
-        "raw_group": raw_group,
-        "groups": [{"name": g or "Ungrouped", "param": g or NONE_PARAM} for g in groups],
-        "data": data,
-        "deadline": deadline,
-        "is_open": is_open,
+        "active": "production_kitchen", "hide_branch": True, "hide_dates": True, "day": day,
+        "group": group, "raw_group": raw_group,
+        "groups": [{"name": group or "Ungrouped", "param": group or NONE_PARAM} for group in groups],
+        "data": production.kitchen_totals(day, group), "deadline": deadline, "is_open": is_open,
         "export_qs": urlencode({"date": day.isoformat(), "group": raw_group}),
     })
 
@@ -218,124 +338,128 @@ def production_kitchen(request):
 def production_kitchen_export(request):
     day, _raw, group, deadline, is_open = _kitchen_scope(request)
     data = production.kitchen_totals(day, group)
-    response, w = _csv_response(f"production-totals-{day.isoformat()}.csv")
-    w.writerow(["Production totals"])
-    w.writerow(["Delivery date", day.isoformat()])
-    w.writerow(["Group", "All" if group is None else (group or "Ungrouped")])
-    w.writerow(["Status", f"Open until {_when(deadline)}" if is_open else "Final"])
-    w.writerow([])
-    w.writerow(["Category", "Product", "Branches", "Total"])
-    for c in data["categories"]:
-        for r in c["rows"]:
-            w.writerow([c["name"], r["name"], r["branches"], r["total"]])
-    w.writerow(["Total", "", data["branches"], data["total"]])
+    response, writer = _csv_response(f"production-totals-{day.isoformat()}.csv")
+    writer.writerow(["Production totals"])
+    writer.writerow(["Delivery date", day.isoformat()])
+    writer.writerow(["Group", "All" if group is None else (group or "Ungrouped")])
+    writer.writerow(["Status", f"Open until {_when(deadline)}" if is_open else "Final"])
+    writer.writerow([]); writer.writerow(["Category", "Product", "Branches", "Total"])
+    for category in data["categories"]:
+        for row in category["rows"]:
+            writer.writerow([category["name"], row["name"], row["branches"], row["total"]])
+    writer.writerow(["Total", "", data["branches"], data["total"]])
     return response
-
-
-# ── Packing ─────────────────────────────────────────────────────────────────
-def _packing_scope(request):
-    now = timezone.now()
-    cutoff = production.cutoff_time()
-    view = "packed" if request.GET.get("view") == "packed" else "live"
-    dates = production.packed_dates() if view == "packed" else []
-    default = dates[0] if dates else production.latest_locked_date(now, cutoff)
-    day = _parse_date(request.GET.get("date"), default)
-    raw_category = request.GET.get("category") or ""
-    deadline = production.locks_at(day, cutoff)
-    return {
-        "view": view, "dates": dates, "day": day,
-        "raw_category": raw_category, "category": _filter_param(raw_category),
-        "deadline": deadline, "is_open": now < deadline,
-    }
 
 
 @login_required
 def production_packing(request):
-    scope = _packing_scope(request)
-    day = scope["day"]
-    here = reverse("backoffice:production_packing") + "?" + urlencode(
-        {k: v for k, v in (("date", day.isoformat()), ("category", scope["raw_category"]),
-                           ("view", "packed" if scope["view"] == "packed" else ""))
-         if v})
-
     error = None
-    posted = {}
-    if request.method == "POST":
-        values, bad = {}, False
-        for field, raw in request.POST.items():
-            if not field.startswith("packed_"):
-                continue
-            item_id = field[7:]
-            try:
-                uuid.UUID(item_id)
-            except ValueError:
-                continue
-            posted[item_id] = raw
-            try:
-                values[item_id] = _parse_qty(raw)
-            except ValueError:
-                bad = True
-        if bad:
-            error = f"Packed quantities must be whole numbers from 0 to {MAX_QTY:,}. Nothing was saved."
-        else:
-            changed = production.save_packed(day, values, request.user)
-            if changed:
-                messages.success(request, (
-                    f"Saved {changed} packed quantit{'y' if changed == 1 else 'ies'} "
-                    f"for {_day(day)}."))
-            else:
-                messages.info(request, "Nothing had changed, so nothing was saved.")
-            return redirect(here)
+    posted, conflicts = {}, {}
+    status = 200
+    conflict = False
+    reload_confirmation = False
+    resave_blocked = False
+    try:
+        scope = _packing_scope(request, post=request.method == "POST")
+        if request.method == "POST" and request.POST.get("confirm_reload") == "1":
+            return redirect(reverse("backoffice:production_packing") + "?" + urlencode({
+                key: value for key, value in (("date", scope["day"].isoformat()),
+                                               ("category", scope["raw_category"]),
+                                               ("view", "packed" if scope["view"] == "packed" else "")) if value}))
+        if request.method == "POST" and request.POST.get("reload_saved") == "1":
+            posted = production_forms.submitted_draft(request, "packing")
+            conflict = reload_confirmation = True
+        elif request.method == "POST":
+            if scope["view"] != "live":
+                raise production_forms.PayloadError("Packed history is read-only. Nothing was saved.")
+            payload = _packing_payload(request)
+            posted = {row["key"]: "" if row["value"] is None else str(row["value"])
+                      for row in payload.rows}
+            changed_rows = [row for row in payload.rows if row["value"] != row["base_value"]]
+            values = {row["key"]: row["value"] for row in changed_rows}
+            expected = {row["key"]: row["revision"] for row in changed_rows}
+            changed = production.save_packed(scope["day"], values, request.user,
+                                             expected_revisions=expected, strict=True)
+            messages.success(request, f"Saved {changed} packed quantit{'y' if changed == 1 else 'ies'} for {_day(scope['day'])}.")
+            return redirect(reverse("backoffice:production_packing") + "?" + urlencode({
+                key: value for key, value in (("date", scope["day"].isoformat()),
+                                               ("category", scope["raw_category"])) if value}))
+    except production_forms.PayloadError as exc:
+        posted = production_forms.submitted_draft(request, "packing")
+        error = str(exc)
+        status = 400
+        resave_blocked = True
+        scope = _packing_scope(request)
+    except getattr(production, "RevisionConflict", ()) as exc:
+        error = "Nothing was saved: one or more packed cells changed in another session. Reload saved quantities to discard this draft."
+        conflicts = getattr(exc, "conflicts", {}) or {}
+        status, conflict = 409, True
+        resave_blocked = True
+        scope = _packing_scope(request, post=True)
+    except (getattr(production, "InvalidRows", ()), getattr(production, "CatalogueConflict", ())) as exc:
+        error = f"{exc} Nothing was saved."
+        status, resave_blocked = 409, True
+        scope = _packing_scope(request, post=True)
 
-    tables = production.packing_tables(day, scope["category"])
-    if scope["view"] == "packed":
-        # History is what was sent: branches and categories with nothing
-        # packed are noise there, however much they asked for.
-        for t in tables:
-            t["rows"] = [r for r in t["rows"] if r["any_packed"]]
-        tables = [t for t in tables if t["rows"]]
-    for t in tables:
-        for row in t["rows"]:
+    tables = _packing_presentation(scope)
+    for table in tables:
+        for row in table["rows"]:
             for cell in row["cells"]:
                 if cell is not None:
-                    # `saved` is what the database holds, so after a refused
-                    # save the re-shown boxes still count as changes.
                     cell.saved = "" if cell.packed_qty is None else cell.packed_qty
                     cell.shown = posted.get(str(cell.id), cell.saved)
-    categories = production.packing_categories(day)
-    return render(request, "backoffice/production_packing.html", {
-        "active": "production_packing",
-        "hide_branch": True,
-        "hide_dates": True,
-        **scope,
-        "categories": [{"name": c or production.UNCATEGORISED, "param": c or NONE_PARAM}
-                       for c in categories],
-        "tables": tables,
-        "error": error,
-        "max_qty": MAX_QTY,
-        "export_qs": urlencode({"date": day.isoformat(), "category": scope["raw_category"]}),
-    })
+                    cell.conflict = conflicts.get(str(cell.id))
+    payload_baseline = {
+        "version": 1, "kind": "packing", "rows": [
+            {"key": str(cell.id), "value": "" if cell.packed_qty is None else str(cell.packed_qty),
+             "base_value": "" if cell.packed_qty is None else str(cell.packed_qty),
+             "revision": getattr(cell, "revision", 0)}
+            for table in tables for row in table["rows"] for cell in row["cells"] if cell is not None
+        ],
+    }
+    known_keys = {row["key"] for row in payload_baseline["rows"]}
+    unknown_rows = [
+        {"key": key, "value": value}
+        for key, value in posted.items() if key not in known_keys
+    ]
+    response = render(request, "backoffice/production_packing.html", {
+        "active": "production_packing", "hide_branch": True, "hide_dates": True, **scope,
+        "categories": [{"name": category or production.UNCATEGORISED, "param": category or NONE_PARAM}
+                       for category in scope["categories"]], "tables": tables, "error": error,
+        "max_qty": MAX_QTY, "conflict": conflict, "reload_confirmation": reload_confirmation,
+        "resave_blocked": resave_blocked,
+        "compact_required": len(payload_baseline["rows"]) > production_forms.MAX_FALLBACK_FIELDS,
+        "unknown_rows": unknown_rows,
+        "payload_baseline": payload_baseline, "payload_baseline_json": json.dumps(payload_baseline, separators=(",", ":")),
+        "export_qs": urlencode({key: value for key, value in (
+            ("date", scope["day"].isoformat()), ("category", scope["raw_category"]),
+            ("view", "packed" if scope["view"] == "packed" else "")) if value}),
+    }, status=status)
+    return response
 
 
 @login_required
 def production_packing_export(request):
     scope = _packing_scope(request)
-    day = scope["day"]
-    response, w = _csv_response(f"packing-{day.isoformat()}.csv")
-    w.writerow(["Packing"])
-    w.writerow(["Delivery date", day.isoformat()])
-    w.writerow(["Category", "All" if scope["category"] is None
-                else (scope["category"] or production.UNCATEGORISED)])
-    w.writerow([])
-    w.writerow(["Category", "Branch", "Product", "Requested", "Packed", "Packed by"])
-    for t in production.packing_tables(day, scope["category"]):
-        for row in t["rows"]:
-            for name, cell in zip(t["columns"], row["cells"]):
-                if cell is None:
+    response, writer = _csv_response(f"packing-{scope['day'].isoformat()}.csv")
+    writer.writerow(["Packing"])
+    writer.writerow(["Delivery date", scope["day"].isoformat()])
+    writer.writerow(["Mode", scope["view"]])
+    writer.writerow(["Category", "All" if scope["category"] is None else (scope["category"] or production.UNCATEGORISED)])
+    writer.writerow([])
+    if scope["view"] == "packed":
+        writer.writerow(["Category", "Branch", "Product", "Packed", "Packed by"])
+    else:
+        writer.writerow(["Category", "Branch", "Product", "Requested", "Packed", "Packed by"])
+    for table in _packing_presentation(scope):
+        for row in table["rows"]:
+            for name, cell in zip(table["columns"], row["cells"]):
+                if cell is None or (scope["view"] == "packed" and cell.packed_qty is None):
                     continue
-                w.writerow([
-                    t["name"], row["branch"].name, name, cell.requested_qty,
-                    "" if cell.packed_qty is None else cell.packed_qty,
-                    cell.packed_by_name,
-                ])
+                packed = "" if cell.packed_qty is None else cell.packed_qty
+                values = [table["name"], row["branch"].name, name]
+                if scope["view"] != "packed":
+                    values.append(cell.requested_qty)
+                values.extend([packed, cell.packed_by_name])
+                writer.writerow(values)
     return response

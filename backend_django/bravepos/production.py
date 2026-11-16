@@ -37,12 +37,17 @@ from __future__ import annotations
 import datetime
 from collections import Counter, OrderedDict
 
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
-    Branch, Product, ProductionRequest, ProductionRequestItem, Settings,
+    Branch, Product, ProductionRequest, ProductionRequestItem,
+)
+from .production_policy import (
+    cutoff_time, deadline_provenance, earliest_open_date, is_open, latest_locked_date, lock_settings,
+    locks_at,
 )
 
 DEFAULT_CUTOFF = datetime.time(23, 30)
@@ -53,49 +58,35 @@ UNCATEGORISED = "Uncategorised"
 _LAST = 10 ** 6
 
 
-class RequestLocked(Exception):
+class ProductionSaveError(Exception):
+    """A production save was deliberately refused without changing data."""
+
+    def __init__(self, message, *, conflicts=None, keys=None):
+        super().__init__(message)
+        self.conflicts = conflicts or {}
+        self.keys = list(keys or [])
+
+
+class RequestLocked(ProductionSaveError):
     """The delivery date's cut-off has passed."""
 
-
-# ── The cut-off ─────────────────────────────────────────────────────────────
-def cutoff_time() -> datetime.time:
-    row = Settings.objects.filter(id="shop").only("production_cutoff").first()
-    return row.production_cutoff if row else DEFAULT_CUTOFF
-
-
-def locks_at(delivery_date, cutoff=None) -> datetime.datetime:
-    """When requests for ``delivery_date`` stop being editable: the cut-off
-    time on the day before, in the shop's timezone."""
-    if cutoff is None:
-        cutoff = cutoff_time()
-    day_before = delivery_date - datetime.timedelta(days=1)
-    return timezone.make_aware(datetime.datetime.combine(day_before, cutoff))
+    def __init__(self, delivery_date=None):
+        message = "This delivery date is locked; nothing was saved."
+        if delivery_date:
+            message = f"{delivery_date} is locked; nothing was saved."
+        super().__init__(message)
 
 
-def is_open(delivery_date, now=None, cutoff=None) -> bool:
-    return (now or timezone.now()) < locks_at(delivery_date, cutoff)
+class RevisionConflict(ProductionSaveError):
+    """The submitted form was based on an older saved version."""
 
 
-def earliest_open_date(now=None, cutoff=None) -> datetime.date:
-    """The first delivery date a request can still be made for."""
-    now = now or timezone.now()
-    if cutoff is None:
-        cutoff = cutoff_time()
-    day = timezone.localdate(now) + datetime.timedelta(days=1)
-    while not is_open(day, now, cutoff):
-        day += datetime.timedelta(days=1)
-    return day
+class CatalogueConflict(ProductionSaveError):
+    """A current catalogue row cannot safely be attached to saved history."""
 
 
-def latest_locked_date(now=None, cutoff=None) -> datetime.date:
-    """The date the kitchen and packer most likely want: the soonest delivery
-    whose numbers are already final.  Tomorrow once today's cut-off has
-    passed, otherwise today."""
-    now = now or timezone.now()
-    tomorrow = timezone.localdate(now) + datetime.timedelta(days=1)
-    if is_open(tomorrow, now, cutoff):
-        return timezone.localdate(now)
-    return tomorrow
+class InvalidRows(ProductionSaveError):
+    """The submitted rows are malformed, unknown, or out of scope."""
 
 
 # ── Which branches ──────────────────────────────────────────────────────────
@@ -179,99 +170,230 @@ def request_form_rows(branch, req) -> list:
     """
     items = list(req.items.all()) if req else []
     by_product = {it.product_id: it for it in items if it.product_id}
-    by_key = {it.match_key: it for it in items}
-    used = set()
+    saved_keys = {it.match_key for it in items}
     rows = []
+    # Saved identities always win over catalogue rows.  Their own immutable
+    # snapshots are the authoritative labels, even while the request is open.
+    for it in items:
+        rows.append({
+            "key": f"item:{it.id}",
+            "name": it.product_name,
+            "name_th": "",
+            "category_name": it.category_name,
+            "qty": it.requested_qty,
+            "revision": getattr(it, "revision", 0),
+            "gone": not it.product_id,
+        })
     for p in requestable_products(branch):
-        it = by_product.get(p.id) or by_key.get(_product_key(p))
+        it = by_product.get(p.id)
+        key = _product_key(p)
         if it is not None:
-            used.add(it.id)
+            # Do not let a product UUID form key rebind or overwrite a saved
+            # item.  The stable item key above is the only edit address.
+            continue
         rows.append({
             "key": str(p.id),
             "name": p.name,
             "name_th": p.name_th,
             "category_name": p.category.name if p.category_id else "",
-            "qty": it.requested_qty if it else 0,
+            "qty": 0,
+            # A different retained row owns this match key.  It cannot safely
+            # become another request line merely because the catalogue changed.
+            "unavailable": key in saved_keys,
         })
-    for it in items:
-        if it.id not in used and it.requested_qty:
-            rows.append({
-                "key": f"item:{it.id}",
-                "name": it.product_name,
-                "name_th": "",
-                "category_name": it.category_name,
-                "qty": it.requested_qty,
-                "gone": True,
-            })
     return rows
 
 
+def _quantity_errors(values):
+    """Return submitted keys with non-whole or out-of-range quantities."""
+    bad = []
+    for key, qty in values.items():
+        if isinstance(qty, bool) or not isinstance(qty, int) or not 0 <= qty <= 99999:
+            bad.append(str(key))
+    return bad
+
+
+def _locked_request(branch, delivery_date, staff, name):
+    """Return the branch/date parent locked after creation races settle.
+
+    Supervisor writes take locks in this order: the settings singleton, this
+    request parent, then its items in primary-key order.  ``get_or_create``
+    keeps the uniqueness constraint authoritative while the explicit refetch
+    makes the resulting parent lock unambiguous on every supported database.
+    """
+    try:
+        with transaction.atomic():
+            req, created = ProductionRequest.objects.get_or_create(
+                branch=branch,
+                delivery_date=delivery_date,
+                defaults={
+                    "created_by": staff,
+                    "created_by_name": name,
+                    "updated_by_name": name,
+                },
+            )
+    except IntegrityError:
+        # Only a concurrent unique-parent creation is expected here.  Let an
+        # unrelated integrity failure escape rather than pretending it saved.
+        req = ProductionRequest.objects.get(branch=branch, delivery_date=delivery_date)
+        created = False
+    return ProductionRequest.objects.select_for_update().get(pk=req.pk), created
+
+
+def _visible_request(req, items):
+    return req if any(it.requested_qty or it.packed_qty is not None for it in items) else None
+
+
 @transaction.atomic
-def save_request(branch, delivery_date, wanted, user=None, now=None):
+def save_request(
+    branch, delivery_date, wanted, user=None, now=None, *,
+    expected_request_id=None, expected_revision=None, strict=False,
+):
     """Write the posted quantities onto the branch's request for the date.
 
-    ``wanted`` maps a form row's ``key`` (a product id, or ``item:<id>`` for
-    a line whose product has left the catalogue) to a whole number.  Keys not
-    posted are left as they are.  A line set to 0 is removed, unless the
-    packer has already entered a number for it — then it stays, at 0
-    requested, so the packed figure is not lost.  A request left with no
-    lines is deleted.
+    ``wanted`` maps a stable saved ``item:<uuid>`` or a new catalogue product
+    UUID to a whole number.  Existing rows are never rebound through barcode
+    or name matching.  Zero rows and empty parents remain as tombstones so an
+    old empty form can never become current again.
 
     Returns the request, or None when nothing is requested.  Raises
     ``RequestLocked`` once the cut-off has passed.
     """
-    if not is_open(delivery_date, now):
-        raise RequestLocked()
+    if strict and expected_revision is None:
+        raise InvalidRows("This request form is missing its saved revision.")
+    if not isinstance(wanted, dict):
+        raise InvalidRows("Request rows must be a mapping.")
+    bad_quantities = _quantity_errors(wanted)
+    if bad_quantities:
+        raise InvalidRows("Request quantities must be whole numbers from 0 to 99,999.",
+                          keys=bad_quantities)
     name = getattr(user, "name", "") or getattr(user, "username", "") or ""
     staff = user if getattr(user, "pk", None) else None
 
-    req = (ProductionRequest.objects.select_for_update()
-           .filter(branch=branch, delivery_date=delivery_date).first())
-    if req is None:
-        req = ProductionRequest.objects.create(
-            branch=branch, delivery_date=delivery_date,
-            created_by=staff, created_by_name=name, updated_by_name=name,
+    # Keep the policy stable before finding/creating the parent.  ``now`` is
+    # intentionally compatibility-only: callers cannot authorize a stale save
+    # by carrying the page's entry-time clock into this critical section.
+    lock_settings()
+    existing = (ProductionRequest.objects.select_for_update()
+                .filter(branch=branch, delivery_date=delivery_date).first())
+    if existing is None and not strict:
+        # Preserve the historical trusted-service no-op behavior: a call that
+        # cannot address a real row and requests no positive catalogue line
+        # does not manufacture an empty parent.  Strict HTTP forms deliberately
+        # retain their empty parent identity instead.
+        catalogue_ids = {str(product.id) for product in requestable_products(branch)}
+        has_positive_catalogue_line = any(
+            str(key) in catalogue_ids and qty > 0 for key, qty in wanted.items()
         )
-    items = list(req.items.all())
+        if not has_positive_catalogue_line:
+            if not is_open(delivery_date):
+                raise RequestLocked(delivery_date)
+            return None
+    if existing is None:
+        req, created = _locked_request(branch, delivery_date, staff, name)
+    else:
+        req, created = existing, False
+    items = list(req.items.select_for_update().order_by("pk"))
+    if strict:
+        current_id = str(req.id)
+        if ((expected_request_id is None and not created)
+                or (expected_request_id is not None and str(expected_request_id) != current_id)
+                or expected_revision != getattr(req, "revision", 0)):
+            raise RevisionConflict(
+                "This request changed in another session; nothing was saved.",
+                conflicts={"request": {
+                    "id": current_id,
+                    "revision": getattr(req, "revision", 0),
+                }},
+            )
     by_id = {str(it.id): it for it in items}
     by_product = {it.product_id: it for it in items if it.product_id}
-    by_key = {it.match_key: it for it in items}
 
     products = {str(p.id): p for p in requestable_products(branch)}
+    unknown = []
+    new_product_keys = {}
+    changes = []
     for key, qty in wanted.items():
-        product = products.get(key)
-        if product is not None:
-            item = by_product.get(product.id) or by_key.get(_product_key(product))
-        elif key.startswith("item:"):
+        key = str(key)
+        product = None
+        item = None
+        if key.startswith("item:"):
             item = by_id.get(key[5:])
             if item is None:
+                unknown.append(key)
                 continue
         else:
+            product = products.get(key)
+            if product is None:
+                unknown.append(key)
+                continue
+            # Legacy trusted service callers may still address an existing
+            # row by the exact product UUID.  It is deliberately not a key
+            # fallback: barcode/name reuse never finds an old item.
+            item = by_product.get(product.id)
+            if item is None and qty:
+                product_key = _product_key(product)
+                existing = next((saved for saved in items if saved.match_key == product_key), None)
+                if existing is not None:
+                    raise CatalogueConflict(
+                        "A saved request line already uses this catalogue product key; nothing was saved.",
+                        keys=[key],
+                        conflicts={key: {"item": str(existing.id), "match_key": product_key}},
+                    )
+                prior = new_product_keys.get(product_key)
+                if prior is not None and prior != key:
+                    raise CatalogueConflict(
+                        "Two submitted catalogue products have the same production key; nothing was saved.",
+                        keys=[prior, key],
+                    )
+                new_product_keys[product_key] = key
+        changes.append((key, qty, item, product))
+
+    if strict and unknown:
+        raise InvalidRows("Some request rows are no longer available; nothing was saved.", keys=unknown)
+
+    # Fresh policy authorization happens after every write lock is held.
+    if not is_open(delivery_date):
+        raise RequestLocked(delivery_date)
+
+    requested_changed = False
+    for key, qty, item, product in changes:
+        if item is None:
+            if not qty:
+                continue
+            item = ProductionRequestItem(request=req, product=product, **_snapshot(product))
+            try:
+                with transaction.atomic():
+                    item.save()
+            except IntegrityError:
+                collision = ProductionRequestItem.objects.filter(
+                    request=req, match_key=_product_key(product),
+                ).first()
+                if collision is None:
+                    raise
+                raise CatalogueConflict(
+                    "A saved request line already uses this catalogue product key; nothing was saved.",
+                    keys=[key], conflicts={key: {"item": str(collision.id), "match_key": collision.match_key}},
+                )
+            items.append(item)
+        if qty == item.requested_qty:
             continue
+        # Recheck immediately before each write so a lock wait cannot carry a
+        # once-open request beyond its deadline.
+        if not is_open(delivery_date):
+            raise RequestLocked(delivery_date)
+        item.requested_qty = qty
+        item.revision = getattr(item, "revision", 0) + 1
+        item.save(update_fields=["requested_qty", "revision"])
+        requested_changed = True
 
-        if qty > 0:
-            if item is None:
-                item = ProductionRequestItem(request=req, product=product)
-                by_key[_product_key(product)] = item
-            if product is not None:
-                item.product = product
-                for field, value in _snapshot(product).items():
-                    setattr(item, field, value)
-            item.requested_qty = qty
-            item.save()
-        elif item is not None:
-            if item.packed_qty is None:
-                item.delete()
-            elif item.requested_qty:
-                item.requested_qty = 0
-                item.save()
-
-    if not req.items.exists():
-        req.delete()
-        return None
-    req.updated_by_name = name
-    req.save(update_fields=["updated_by_name", "updated_at"])
-    return req
+    if requested_changed:
+        if not is_open(delivery_date):
+            raise RequestLocked(delivery_date)
+        req.revision = getattr(req, "revision", 0) + 1
+        req.updated_by_name = name
+        req.save(update_fields=["revision", "updated_by_name", "updated_at"])
+    return _visible_request(req, items)
 
 
 def request_status(req, now=None, cutoff=None) -> dict:
@@ -369,7 +491,7 @@ def kitchen_totals(delivery_date, group=None) -> dict:
 # ── The packer ──────────────────────────────────────────────────────────────
 def _packing_lines(delivery_date) -> list:
     # A line zeroed after it was packed still shows, so its packed figure
-    # stays visible; a line that is simply zero is never stored.
+    # stays visible; unconfirmed zero tombstones stay out of the packing grid.
     return _lines(_items_for(delivery_date)
                   .filter(Q(requested_qty__gt=0) | Q(packed_qty__isnull=False)))
 
@@ -444,22 +566,79 @@ def packing_tables(delivery_date, category=None) -> list:
 
 
 @transaction.atomic
-def save_packed(delivery_date, values, user=None) -> int:
+def save_packed(delivery_date, values, user=None, *, expected_revisions=None, strict=False) -> int:
     """Store the packer's numbers.  ``values`` maps a line id to a whole
     number, or None to clear it.  Only lines on ``delivery_date`` are touched.
     Returns how many changed."""
+    if not isinstance(values, dict):
+        raise InvalidRows("Packing rows must be a mapping.")
+    bad_quantities = [str(key) for key, qty in values.items()
+                      if qty is not None and (isinstance(qty, bool) or not isinstance(qty, int)
+                                              or not 0 <= qty <= 99999)]
+    if bad_quantities:
+        raise InvalidRows("Packed quantities must be blank or whole numbers from 0 to 99,999.",
+                          keys=bad_quantities)
+    if strict and not isinstance(expected_revisions, dict):
+        raise InvalidRows("This packing form is missing its saved revisions.")
+
     name = getattr(user, "name", "") or getattr(user, "username", "") or ""
+    keys = [str(key) for key in values]
+    # Resolve parents before acquiring any write locks, then lock all parents
+    # in deterministic primary-key order before their selected item cells.
+    try:
+        candidates = list(ProductionRequestItem.objects.filter(id__in=keys).values_list("id", "request_id"))
+    except (ValidationError, ValueError):
+        candidates = []
+    item_parent_ids = {str(item_id): parent_id for item_id, parent_id in candidates}
+    parent_ids = sorted(set(item_parent_ids.values()), key=str)
+    parents = list(ProductionRequest.objects.select_for_update().filter(pk__in=parent_ids).order_by("pk"))
+    locked_parent_ids = {parent.id for parent in parents}
+    try:
+        items = list(ProductionRequestItem.objects.select_for_update()
+                     .filter(id__in=keys, request_id__in=locked_parent_ids).order_by("pk"))
+    except (ValidationError, ValueError):
+        items = []
+    by_id = {str(item.id): item for item in items}
+
+    unknown = [key for key in keys if key not in by_id]
+    wrong_date = [key for key, item in by_id.items() if item.request.delivery_date != delivery_date]
+    unavailable = [key for key, item in by_id.items()
+                   if item.requested_qty == 0 and item.packed_qty is None]
+    missing_revisions = [key for key in keys if not strict or key not in expected_revisions]
+    if strict and (unknown or wrong_date or unavailable or missing_revisions):
+        raise InvalidRows("Some packing cells are no longer available; nothing was saved.",
+                          keys=unknown + wrong_date + unavailable + missing_revisions)
+    if not strict:
+        # The trusted compatibility path retains the former harmless filtering
+        # of wrong-date/unknown cells.
+        items = [item for item in items if item.request.delivery_date == delivery_date]
+
+    conflicts = {}
+    if strict:
+        for item in items:
+            if expected_revisions[str(item.id)] != getattr(item, "revision", 0):
+                conflicts[str(item.id)] = {
+                    "revision": getattr(item, "revision", 0),
+                    "requested_qty": item.requested_qty,
+                    "packed_qty": item.packed_qty,
+                }
+    if conflicts:
+        raise RevisionConflict("Some packing cells changed in another session; nothing was saved.",
+                               conflicts=conflicts)
+
+    # Complete validation precedes the first mutation.  The fresh timestamp is
+    # assigned only after locks/version checks, preserving blank (None) versus
+    # confirmed zero semantics.
     now = timezone.now()
     changed = 0
-    items = (ProductionRequestItem.objects.select_for_update()
-             .filter(request__delivery_date=delivery_date, id__in=list(values)))
-    for it in items:
-        qty = values[str(it.id)]
-        if qty == it.packed_qty:
+    for item in items:
+        qty = values[str(item.id)]
+        if qty == item.packed_qty:
             continue
-        it.packed_qty = qty
-        it.packed_by_name = name if qty is not None else ""
-        it.packed_at = now if qty is not None else None
-        it.save(update_fields=["packed_qty", "packed_by_name", "packed_at"])
+        item.packed_qty = qty
+        item.packed_by_name = name if qty is not None else ""
+        item.packed_at = now if qty is not None else None
+        item.revision = getattr(item, "revision", 0) + 1
+        item.save(update_fields=["packed_qty", "packed_by_name", "packed_at", "revision"])
         changed += 1
     return changed

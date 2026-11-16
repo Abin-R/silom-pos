@@ -7,6 +7,7 @@ Run:
 from __future__ import annotations
 
 import datetime
+from html.parser import HTMLParser
 
 from django.test import TestCase
 from django.urls import reverse
@@ -39,6 +40,46 @@ def open_day():
 def locked_day():
     """A delivery date whose requests have always already locked."""
     return today() - datetime.timedelta(days=1)
+
+
+class _ProductionForm(HTMLParser):
+    """Collect a real rendered small-form submission, including its versions."""
+
+    def __init__(self):
+        super().__init__()
+        self.inside = False
+        self.values = {}
+        self.action = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "form":
+            self.inside = attrs.get("id") in {"prForm", "pkForm"}
+            if self.inside:
+                self.action = attrs.get("action")
+        if self.inside and tag == "input" and attrs.get("name") and "disabled" not in attrs:
+            self.values[attrs["name"]] = attrs.get("value", "")
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.inside = False
+
+
+def post_production(client, url, changes):
+    """The HTTP protocol rejects old forms without pinned scope and revisions."""
+    form = _ProductionForm()
+    page = client.get(url)
+    form.feed(page.content.decode())
+    for field, value in changes.items():
+        if field.startswith("qty_") and field not in form.values:
+            # Existing rows now submit stable item IDs, not a mutable catalogue key.
+            product_id = field[4:]
+            req = page.context.get("req")
+            item = req.items.filter(product_id=product_id).first() if req else None
+            if item:
+                field = f"qty_item:{item.pk}"
+        form.values[field] = value
+    return client.post(form.action or url, form.values)
 
 
 class Catalogue:
@@ -89,7 +130,7 @@ class CutoffTests(TestCase):
                          datetime.date(2026, 11, 11))
 
     def test_cutoff_comes_from_shop_settings(self):
-        Settings.objects.create(id="shop", production_cutoff=datetime.time(15, 30))
+        Settings.objects.update_or_create(id="shop", defaults={"production_cutoff": datetime.time(15, 30)})
         self.assertEqual(production.cutoff_time(), datetime.time(15, 30))
 
 
@@ -120,10 +161,14 @@ class SaveRequestTests(Catalogue, TestCase):
             dict(ProductionRequestItem.objects.values_list("product_name", "requested_qty")),
             {"Red Velvet Cookie": 5, "Strawberry Mousse Pop": 3})
 
-    def test_all_zero_removes_the_request(self):
+    def test_all_zero_hides_the_request_but_keeps_its_identity(self):
         self.save({self.pid(self.emq, "Red Velvet Cookie"): 12})
         self.assertIsNone(self.save({self.pid(self.emq, "Red Velvet Cookie"): 0}))
-        self.assertFalse(ProductionRequest.objects.exists())
+        req = ProductionRequest.objects.get()
+        self.assertGreater(req.revision, 0)
+        self.assertEqual(req.items.get().requested_qty, 0)
+        self.assertEqual(production.kitchen_totals(open_day())["total"], 0)
+        self.assertEqual(production.packing_tables(open_day()), [])
 
     def test_zeroing_a_packed_line_keeps_the_packed_number(self):
         req = self.save({self.pid(self.emq, "Red Velvet Cookie"): 12,
@@ -269,7 +314,7 @@ class BarcodeMatchingTests(TestCase):
         self.ask(self.alpha, p, 6)
         item = ProductionRequestItem.objects.get()
         self.assertEqual((item.product_name, item.requested_qty, item.match_key),
-                         ("Red Velvet Cookie NEW", 6, "b:30879"))
+                         ("Red Velvet Cookie", 6, "b:30879"))
 
 
 # ── The pages, per role ─────────────────────────────────────────────────────
@@ -296,7 +341,7 @@ class StockSupervisorPageTests(Catalogue, TestCase):
         self.assertContains(response, "Stock supervisor")
 
     def test_saves_and_shows_on_history(self):
-        response = self.client.post(self.url(), {
+        response = post_production(self.client, self.url(), {
             f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "12",
             f"qty_{self.pid(self.emq, 'Oreo Confetti Cookie')}": ""})
         self.assertRedirects(response, self.url())
@@ -306,16 +351,18 @@ class StockSupervisorPageTests(Catalogue, TestCase):
         self.assertContains(history, "Open")
 
     def test_bad_number_saves_nothing(self):
-        response = self.client.post(self.url(), {f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "1.5"})
-        self.assertContains(response, "whole numbers")
+        response = post_production(self.client, self.url(), {f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "1.5"})
+        self.assertContains(response, "whole numbers", status_code=400)
         self.assertFalse(ProductionRequest.objects.exists())
 
     def test_locked_date_is_read_only(self):
         response = self.client.post(self.url(day=locked_day()), {
             f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "12"})
-        self.assertContains(response, "Nothing was saved")
+        self.assertContains(response, "Nothing was saved", status_code=400)
         self.assertFalse(ProductionRequest.objects.exists())
-        self.assertNotContains(self.client.get(self.url(day=locked_day())), 'name="qty_')
+        page = self.client.get(self.url(day=locked_day()))
+        self.assertContains(page, "readonly")
+        self.assertNotContains(page, 'id="prSave"')
 
     def test_never_sees_packed_numbers(self):
         production.save_request(self.emq, open_day(), {self.pid(self.emq, "Red Velvet Cookie"): 12})
@@ -330,7 +377,7 @@ class StockSupervisorPageTests(Catalogue, TestCase):
         # Branches ticked on the Users page don't limit a supervisor.
         self.sup.branches.add(self.icon)
         for branch, qty in ((self.emq, 9), (self.icon, 5)):
-            response = self.client.post(self.url(branch=branch), {
+            response = post_production(self.client, self.url(branch=branch), {
                 f"qty_{self.pid(branch, 'Red Velvet Cookie')}": str(qty)})
             self.assertEqual(response.status_code, 302)
         self.assertEqual(
@@ -401,7 +448,7 @@ class PackerPageTests(Catalogue, TestCase):
 
     def test_saves_packed_and_moves_no_stock(self):
         item = ProductionRequestItem.objects.get(request__branch=self.emq)
-        response = self.client.post(self.url, {f"packed_{item.id}": "11"})
+        response = post_production(self.client, self.url, {f"packed_{item.id}": "11"})
         self.assertRedirects(response, self.url)
         item.refresh_from_db()
         self.assertEqual((item.packed_qty, item.packed_by_name), (11, self.packer.name))
@@ -420,8 +467,8 @@ class PackerPageTests(Catalogue, TestCase):
 
     def test_bad_number_saves_nothing(self):
         item = ProductionRequestItem.objects.get(request__branch=self.emq)
-        response = self.client.post(self.url, {f"packed_{item.id}": "-1"})
-        self.assertContains(response, "whole numbers")
+        response = post_production(self.client, self.url, {f"packed_{item.id}": "-1"})
+        self.assertContains(response, "whole numbers", status_code=400)
         item.refresh_from_db()
         self.assertIsNone(item.packed_qty)
 
@@ -438,7 +485,7 @@ class AdminCannotEditAfterCutoffTests(Catalogue, TestCase):
         url = (reverse("backoffice:production_request")
                + f"?branch={self.emq.id}&date={locked_day().isoformat()}")
         response = self.client.post(url, {f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "12"})
-        self.assertContains(response, "Nothing was saved")
+        self.assertContains(response, "Nothing was saved", status_code=400)
         self.assertFalse(ProductionRequest.objects.exists())
 
     def test_admin_sees_all_four_pages(self):
@@ -453,8 +500,10 @@ class CutoffSettingTests(TestCase):
     def post(self, user, value):
         sign_in(self.client, user)
         Branch.objects.get_or_create(name="Silom")
+        baseline = Settings.objects.get(id="shop").production_cutoff.isoformat()
         self.client.post(reverse("backoffice:shop_settings"), {
-            "shop_name": "Rolling Pinn", "production_cutoff": value})
+            "shop_name": "Rolling Pinn", "production_cutoff": value,
+            "production_cutoff_baseline": baseline})
         return Settings.objects.get(id="shop").production_cutoff
 
     def test_admin_changes_it(self):

@@ -1,5 +1,6 @@
 """DRF serializers — shape the JSON over the wire so it matches what the
 existing frontend already sends and expects."""
+from django.db import transaction
 from rest_framework import serializers
 
 from . import images
@@ -254,9 +255,28 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 
 class SettingsSerializer(serializers.ModelSerializer):
+    def update(self, instance, validated_data):
+        """Apply submitted fields to a freshly locked settings row.
+
+        ``production_cutoff`` is read-only, but DRF's default update still
+        saves every field on ``instance``. A stale POS serializer instance can
+        therefore restore an old cutoff while changing an unrelated setting.
+        """
+        with transaction.atomic():
+            current = Settings.objects.select_for_update().get(pk=instance.pk)
+            for attr, value in validated_data.items():
+                setattr(current, attr, value)
+            if validated_data:
+                current.save(update_fields=list(validated_data))
+            return current
+
     class Meta:
         model = Settings
         fields = '__all__'
+        # Older till clients may continue sending this key; DRF ignores a
+        # read-only field rather than letting a POS PUT bypass the append-only
+        # admin policy transition.
+        read_only_fields = ('production_cutoff',)
 
 
 class OrderItemSerializer(serializers.ModelSerializer):

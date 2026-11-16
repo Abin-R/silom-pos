@@ -1858,6 +1858,33 @@ class StockDocumentItem(models.Model):
 
 
 # ─── Production requests (branch → central kitchen) ─────────────────────────
+class ProductionCutoffPolicy(models.Model):
+    """An append-only, effective-dated production request deadline rule.
+
+    A row applies from ``effective_from`` until a newer row takes over.  The
+    policy table, rather than request rows, preserves a closed date even when
+    nobody has opened its request form yet.
+    """
+    class Source(models.TextChoices):
+        LEGACY_BASELINE = "legacy_baseline", "Legacy baseline"
+        ADMIN_CHANGE = "admin_change", "Admin change"
+
+    id = models.BigAutoField(primary_key=True)
+    effective_from = models.DateField()
+    cutoff = models.TimeField()
+    activated_at = models.DateTimeField()
+    source = models.CharField(max_length=32, choices=Source.choices)
+
+    class Meta:
+        ordering = ["effective_from", "id"]
+        indexes = [
+            models.Index(fields=["effective_from", "id"], name="bravepos_pc_effective_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.effective_from} {self.cutoff} ({self.source})"
+
+
 class ProductionRequest(models.Model):
     """What one branch asks the central kitchen to make and send for one
     delivery date.  One per branch per date: opening the same branch and date
@@ -1881,6 +1908,9 @@ class ProductionRequest(models.Model):
     # Name snapshots, so the history still reads right after a rename.
     created_by_name = models.CharField(max_length=120, blank=True, default="")
     updated_by_name = models.CharField(max_length=120, blank=True, default="")
+    # Incremented only when requested quantities change.  Packing has its own
+    # per-item revisions so an unrelated packed cell does not stale this form.
+    revision = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1931,6 +1961,8 @@ class ProductionRequestItem(models.Model):
     packed_qty = models.PositiveIntegerField(null=True, blank=True)
     packed_by_name = models.CharField(max_length=120, blank=True, default="")
     packed_at = models.DateTimeField(null=True, blank=True)
+    # Changes to either requested or packed quantity advance this cell token.
+    revision = models.PositiveBigIntegerField(default=0)
 
     class Meta:
         ordering = ["category_order", "category_name", "product_order", "product_name"]

@@ -60,6 +60,7 @@ from bravepos import appdist, catalog, crm, discounts, images, permissions, sale
 from bravepos import branch_sync as sync_sections
 from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
+from bravepos.production_policy import lock_settings, update_cutoff
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
 
@@ -6690,34 +6691,42 @@ def shop_settings(request):
     s = _get_or_create_settings()
 
     if request.method == "POST":
-        # ── Shop-wide (singleton Settings) ───────────────────────────
-        s.shop_name = (request.POST.get("shop_name") or "").strip() or s.shop_name
-        s.business_type = (request.POST.get("business_type") or "").strip() or s.business_type
-        s.company_name = (request.POST.get("company_name") or "").strip()
-        s.currency = (request.POST.get("currency") or "THB").strip() or "THB"
-        s.open_time = (request.POST.get("open_time") or s.open_time).strip()
-        s.close_time = (request.POST.get("close_time") or s.close_time).strip()
+        def apply_shop_fields(settings_row):
+            settings_row.shop_name = (request.POST.get("shop_name") or "").strip() or settings_row.shop_name
+            settings_row.business_type = (request.POST.get("business_type") or "").strip() or settings_row.business_type
+            settings_row.company_name = (request.POST.get("company_name") or "").strip()
+            settings_row.currency = (request.POST.get("currency") or "THB").strip() or "THB"
+            settings_row.open_time = (request.POST.get("open_time") or settings_row.open_time).strip()
+            settings_row.close_time = (request.POST.get("close_time") or settings_row.close_time).strip()
 
-        tax_mode = request.POST.get("tax_mode") or "exclusive"
-        s.tax_mode = "inclusive" if tax_mode == "inclusive" else "exclusive"
-        try:
-            s.tax_percent = Decimal(request.POST.get("tax_percent") or "0")
-        except Exception:
-            pass
-        try:
-            s.service_charge_percent = Decimal(request.POST.get("service_charge") or "0")
-        except Exception:
-            pass
-        s.service_charge_enabled = s.service_charge_percent > 0
-        # Admins only, like the payment template below: moving the cut-off
-        # moves when every branch's production requests lock.  A blank or
-        # unreadable value keeps what was there.
+            tax_mode = request.POST.get("tax_mode") or "exclusive"
+            settings_row.tax_mode = "inclusive" if tax_mode == "inclusive" else "exclusive"
+            try:
+                settings_row.tax_percent = Decimal(request.POST.get("tax_percent") or "0")
+            except Exception:
+                pass
+            try:
+                settings_row.service_charge_percent = Decimal(request.POST.get("service_charge") or "0")
+            except Exception:
+                pass
+            settings_row.service_charge_enabled = settings_row.service_charge_percent > 0
+
+        requested_cutoff = None
+        cutoff_baseline = None
         if getattr(request.user, "role", "") == "admin":
             try:
-                s.production_cutoff = time.fromisoformat(
+                requested_cutoff = time.fromisoformat(
                     (request.POST.get("production_cutoff") or "").strip())
             except ValueError:
                 pass
+            try:
+                cutoff_baseline = time.fromisoformat(
+                    (request.POST.get("production_cutoff_baseline") or "").strip())
+            except ValueError:
+                pass
+
+        # ── Shop-wide (singleton Settings) ───────────────────────────
+        apply_shop_fields(s)
         # Payment credentials on the Settings row are a *template*: they seed
         # branches created from here on and are never read at charge time, so
         # editing them cannot disturb a branch that is already trading.
@@ -6733,11 +6742,48 @@ def shop_settings(request):
             context = {
                 "active": "shop_settings", "settings": s, "branch_obj": branch,
                 "branches": branches, "branch": branch, "hide_dates": True,
+                "can_edit_cutoff": getattr(request.user, "role", "") == "admin",
                 "payment_errors": errors,
                 **_payment_context(s, request.user),
             }
             return render(request, "backoffice/shop_settings.html", context)
-        s.save()
+        # A stale settings form must not overwrite a cut-off saved by another
+        # admin.  Validate against the display copy above, then start again
+        # from a locked row and append the deadline policy in the same
+        # transaction as the visible settings update.
+        cutoff_error = ""
+        with transaction.atomic():
+            current = lock_settings()
+            if requested_cutoff is not None and cutoff_baseline is not None:
+                if current.production_cutoff == cutoff_baseline:
+                    if requested_cutoff != current.production_cutoff:
+                        update_cutoff(requested_cutoff)
+                elif requested_cutoff != cutoff_baseline:
+                    cutoff_error = (
+                        "The production cut-off changed while this form was open. "
+                        "Nothing was saved; reload the settings before changing it."
+                    )
+
+            if cutoff_error:
+                # Keep submitted non-cutoff fields visible, but refresh the
+                # deadline/token so a later explicit retry is safe.
+                s.production_cutoff = current.production_cutoff
+            else:
+                s = lock_settings()
+                apply_shop_fields(s)
+                if can_edit_payment(request.user):
+                    _apply_payment_form(s, request.POST)
+                s.save()
+
+        if cutoff_error:
+            context = {
+                "active": "shop_settings", "settings": s, "branch_obj": branch,
+                "branches": branches, "branch": branch, "hide_dates": True,
+                "can_edit_cutoff": getattr(request.user, "role", "") == "admin",
+                "cutoff_error": cutoff_error,
+                **_payment_context(s, request.user),
+            }
+            return render(request, "backoffice/shop_settings.html", context)
 
         # ── Per-branch (selected Branch) ─────────────────────────────
         if branch:

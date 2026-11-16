@@ -1,121 +1,240 @@
 {% extends "backoffice/base.html" %}
-{% comment %}
-  Request production — what one branch wants from the central kitchen on one
-  delivery date.  Every active product of the branch, grouped by category,
-  with one number box each: the supervisor goes down the list typing numbers.
-  Enter moves to the next box rather than submitting a half-filled list.
-
-  One request per branch per date, so opening a branch and date that already
-  has one shows its numbers to change.  Editable until the cut-off (the day
-  before delivery, Shop settings); after that it is shown read only.
-
-  No packed quantities here on purpose — see bravepos.production.
-{% endcomment %}
-
 {% block title %}Request production{% endblock %}
 {% block page_title %}Request production{% endblock %}
-{% block page_sub %}
-  <div class="tb-sub">{% if branch %}{{ branch.name }} · {% endif %}Delivery {{ day|date:"D d M Y" }}</div>
+{% block page_sub %}<div class="tb-sub">
+{% if branch %}
+{{ branch.name }} ·
+{% endif %}
+Delivery {{ day|date:"D d M Y" }}
+</div>
 {% endblock %}
-
 {% block topbar_end %}
-  <div class="ctl" title="Delivery date">
-    <svg><use href="#i-cal"/></svg>
-    <input type="date" name="date" value="{{ day|date:'Y-m-d' }}" min="{{ earliest|date:'Y-m-d' }}"
-           form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
-  </div>
-  {% if branch and is_open %}
-  <button type="submit" form="prForm" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save request</button>
-  {% endif %}
+<div class="ctl" title="Delivery date">
+<svg>
+<use href="#i-cal"/>
+</svg>
+<input type="date" name="date" value="{{ day|date:'Y-m-d' }}" min="{{ earliest|date:'Y-m-d' }}" form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
+</div>
+{% if branch and is_open and not conflict and not resave_blocked and not reload_confirmation %}
+<button type="submit" form="prForm" class="btn btn-blue" data-compact-save
+{% if compact_required %}
+ disabled aria-describedby="prCapacity"
+{% endif %}
+>
+<svg>
+<use href="#i-check"/>
+</svg>
+ Save request
+</button>
+{% endif %}
 {% endblock %}
-
-{% block extra_head %}
-<style>
-  .pr-qty { width: 96px; height: 40px; text-align: right; font-family: var(--mono); font-size: 15px; font-weight: 600; }
-  .pr-qty.has { border-color: var(--blue); background: var(--blue-soft); }
-  .pr-cat td { background: var(--sunk); font-size: 11.5px; font-weight: 700; letter-spacing: .05em;
-               text-transform: uppercase; color: var(--mut); padding-top: 14px; }
-  .pr-total { margin-left: auto; font-size: 13.5px; color: var(--mut); font-weight: 550; }
-  .pr-total b { color: var(--txt); font-family: var(--mono); }
-  .pr-search { max-width: 260px; }
-  .pr-empty { padding: 48px 20px; text-align: center; color: var(--mut2); font-size: 15px; }
-</style>
-{% endblock %}
-
+{% block extra_head %}<style>
+.pr-qty { width:96px; height:40px; text-align:right; font-family:var(--mono); font-size:15px; font-weight:600; }.pr-qty.has { border-color:var(--blue); background:var(--blue-soft); }.pr-cat td { background:var(--sunk); font-size:11.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--mut); padding-top:14px; }.pr-total { margin-left:auto; font-size:13.5px; color:var(--mut); font-weight:550; }.pr-total b { color:var(--txt); font-family:var(--mono); }.pr-search { max-width:260px; }.pr-empty { padding:48px 20px; text-align:center; color:var(--mut2); font-size:15px; }
+</style>{% endblock %}
 {% block content %}
 {% if not branch %}
-  <div class="panel"><div class="pr-empty">There is no branch to request for yet.</div></div>
+<div class="panel">
+<div class="pr-empty">
+There is no branch to request for yet.
+</div>
+</div>
 {% else %}
-  {% if error %}
-  <div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>
-  {% endif %}
-  {% if is_open %}
-  <div class="banner b-blue" style="margin-bottom:14px"><svg><use href="#i-clock"/></svg>
-    <span>You can change this request until <b>{{ deadline|date:"D d M H:i" }}</b>. After that the kitchen starts from these numbers and it can't be changed.</span></div>
-  {% else %}
-  <div class="banner b-amber" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg>
-    <span>Requests for {{ day|date:"D d M" }} closed at <b>{{ deadline|date:"D d M H:i" }}</b>.
-      {% if req %}This request can no longer be changed.{% else %}{{ branch.name }} didn't request anything.{% endif %}
-      The first date you can still request for is
-      <a href="?branch={{ branch.id }}&amp;date={{ earliest|date:'Y-m-d' }}">{{ earliest|date:"D d M" }}</a>.</span></div>
-  {% endif %}
-
-  {% if is_open %}
-  <form method="post" id="prForm" class="panel" style="flex:none">
-    {% csrf_token %}
-    <div class="panel-h">
-      Products
-      <div class="ctl ctl-search pr-search">
-        <svg><use href="#i-search"/></svg>
-        <input type="search" id="prSearch" placeholder="Find a product" autocomplete="off">
-      </div>
-      <span class="pr-total" id="prTotal" aria-live="polite"></span>
-    </div>
-    <table class="tbl">
-      <thead><tr><th>Product</th><th class="r" style="width:130px">Quantity</th></tr></thead>
-      {% for g in groups %}
-      <tbody class="pr-group">
-        <tr class="pr-cat"><td colspan="2">{{ g.name }}</td></tr>
-        {% for r in g.rows %}
-        <tr class="pr-row" data-name="{{ r.name|lower }} {{ r.name_th|lower }}">
-          <td>
-            <label for="q-{{ r.key }}" style="font-weight:560">{{ r.name }}</label>
-            {% if r.name_th %}<div class="sub">{{ r.name_th }}</div>{% endif %}
-            {% if r.gone %}<div class="sub amber">No longer in this branch's catalogue — set 0 to remove it</div>{% endif %}
-          </td>
-          <td class="r">
-            <input class="inp pr-qty" id="q-{{ r.key }}" name="qty_{{ r.key }}" type="number"
-                   inputmode="numeric" min="0" max="{{ max_qty }}" step="1" placeholder="0"
-                   value="{{ r.shown }}" aria-label="Quantity of {{ r.name }}">
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      {% empty %}
-      <tbody><tr><td colspan="2" class="pr-empty">{{ branch.name }} has no active products.</td></tr></tbody>
-      {% endfor %}
-      <tbody id="prNoMatch" hidden><tr><td colspan="2" class="pr-empty">No products match.</td></tr></tbody>
-    </table>
+{% if error %}
+<div class="banner b-red" role="alert" style="margin-bottom:14px">
+<svg>
+<use href="#i-alert"/>
+</svg>
+<span>
+{{ error }}
+</span>
+</div>
+{% endif %}
+{% if reload_confirmation %}
+<div class="banner b-amber" role="alert" style="margin-bottom:14px">
+<svg>
+<use href="#i-alert"/>
+</svg>
+<span>
+Reload saved quantities and discard all your unsaved entries?
+</span>
+<form method="post">
+{% csrf_token %}
+<input type="hidden" name="branch_id" value="{{ branch.id }}">
+<input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
+<button class="btn btn-sm" type="submit" name="confirm_reload" value="1">
+Reload saved quantities
+</button>
+</form>
+</div>
+{% endif %}
+{% if unknown_rows %}
+<div class="banner b-amber" role="alert" style="margin-bottom:14px">
+<svg>
+<use href="#i-alert"/>
+</svg>
+<span>
+Some submitted rows are no longer available and were not saved:
+{% for row in unknown_rows %}
+<code>{{ row.key }}</code>
+{% if row.value != "" %}
+ ({{ row.value }})
+{% endif %}
+{% if not forloop.last %}
+,
+{% endif %}
+{% endfor %}
+.
+</span>
+</div>
+{% endif %}
+{% if is_open and not retained_readonly %}
+<div class="banner b-blue" style="margin-bottom:14px">
+<svg>
+<use href="#i-clock"/>
+</svg>
+<span>
+You can change this request until
+<b>
+{{ deadline|date:"D d M H:i" }}
+</b>
+.
+</span>
+</div>
+{% else %}
+<div class="banner b-amber" style="margin-bottom:14px">
+<svg>
+<use href="#i-alert"/>
+</svg>
+<span>
+Requests for {{ day|date:"D d M" }} are closed
+{% if deadline_legacy %}
+ under the adopted cutoff policy; the original deadline is unavailable
+{% endif %}
+.
+{% if retained_readonly %}
+<b>Nothing was saved; this is your retained draft.</b>
+{% elif req %}
+This request can no longer be changed.
+{% else %}
+{{ branch.name }} didn't request anything.
+{% endif %}
+ The first date you can still request for is
+<a href="?branch={{ branch.id }}&amp;date={{ earliest|date:'Y-m-d' }}">
+{{ earliest|date:"D d M" }}
+</a>
+.
+</span>
+</div>
+{% endif %}
+  {% if groups %}
+  <form method="post" enctype="multipart/form-data" id="prForm" class="panel" style="flex:none" data-form-kind="request">
+{% csrf_token %}
+<input type="hidden" name="branch_id" value="{{ branch.id }}">
+<input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
+<input type="hidden" name="request_id" value="{{ req.id|default:'' }}">
+<input type="hidden" name="request_revision" value="{{ request_revision }}">
+<input type="hidden" name="production_payload" id="prPayload" disabled>
+<div class="panel-h">
+Products
+<div class="ctl ctl-search pr-search">
+<svg>
+<use href="#i-search"/>
+</svg>
+<input type="search" id="prSearch" placeholder="Find a product" autocomplete="off">
+</div>
+<span class="pr-total" id="prTotal" aria-live="polite">
+</span>
+</div>
+<table class="tbl">
+<thead>
+<tr>
+<th>
+Product
+</th>
+<th class="r" style="width:130px">
+{% if conflict or retained_readonly %}
+Your draft
+{% else %}
+Quantity
+{% endif %}
+</th>
+</tr>
+</thead>
+{% for g in groups %}
+<tbody class="pr-group">
+<tr class="pr-cat">
+<td colspan="2">
+{{ g.name }}
+</td>
+</tr>
+{% for r in g.rows %}
+<tr class="pr-row" data-name="{{ r.name|lower }} {{ r.name_th|lower }}">
+<td>
+<label for="q-{{ r.key }}" style="font-weight:560">
+{{ r.name }}</label>
+{% if r.name_th %}
+<div class="sub">{{ r.name_th }}</div>
+{% endif %}
+{% if r.gone %}
+<div class="sub amber">No longer in this branch's catalogue</div>
+{% endif %}
+{% if r.unavailable %}
+<div class="sub amber">Unavailable: a retained request line has the same product key</div>
+{% endif %}
+{% if conflict %}
+<div class="sub">Saved: {{ r.saved }}</div>
+{% endif %}
+</td>
+<td class="r">
+<input class="inp pr-qty" id="q-{{ r.key }}" name="qty_{{ r.key }}" type="number" inputmode="numeric" min="0" max="{{ max_qty }}" step="1" placeholder="0" value="{{ r.shown }}" data-key="{{ r.key }}" data-base="{{ r.qty|default:'' }}" aria-label="Quantity of {{ r.name }}"
+{% if retained_readonly or not is_open %}
+readonly
+{% endif %}
+{% if r.unavailable %}
+disabled
+{% endif %}
+>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+{% endfor %}
+<tbody id="prNoMatch" hidden>
+<tr>
+<td colspan="2" class="pr-empty">
+No products match.
+</td>
+</tr>
+</tbody>
+</table>
     <div class="form-actions">
-      <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save request</button>
-      <span class="sub">Leave a box empty or 0 for products you don't need.</span>
-    </div>
+{% if is_open and not conflict and not resave_blocked and not retained_readonly and not reload_confirmation %}
+<button type="submit" class="btn btn-blue" data-compact-save
+{% if compact_required %}
+ disabled aria-describedby="prCapacity"
+{% endif %}
+>
+<svg>
+<use href="#i-check"/>
+</svg>
+ Save request</button>
+{% endif %}
+{% if conflict or resave_blocked %}
+<button class="btn" type="submit" name="reload_saved" value="1" data-reload-saved data-url="?branch={{ branch.id }}&amp;date={{ day|date:'Y-m-d' }}">Reload saved quantities
+</button>
+<span class="sub">
+Reloading discards all unsaved entries.</span>
+{% endif %}
+<span class="sub" id="prCapacity">Leave a box empty or 0 for products you don't need.</span>
+{% if compact_required %}
+<noscript>
+<span class="sub">
+This form has more than 900 editable rows and needs JavaScript to save safely.
+</span>
+</noscript>
+{% endif %}
+</div>
   </form>
-  {% elif req %}
-  <div class="panel" style="flex:none">
-    <div class="panel-h">Requested <span class="pr-total"><b>{{ total }}</b> pieces · <b>{{ lines }}</b> products</span></div>
-    <table class="tbl">
-      <thead><tr><th>Product</th><th class="r" style="width:130px">Quantity</th></tr></thead>
-      {% for g in groups %}
-      <tbody>
-        {% for r in g.rows %}{% if r.qty %}
-        {% ifchanged g.name %}<tr class="pr-cat"><td colspan="2">{{ g.name }}</td></tr>{% endifchanged %}
-        <tr><td>{{ r.name }}</td><td class="r money" style="font-weight:620">{{ r.qty }}</td></tr>
-        {% endif %}{% endfor %}
-      </tbody>
-      {% endfor %}
-    </table>
-  </div>
   {% endif %}
 {% endif %}
 {% endblock %}
@@ -123,63 +242,168 @@
 {% block extra_scripts %}
 <script>
 (function () {
-  var form = document.getElementById("prForm");
+  var form = document.getElementById('prForm');
   if (!form) return;
-  var boxes = Array.prototype.slice.call(form.querySelectorAll(".pr-qty"));
-  var total = document.getElementById("prTotal");
-  var search = document.getElementById("prSearch");
-  var noMatch = document.getElementById("prNoMatch");
-  var saved = boxes.map(function (b) { return b.value; });
+
+  var boxes = [].slice.call(form.querySelectorAll('.pr-qty:not([disabled])'));
+  var total = document.getElementById('prTotal');
+  var search = document.getElementById('prSearch');
+  var noMatch = document.getElementById('prNoMatch');
+  var saves = [].slice.call(document.querySelectorAll('[data-compact-save]'));
+  var payload = document.getElementById('prPayload');
+  var capacity = document.getElementById('prCapacity');
+  var saved = boxes.map(function (box) { return box.value; });
   var submitting = false;
 
   function refresh() {
-    var pieces = 0, products = 0;
-    boxes.forEach(function (b) {
-      var n = parseInt(b.value, 10);
-      var has = n > 0;
-      b.classList.toggle("has", has);
-      if (has) { pieces += n; products += 1; }
+    var pieces = 0;
+    var products = 0;
+    boxes.forEach(function (box) {
+      var quantity = parseInt(box.value, 10);
+      var hasQuantity = quantity > 0;
+      box.classList.toggle('has', hasQuantity);
+      if (hasQuantity) {
+        pieces += quantity;
+        products += 1;
+      }
     });
-    total.innerHTML = "<b>" + pieces.toLocaleString() + "</b> piece" + (pieces === 1 ? "" : "s") +
-      " · <b>" + products + "</b> product" + (products === 1 ? "" : "s");
+    if (total) {
+      total.innerHTML = '<b>' + pieces.toLocaleString() + '</b> piece' +
+        (pieces === 1 ? '' : 's') + ' · <b>' + products + '</b> product' +
+        (products === 1 ? '' : 's');
+    }
   }
-  function visible() { return boxes.filter(function (b) { return !b.closest("tr").hidden; }); }
 
-  form.addEventListener("input", refresh);
-  // Enter goes to the next box: going down a long list typing numbers, an
-  // Enter that submitted would save half an order.
-  form.addEventListener("keydown", function (e) {
-    if (e.key !== "Enter") return;
-    if (e.target === search) { e.preventDefault(); var first = visible()[0]; if (first) first.focus(); return; }
-    if (!e.target.classList.contains("pr-qty")) return;
-    e.preventDefault();
-    var list = visible();
-    var next = list[list.indexOf(e.target) + (e.shiftKey ? -1 : 1)];
-    if (next) { next.focus(); next.select(); }
+  function visible() {
+    return boxes.filter(function (box) { return !box.closest('tr').hidden; });
+  }
+
+  function compact() {
+    var data = {
+      version: 1,
+      kind: 'request',
+      request_id: form.request_id.value || null,
+      request_revision: Number(form.request_revision.value),
+      rows: boxes.map(function (box) {
+        return {key: box.dataset.key, value: box.value, base_value: box.dataset.base};
+      })
+    };
+    var text = JSON.stringify(data);
+    if (data.rows.length > 10000 || new Blob([text]).size > 2097152) {
+      throw Error('This production form exceeds its supported capacity.');
+    }
+    payload.value = text;
+  }
+
+  function restoreLegacyInputs() {
+    boxes.forEach(function (box) { box.disabled = false; });
+    payload.disabled = true;
+    payload.value = '';
+  }
+
+  function submitCompact() {
+    compact();
+    payload.disabled = false;
+    boxes.forEach(function (box) { box.disabled = true; });
+  }
+
+  function validateCapacity() {
+    try {
+      compact();
+      payload.disabled = true;
+      payload.value = '';
+      saves.forEach(function (save) { save.disabled = false; });
+      return true;
+    } catch (error) {
+      saves.forEach(function (save) { save.disabled = true; });
+      if (capacity) capacity.textContent = error.message;
+      return false;
+    }
+  }
+
+  form.addEventListener('input', refresh);
+  form.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter') return;
+    if (event.target === search) {
+      event.preventDefault();
+      var first = visible()[0];
+      if (first) first.focus();
+      return;
+    }
+    if (!event.target.classList.contains('pr-qty')) return;
+    event.preventDefault();
+    var inputs = visible();
+    var next = inputs[inputs.indexOf(event.target) + (event.shiftKey ? -1 : 1)];
+    if (next) {
+      next.focus();
+      next.select();
+    }
   });
-  form.addEventListener("focusin", function (e) {
-    if (e.target.classList.contains("pr-qty")) e.target.select();
+  form.addEventListener('focusin', function (event) {
+    if (event.target.classList.contains('pr-qty')) event.target.select();
   });
-  if (search) search.addEventListener("input", function () {
-    var q = search.value.trim().toLowerCase();
-    var shown = 0;
-    form.querySelectorAll(".pr-group").forEach(function (g) {
-      var any = false;
-      g.querySelectorAll(".pr-row").forEach(function (r) {
-        var show = !q || r.dataset.name.indexOf(q) !== -1;
-        r.hidden = !show;
-        if (show) { any = true; shown++; }
+  if (search) {
+    search.addEventListener('input', function () {
+      var query = search.value.trim().toLowerCase();
+      var shown = 0;
+      form.querySelectorAll('.pr-group').forEach(function (group) {
+        var any = false;
+        group.querySelectorAll('.pr-row').forEach(function (row) {
+          var show = !query || row.dataset.name.indexOf(query) !== -1;
+          row.hidden = !show;
+          if (show) {
+            any = true;
+            shown += 1;
+          }
+        });
+        group.hidden = !any;
       });
-      g.hidden = !any;
+      noMatch.hidden = shown !== 0;
     });
-    noMatch.hidden = shown !== 0;
+  }
+
+  form.addEventListener('submit', function (event) {
+    if (event.defaultPrevented) return;
+    try {
+      submitCompact();
+      submitting = true;
+      window.setTimeout(function () {
+        if (event.defaultPrevented) {
+          submitting = false;
+          restoreLegacyInputs();
+        }
+      }, 0);
+    } catch (error) {
+      event.preventDefault();
+      submitting = false;
+      restoreLegacyInputs();
+      saves.forEach(function (save) { save.disabled = true; });
+      if (capacity) capacity.textContent = error.message;
+    }
   });
-  form.addEventListener("submit", function () { submitting = true; });
-  window.addEventListener("beforeunload", function (e) {
-    if (submitting) return;
-    if (boxes.some(function (b, i) { return b.value !== saved[i]; })) { e.preventDefault(); e.returnValue = ""; }
+
+  document.querySelectorAll('[data-reload-saved]').forEach(function (link) {
+    link.addEventListener('click', function (event) {
+      event.preventDefault();
+      if (confirm('Reload saved quantities and discard all your unsaved entries?')) {
+        window.location = link.dataset.url;
+      }
+    });
   });
+  window.addEventListener('beforeunload', function (event) {
+    if (!submitting && boxes.some(function (box, index) { return box.value !== saved[index]; })) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+  window.addEventListener('pageshow', function () {
+    submitting = false;
+    restoreLegacyInputs();
+    validateCapacity();
+  });
+
   refresh();
+  validateCapacity();
 })();
 </script>
 {% endblock %}
