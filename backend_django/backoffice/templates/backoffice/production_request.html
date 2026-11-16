@@ -127,7 +127,7 @@ This request can no longer be changed.
 </div>
 {% endif %}
   {% if groups %}
-  <form method="post" enctype="multipart/form-data" id="prForm" class="panel" style="flex:none" data-form-kind="request">
+  <form method="post" action="?branch={{ branch.id }}&amp;date={{ day|date:'Y-m-d' }}" enctype="multipart/form-data" id="prForm" class="panel" style="flex:none" data-form-kind="request" data-retained-draft="{% if has_retained_draft %}true{% else %}false{% endif %}">
 {% csrf_token %}
 <input type="hidden" name="branch_id" value="{{ branch.id }}">
 <input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
@@ -252,7 +252,8 @@ This form has more than 900 editable rows and needs JavaScript to save safely.
   var saves = [].slice.call(document.querySelectorAll('[data-compact-save]'));
   var payload = document.getElementById('prPayload');
   var capacity = document.getElementById('prCapacity');
-  var saved = boxes.map(function (box) { return box.value; });
+  var saved = boxes.map(function (box) { return box.dataset.base; });
+  var retainedDraft = form.dataset.retainedDraft === 'true';
   var submitting = false;
 
   function refresh() {
@@ -391,7 +392,7 @@ This form has more than 900 editable rows and needs JavaScript to save safely.
     });
   });
   window.addEventListener('beforeunload', function (event) {
-    if (!submitting && boxes.some(function (box, index) { return box.value !== saved[index]; })) {
+    if (!submitting && (retainedDraft || boxes.some(function (box, index) { return box.value !== saved[index]; }))) {
       event.preventDefault();
       event.returnValue = '';
     }

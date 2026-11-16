@@ -63,6 +63,7 @@ def _same_query_scope(request, key, value):
 
 
 def _request_scope(request, branches):
+    production_forms.check_body_size(request)
     branch_id = request.POST.get("branch_id")
     day_text = request.POST.get("delivery_date")
     if not branch_id:
@@ -77,6 +78,7 @@ def _request_scope(request, branches):
 
 
 def _request_payload(request):
+    production_forms.check_body_size(request)
     if request.POST.get("production_payload"):
         return production_forms.parse_payload(request, "request")
     count = production_forms.fallback_row_count(request, "qty_")
@@ -106,6 +108,7 @@ def _packing_scope(request, *, post=False):
     day = _parse_date(request.GET.get("date"), default)
     raw_category = request.GET.get("category") or ""
     if post:
+        production_forms.check_body_size(request)
         mode = request.POST.get("mode")
         raw_day = request.POST.get("delivery_date")
         raw_category = request.POST.get("category", "")
@@ -142,6 +145,7 @@ def _packing_presentation(scope):
 
 
 def _packing_payload(request):
+    production_forms.check_body_size(request)
     if request.POST.get("production_payload"):
         return production_forms.parse_payload(request, "packing")
     count = production_forms.fallback_row_count(request, "packed_")
@@ -185,9 +189,12 @@ def _request_rows_context(branch, day, posted, conflicts):
     rows = production.request_form_rows(branch, req)
     known = {row["key"] for row in rows}
     for row in rows:
+        product_key = str(row["product_id"]) if row.get("product_id") else None
+        if product_key:
+            known.add(product_key)
         row["saved"] = row["qty"]
-        row["shown"] = posted.get(row["key"], row["qty"] or "")
-        row["conflict"] = conflicts.get(row["key"])
+        row["shown"] = posted.get(row["key"], posted.get(product_key, row["qty"] or ""))
+        row["conflict"] = conflicts.get(row["key"], conflicts.get(product_key))
     unknown_rows = [{"key": key, "value": value} for key, value in posted.items() if key not in known]
     return req, rows, unknown_rows
 
@@ -238,7 +245,7 @@ def production_request(request):
             posted = production_forms.submitted_draft(request, "request")
             error = f"{exc} Nothing was saved."
             status = 400
-            resave_blocked = True
+            resave_blocked = not str(exc).startswith("Quantities must be whole numbers")
         except production.RequestLocked:
             error = f"Requests for {_day(day)} are closed. Nothing was saved."
             retained_readonly = True
@@ -280,8 +287,8 @@ def production_request(request):
         "conflict": status == 409, "reload_confirmation": reload_confirmation,
         "resave_blocked": resave_blocked,
         "compact_required": sum(not row.get("unavailable", False) for row in rows) > production_forms.MAX_FALLBACK_FIELDS,
-        "deadline_legacy": getattr(production, "deadline_provenance", lambda value: "admin_change")(day) == "legacy_baseline",
-        "unknown_rows": unknown_rows,
+        "deadline_legacy": getattr(production, "is_legacy_deadline", lambda value: False)(day),
+        "unknown_rows": unknown_rows, "has_retained_draft": bool(posted),
     }, status=status)
     return response
 
@@ -295,16 +302,21 @@ def production_requests(request):
           .select_related("branch").prefetch_related("items").order_by("-delivery_date", "branch__name"))
     visible = []
     for request_row in qs:
-        items = [item for item in request_row.items.all() if item.requested_qty]
-        # Retained empty parents are version tombstones, not normal history.
-        if items:
-            visible.append((request_row, items))
+        request_items = [item for item in request_row.items.all() if item.requested_qty]
+        # A retained item with a packed value remains meaningful history, even
+        # after its requested quantity is cleared. Its supervisor summary must
+        # still use only requested values and never reveal packing details.
+        if request_items or any(item.packed_qty is not None for item in request_row.items.all()):
+            visible.append((request_row, request_items))
     page_obj = Paginator(visible, 50).get_page(request.GET.get("page"))
     rows = []
     for row, items in page_obj.object_list:
-        summary = ", ".join(f"{item.product_name} ×{item.requested_qty}" for item in items[:2])
-        if len(items) > 2:
-            summary += f" +{len(items) - 2} more"
+        if items:
+            summary = ", ".join(f"{item.product_name} ×{item.requested_qty}" for item in items[:2])
+            if len(items) > 2:
+                summary += f" +{len(items) - 2} more"
+        else:
+            summary = "No current requested quantities"
         rows.append({"req": row, "summary": summary, "pieces": sum(item.requested_qty for item in items),
                      "products": len(items), "status": production.request_status(row, now)})
     return render(request, "backoffice/production_requests.html", {
@@ -318,25 +330,26 @@ def _kitchen_scope(request):
     day = _parse_date(request.GET.get("date"), production.latest_locked_date(now))
     raw_group = request.GET.get("group") or ""
     deadline = production.locks_at(day)
-    return day, raw_group, _filter_param(raw_group), deadline, production.is_open(day, now)
+    return day, raw_group, _filter_param(raw_group), deadline, production.is_open(day, now), production.is_legacy_deadline(day)
 
 
 @login_required
 def production_kitchen(request):
-    day, raw_group, group, deadline, is_open = _kitchen_scope(request)
+    day, raw_group, group, deadline, is_open, deadline_legacy = _kitchen_scope(request)
     groups = production.kitchen_groups(day)
     return render(request, "backoffice/production_kitchen.html", {
         "active": "production_kitchen", "hide_branch": True, "hide_dates": True, "day": day,
         "group": group, "raw_group": raw_group,
         "groups": [{"name": group or "Ungrouped", "param": group or NONE_PARAM} for group in groups],
         "data": production.kitchen_totals(day, group), "deadline": deadline, "is_open": is_open,
+        "deadline_legacy": deadline_legacy,
         "export_qs": urlencode({"date": day.isoformat(), "group": raw_group}),
     })
 
 
 @login_required
 def production_kitchen_export(request):
-    day, _raw, group, deadline, is_open = _kitchen_scope(request)
+    day, _raw, group, deadline, is_open, _deadline_legacy = _kitchen_scope(request)
     data = production.kitchen_totals(day, group)
     response, writer = _csv_response(f"production-totals-{day.isoformat()}.csv")
     writer.writerow(["Production totals"])
@@ -359,6 +372,7 @@ def production_packing(request):
     conflict = False
     reload_confirmation = False
     resave_blocked = False
+    scope = None
     try:
         scope = _packing_scope(request, post=request.method == "POST")
         if request.method == "POST" and request.POST.get("confirm_reload") == "1":
@@ -388,8 +402,9 @@ def production_packing(request):
         posted = production_forms.submitted_draft(request, "packing")
         error = str(exc)
         status = 400
-        resave_blocked = True
-        scope = _packing_scope(request)
+        resave_blocked = not str(exc).startswith("Packed quantities must be whole numbers")
+        if scope is None:
+            scope = _packing_scope(request)
     except getattr(production, "RevisionConflict", ()) as exc:
         error = "Nothing was saved: one or more packed cells changed in another session. Reload saved quantities to discard this draft."
         conflicts = getattr(exc, "conflicts", {}) or {}

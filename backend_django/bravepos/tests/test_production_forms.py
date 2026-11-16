@@ -4,16 +4,21 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 from backoffice import production_forms
+from backoffice.production_views import _request_payload
 from bravepos import production
-from bravepos.models import Branch, Category, Product, ProductionRequestItem
+from bravepos.models import (
+    Branch, Category, Product, ProductionCutoffPolicy, ProductionRequestItem,
+    Settings,
+)
 from bravepos.tests.test_user_management_and_audit import make_user, sign_in
 
 
@@ -83,6 +88,14 @@ class ProductionPayloadTests(SimpleTestCase):
         })
         with self.assertRaises(production_forms.PayloadError):
             production_forms.parse_payload(too_many, "request")
+
+    def test_fallback_payload_checks_the_body_limit_before_field_parsing(self):
+        request = self.factory.post("/backoffice/production/request", {
+            "request_id": "", "request_revision": "0", "qty_product": "1",
+        })
+        request.META["CONTENT_LENGTH"] = str(production_forms.MAX_BODY_BYTES + 1)
+        with self.assertRaises(production_forms.PayloadError):
+            _request_payload(request)
 
 
 class ProductionFormContextTests(TestCase):
@@ -165,6 +178,23 @@ class ProductionFormContextTests(TestCase):
             2,
         )
 
+    def test_request_history_keeps_packed_only_item_without_packing_details(self):
+        request_row = production.save_request(
+            self.branch, self.day, {str(self.product.id): 3}, self.user,
+        )
+        item = request_row.items.get()
+        production.save_packed(self.day, {str(item.id): 0}, self.user)
+        production.save_request(self.branch, self.day, {str(self.product.id): 0}, self.user)
+
+        response = self.client.get(reverse("backoffice:production_requests"))
+        self.assertEqual(response.status_code, 200)
+        row = next(row for row in response.context["rows"] if row["req"].id == request_row.id)
+        self.assertEqual(row["summary"], "No current requested quantities")
+        self.assertEqual((row["products"], row["pieces"]), (0, 0))
+        self.assertContains(response, "No current requested quantities")
+        self.assertNotContains(response, self.product.name)
+        self.assertNotContains(response, "Packed by")
+
 
 class ProductionCompactTemplateTests(SimpleTestCase):
     """Run the rendered compact-submit functions in Node without a browser DOM."""
@@ -231,3 +261,52 @@ for (const [filename, prefix] of [
             )
             self.assertIn('event.defaultPrevented', template)
             self.assertIn('restoreLegacyInputs();', template)
+        self.assertIn('form="pkForm" name="reload_saved"', packing)
+        self.assertIn('if (!boxes.length) return;', packing)
+        self.assertIn('cell.conflict.packed_qty', packing)
+
+
+class ProductionLegacyDeadlinePresentationTests(TestCase):
+    """Only deadlines already past at baseline adoption are unknowable."""
+
+    def setUp(self):
+        self.now = timezone.make_aware(datetime(2026, 11, 16, 13, 0))
+        self.historic_day = self.now.date() - timedelta(days=1)
+        self.future_day = self.now.date() + timedelta(days=2)
+        Settings.objects.update_or_create(
+            id="shop", defaults={"production_cutoff": time(18, 0)},
+        )
+        ProductionCutoffPolicy.objects.all().delete()
+        ProductionCutoffPolicy.objects.create(
+            effective_from=datetime.min.date(),
+            cutoff=time(18, 0),
+            activated_at=timezone.make_aware(datetime(2026, 11, 16, 12, 0)),
+            source=ProductionCutoffPolicy.Source.LEGACY_BASELINE,
+        )
+        self.user = make_user(username="legacy-kitchen", email="legacy-kitchen@example.com", role="viewer")
+        sign_in(self.client, self.user)
+
+    def _get_kitchen(self, day):
+        with patch("backoffice.production_views.timezone.now", return_value=self.now):
+            return self.client.get(
+                reverse("backoffice:production_kitchen") + f"?date={day.isoformat()}"
+            )
+
+    def test_historic_kitchen_omits_clamped_adoption_timestamp(self):
+        self.assertTrue(production.is_legacy_deadline(self.historic_day))
+        response = self._get_kitchen(self.historic_day)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["deadline_legacy"])
+        self.assertContains(response, "original deadline is unavailable")
+        self.assertNotContains(response, "requests closed at")
+
+    def test_future_baseline_deadline_remains_exact_and_known(self):
+        self.assertFalse(production.is_legacy_deadline(self.future_day))
+        response = self._get_kitchen(self.future_day)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["deadline_legacy"])
+        self.assertEqual(response.context["deadline"], timezone.make_aware(
+            datetime.combine(self.future_day - timedelta(days=1), time(18, 0))
+        ))
+        self.assertContains(response, "Not final")
+        self.assertNotContains(response, "original deadline is unavailable")

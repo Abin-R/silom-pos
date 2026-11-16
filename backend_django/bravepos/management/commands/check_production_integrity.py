@@ -10,8 +10,15 @@ from datetime import date
 from uuid import UUID
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Q
+from django.db.models.functions import Lower, Trim
 
-from bravepos.models import ProductionRequestItem
+from bravepos.models import Product, ProductionRequestItem
+
+
+CATALOGUE_LOOKUP_LIMIT = 10000
+CATALOGUE_KEY_LIMIT = 10000
+CATALOGUE_KEY_CHUNK = 500
 
 
 def _current_product_key(barcode, name):
@@ -58,11 +65,13 @@ class Command(BaseCommand):
 
         by_request_product = defaultdict(list)
         by_request_key = defaultdict(list)
+        snapshot_keys = defaultdict(list)
         current_keys = {}
         for item in items:
             if item["product_id"]:
                 by_request_product[(item["request_id"], item["product_id"])].append(item)
             by_request_key[(item["request_id"], item["match_key"])].append(item)
+            snapshot_keys[(item["request__branch_id"], item["match_key"])].append(item)
 
             if item["product_id"] and item["product__branch_id"] != item["request__branch_id"]:
                 findings += 1
@@ -114,6 +123,69 @@ class Command(BaseCommand):
                         request=request_id,
                         key=match_key,
                         items=",".join(str(item["id"]) for item in collisions),
+                    )
+                )
+
+        # A saved item's product may have been deleted, so linked-item checks
+        # alone cannot see a new active catalogue product that reuses its
+        # snapshot key.  This separate, explicitly bounded scan is scoped to
+        # the branches and keys represented by the item inspection.
+        branch_ids = {item["request__branch_id"] for item in items}
+        snapshot_key_list = sorted(snapshot_keys, key=lambda pair: (str(pair[0]), pair[1]))
+        key_truncated = len(snapshot_key_list) > CATALOGUE_KEY_LIMIT
+        snapshot_key_list = snapshot_key_list[:CATALOGUE_KEY_LIMIT]
+        catalogue, catalogue_truncated = [], False
+        for start in range(0, len(snapshot_key_list), CATALOGUE_KEY_CHUNK):
+            if len(catalogue) > CATALOGUE_LOOKUP_LIMIT:
+                catalogue_truncated = True
+                break
+            chunk = snapshot_key_list[start:start + CATALOGUE_KEY_CHUNK]
+            barcodes = [key[2:] for _branch, key in chunk if key.startswith("b:")]
+            names = [key[2:] for _branch, key in chunk if key.startswith("n:")]
+            candidates = Product.objects.filter(
+                active=True, branch_id__in={branch for branch, _key in chunk},
+            ).annotate(
+                production_barcode=Trim("barcode"),
+                production_name=Lower(Trim("name")),
+            ).filter(
+                Q(production_barcode__in=barcodes)
+                | Q(production_barcode="", production_name__in=names)
+            ).order_by("id").values("id", "branch_id", "barcode", "name")[:
+                CATALOGUE_LOOKUP_LIMIT + 1 - len(catalogue)
+            ]
+            catalogue.extend(candidates)
+        catalogue_truncated = catalogue_truncated or len(catalogue) > CATALOGUE_LOOKUP_LIMIT
+        catalogue = catalogue[:CATALOGUE_LOOKUP_LIMIT]
+        if catalogue_truncated:
+            self.stdout.write(self.style.WARNING(
+                "CATALOGUE INCOMPLETE: inspected the first {limit} active products in the "
+                "item scope; narrow --branch or inspect the remaining catalogue separately."
+                .format(limit=CATALOGUE_LOOKUP_LIMIT)
+            ))
+        if key_truncated:
+            self.stdout.write(self.style.WARNING(
+                "CATALOGUE INCOMPLETE: inspected the first {limit} snapshot keys; narrow "
+                "--date and --branch before treating replacement checks as complete."
+                .format(limit=CATALOGUE_KEY_LIMIT)
+            ))
+        reported_replacements = set()
+        for product in catalogue:
+            product_key = _current_product_key(product["barcode"], product["name"])
+            for saved in snapshot_keys[(product["branch_id"], product_key)]:
+                # The saved item is already linked to this exact product, so
+                # it is ordinary history, not a replacement collision.
+                if saved["product_id"] == product["id"]:
+                    continue
+                pair = (str(saved["id"]), str(product["id"]))
+                if pair in reported_replacements:
+                    continue
+                reported_replacements.add(pair)
+                findings += 1
+                self.stdout.write(
+                    "INSPECT active catalogue replacement collides with saved snapshot key: "
+                    "request={request} item={item} replacement_product={product} key={key!r}".format(
+                        request=saved["request_id"], item=saved["id"], product=product["id"],
+                        key=product_key,
                     )
                 )
 

@@ -46,7 +46,7 @@ from .models import (
     Branch, Product, ProductionRequest, ProductionRequestItem,
 )
 from .production_policy import (
-    cutoff_time, deadline_provenance, earliest_open_date, is_open, latest_locked_date, lock_settings,
+    cutoff_time, deadline_provenance, earliest_open_date, is_legacy_deadline, is_open, latest_locked_date, lock_settings,
     locks_at,
 )
 
@@ -177,6 +177,7 @@ def request_form_rows(branch, req) -> list:
     for it in items:
         rows.append({
             "key": f"item:{it.id}",
+            "product_id": it.product_id,
             "name": it.product_name,
             "name_th": "",
             "category_name": it.category_name,
@@ -193,6 +194,7 @@ def request_form_rows(branch, req) -> list:
             continue
         rows.append({
             "key": str(p.id),
+            "product_id": p.id,
             "name": p.name,
             "name_th": p.name_th,
             "category_name": p.category.name if p.category_id else "",
@@ -242,6 +244,55 @@ def _locked_request(branch, delivery_date, staff, name):
 
 def _visible_request(req, items):
     return req if any(it.requested_qty or it.packed_qty is not None for it in items) else None
+
+
+def _refuse_ambiguous_saved_items(parents):
+    """Refuse writes against parent records with irreconcilable product links.
+
+    A renamed product and a null product FK are normal historical states.  By
+    contrast, two non-null rows pointing at the same product on one request,
+    or a product owned by another branch, leave no safe identity to update.
+    Parent rows are already locked by both save paths when this runs.
+    """
+    parent_branches = {parent.id: parent.branch_id for parent in parents}
+    if not parent_branches:
+        return
+    records = list(ProductionRequestItem.objects.filter(
+        request_id__in=parent_branches,
+    ).values("id", "request_id", "product_id", "product__branch_id"))
+    by_product = {}
+    conflicts = {}
+    keys = []
+    for record in records:
+        item_key = f"item:{record['id']}"
+        product_id = record["product_id"]
+        if product_id is not None:
+            duplicate_key = (record["request_id"], product_id)
+            duplicate = by_product.setdefault(duplicate_key, [])
+            duplicate.append(record)
+            if record["product__branch_id"] != parent_branches[record["request_id"]]:
+                keys.append(item_key)
+                conflicts[item_key] = {
+                    "reason": "cross_branch_product_link",
+                    "request": str(record["request_id"]),
+                    "product": str(product_id),
+                }
+    for (request_id, product_id), linked in by_product.items():
+        if len(linked) > 1:
+            for record in linked:
+                item_key = f"item:{record['id']}"
+                keys.append(item_key)
+                conflicts[item_key] = {
+                    "reason": "duplicate_product_link",
+                    "request": str(request_id),
+                    "product": str(product_id),
+                }
+    if conflicts:
+        raise CatalogueConflict(
+            "This request has ambiguous saved catalogue links; nothing was saved.",
+            keys=keys,
+            conflicts=conflicts,
+        )
 
 
 @transaction.atomic
@@ -294,6 +345,7 @@ def save_request(
     else:
         req, created = existing, False
     items = list(req.items.select_for_update().order_by("pk"))
+    _refuse_ambiguous_saved_items([req])
     if strict:
         current_id = str(req.id)
         if ((expected_request_id is None and not created)
@@ -598,6 +650,7 @@ def save_packed(delivery_date, values, user=None, *, expected_revisions=None, st
                      .filter(id__in=keys, request_id__in=locked_parent_ids).order_by("pk"))
     except (ValidationError, ValueError):
         items = []
+    _refuse_ambiguous_saved_items(parents)
     by_id = {str(item.id): item for item in items}
 
     unknown = [key for key in keys if key not in by_id]

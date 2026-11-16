@@ -128,10 +128,3 @@ def submitted_draft(request, kind: str) -> dict[str, str]:
             pass
     prefix = "qty_" if kind == "request" else "packed_"
     return {key[len(prefix):]: value for key, value in request.POST.items() if key.startswith(prefix)}
-
-
-def compact_rows_from_inputs(rows, kind):
-    """Build a v1 envelope on the server for the <=900 field no-JS fallback."""
-    if len(rows) > MAX_FALLBACK_FIELDS:
-        raise PayloadError("This grid is too large to save without the compact form handler.")
-    return rows

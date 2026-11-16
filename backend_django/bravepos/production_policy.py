@@ -48,6 +48,23 @@ def deadline_provenance(delivery_date) -> str:
     return policy.source if policy else ProductionCutoffPolicy.Source.LEGACY_BASELINE
 
 
+def is_legacy_deadline(delivery_date) -> bool:
+    """Whether the displayed legacy deadline was clamped at policy adoption.
+
+    The migration's baseline policy is valid for future delivery dates, whose
+    cutoff time remains known.  It cannot recover a deadline that was already
+    in the past when the policy was adopted, so only that clamped case should
+    be labelled as unavailable in the UI.
+    """
+    policy = policy_for_date(delivery_date)
+    if policy is None or policy.source != ProductionCutoffPolicy.Source.LEGACY_BASELINE:
+        return False
+    arithmetic_deadline = timezone.make_aware(datetime.datetime.combine(
+        delivery_date - datetime.timedelta(days=1), policy.cutoff,
+    ))
+    return arithmetic_deadline < policy.activated_at
+
+
 def locks_at(delivery_date, cutoff=None) -> datetime.datetime:
     """Return the aware deadline for a delivery date in the shop timezone.
 

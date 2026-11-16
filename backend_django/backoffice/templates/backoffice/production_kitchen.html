@@ -43,6 +43,9 @@
 {% if is_open %}
 <div class="banner b-amber" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg>
   <span>Not final — branches can still change these numbers until <b>{{ deadline|date:"D d M H:i" }}</b>.</span></div>
+{% elif deadline_legacy %}
+<div class="banner b-green" style="margin-bottom:14px"><svg><use href="#i-check"/></svg>
+  <span>Final — requests are closed under the adopted cutoff policy; the original deadline is unavailable.</span></div>
 {% else %}
 <div class="banner b-green" style="margin-bottom:14px"><svg><use href="#i-check"/></svg>
   <span>Final — requests closed at {{ deadline|date:"D d M H:i" }}.</span></div>

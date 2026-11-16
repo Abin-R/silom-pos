@@ -177,17 +177,15 @@ Reload saved quantities and discard all your unsaved entries?
 {% else %}
 Your complete draft remains below. Reloading saved quantities discards it only after confirmation.
 {% endif %}
-</span><form method="post">
-{% csrf_token %}
-<input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
-<input type="hidden" name="mode" value="{{ view }}">
-<input type="hidden" name="category" value="{{ raw_category }}">
+</span>
 {% if reload_confirmation %}
+<form method="post" action="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}">
+{% csrf_token %}<input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}"><input type="hidden" name="mode" value="{{ view }}"><input type="hidden" name="category" value="{{ raw_category }}">
 <button class="btn btn-sm" type="submit" name="confirm_reload" value="1">Reload saved quantities</button>
-{% else %}
-<button class="btn btn-sm" type="submit" name="reload_saved" value="1" data-reload-saved data-url="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}">Reload saved quantities</button>
-{% endif %}
 </form>
+{% else %}
+<button class="btn btn-sm" type="submit" form="pkForm" name="reload_saved" value="1" data-reload-saved data-url="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}">Reload saved quantities</button>
+{% endif %}
 </div>
 {% endif %}
 {% if view == 'live' and is_open and tables %}
@@ -225,7 +223,7 @@ Nothing was packed for {{ day|date:"D d M Y" }}
 </div>
 </div>
 {% else %}
-<form method="post" enctype="multipart/form-data" id="pkForm" data-form-kind="packing">
+<form method="post" action="?date={{ day|date:'Y-m-d' }}{% if raw_category %}&amp;category={{ raw_category }}{% endif %}" enctype="multipart/form-data" id="pkForm" data-form-kind="packing">
 {% csrf_token %}
 <input type="hidden" name="delivery_date" value="{{ day|date:'Y-m-d' }}">
 <input type="hidden" name="mode" value="{{ view }}">
@@ -311,7 +309,7 @@ aria-invalid="true" aria-describedby="conflict-{{ cell.id }}"
 {% endif %}
 >
 {% if cell.conflict is not None %}
-<span class="pk-conflict" id="conflict-{{ cell.id }}">Saved: {{ cell.conflict }}</span>
+<span class="pk-conflict" id="conflict-{{ cell.id }}">Saved: {% if cell.conflict.packed_qty is None %}blank{% else %}{{ cell.conflict.packed_qty }}{% endif %}</span>
 {% endif %}
 {% else %}
 <span class="pk-none">—</span>
@@ -416,6 +414,7 @@ This grid has more than 900 editable cells and needs JavaScript to save safely.
   if (!form) return;
 
   var boxes = [].slice.call(form.querySelectorAll('.pk-in'));
+  if (!boxes.length) return;
   var saves = [].slice.call(document.querySelectorAll('[data-compact-save]'));
   var payload = document.getElementById('pkPayload');
   var baseline = document.getElementById('pkBaseline');

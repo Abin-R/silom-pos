@@ -276,7 +276,7 @@ class SettingsSerializer(serializers.ModelSerializer):
         # Older till clients may continue sending this key; DRF ignores a
         # read-only field rather than letting a POS PUT bypass the append-only
         # admin policy transition.
-        read_only_fields = ('production_cutoff',)
+        read_only_fields = ('id', 'production_cutoff')
 
 
 class OrderItemSerializer(serializers.ModelSerializer):

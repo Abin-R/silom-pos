@@ -74,6 +74,8 @@ Use `--date YYYY-MM-DD` and `--branch UUID` to narrow the database query.
 The command prints `INCOMPLETE` if more items match than its limit.
 Do not interpret a limited inspection as a complete check of all history.
 Increase `--limit` only within the supported maximum of 50,000 items, with low concurrency.
+The replacement-product check also bounds snapshot keys and current catalogue matches.
+Resolve any `CATALOGUE INCOMPLETE` warning through narrower branch/date inspections.
 
 ## Verification
 

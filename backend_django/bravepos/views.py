@@ -964,8 +964,8 @@ def settings_view(request):
 
     ser = SettingsSerializer(obj, data=_strip_payment_fields(dict(request.data)), partial=True)
     ser.is_valid(raise_exception=True)
-    ser.save()
-    return Response(_strip_payment_fields(dict(SettingsSerializer(obj).data)))
+    saved = ser.save()
+    return Response(_strip_payment_fields(dict(SettingsSerializer(saved).data)))
 
 
 # ─── CRM loyalty ─────────────────────────────────────────────────────────────

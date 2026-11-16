@@ -142,3 +142,89 @@ class ProductionSafetyTests(TestCase):
                      delivery_date=self.day, stdout=output)
         self.assertIn("Inspected 1 production item(s)", output.getvalue())
         self.assertNotIn("INCOMPLETE", output.getvalue())
+
+    def test_writers_refuse_duplicate_product_links_without_mutation(self):
+        req = self.request({str(self.product.id): 3})
+        item = req.items.get()
+        duplicate = ProductionRequestItem.objects.create(
+            request=req,
+            product=self.product,
+            product_name="Legacy duplicate",
+            barcode="legacy-duplicate",
+            match_key="b:legacy-duplicate",
+            requested_qty=5,
+        )
+        request_revision = req.revision
+
+        with self.assertRaises(production.CatalogueConflict) as raised:
+            self.request({f"item:{item.id}": 8})
+        self.assertIn("ambiguous saved catalogue links", str(raised.exception))
+        with self.assertRaises(production.CatalogueConflict):
+            self.request(
+                {f"item:{item.id}": 9}, expected_request_id=str(req.id),
+                expected_revision=request_revision, strict=True,
+            )
+        with self.assertRaises(production.CatalogueConflict):
+            production.save_packed(self.day, {str(item.id): 2})
+
+        req.refresh_from_db()
+        item.refresh_from_db()
+        duplicate.refresh_from_db()
+        self.assertEqual(req.revision, request_revision)
+        self.assertEqual((item.requested_qty, item.packed_qty), (3, None))
+        self.assertEqual((duplicate.requested_qty, duplicate.packed_qty), (5, None))
+
+    def test_writers_refuse_cross_branch_link_without_mutation(self):
+        req = self.request({str(self.product.id): 3})
+        item = req.items.get()
+        item.product = self.other_product
+        item.save(update_fields=["product"])
+        request_revision = req.revision
+
+        with self.assertRaises(production.CatalogueConflict):
+            self.request(
+                {f"item:{item.id}": 8}, expected_request_id=str(req.id),
+                expected_revision=request_revision, strict=True,
+            )
+        with self.assertRaises(production.CatalogueConflict):
+            production.save_packed(
+                self.day, {str(item.id): 2},
+                expected_revisions={str(item.id): item.revision}, strict=True,
+            )
+
+        req.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(req.revision, request_revision)
+        self.assertEqual((item.requested_qty, item.packed_qty), (3, None))
+
+    def test_renamed_snapshot_mismatch_is_not_refused_as_corruption(self):
+        req = self.request({str(self.product.id): 3})
+        item = req.items.get()
+        self.product.name = "Renamed cookie"
+        self.product.barcode = "renamed-one"
+        self.product.save(update_fields=["name", "barcode"])
+
+        saved = self.request(
+            {f"item:{item.id}": 8}, expected_request_id=str(req.id),
+            expected_revision=req.revision, strict=True,
+        )
+        item.refresh_from_db()
+        self.assertEqual((saved.revision, item.requested_qty), (2, 8))
+        self.assertEqual(production.save_packed(
+            self.day, {str(item.id): 6},
+            expected_revisions={str(item.id): item.revision}, strict=True,
+        ), 1)
+
+    def test_integrity_command_reports_active_replacement_for_null_product_item(self):
+        req = self.request({str(self.product.id): 3})
+        item = req.items.get()
+        self.product.delete()
+        replacement = Product.objects.create(
+            branch=self.branch, name="Replacement cookie", barcode="one",
+        )
+        output = StringIO()
+        call_command("check_production_integrity", stdout=output)
+        item.refresh_from_db()
+        self.assertIsNone(item.product_id)
+        self.assertIn("active catalogue replacement collides with saved snapshot key", output.getvalue())
+        self.assertIn(str(replacement.id), output.getvalue())

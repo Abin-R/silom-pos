@@ -1,4 +1,5 @@
 import datetime
+import json
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -6,7 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bravepos.audit import AUDITED
-from bravepos.models import ProductionCutoffPolicy, Settings
+from bravepos.models import Branch, BranchSession, ProductionCutoffPolicy, Settings, Staff
 from bravepos.production_policy import (
     deadline_provenance,
     earliest_open_date,
@@ -123,6 +124,39 @@ class ProductionCutoffPolicyTests(TestCase):
         settings_row.refresh_from_db()
         self.assertEqual(settings_row.shop_name, "Changed from a stale POS form")
         self.assertEqual(settings_row.production_cutoff, datetime.time(20, 0))
+
+    def test_pos_settings_get_edit_put_accepts_readonly_id_and_returns_saved_row(self):
+        branch = Branch.objects.create(name="Settings API Branch")
+        staff = Staff(name="Settings API", email="settings-api@example.com", role="admin")
+        staff.set_password("pw")
+        staff.save()
+        staff.branches.add(branch)
+        session = BranchSession.objects.create(
+            branch=branch, staff=staff, token=BranchSession.new_token(),
+        )
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {session.token}"}
+
+        get_response = self.client.get("/api/settings", **auth)
+        self.assertEqual(get_response.status_code, 200)
+        payload = get_response.json()
+        self.assertEqual(payload["id"], "shop")
+        original_cutoff = payload["production_cutoff"]
+        payload["shop_name"] = "Saved POS settings name"
+
+        put_response = self.client.put(
+            "/api/settings",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **auth,
+        )
+
+        self.assertEqual(put_response.status_code, 200)
+        settings_row = Settings.objects.get(id="shop")
+        response_data = put_response.json()
+        self.assertEqual(settings_row.shop_name, "Saved POS settings name")
+        self.assertEqual(response_data["id"], settings_row.id)
+        self.assertEqual(response_data["shop_name"], settings_row.shop_name)
+        self.assertEqual(response_data["production_cutoff"], original_cutoff)
 
     def test_admin_shop_settings_appends_policy_after_validation(self):
         admin = make_user(username="cutoff-admin", email="cutoff-admin@example.com")
