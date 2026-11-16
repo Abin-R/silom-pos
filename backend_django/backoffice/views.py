@@ -1068,7 +1068,7 @@ def _grab_review_row(hold) -> dict:
         "status": hold.status,
         "grab_state": hold.grab_state,
         "reason_label": hold.review_reason.replace("_", " ").capitalize(),
-        "reason_text": grab_sync.REVIEW_TEXT.get(hold.review_reason, hold.review_reason),
+        "reason_text": grab_sync.review_text(hold.review_reason, hold.review_detail),
         "detail_text": json.dumps(detail, ensure_ascii=False)[:300] if detail else "",
         "items": [{"name": i.get("name") or i.get("barcode") or "", "qty": int(i.get("qty") or 0)}
                   for i in (hold.items or [])],

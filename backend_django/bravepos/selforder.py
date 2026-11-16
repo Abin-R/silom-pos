@@ -582,7 +582,8 @@ def _hold_stock(draft: SelfOrder) -> None:
         locked = SelfOrder.objects.select_for_update().get(pk=draft.pk)
         if locked.status != 'pending':
             raise SelfOrderError('This order is no longer awaiting payment.')
-        Branch.objects.select_for_update().filter(pk=draft.branch_id).first()
+        # no_key: the same lock as a till sale takes (see ``create_order_from_items``).
+        Branch.objects.select_for_update(no_key=True).filter(pk=draft.branch_id).first()
 
         held = held_quantities(draft.branch, exclude_pk=draft.pk)
         tracked = Product.objects.filter(

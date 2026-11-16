@@ -28,7 +28,7 @@ from bravepos.models import (
     AuditLog, Branch, GrabOrderHold, GrabSyncStatus, Product, Settings, Staff, StockMovement,
 )
 
-from .factories import make_branch, make_product
+from .factories import make_branch, make_product, make_shop
 from .test_selforder import run_concurrently
 
 KEY = "test-grab-key"
@@ -305,6 +305,44 @@ class ConvertTests(GrabTestCase):
     def test_an_empty_order_is_nothing_to_convert(self):
         self.assertEqual(self.convert(items=[]).json()["status"], "nothing_to_convert")
 
+    def open_order_ids(self):
+        res = self.client.get(STOCK, {"merchant_id": MERCHANT}, HTTP_X_API_KEY=KEY)
+        return [o["order_id"] for o in res.json()["open_orders"]]
+
+    def test_a_convert_with_no_hold_and_nothing_mappable_leaves_no_held_row(self):
+        for items in ([], [{"barcode": "9001", "qty": 1}]):
+            order_id = f"NOHOLD{len(items)}"
+            res = self.convert(order_id=order_id, items=items)
+            self.assertEqual(res.json()["status"], "nothing_to_convert")
+            self.assertNotIn(order_id, self.open_order_ids())
+            row = self.row(order_id)
+            self.assertNotEqual(row.status, "held")
+            self.assertEqual(self.stock_of(self.latte), 10)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_the_unmapped_review_survives_on_the_closed_row(self):
+        self.convert(items=[{"barcode": "9001", "qty": 1}])
+        row = self.row()
+        self.assertEqual((row.status, row.review_status, row.review_reason),
+                         ("released", "open", "unmapped_item"))
+
+    def test_a_row_closed_for_having_nothing_can_still_be_converted_later(self):
+        self.convert(items=[{"barcode": "9001", "qty": 1}])
+        self.assertEqual(self.row().close_reason, "nothing_to_convert")
+        other = make_product(self.silom, name="Late arrival", stock=4)
+        other.barcode = "9001"
+        other.save()
+        self.assertEqual(self.convert(items=[{"barcode": "9001", "qty": 1}]).json()["status"],
+                         "converted")
+        row = self.row()
+        self.assertEqual((row.status, row.close_reason, row.closed_at), ("converted", "", None))
+        self.assertEqual(self.stock_of(other), 3)
+
+    def test_a_hold_that_has_items_stays_held_when_convert_maps_nothing(self):
+        self.hold()
+        self.convert(items=[{"barcode": "9001", "qty": 1}])
+        self.assertEqual(self.row().status, "held")
+
     def test_another_branchs_product_with_the_same_barcode_is_untouched(self):
         theirs = make_product(self.paragon, name="Latte", stock=20)
         theirs.barcode = "8812"
@@ -472,7 +510,8 @@ class HoldTests(GrabTestCase):
         res = self.hold()
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"results": [{
-            "order_id": ORDER, "status": "held", "created": True, "skipped": []}]})
+            "order_id": ORDER, "status": "held", "created": True, "skipped": []}],
+            "invalid": []})
         row = self.row()
         self.assertEqual(row.status, "held")
         self.assertEqual(row.display_id, "GF-921")
@@ -546,13 +585,62 @@ class HoldTests(GrabTestCase):
         self.assertFalse(GrabOrderHold.objects.exists())
 
     def test_bad_bodies_are_400(self):
+        # Only a fault in the call as a whole rejects it.
         self.assertEqual(self.post(HOLD, {"merchant_id": MERCHANT, "orders": "x"}).status_code, 400)
-        self.assertEqual(self.post(HOLD, {"merchant_id": MERCHANT, "orders": [
-            {"order_id": "A", "items": []}, {"order_id": "A", "items": []}]}).status_code, 400)
-        self.assertEqual(self.post(HOLD, {"merchant_id": MERCHANT, "orders": [
-            {"order_id": "", "items": []}]}).status_code, 400)
-        self.assertEqual(self.post(HOLD, {"merchant_id": MERCHANT, "orders": [
-            {"order_id": "A", "items": [{"barcode": "8812", "qty": 0}]}]}).status_code, 400)
+        self.assertEqual(self.post(HOLD, {"merchant_id": "", "orders": []}).status_code, 400)
+        self.assertEqual(self.post(HOLD, [1]).status_code, 400)
+
+    def test_a_display_id_up_to_64_characters_is_held(self):
+        res = self.hold(display_id="G" * 64)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["invalid"], [])
+        self.assertEqual(self.row().display_id, "G" * 64)
+
+    def test_one_bad_order_does_not_reject_the_batch(self):
+        good = {"order_id": "A", "items": [{"barcode": "8812", "qty": 1}]}
+        res = self.post(HOLD, {"merchant_id": MERCHANT, "orders": [
+            good,
+            {"order_id": "B", "items": [{"barcode": "8812", "qty": 0}]},        # bad qty
+            {"order_id": "C", "display_id": "x" * 65, "items": []},              # too long
+            {"order_id": "", "items": []},                                       # no id
+            "not an object",
+            {"order_id": "A", "items": []},                                      # repeated id
+            {"order_id": "D", "placed_at": "soon", "items": []},                 # bad time
+            {"order_id": "E", "items": [{"barcode": "8813", "qty": 2}]},
+        ]})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual([r["order_id"] for r in body["results"]], ["A", "E"])
+        self.assertEqual([(i["index"], i["order_id"]) for i in body["invalid"]],
+                         [(1, "B"), (2, "C"), (3, ""), (4, ""), (5, "A"), (6, "D")])
+        self.assertTrue(all(i["detail"] for i in body["invalid"]))
+        self.assertEqual(sorted(GrabOrderHold.objects.values_list("order_id", flat=True)),
+                         ["A", "E"])
+        # The first A was held with its own lines, not the repeat's empty ones.
+        self.assertEqual(len(GrabOrderHold.objects.get(order_id="A").items), 1)
+
+    def test_the_invalid_entry_has_a_fixed_shape_and_a_whole_bad_batch_is_still_200(self):
+        res = self.post(HOLD, {"merchant_id": MERCHANT, "orders": [
+            {"order_id": "B", "items": [{"barcode": "8812", "qty": 0}]}]})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["results"], [])
+        (entry,) = body["invalid"]
+        self.assertEqual(set(entry), {"index", "order_id", "detail"})
+        self.assertEqual((entry["index"], entry["order_id"]), (0, "B"))
+        self.assertIsInstance(entry["detail"], str)
+
+    def test_dry_run_also_reports_invalid_orders(self):
+        res = self.post(HOLD, {"merchant_id": MERCHANT, "dry_run": True, "orders": [
+            {"order_id": "A", "items": []}, {"order_id": "B", "display_id": "x" * 65}]})
+        body = res.json()
+        self.assertEqual([r["order_id"] for r in body["results"]], ["A"])
+        self.assertEqual([i["order_id"] for i in body["invalid"]], ["B"])
+        self.assertFalse(GrabOrderHold.objects.exists())
+
+    def test_convert_takes_a_64_character_display_id_too(self):
+        self.assertEqual(self.convert(display_id="G" * 64).status_code, 200)
+        self.assertEqual(self.convert(order_id="Z", display_id="G" * 65).status_code, 400)
 
     def test_a_held_row_of_a_branch_without_a_merchant_id_is_ignored(self):
         self.hold()
@@ -764,6 +852,43 @@ class CorrectTests(GrabTestCase):
         self.assertEqual(self.correct([dict(LATTE_LINE)]).json()["status"], "not_converted")
         self.assertEqual(self.stock_of(self.latte), 10)
 
+    def test_a_skipped_line_puts_no_stock_back_and_opens_the_review(self):
+        self.converted()
+        res = self.correct([{"barcode": "8812", "qty": 1}, {"barcode": "9001", "qty": 1}])
+        self.assertEqual(res.json()["status"], "no_change")
+        self.assertEqual(self.stock_of(self.latte), 8)               # nothing went back
+        self.assertFalse(StockMovement.objects.filter(type="return").exists())
+        self.assertEqual(self.row().deducted, {str(self.latte.id): 2})
+        row = self.row()
+        self.assertEqual((row.review_status, row.review_reason), ("open", "unmapped_item"))
+
+    def test_a_skipped_line_still_lets_a_unit_added_elsewhere_be_deducted(self):
+        self.converted()
+        res = self.correct([{"barcode": "8812", "qty": 2}, {"barcode": "8813", "qty": 1},
+                            {"barcode": "9001", "qty": 1}])
+        self.assertEqual(res.json()["status"], "corrected")
+        self.assertEqual((self.stock_of(self.latte), self.stock_of(self.cake)), (8, 4))
+        self.assertEqual(self.row().review_reason, "unmapped_item")
+
+    def test_an_inactive_product_line_counts_as_skipped(self):
+        self.converted()
+        Product.objects.filter(pk=self.latte.pk).update(active=False)
+        self.correct([{"barcode": "8812", "qty": 1}, {"barcode": "8813", "qty": 1}])
+        self.assertEqual(self.stock_of(self.latte), 8)
+        self.assertEqual(self.row().review_reason, "unmapped_item")
+
+    def test_removing_a_unit_with_every_line_mapped_still_puts_it_back(self):
+        self.converted()
+        self.correct([{"barcode": "8812", "qty": 1}])
+        self.assertEqual(self.stock_of(self.latte), 9)
+        self.assertEqual(self.row().review_status, "")
+
+    def test_final_items_that_map_to_nothing_open_the_review_and_keep_the_deduction(self):
+        self.converted()
+        self.correct([{"barcode": "9001", "qty": 1}])
+        self.assertEqual(self.stock_of(self.latte), 8)
+        self.assertEqual(self.row().review_reason, "unmapped_item")
+
     def test_final_items_that_map_to_nothing_do_not_wipe_the_deduction(self):
         self.converted()
         res = self.correct([{"barcode": "9001", "qty": 1}])
@@ -802,7 +927,7 @@ class SeaTalkMixin:
         env = mock.patch.dict(os.environ, {"SEATALK_GRAB_GROUP_ID": "grp-1"})
         env.start()
         self.addCleanup(env.stop)
-        sender = mock.patch("bravepos.seatalk.send_group_text", return_value=True)
+        sender = mock.patch("bravepos.seatalk.send_group_text_async", return_value=True)
         self.sent = sender.start()
         self.addCleanup(sender.stop)
 
@@ -891,6 +1016,30 @@ class HeartbeatTests(GrabTestCase):
         self.assertEqual(after.last_ok_at, before.last_ok_at)
         self.assertEqual(after.grab_shown, {"8812": 4})
 
+    def test_a_named_problem_on_a_good_cycle_is_an_outage(self):
+        # The cycle read Grab fine; the push is what failed.
+        self.beat()
+        res = self.beat(cycle_ok=True, problem="push_failed")
+        self.assertEqual(res.json(), {"outage": True})
+        st = GrabSyncStatus.objects.get()
+        self.assertEqual(st.problem, "push_failed")
+        self.assertIsNotNone(st.last_ok_at)
+        stock = self.client.get(STOCK, {"merchant_id": MERCHANT}, HTTP_X_API_KEY=KEY).json()
+        self.assertTrue(stock["outage"])
+        # The next clean cycle ends it.
+        self.assertEqual(self.beat().json(), {"outage": False})
+        self.assertEqual(GrabSyncStatus.objects.get().problem, "")
+
+    def test_a_named_problem_with_push_off_is_no_outage(self):
+        self.assertEqual(self.beat(push_live=False, problem="push_failed").json(),
+                         {"outage": False})
+
+    def test_zero_units_shown_is_accepted_and_kept(self):
+        # The poller clamps what Grab shows at 0; 0 is a real figure, not an error.
+        res = self.beat(grab_shown={"8812": 0, "8813": 0})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(GrabSyncStatus.objects.get().grab_shown, {"8812": 0, "8813": 0})
+
     def test_a_bad_cycle_with_no_problem_is_not_an_outage_by_itself(self):
         self.beat()
         self.assertEqual(self.beat(cycle_ok=False).json(), {"outage": False})
@@ -944,8 +1093,27 @@ class StockReadTests(GrabTestCase):
         open_ids = {o["order_id"]: o for o in self.get()["open_orders"]}
         self.assertEqual(set(open_ids), {"HELD", "DONE"})
         self.assertEqual(open_ids["HELD"], {"order_id": "HELD", "status": "held",
-                                            "grab_state": "PreparingV2", "review_status": ""})
+                                            "grab_state": "PreparingV2", "review_status": "",
+                                            "review_reason": None})
         self.assertEqual(open_ids["DONE"]["status"], "converted")
+
+    def test_open_orders_carry_the_open_reviews_reason(self):
+        for oid in ("U", "S", "M", "NONE", "SETTLED"):
+            self.hold(order_id=oid)
+        for oid, reason in (("U", "unclear_pickup"), ("S", "stale"), ("M", "unmapped_item"),
+                            ("SETTLED", "unclear_pickup")):
+            self.review(reason, order_id=oid)
+        GrabOrderHold.objects.filter(order_id="SETTLED").update(review_status="done")
+        reasons = {o["order_id"]: o["review_reason"] for o in self.get()["open_orders"]}
+        self.assertEqual(reasons, {"U": "unclear_pickup", "S": "stale", "M": "unmapped_item",
+                                   "NONE": None, "SETTLED": None})
+
+    def test_a_converted_order_keeps_its_open_review_reason(self):
+        self.hold()
+        self.convert()
+        self.review("stale")
+        (order,) = self.get()["open_orders"]
+        self.assertEqual((order["status"], order["review_reason"]), ("converted", "stale"))
 
     def test_a_converted_order_older_than_a_day_drops_out(self):
         self.hold()
@@ -1212,6 +1380,21 @@ class ReviewPageTests(SeaTalkMixin, GrabTestCase):
         self.assertContains(res, "Latte ×2")
         for action in ("deduct", "restore", "ignore"):
             self.assertContains(res, reverse("backoffice:grab_review_settle", args=[hold.id, action]))
+
+    def test_a_self_order_took_held_row_says_self_order(self):
+        self.hold()
+        hold = self.row()
+        product = hold.items[0]["product_id"]
+        for source, expected in (("self_order", "self-order"), ("counter", "The till sold")):
+            hold.review_status = ""
+            hold.save(update_fields=["review_status"])
+            with self.captureOnCommitCallbacks(execute=True):
+                grab_sync.till_took_held(
+                    self.silom, "PS1",
+                    [{"product_id": product, "wanted": 3, "can_sell": 2, "held_for_grab": 1}],
+                    source)
+            res = self.client.get(self.page + f"?branch={self.silom.id}")
+            self.assertContains(res, expected)
 
     def test_the_nav_links_to_it_with_a_count(self):
         self.open_held()
@@ -1491,3 +1674,127 @@ class ConcurrencyTests(TransactionTestCase):
             self.assertEqual((hold.status, self.latte.stock), ("released", 10))
         self.assertLessEqual(StockMovement.objects.filter(document_no=ORDER).count(), 1)
         connections.close_all()
+
+    def sale_lines(self, *products):
+        return [{"product_id": str(p.id), "name": p.name, "qty": 1, "price": "10"}
+                for p in products]
+
+    def test_the_hold_row_lock_does_not_lock_the_branch(self):
+        """``select_for_update(of=("self",))``: the till's branch lock is never
+        taken by a Grab call, so it cannot block a checkout."""
+        from django.db import connection as conn
+        grab_sync.hold_orders(self.branch, [{
+            "order_id": ORDER, "display_id": "G", "grab_state": "", "placed_at": None,
+            "items": []}])
+        outcome = []
+
+        def other_connection():
+            try:
+                with transaction.atomic():
+                    Branch.objects.select_for_update(nowait=True).get(pk=self.branch.pk)
+                outcome.append("locked")
+            except Exception as e:      # noqa: BLE001 — OperationalError when it is held
+                outcome.append(repr(e))
+
+        with transaction.atomic():
+            from django.test.utils import CaptureQueriesContext
+            with CaptureQueriesContext(conn) as ctx:
+                grab_sync._lock_hold(self.branch, ORDER)
+            self.assertIn('FOR UPDATE OF "bravepos_graborderhold"',
+                          ctx.captured_queries[0]["sql"])
+            self.assertEqual(run_concurrently([other_connection]), [])
+        self.assertEqual(outcome, ["locked"])
+
+    def test_the_review_page_settle_and_till_gate_lock_only_the_hold_row(self):
+        from django.db import connection as conn
+        from django.test.utils import CaptureQueriesContext
+        hold = GrabOrderHold.objects.create(
+            branch=self.branch, order_id=ORDER, review_status="open",
+            review_reason="unclear_pickup", items=[])
+        with CaptureQueriesContext(conn) as ctx:
+            grab_sync.settle_review(hold.pk, "ignore", "tester")
+            grab_sync.till_took_held(self.branch, "PS1", [])
+        locking = [q["sql"] for q in ctx.captured_queries if "FOR UPDATE" in q["sql"]]
+        self.assertTrue(locking)
+        self.assertTrue(all("FOR UPDATE OF" in q and "branch" not in q.split("FOR UPDATE OF")[1]
+                            for q in locking), locking)
+
+    def test_till_sales_and_grab_conversions_in_opposite_orders_do_not_deadlock(self):
+        from bravepos.orders import create_order_from_items
+        make_shop()
+        cake = make_product(self.branch, name="Cake", stock=1000)
+        cake.barcode = "8813"
+        cake.save()
+        self.latte.stock = 1000
+        self.latte.save()
+        rounds = 10
+        for n in range(rounds):
+            grab_sync.hold_orders(self.branch, [{
+                "order_id": f"O{n}", "display_id": f"G{n}", "grab_state": "", "placed_at": None,
+                "items": [{"barcode": "8813", "qty": 1, "grab_item_id": "", "name": "Cake",
+                           "bundle_item_id": ""},
+                          {"barcode": "8812", "qty": 1, "grab_item_id": "", "name": "Latte",
+                           "bundle_item_id": ""}]}])
+        fns = []
+        for n in range(rounds):
+            fns.append(lambda: create_order_from_items(
+                branch=self.branch, items=self.sale_lines(self.latte, cake),   # latte first
+                goods_total=20, subtotal=20, payment_method="Cash", paid_amount=20))
+            fns.append(lambda n=n: grab_sync.convert_order(
+                self.branch, f"O{n}", f"G{n}", None))                           # cake first
+            fns.append(lambda n=n: grab_sync.correct_order(
+                self.branch, f"O{n}", f"G{n}", [
+                    {"barcode": "8812", "qty": 2, "grab_item_id": "", "name": "", "bundle_item_id": ""},
+                    {"barcode": "8813", "qty": 1, "grab_item_id": "", "name": "", "bundle_item_id": ""}]))
+        errors = run_concurrently(fns)
+        self.assertEqual(errors, [])
+        from bravepos.models import Order
+        self.assertEqual(Order.objects.count(), rounds)
+        cake.refresh_from_db()
+        self.latte.refresh_from_db()
+        # Every sale took 1 of each; every order that converted took 1 cake and
+        # 1 latte (2 after a correction that ran after it).
+        converted = GrabOrderHold.objects.filter(status="converted").count()
+        self.assertEqual(cake.stock, 1000 - rounds - converted)
+        self.assertGreaterEqual(1000 - self.latte.stock, rounds + converted)
+        connections.close_all()
+
+    def test_a_till_sale_that_took_held_units_opens_its_review_while_the_order_converts(self):
+        from bravepos.orders import create_order_from_items
+        make_shop()
+        self.latte.stock = 6
+        self.latte.save()
+        grab_sync.hold_orders(self.branch, [{
+            "order_id": ORDER, "display_id": "G1", "grab_state": "", "placed_at": None,
+            "items": [{"barcode": "8812", "qty": 5, "grab_item_id": "", "name": "Latte",
+                       "bundle_item_id": ""}]}])
+        errors = run_concurrently([
+            lambda: create_order_from_items(
+                branch=self.branch,
+                items=[{"product_id": str(self.latte.id), "name": "Latte", "qty": 3, "price": "10"}],
+                goods_total=30, subtotal=30, payment_method="Cash", paid_amount=30),
+            lambda: grab_sync.convert_order(self.branch, ORDER, "G1", None),
+        ])
+        self.assertEqual(errors, [])
+        self.latte.refresh_from_db()
+        self.assertEqual(self.latte.stock, 6 - 3 - 5)
+        connections.close_all()
+
+
+class StockMovementIndexTests(TestCase):
+    def test_the_branch_and_time_index_exists(self):
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(
+                cursor, StockMovement._meta.db_table)
+        index = constraints.get("stockmov_branch_created_idx")
+        self.assertIsNotNone(index)
+        self.assertEqual(index["columns"], ["branch_id", "created_at"])
+
+    def test_the_migration_builds_it_concurrently_outside_a_transaction(self):
+        import importlib
+        mod = importlib.import_module("bravepos.migrations.0093_stockmovement_branch_created_index")
+        self.assertFalse(mod.Migration.atomic)
+        from django.contrib.postgres.operations import AddIndexConcurrently
+        self.assertTrue(all(isinstance(op, AddIndexConcurrently)
+                            for op in mod.Migration.operations))
+        self.assertEqual(mod.Migration.dependencies, [("bravepos", "0092_grab_stock_sync")])

@@ -52,15 +52,15 @@
             <td class="money">{{ r.first_seen_at|date:"d M, H:i" }}</td>
             <td class="r" style="white-space:nowrap">
               <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'deduct' %}" style="display:inline"
-                    onsubmit="return confirm('Deduct {{ r.display_id }}? A held order is taken out of stock now; one already deducted is left as it is.')">
+                    onsubmit="return confirm('Deduct {{ r.display_id|escapejs }}? A held order is taken out of stock now; one already deducted is left as it is.')">
                 {% csrf_token %}<button class="btn btn-sm" type="submit">Deduct</button>
               </form>
               <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'restore' %}" style="display:inline"
-                    onsubmit="return confirm('Restore {{ r.display_id }}? A held order is released; one already deducted has its stock put back.')">
+                    onsubmit="return confirm('Restore {{ r.display_id|escapejs }}? A held order is released; one already deducted has its stock put back.')">
                 {% csrf_token %}<button class="btn btn-sm" type="submit">Restore</button>
               </form>
               <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'ignore' %}" style="display:inline"
-                    onsubmit="return confirm('Ignore {{ r.display_id }}? The review closes and stock is not changed.')">
+                    onsubmit="return confirm('Ignore {{ r.display_id|escapejs }}? The review closes and stock is not changed.')">
                 {% csrf_token %}<button class="btn btn-sm" type="submit">Ignore</button>
               </form>
             </td>

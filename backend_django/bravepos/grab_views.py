@@ -60,7 +60,10 @@ def grab_hold_orders(request):
     call, branch, early = _start(request, grab_sync.parse_hold_orders)
     if early:
         return early
-    return Response(grab_sync.hold_orders(branch, call['orders'], dry_run=call['dry_run']))
+    result = grab_sync.hold_orders(branch, call['orders'], dry_run=call['dry_run'])
+    # Orders that could not be read are reported, not held; the rest were held.
+    result['invalid'] = call['invalid']
+    return Response(result)
 
 
 @api_view(['POST'])

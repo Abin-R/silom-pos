@@ -30,8 +30,12 @@ queryset ``update()``.
 Locking: the hold row first (``select_for_update``), then the products in
 primary-key order, so two calls for the same order take the same locks one
 after the other and two different orders cannot deadlock.  The ``Branch`` row is
-never locked — till checkout locks it, and a Grab call has no business making a
-cashier wait.
+never locked (``of=("self",)`` keeps a ``select_related`` branch out of it) —
+till checkout locks it, and a Grab call has no business making a cashier wait.
+Till checkout takes that lock as FOR NO KEY UPDATE, so the share lock a stock
+movement's foreign key takes on the branch does not wait for it either; and it
+locks its products in id order too, so a sale and a convert cannot wait on each
+other in a circle.
 
 Safety switches, both from the environment:
 
@@ -70,6 +74,8 @@ CREATED_BY = "Grab sync"
 
 # ``StockMovement.document_no`` is 64 characters.
 ORDER_ID_MAX = 64
+NOTHING_TO_CONVERT = "nothing_to_convert"   # close_reason of an empty row closed at once
+DISPLAY_ID_MAX = 64              # ``GrabOrderHold.display_id`` is 64 too
 MAX_ORDERS_PER_HOLD_CALL = 500
 
 # How long a converted order stays in the stock read's ``open_orders``, so the
@@ -104,6 +110,16 @@ REVIEW_TEXT = {
     "stale": "Open for hours and nothing has settled it",
     "till_took_held": "The till sold units that were held for it, so the bag may be short",
 }
+SELF_ORDER_TOOK_HELD_TEXT = (
+    "A self-order sale took units that were held for it, so the bag may be short")
+
+
+def review_text(reason: str, detail: dict | None = None) -> str:
+    """The sentence that says why an order needs a look.  A ``till_took_held``
+    review names the channel that took the units: the till or a self-order."""
+    if reason == "till_took_held" and (detail or {}).get("source") == "self_order":
+        return SELF_ORDER_TOOK_HELD_TEXT
+    return REVIEW_TEXT.get(reason, reason)
 
 
 class BadRequest(Exception):
@@ -189,7 +205,7 @@ def parse_order(data: dict) -> dict:
         "merchant_id": parse_merchant_id(data.get("merchant_id")),
         "order_id": _text(data.get("order_id"), "order_id", max_length=ORDER_ID_MAX),
         "display_id": _text(data.get("display_id"), "display_id",
-                            required=False, max_length=32),
+                            required=False, max_length=DISPLAY_ID_MAX),
         # Why a release/restore happened (Grab's status); convert ignores it.
         "reason": _text(data.get("reason"), "reason", required=False, max_length=64),
         # The Grab page or state the order was last seen in.
@@ -236,8 +252,29 @@ def parse_items(raw) -> list[dict]:
     return lines
 
 
+def _parse_hold_order(o) -> dict:
+    """One order of the hold batch, validated; ``BadRequest`` if it is not usable."""
+    if not isinstance(o, dict):
+        raise BadRequest("Each order must be an object.")
+    return {
+        "order_id": _text(o.get("order_id"), "order_id", max_length=ORDER_ID_MAX),
+        "display_id": _text(o.get("display_id"), "display_id",
+                            required=False, max_length=DISPLAY_ID_MAX),
+        "placed_at": _when(o.get("placed_at"), "placed_at"),
+        "grab_state": _text(o.get("grab_state"), "grab_state",
+                            required=False, max_length=32),
+        "items": parse_items(o.get("items") if o.get("items") is not None else []),
+    }
+
+
 def parse_hold_orders(data: dict) -> dict:
-    """``{merchant_id, orders, dry_run}`` for the batch hold call."""
+    """``{merchant_id, orders, invalid, dry_run}`` for the batch hold call.
+
+    Only a problem with the call as a whole (body, merchant, ``orders``) is a
+    ``BadRequest``.  An order that cannot be read goes to ``invalid`` —
+    ``{index, order_id, detail}`` — and the rest of the batch still holds: one
+    bad order must not stall every other order at the outlet.
+    """
     if not isinstance(data, dict):
         raise BadRequest("Body must be a JSON object.")
     merchant_id = parse_merchant_id(data.get("merchant_id"))
@@ -246,24 +283,24 @@ def parse_hold_orders(data: dict) -> dict:
         raise BadRequest("orders must be a list.")
     if len(raw) > MAX_ORDERS_PER_HOLD_CALL:
         raise BadRequest("Too many orders in one call.")
-    orders, seen = [], set()
-    for o in raw:
-        if not isinstance(o, dict):
-            raise BadRequest("Each order must be an object.")
-        order_id = _text(o.get("order_id"), "order_id", max_length=ORDER_ID_MAX)
-        if order_id in seen:
-            raise BadRequest(f"order_id {order_id} appears twice.")
-        seen.add(order_id)
-        orders.append({
-            "order_id": order_id,
-            "display_id": _text(o.get("display_id"), "display_id",
-                                required=False, max_length=32),
-            "placed_at": _when(o.get("placed_at"), "placed_at"),
-            "grab_state": _text(o.get("grab_state"), "grab_state",
-                                required=False, max_length=32),
-            "items": parse_items(o.get("items") if o.get("items") is not None else []),
-        })
-    return {"merchant_id": merchant_id, "orders": orders, "dry_run": data.get("dry_run") is True}
+    orders, invalid, seen = [], [], set()
+    for index, o in enumerate(raw):
+        try:
+            order = _parse_hold_order(o)
+            if order["order_id"] in seen:
+                raise BadRequest(f"order_id {order['order_id']} appears twice.")
+        except BadRequest as e:
+            raw_id = o.get("order_id") if isinstance(o, dict) else None
+            invalid.append({
+                "index": index,
+                "order_id": raw_id.strip()[:ORDER_ID_MAX] if isinstance(raw_id, str) else "",
+                "detail": str(e),
+            })
+            continue
+        seen.add(order["order_id"])
+        orders.append(order)
+    return {"merchant_id": merchant_id, "orders": orders, "invalid": invalid,
+            "dry_run": data.get("dry_run") is True}
 
 
 def parse_review(data: dict) -> dict:
@@ -318,11 +355,13 @@ def iso_z(when) -> str:
 # ── Alerts and reviews ──────────────────────────────────────────────────────
 def alert(text: str):
     """Tell the Grab SeaTalk group, once the surrounding transaction commits —
-    never from inside a lock.  Quietly nothing when no group is configured."""
+    never from inside a lock — and on a background thread, so the request (a
+    till checkout among them) never waits on SeaTalk.  Quietly nothing when no
+    group is configured."""
     group = seatalk.grab_group_id()
     if not group:
         return
-    transaction.on_commit(lambda: seatalk.send_group_text(group, text))
+    transaction.on_commit(lambda: seatalk.send_group_text_async(group, text))
 
 
 def _order_name(hold) -> str:
@@ -364,7 +403,7 @@ def open_review(hold, reason: str, detail: dict | None = None) -> bool:
     if first_time:
         alert(
             f"Grab order {_order_name(hold)} at {hold.branch.name} needs a look. "
-            f"{REVIEW_TEXT.get(reason, reason)}. "
+            f"{review_text(reason, detail)}. "
             f"Open Backoffice > Grab review to deduct, restore or ignore it."
         )
     return True
@@ -382,7 +421,10 @@ def _line(product, qty, stock_after, skipped_reason=None, barcode=None):
 
 
 def _lock_hold(branch, order_id):
-    return (GrabOrderHold.objects.select_for_update()
+    # ``of=("self",)``: lock the hold row only.  A bare ``select_for_update()`` on a
+    # ``select_related`` query would lock the Branch row too, which the till's
+    # checkout holds for the whole sale.
+    return (GrabOrderHold.objects.select_for_update(of=("self",))
             .filter(branch=branch, order_id=order_id).select_related("branch").first())
 
 
@@ -559,8 +601,10 @@ def _convert_locked(branch, hold, display_id, items, *, ready_at=None, go_live_a
         return {"status": "already_converted", "lines": _deducted_lines(branch, hold)}
     if hold.status == GrabOrderHold.RESTORED:
         return {"status": "already_restored", "lines": []}
-    if hold.status == GrabOrderHold.RELEASED:
+    if hold.status == GrabOrderHold.RELEASED and hold.close_reason != NOTHING_TO_CONVERT:
         return {"status": "released_earlier", "lines": []}
+    # (A row closed as ``nothing_to_convert`` was never a real hold: once its
+    # products exist, the same order can still be converted.)
 
     if items is None:
         items = [{"barcode": i.get("barcode", ""), "qty": i.get("qty", 0),
@@ -601,8 +645,14 @@ def _convert_locked(branch, hold, display_id, items, *, ready_at=None, go_live_a
     lines += [_line(None, 0, None, s["reason"], s["barcode"]) for s in skipped]
 
     if not mapped:
-        if skipped and not dry_run and not hold._state.adding:
-            open_review(hold, "unmapped_item", _skipped_detail(skipped))
+        if not dry_run and not hold._state.adding:
+            if skipped:
+                open_review(hold, "unmapped_item", _skipped_detail(skipped))
+            if hold.status == GrabOrderHold.HELD and not hold.items:
+                # Nothing here holds any unit (made by this very call, or empty from
+                # the start): do not leave an empty ``held`` row for the poller to
+                # watch forever.  A review, if one opened, stays on the closed row.
+                _release_locked(hold, NOTHING_TO_CONVERT, now)
         return {"status": "nothing_to_convert", "lines": lines}
 
     deducted = {}
@@ -650,6 +700,9 @@ def _finish_convert(hold, display_id, items, deducted, ready_at, grab_state, now
         fields.append("grab_state")
     if close_reason:
         hold.close_reason, hold.closed_at = close_reason, now
+        fields += ["close_reason", "closed_at"]
+    elif hold.close_reason == NOTHING_TO_CONVERT:
+        hold.close_reason, hold.closed_at = "", None
         fields += ["close_reason", "closed_at"]
     hold.save(update_fields=fields)
 
@@ -754,7 +807,9 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
     Only mapped lines count: an order whose final items map to nothing is left
     as it is rather than read as "everything was removed".  A unit added by the
     edit is not deducted if staff counted the product after the order was packed
-    (their count left the bag out).  A unit taken off always goes back.
+    (their count left the bag out).  A unit taken off goes back — unless a line
+    of the edit could not be mapped to a product: then no stock goes back at
+    all and a review opens.
     """
     dry_run = dry_run or not writes_enabled()
     with transaction.atomic():
@@ -781,6 +836,8 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
             if not dry_run and grab_state and hold.grab_state != grab_state:
                 hold.grab_state = grab_state
                 hold.save(update_fields=["grab_state"])
+            if skipped and not dry_run and hold.close_reason != "before_go_live":
+                open_review(hold, "unmapped_item", _skipped_detail(skipped))
             return {"status": "no_change", "lines": lines}
 
         counted = _counted_after(branch, final, hold.ready_at)
@@ -792,6 +849,13 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
             delta = final.get(pid, 0) - deducted.get(pid, 0)
             product = locked.get(pid)
             if delta == 0 or product is None:
+                continue
+            if delta < 0 and skipped:
+                # A line that maps to nothing (unknown barcode, inactive product, a
+                # barcode that changed) may be the very line this product was
+                # deducted for.  Putting stock back on that guess could invent
+                # units, so nothing goes back; staff settle it on the review.
+                lines.append(_line(product, -delta, product.stock, "line_not_mapped"))
                 continue
             if delta > 0 and pid in counted:
                 lines.append(_line(product, delta, product.stock, "counted_after_packing"))
@@ -859,7 +923,7 @@ def settle_review(hold_pk, action: str, by: str) -> dict:
         raise ValueError(action)
     now = djtz.now()
     with transaction.atomic():
-        hold = (GrabOrderHold.objects.select_for_update().select_related("branch")
+        hold = (GrabOrderHold.objects.select_for_update(of=("self",)).select_related("branch")
                 .filter(pk=hold_pk).first())
         if hold is None or hold.review_status != "open":
             raise ReviewNotOpen(hold_pk)
@@ -894,11 +958,12 @@ class ReviewNotOpen(Exception):
 
 # ── heartbeat ───────────────────────────────────────────────────────────────
 def heartbeat(branch, beat, *, dry_run=False) -> dict:
-    """The poller's cycle finished.  A good cycle (``cycle_ok``) is what ends an
-    outage: it stamps ``last_ok_at``, clears the problem and records what Grab
-    shows.  A bad one never touches ``last_ok_at`` or ``grab_shown`` (the poller
-    may resend the last good figures; they are ignored), and only a named
-    problem is recorded."""
+    """The poller's cycle finished.  A good cycle (``cycle_ok``) stamps
+    ``last_ok_at`` and records what Grab shows; a bad one never touches either
+    (the poller may resend the last good figures; they are ignored).  A named
+    ``problem`` is recorded whatever ``cycle_ok`` says — a cycle can read fine
+    and still fail to push — and puts the branch in outage; a good cycle that
+    names none clears it."""
     dry_run = dry_run or not writes_enabled()
     status = stock_pool.sync_status(branch)
     if dry_run:
@@ -909,10 +974,13 @@ def heartbeat(branch, beat, *, dry_run=False) -> dict:
         status.push_live = beat["push_live"]
         if beat["cycle_ok"]:
             status.last_ok_at = now
-            status.problem = ""
             status.grab_shown = beat["grab_shown"]
-        elif beat["problem"]:
+        # A named problem is recorded whatever ``cycle_ok`` says — a cycle can read
+        # fine and still fail to push — and a good, unnamed cycle clears it.
+        if beat["problem"]:
             status.problem = beat["problem"]
+        elif beat["cycle_ok"]:
+            status.problem = ""
         # A cycle that did not finish and names no problem (one incomplete read)
         # changes nothing: ``last_ok_at`` and the last good ``grab_shown`` stand,
         # and five quiet minutes make the outage on their own.
@@ -948,6 +1016,9 @@ def stock_for_branch(branch) -> dict:
         open_orders = [{
             "order_id": h.order_id, "status": h.status, "grab_state": h.grab_state,
             "review_status": h.review_status,
+            # Why staff are looking at it (null when no review is open): the
+            # poller stops lifecycle handling on ``unclear_pickup``/``stale``.
+            "review_reason": (h.review_reason or None) if h.review_status == "open" else None,
         } for h in holds]
         changed = {bc: iso_z(when) for bc, when in
                    stock_pool.target_changed_at(branch, products).items()}
@@ -972,19 +1043,23 @@ def _open_filter(recent):
 
 
 # ── till gate ───────────────────────────────────────────────────────────────
-def till_took_held(branch, order_number: str, shortfalls: list[dict]):
+def till_took_held(branch, order_number: str, shortfalls: list[dict], source: str = "counter"):
     """A sale was saved that sold units held for Grab: the hold landed between
     the till's check and its save, and the customer has already paid, so the
     sale stands.  Open a review on the newest Grab order holding each product
     (and alert), so someone checks the bag.
 
-    Called under the branch lock from ``create_order_from_items``.  A failure
-    here must never lose the sale, so it never raises.
+    Called from ``create_order_from_items`` once the sale has committed, so it
+    holds no product lock (the Grab paths take the hold row, then products; this
+    one takes only hold rows) and a slow alert cannot delay the sale.  A failure
+    here must never lose the sale, so it never raises.  ``source`` is the channel
+    that sold the units: ``counter`` (the till) or ``self_order``.
     """
     try:
         with transaction.atomic():
             holds = list(
-                GrabOrderHold.objects.select_for_update().select_related("branch")
+                GrabOrderHold.objects.select_for_update(of=("self",))
+                .select_related("branch")
                 .filter(branch=branch, status=GrabOrderHold.HELD).order_by("-first_seen_at")
             )
             for short in shortfalls:
@@ -1001,7 +1076,7 @@ def till_took_held(branch, order_number: str, shortfalls: list[dict]):
                 name = next((i.get("name") for i in target.items
                              if str(i.get("product_id")) == short["product_id"]), "") or short["product_id"]
                 open_review(target, "till_took_held", {
-                    "order_number": order_number, "product": name,
+                    "order_number": order_number, "product": name, "source": source,
                     "wanted": short["wanted"], "can_sell": short["can_sell"],
                     "held_for_grab": short["held_for_grab"],
                 })

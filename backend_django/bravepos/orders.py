@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, Max, Q
 from django.utils import timezone as djtz
 
@@ -48,6 +48,12 @@ _UNSET = object()
 # the loser gets an IntegrityError.  Retrying is enough because the window is
 # tiny and each retry re-reads the (now higher) max.
 ORDER_NUMBER_MAX_RETRIES = 6
+
+# PostgreSQL picks one transaction to abort when two wait on each other (40P01),
+# or when it cannot serialise them (40001).  The whole sale rolled back, so
+# trying it again is safe; after this many tries the error is raised.
+DEADLOCK_MAX_TRIES = 3
+_RETRYABLE_PGCODES = ('40P01', '40001')
 
 
 def _next_order_number() -> str:
@@ -227,13 +233,33 @@ def create_order_from_items(
         shift = Shift.objects.filter(branch=branch, status='open').first()
 
     last_error: Exception | None = None
-    for _attempt in range(ORDER_NUMBER_MAX_RETRIES):
+    deadlocks = 0
+    attempt = 0
+    while attempt < ORDER_NUMBER_MAX_RETRIES:
+        attempt += 1
         try:
             with transaction.atomic():
                 # Serialise order creation for this branch.  Makes the
                 # read-then-insert of queue_number safe; order_number is global
                 # so it can still collide across branches — the retry covers that.
-                Branch.objects.select_for_update().filter(pk=branch.pk).first()
+                #
+                # ``no_key``: FOR NO KEY UPDATE, not FOR UPDATE.  Every insert of a
+                # stock movement (a Grab convert, a stock count) takes a share lock
+                # on its branch row for the foreign key, and FOR UPDATE would make
+                # each of those wait for the whole sale — while holding product rows
+                # this sale is about to ask for, which is a deadlock.  Two sales
+                # still wait for each other, which is all this lock is for.
+                Branch.objects.select_for_update(no_key=True).filter(pk=branch.pk).first()
+
+                # Then the products this sale moves, in id order.  The Grab sync
+                # (convert, correct, restore) and the stock screens lock the same
+                # rows in the same order, so none of them can wait on another in
+                # a circle.  Locked here, once, rather than row by row as each
+                # line is decremented in the order the cashier rang them up.
+                if products_by_id:
+                    list(Product.objects.select_for_update()
+                         .filter(pk__in=[p.pk for p in products_by_id.values()])
+                         .order_by('id').values_list('pk', flat=True))
 
                 # One payment is one bill.  The till's paid-yet? poll does not
                 # wait for one check to answer before starting the next, so a
@@ -351,12 +377,34 @@ def create_order_from_items(
                 _record_free_items(branch, order, free_items, products_by_id,
                                    promo_codes, staff)
                 if grab_short:
-                    # So someone checks the Grab bag.  Never raises.
-                    grab_sync.till_took_held(branch, order.order_number, grab_short)
+                    # So someone checks the Grab bag — after the sale commits, so
+                    # it holds no product lock while it takes the Grab hold rows
+                    # (the other order would be a circle) and never delays the
+                    # sale.  It never raises.
+                    transaction.on_commit(lambda: grab_sync.till_took_held(
+                        branch, order.order_number, grab_short, source))
                 return order
         except IntegrityError as e:
             # Almost certainly the unique order_number. Re-derive and try again.
             last_error = e
+            continue
+        except OperationalError as e:
+            # A deadlock or serialisation failure rolled the sale back whole, so it
+            # is safe to run again.  Anything else, or the last try failing, is
+            # raised: the caller gets an error, never a half-made sale, and the
+            # log says what happened (the till keeps the payment to re-submit —
+            # ``reuse_paid_bill`` makes that safe).
+            code = getattr(getattr(e, '__cause__', None), 'pgcode', None)
+            if code not in _RETRYABLE_PGCODES:
+                raise
+            deadlocks += 1
+            logger.warning(
+                'Sale at %s rolled back by the database (%s), try %s of %s',
+                branch.name, code, deadlocks, DEADLOCK_MAX_TRIES)
+            if deadlocks >= DEADLOCK_MAX_TRIES:
+                logger.exception('Sale at %s lost to repeated database deadlocks', branch.name)
+                raise
+            attempt -= 1
             continue
 
     raise IntegrityError(
