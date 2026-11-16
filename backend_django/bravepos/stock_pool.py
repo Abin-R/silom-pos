@@ -60,6 +60,14 @@ def _add(into: dict[str, int], more: dict[str, int]) -> dict[str, int]:
     return into
 
 
+def _units(item_lists) -> dict[str, int]:
+    """Units per product id over many lists of lines."""
+    held: dict[str, int] = {}
+    for items in item_lists:
+        _add(held, line_quantities(items))
+    return held
+
+
 # ── The three reductions ────────────────────────────────────────────────────
 def self_held(branch, exclude_pk=None) -> dict[str, int]:
     """Units per product id under a live self-order hold at this branch.
@@ -73,10 +81,7 @@ def self_held(branch, exclude_pk=None) -> dict[str, int]:
     )
     if exclude_pk is not None:
         drafts = drafts.exclude(pk=exclude_pk)
-    held: dict[str, int] = {}
-    for items in drafts.values_list('items', flat=True):
-        _add(held, line_quantities(items))
-    return held
+    return _units(drafts.values_list('items', flat=True))
 
 
 def grab_held(branch) -> dict[str, int]:
@@ -88,13 +93,9 @@ def grab_held(branch) -> dict[str, int]:
     """
     if not branch.grab_merchant_id:
         return {}
-    held: dict[str, int] = {}
-    rows = GrabOrderHold.objects.filter(
+    return _units(GrabOrderHold.objects.filter(
         branch=branch, status=GrabOrderHold.HELD,
-    ).values_list('items', flat=True)
-    for items in rows:
-        _add(held, line_quantities(items))
-    return held
+    ).values_list('items', flat=True))
 
 
 def sync_status(branch):
@@ -107,9 +108,7 @@ def in_outage(status, now=None) -> bool:
     outage."""
     if status is None or not status.push_live:
         return False
-    if status.problem:
-        return True
-    if status.last_ok_at is None:
+    if status.problem or status.last_ok_at is None:
         return True
     return (now or djtz.now()) - status.last_ok_at > OUTAGE_AFTER
 

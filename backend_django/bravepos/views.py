@@ -659,13 +659,7 @@ def grab_till_check(request):
         pk__in=[row['product_id'] for row in short]).values_list('pk', 'name'))
     for row in short:
         row['name'] = names.get(uuid.UUID(row['product_id']), '')
-    return Response({
-        'ok': not short,
-        'blocked': [{
-            'product_id': r['product_id'], 'name': r['name'], 'wanted': r['wanted'],
-            'can_sell': r['can_sell'], 'held_for_grab': r['held_for_grab'],
-        } for r in short],
-    })
+    return Response({'ok': not short, 'blocked': short})
 
 
 class CustomerViewSet(TillPermissionMixin, SessionRequiredMixin, viewsets.ModelViewSet):

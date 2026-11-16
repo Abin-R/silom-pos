@@ -23,58 +23,54 @@ def _branch_or_404(merchant_id):
     return branch, None
 
 
-def _order_call(request, parser=grab_sync.parse_order):
-    """Key, body, branch — the start of every order endpoint.  ``(order, branch,
+def _start(request, parse):
+    """Key, body, branch — the start of every POST endpoint.  ``(parsed, branch,
     None)`` or ``(None, None, Response)``."""
     denied = grab_sync.check_api_key(request)
     if denied:
         return None, None, denied
     try:
-        order = parser(request.data)
+        parsed = parse(request.data)
     except grab_sync.BadRequest as e:
         return None, None, Response({'detail': str(e)}, status=400)
-    branch, missing = _branch_or_404(order['merchant_id'])
+    branch, missing = _branch_or_404(parsed['merchant_id'])
     if missing:
         return None, None, missing
     grab_sync.mark_audit_source(request)
-    return order, branch, None
+    return parsed, branch, None
+
+
+def _parse_convert(data):
+    order = grab_sync.parse_order(data)
+    raw = data.get('items')
+    # No items: convert what the hold has.
+    order['items'] = grab_sync.parse_items(raw) if raw is not None else None
+    return order
+
+
+def _parse_correct(data):
+    order = grab_sync.parse_order(data)
+    order['items'] = grab_sync.parse_items(data.get('items'))
+    return order
 
 
 @api_view(['POST'])
 def grab_hold_orders(request):
     """Hold the units of every Grab order in the batch (create or update)."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        merchant_id, orders, dry_run = grab_sync.parse_hold_orders(request.data)
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _branch_or_404(merchant_id)
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
-    return Response(grab_sync.hold_orders(branch, orders, dry_run=dry_run))
+    call, branch, early = _start(request, grab_sync.parse_hold_orders)
+    if early:
+        return early
+    return Response(grab_sync.hold_orders(branch, call['orders'], dry_run=call['dry_run']))
 
 
 @api_view(['POST'])
 def grab_convert_order(request):
     """A Grab order was packed: its hold becomes a deduction, once."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        order = grab_sync.parse_order(request.data)
-        raw = request.data.get('items')
-        items = grab_sync.parse_items(raw) if raw is not None else None
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _branch_or_404(order['merchant_id'])
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
+    order, branch, early = _start(request, _parse_convert)
+    if early:
+        return early
     return Response(grab_sync.convert_order(
-        branch, order['order_id'], order['display_id'], items,
+        branch, order['order_id'], order['display_id'], order['items'],
         ready_at=order['ready_at'], go_live_at=order['go_live_at'],
         grab_state=order['grab_state'], dry_run=order['dry_run'],
     ))
@@ -83,7 +79,7 @@ def grab_convert_order(request):
 @api_view(['POST'])
 def grab_release_order(request):
     """A Grab order was cancelled before it was packed: drop its hold."""
-    order, branch, early = _order_call(request)
+    order, branch, early = _start(request, grab_sync.parse_order)
     if early:
         return early
     return Response(grab_sync.release_order(
@@ -93,7 +89,7 @@ def grab_release_order(request):
 @api_view(['POST'])
 def grab_restore_order(request):
     """A converted Grab order was cancelled: put its stock back, once."""
-    order, branch, early = _order_call(request)
+    order, branch, early = _start(request, grab_sync.parse_order)
     if early:
         return early
     return Response(grab_sync.restore_order(
@@ -105,20 +101,11 @@ def grab_restore_order(request):
 @api_view(['POST'])
 def grab_correct_order(request):
     """A converted Grab order was edited: write only the difference."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        order = grab_sync.parse_order(request.data)
-        items = grab_sync.parse_items(request.data.get('items'))
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _branch_or_404(order['merchant_id'])
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
+    order, branch, early = _start(request, _parse_correct)
+    if early:
+        return early
     return Response(grab_sync.correct_order(
-        branch, order['order_id'], order['display_id'], items,
+        branch, order['order_id'], order['display_id'], order['items'],
         grab_state=order['grab_state'] or 'COMPLETED', dry_run=order['dry_run'],
     ))
 
@@ -126,7 +113,7 @@ def grab_correct_order(request):
 @api_view(['POST'])
 def grab_review_order(request):
     """The poller cannot tell what happened to an order: open a review."""
-    order, branch, early = _order_call(request, grab_sync.parse_review)
+    order, branch, early = _start(request, grab_sync.parse_review)
     if early:
         return early
     return Response(grab_sync.review_order(branch, order, dry_run=order['dry_run']))
@@ -135,17 +122,9 @@ def grab_review_order(request):
 @api_view(['POST'])
 def grab_heartbeat(request):
     """The poller finished a cycle.  Answers whether the branch is in outage."""
-    denied = grab_sync.check_api_key(request)
-    if denied:
-        return denied
-    try:
-        beat = grab_sync.parse_heartbeat(request.data)
-    except grab_sync.BadRequest as e:
-        return Response({'detail': str(e)}, status=400)
-    branch, missing = _branch_or_404(beat['merchant_id'])
-    if missing:
-        return missing
-    grab_sync.mark_audit_source(request)
+    beat, branch, early = _start(request, grab_sync.parse_heartbeat)
+    if early:
+        return early
     return Response(grab_sync.heartbeat(branch, beat, dry_run=beat['dry_run']))
 
 

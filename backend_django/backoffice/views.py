@@ -1065,18 +1065,14 @@ def _grab_review_row(hold) -> dict:
         "id": str(hold.id),
         "order_id": hold.order_id,
         "display_id": hold.display_id or hold.order_id,
-        "branch_name": hold.branch.name,
         "status": hold.status,
         "grab_state": hold.grab_state,
-        "reason": hold.review_reason,
         "reason_label": hold.review_reason.replace("_", " ").capitalize(),
         "reason_text": grab_sync.REVIEW_TEXT.get(hold.review_reason, hold.review_reason),
         "detail_text": json.dumps(detail, ensure_ascii=False)[:300] if detail else "",
         "items": [{"name": i.get("name") or i.get("barcode") or "", "qty": int(i.get("qty") or 0)}
                   for i in (hold.items or [])],
-        "placed_at": hold.placed_at,
         "first_seen_at": hold.first_seen_at,
-        "ready_at": hold.ready_at,
         "resolution": hold.resolution,
         "resolved_by": hold.resolved_by,
         "resolved_at": hold.resolved_at,
@@ -1093,7 +1089,7 @@ def grab_review(request):
     branch = _select_branch(request, branches)
     open_rows, settled = [], []
     if branch is not None:
-        mine = GrabOrderHold.objects.filter(branch=branch).select_related("branch")
+        mine = GrabOrderHold.objects.filter(branch=branch)
         open_rows = mine.filter(review_status="open").order_by("first_seen_at")
         settled = (
             mine.filter(

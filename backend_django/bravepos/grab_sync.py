@@ -198,7 +198,7 @@ def parse_order(data: dict) -> dict:
         "ready_at": _when(data.get("ready_at"), "ready_at"),
         # The poller's GRAB_STOCK_SINCE: a Ready time before it is an order
         # packed before go-live, whose stock the count at go-live already knows.
-        "go_live_at": _when(data.get("go_live_at") or data.get("since"), "go_live_at"),
+        "go_live_at": _when(data.get("since"), "since"),
         "dry_run": data.get("dry_run") is True,
     }
 
@@ -236,8 +236,8 @@ def parse_items(raw) -> list[dict]:
     return lines
 
 
-def parse_hold_orders(data: dict) -> tuple[str, list[dict], bool]:
-    """``(merchant_id, [order, ...], dry_run)`` for the batch hold call."""
+def parse_hold_orders(data: dict) -> dict:
+    """``{merchant_id, orders, dry_run}`` for the batch hold call."""
     if not isinstance(data, dict):
         raise BadRequest("Body must be a JSON object.")
     merchant_id = parse_merchant_id(data.get("merchant_id"))
@@ -263,7 +263,7 @@ def parse_hold_orders(data: dict) -> tuple[str, list[dict], bool]:
                                 required=False, max_length=32),
             "items": parse_items(o.get("items") if o.get("items") is not None else []),
         })
-    return merchant_id, orders, data.get("dry_run") is True
+    return {"merchant_id": merchant_id, "orders": orders, "dry_run": data.get("dry_run") is True}
 
 
 def parse_review(data: dict) -> dict:
@@ -475,10 +475,7 @@ def hold_orders(branch, orders, *, dry_run=False) -> dict:
     """Hold every order in the batch.  One transaction per order, so a problem
     with one never loses the rest."""
     dry_run = dry_run or not writes_enabled()
-    results = []
-    for order in orders:
-        results.append(_hold_one(branch, order, dry_run))
-    return {"results": results}
+    return {"results": [_hold_one(branch, order, dry_run) for order in orders]}
 
 
 def _hold_one(branch, order, dry_run) -> dict:
@@ -598,20 +595,12 @@ def _convert_locked(branch, hold, display_id, items, *, ready_at=None, go_live_a
 
     mapped, skipped = _map_items(items, products)
     counted = _counted_after(branch, [p.id for p, _i in mapped], ready_at)
-    to_take, counted_lines = [], []
-    for product, item in mapped:
-        if str(product.id) in counted:
-            counted_lines.append((product, item))
-        else:
-            to_take.append((product, item))
+    to_take = [(p, i) for p, i in mapped if str(p.id) not in counted]
+    lines = [_line(p, i["qty"], p.stock, "counted_after_packing")
+             for p, i in mapped if str(p.id) in counted]
+    lines += [_line(None, 0, None, s["reason"], s["barcode"]) for s in skipped]
 
-    lines = []
-    for product, item in counted_lines:
-        lines.append(_line(product, item["qty"], product.stock, "counted_after_packing"))
-    for s in skipped:
-        lines.append(_line(None, 0, None, s["reason"], s["barcode"]))
-
-    if not to_take and not counted_lines:
+    if not mapped:
         if skipped and not dry_run and not hold._state.adding:
             open_review(hold, "unmapped_item", _skipped_detail(skipped))
         return {"status": "nothing_to_convert", "lines": lines}
@@ -776,19 +765,16 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
         barcodes = {i["barcode"] for i in items if i["barcode"]}
         deducted = {pid: qty for pid, qty in (hold.deducted or {}).items() if qty}
         # One lock pass over every product either side mentions.
-        wanted_ids = set(deducted)
-        by_barcode = {p.barcode: p for p in Product.objects.filter(
-            branch=branch, active=True, barcode__in=list(barcodes))}
-        wanted_ids |= {str(p.id) for p in by_barcode.values()}
+        by_barcode = _products_by_barcode(branch, barcodes)
+        wanted_ids = set(deducted) | {str(p.id) for p in by_barcode.values()}
         locked = {
             str(p.id): p for p in Product.objects.select_for_update()
             .filter(branch=branch, pk__in=list(wanted_ids)).order_by("id")
         }
         mapped, skipped = _map_items(
             items, {bc: locked[str(p.id)] for bc, p in by_barcode.items() if str(p.id) in locked})
-        final: dict[str, int] = {}
-        for product, item in mapped:
-            final[str(product.id)] = final.get(str(product.id), 0) + item["qty"]
+        new_items = _hold_items(mapped)
+        final = stock_pool.line_quantities(new_items)
 
         lines = [_line(None, 0, None, s["reason"], s["barcode"]) for s in skipped]
         if hold.close_reason == "before_go_live" or not final:
@@ -797,7 +783,7 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
                 hold.save(update_fields=["grab_state"])
             return {"status": "no_change", "lines": lines}
 
-        counted = _counted_after(branch, [pid for pid in final], hold.ready_at)
+        counted = _counted_after(branch, final, hold.ready_at)
         display_id = display_id or hold.display_id
         note = f"Grab {display_id} edit".strip()
         new_deducted = dict(deducted)
@@ -824,7 +810,7 @@ def correct_order(branch, order_id, display_id, items, *, grab_state="COMPLETED"
         fields = []
         if changed:
             hold.deducted = {pid: q for pid, q in new_deducted.items() if q}
-            hold.items = _hold_items(mapped)
+            hold.items = new_items
             hold.changed_at = now
             fields += ["deducted", "items", "changed_at"]
         if grab_state and hold.grab_state != grab_state:

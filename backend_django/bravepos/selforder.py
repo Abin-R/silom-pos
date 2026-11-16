@@ -144,10 +144,6 @@ def held_quantities(branch, exclude_pk=None) -> dict[str, int]:
     return stock_pool.withheld_for_other_channels(branch, exclude_pk=exclude_pk)
 
 
-# Kept under its old name: other call sites in this module use it.
-_line_quantities = stock_pool.line_quantities
-
-
 def is_sold_out(product, held: int = 0) -> bool:
     """A product with none left to sell."""
     return int(product.stock or 0) - held <= 0
@@ -425,7 +421,7 @@ def free_item_stock(branch, items: list[dict], exclude_pk=None) -> dict[str, str
     free_pids = {it['product_id'] for it in items if it.get('is_free')}
     if not free_pids:
         return {}
-    wanted = _line_quantities(items)
+    wanted = stock_pool.line_quantities(items)
     held = held_quantities(branch, exclude_pk=exclude_pk)
     out: dict[str, str] = {}
     for p in Product.objects.filter(pk__in=free_pids, branch=branch):
@@ -580,7 +576,7 @@ def _hold_stock(draft: SelfOrder) -> None:
             'This order has timed out. Please go back to the menu and order again.'
         )
 
-    wanted = _line_quantities(draft.items)
+    wanted = stock_pool.line_quantities(draft.items)
     free_pids = {str(it.get('product_id')) for it in draft.items if it.get('is_free')}
     with transaction.atomic():
         locked = SelfOrder.objects.select_for_update().get(pk=draft.pk)
