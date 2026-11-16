@@ -1053,20 +1053,33 @@ def till_took_held(branch, order_number: str, shortfalls: list[dict], source: st
     holds no product lock (the Grab paths take the hold row, then products; this
     one takes only hold rows) and a slow alert cannot delay the sale.  A failure
     here must never lose the sale, so it never raises.  ``source`` is the channel
-    that sold the units: ``counter`` (the till) or ``self_order``.
+    that sold the units: ``counter`` (the till) or ``self_order``.  A shortfall
+    from a real sale carries its ``_hold_id`` from the locked-sale check: review
+    that row even if it converted before this callback got its hold lock.
     """
     try:
         with transaction.atomic():
-            holds = list(
+            captured_ids = {short.get('_hold_id') for short in shortfalls if short.get('_hold_id')}
+            captured = {
+                str(hold.pk): hold for hold in
+                GrabOrderHold.objects.select_for_update(of=("self",))
+                .select_related("branch")
+                .filter(branch=branch, pk__in=captured_ids)
+            }
+            # Direct callers without a captured id retain the old, newest-held
+            # behaviour.  Sales always use their captured identity.
+            held = list(
                 GrabOrderHold.objects.select_for_update(of=("self",))
                 .select_related("branch")
                 .filter(branch=branch, status=GrabOrderHold.HELD).order_by("-first_seen_at")
-            )
+            ) if any(not short.get('_hold_id') for short in shortfalls) else []
             for short in shortfalls:
-                target = next(
-                    (h for h in holds
-                     if any(str(i.get("product_id")) == short["product_id"] for i in h.items or [])),
-                    None)
+                target = captured.get(str(short.get('_hold_id')))
+                if target is None and not short.get('_hold_id'):
+                    target = next(
+                        (h for h in held
+                         if any(str(i.get("product_id")) == short["product_id"] for i in h.items or [])),
+                        None)
                 if target is None:
                     logger.warning(
                         "Till sale %s took %s units of %s that Grab may still sell "

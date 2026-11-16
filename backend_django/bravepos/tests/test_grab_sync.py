@@ -15,6 +15,7 @@ Run:
 from __future__ import annotations
 
 import os
+import threading
 from datetime import timedelta
 from unittest import mock, skipUnless
 
@@ -1778,6 +1779,67 @@ class ConcurrencyTests(TransactionTestCase):
         self.assertEqual(errors, [])
         self.latte.refresh_from_db()
         self.assertEqual(self.latte.stock, 6 - 3 - 5)
+        connections.close_all()
+
+    def test_sale_reviews_the_captured_hold_after_a_waiting_convert_finishes(self):
+        """The sale has the product lock, then the convert takes the hold lock
+        and waits for that product.  The post-commit review must still find the
+        same hold after the convert changes it to ``converted``."""
+        from bravepos.orders import _grab_shortfalls, create_order_from_items
+
+        make_shop()
+        self.latte.stock = 7
+        self.latte.save()
+        hold = GrabOrderHold.objects.create(
+            branch=self.branch, order_id=ORDER, display_id="G1",
+            items=[{"product_id": str(self.latte.id), "barcode": "8812", "qty": 5,
+                    "name": "Latte"}],
+        )
+        convert_waiting_for_product = threading.Event()
+        convert_errors = []
+        real_products_by_barcode = grab_sync._products_by_barcode
+
+        def signal_convert_before_product_lock(branch, barcodes, *, lock=False):
+            if lock and threading.current_thread().name == "waiting-convert":
+                convert_waiting_for_product.set()
+            return real_products_by_barcode(branch, barcodes, lock=lock)
+
+        def convert():
+            try:
+                grab_sync.convert_order(self.branch, ORDER, "G1", None)
+            except Exception as error:  # noqa: BLE001 — asserted on the parent thread
+                convert_errors.append(error)
+            finally:
+                connections.close_all()
+
+        converter = threading.Thread(target=convert, name="waiting-convert")
+
+        def capture_then_start_convert(branch, items, free_items):
+            shortfalls = _grab_shortfalls(branch, items, free_items)
+            self.assertEqual(shortfalls[0]["_hold_id"], str(hold.pk))
+            converter.start()
+            self.assertTrue(convert_waiting_for_product.wait(timeout=10),
+                            "convert did not take the hold lock before seeking the product")
+            return shortfalls
+
+        with mock.patch("bravepos.grab_sync._products_by_barcode",
+                        side_effect=signal_convert_before_product_lock), \
+                mock.patch("bravepos.orders._grab_shortfalls", side_effect=capture_then_start_convert):
+            sale = create_order_from_items(
+                branch=self.branch,
+                items=[{"product_id": str(self.latte.id), "name": "Latte", "qty": 3,
+                        "price": "10"}],
+                goods_total=30, subtotal=30, payment_method="Cash", paid_amount=30,
+            )
+        converter.join(timeout=10)
+        self.assertFalse(converter.is_alive(), "convert did not finish")
+        self.assertEqual(convert_errors, [])
+        hold.refresh_from_db()
+        self.assertEqual((hold.status, hold.review_status, hold.review_reason),
+                         ("converted", "open", "till_took_held"))
+        self.assertEqual(hold.review_detail["order_number"], sale.order_number)
+        self.latte.refresh_from_db()
+        self.assertEqual(self.latte.stock, -1)
         connections.close_all()
 
 

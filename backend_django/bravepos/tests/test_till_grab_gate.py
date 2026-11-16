@@ -266,8 +266,10 @@ class DeadlockTests(GateTestCase):
 
     def deadlock(self):
         from django.db import OperationalError
+        from psycopg.errors import DeadlockDetected
         error = OperationalError('deadlock detected')
-        error.__cause__ = type('DeadlockDetected', (Exception,), {'pgcode': '40P01'})()
+        # psycopg 3 exposes the PostgreSQL state as ``sqlstate``, not pgcode.
+        error.__cause__ = DeadlockDetected()
         return error
 
     def create(self):
@@ -312,6 +314,23 @@ class DeadlockTests(GateTestCase):
             with self.assertRaises(OperationalError):
                 self.create()
         self.assertEqual(create.call_count, 1)
+
+    def test_the_psycopg2_pgcode_fallback_is_still_retried(self):
+        from django.db import OperationalError
+        error = OperationalError('deadlock detected')
+        error.__cause__ = type('Psycopg2Deadlock', (Exception,), {'pgcode': '40P01'})()
+        real = Order.objects.create
+        calls = []
+
+        def flaky(**kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise error
+            return real(**kw)
+
+        with mock.patch.object(Order.objects, 'create', side_effect=flaky):
+            self.create()
+        self.assertEqual(calls, [1, 1])
 
 
 @skipUnless(connection.vendor == 'postgresql', 'row locks need PostgreSQL')

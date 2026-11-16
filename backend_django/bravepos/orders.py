@@ -26,7 +26,7 @@ from .gateways import (
     get_shop_settings,
 )
 from .models import (
-    Branch, DiscountType, Order, OrderItem, Product, Shift, StockDocument,
+    Branch, DiscountType, GrabOrderHold, Order, OrderItem, Product, Shift, StockDocument,
     StockDocumentItem, StockMovement,
 )
 
@@ -394,7 +394,10 @@ def create_order_from_items(
             # raised: the caller gets an error, never a half-made sale, and the
             # log says what happened (the till keeps the payment to re-submit —
             # ``reuse_paid_bill`` makes that safe).
-            code = getattr(getattr(e, '__cause__', None), 'pgcode', None)
+            cause = getattr(e, '__cause__', None)
+            # psycopg 3 calls this ``sqlstate``; psycopg 2 exposed ``pgcode``.
+            # Accept both while the project can be run with either driver.
+            code = getattr(cause, 'sqlstate', None) or getattr(cause, 'pgcode', None)
             if code not in _RETRYABLE_PGCODES:
                 raise
             deadlocks += 1
@@ -433,7 +436,30 @@ def _grab_shortfalls(branch, items, free_items) -> list[dict]:
             wanted[pid] = wanted.get(pid, 0) + qty
     try:
         with transaction.atomic():
-            return stock_pool.till_shortfalls(branch, wanted)
+            shortfalls = stock_pool.till_shortfalls(branch, wanted)
+            if not shortfalls:
+                return []
+            # Keep the exact held row that made this sale short.  The callback
+            # runs after the sale commits (so it never takes a hold lock while
+            # holding product locks).  A conversion may take this hold row and
+            # wait for the sale's product lock in between; by the callback it is
+            # then converted, so looking again only for ``status=held`` loses the
+            # review.  This is deliberately a plain read: locking a hold after
+            # products would recreate that lock cycle.
+            holds = list(
+                GrabOrderHold.objects.filter(branch=branch, status=GrabOrderHold.HELD)
+                .only('id', 'items').order_by('-first_seen_at')
+            )
+            for short in shortfalls:
+                target = next(
+                    (hold for hold in holds
+                     if any(str(item.get('product_id')) == short['product_id']
+                            for item in hold.items or [])),
+                    None,
+                )
+                if target is not None:
+                    short['_hold_id'] = str(target.pk)
+            return shortfalls
     except Exception:  # noqa: BLE001 — see docstring
         logger.exception('Grab hold check failed for a sale at %s', branch.name)
         return []
