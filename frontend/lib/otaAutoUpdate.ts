@@ -45,6 +45,34 @@ const SAFE_PATHS = new Set(["/", "/pos"]);
 
 const busy = new Set<string>();
 let updateReady = false;
+// How long the "Updating…" screen stays up before the reload, so staff see
+// why the till is about to blank for a moment.
+const INSTALL_NOTICE_MS = 1_500;
+
+/**
+ * What the till shows about updates (components/OtaStatus):
+ *  - downloading: a small note while the new version comes down
+ *  - ready: a small note until the till is free to install it
+ *  - installing: a full-screen "Updating…" just before the restart
+ */
+export type OtaStatus = "idle" | "downloading" | "ready" | "installing";
+let status: OtaStatus = "idle";
+const statusListeners = new Set<(s: OtaStatus) => void>();
+
+function setStatus(next: OtaStatus) {
+  if (status === next) return;
+  status = next;
+  statusListeners.forEach((l) => l(next));
+}
+
+/** Current update status, and a subscription to changes. */
+export function getOtaStatus(): OtaStatus {
+  return status;
+}
+export function subscribeOtaStatus(l: (s: OtaStatus) => void): () => void {
+  statusListeners.add(l);
+  return () => { statusListeners.delete(l); };
+}
 let checking = false;
 let lastCheckAt = 0;
 
@@ -66,6 +94,7 @@ async function checkAndFetch(): Promise<void> {
   try {
     const check = await Updates.checkForUpdateAsync();
     if (!check.isAvailable) return;
+    setStatus("downloading");
     const fetched = await Updates.fetchUpdateAsync();
     if (fetched.isNew) {
       updateReady = true;
@@ -75,6 +104,7 @@ async function checkAndFetch(): Promise<void> {
     // Offline tills are normal; never alert, just leave a trail.
     note("check failed", { error: String(e?.message ?? e) });
   } finally {
+    setStatus(updateReady ? "ready" : "idle");
     checking = false;
   }
 }
@@ -104,6 +134,7 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
   const markIfPending = (pending: boolean | undefined) => {
     if (pending && !updateReady) {
       updateReady = true;
+      setStatus("ready");
       note("update downloaded at launch, waiting for an idle moment");
     }
   };
@@ -121,14 +152,26 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
   const apply = async () => {
     applying = true;
     note("restarting into the downloaded update", { path: getPath() });
+    setStatus("installing");
     try {
       await AsyncStorage.setItem(RESUME_KEY, JSON.stringify({ at: Date.now() }));
+      await new Promise((r) => setTimeout(r, INSTALL_NOTICE_MS));
+      // Something may have started while the notice was up (a self-order
+      // slip arriving); if so, stand down and wait for the next idle moment.
+      if (!isIdle()) {
+        await AsyncStorage.removeItem(RESUME_KEY);
+        setStatus("ready");
+        idleSince = null;
+        applying = false;
+        return;
+      }
       await Updates.reloadAsync();
     } catch (e: any) {
       // Reload refused — clear the marker so a later manual reopen is not
       // mistaken for our restart, and try again on a later tick.
       try { await AsyncStorage.removeItem(RESUME_KEY); } catch {}
       note("reload failed", { error: String(e?.message ?? e) });
+      setStatus("ready");
       applying = false;
     }
   };
