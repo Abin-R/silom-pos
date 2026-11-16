@@ -214,8 +214,13 @@ export function useStarPrinter() {
           return;
         }
         // Append — never overwrite.  Two receipts handed to us at once must
-        // both print.
-        setJobs((prev) => [...prev, { config, order, shop, resolve }]);
+        // both print.  Counted as printing until it settles, which holds
+        // back an update restart (lib/otaAutoUpdate).
+        const done = queue.beginLivePrint();
+        setJobs((prev) => [...prev, {
+          config, order, shop,
+          resolve: (r) => { done(); resolve(r); },
+        }]);
       }),
     [],
   );

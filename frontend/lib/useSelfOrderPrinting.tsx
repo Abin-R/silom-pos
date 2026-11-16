@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api";
 import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "./localPrinterConfig";
+import { setBusy as setOtaBusy } from "./otaAutoUpdate";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
 
 const POLL_MS = 10_000;
@@ -143,6 +144,9 @@ export function useSelfOrderPrinting(
         if (!res.ok || stopped) return;
         const orders: ApiOrder[] = await res.json();
         if (!orders?.length) return;
+        // The server has handed these over as ours to print; an update
+        // restart before they are out would lose them (lib/otaAutoUpdate).
+        setOtaBusy("self-order", true);
 
         const shopRes = await apiFetch("/settings");
         const shop = shopRes.ok ? await shopRes.json() : {};
@@ -170,6 +174,7 @@ export function useSelfOrderPrinting(
         console.warn("self-order poll failed", e);
       } finally {
         busy = false;
+        setOtaBusy("self-order", false);
       }
     };
 

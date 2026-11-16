@@ -40,6 +40,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { endSession } from "../lib/appLock";
 import { getDeviceId } from "../lib/deviceId";
+import { consumeResumeMarker, setBusy } from "../lib/otaAutoUpdate";
 import { C, MONO, R } from "../lib/theme";
 import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
@@ -89,22 +90,46 @@ export default function Login() {
 
   // ── No session restore ─────────────────────────────────────────────────
   // Every launch starts at the PIN pad: a shared till must not reopen as
-  // whoever used it last. A session left on disk (app closed, crashed, or
-  // updated) is ended here rather than resumed. Leaving the app mid-session
-  // is handled by lib/appLock.
+  // whoever used it last. A session left on disk (app closed or crashed) is
+  // ended here rather than resumed. Leaving the app mid-session is handled by
+  // lib/appLock.
+  //
+  // The one exception is the app restarting itself to install an update
+  // (lib/otaAutoUpdate): that is not someone reopening the till, so the
+  // cashier carries on signed in, back on the sales screen.
   const [checkingSession, setCheckingSession] = useState(true);
   useEffect(() => {
     (async () => {
       try {
+        const resuming = await consumeResumeMarker();
         const raw = await AsyncStorage.getItem(AUTH_KEY);
         const saved = raw ? JSON.parse(raw) : null;
+        if (resuming && saved?.token) {
+          setAuthToken(saved.token);
+          setSentryContext({
+            staffId: saved.staff?.id,
+            staffName: saved.staff?.name,
+            role: saved.staff?.role || "cashier",
+            branchName: saved.branch?.name,
+          });
+          router.replace({
+            pathname: "/pos",
+            params: {
+              staff: saved.staff?.name || "",
+              role: saved.staff?.role || "cashier",
+              branch_id: saved.branch?.id || "",
+              branch_name: saved.branch?.name || "",
+            },
+          });
+          return;
+        }
         if (saved?.token) await endSession();
       } catch {
         // corrupt JSON — nothing to end; fall through to the login form.
       }
       setCheckingSession(false);
     })();
-  }, []);
+  }, [router]);
 
   // ── Clock ──────────────────────────────────────────────────────────────
   const [now, setNow] = useState(new Date());
@@ -149,6 +174,11 @@ export default function Login() {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // A PIN half typed must not be wiped by an update restart.
+  useEffect(() => {
+    setBusy("login", pin.length > 0 || submitting);
+    return () => setBusy("login", false);
+  }, [pin, submitting]);
 
   useEffect(() => {
     if (!branch) return;

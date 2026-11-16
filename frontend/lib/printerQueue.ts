@@ -73,6 +73,34 @@ export function release(id: string): void {
   inFlight.delete(id);
 }
 
+// Live prints (a cashier's bill, a self-order slip) are not in the queue
+// until they fail, so they are counted here while they run.  Kept with a
+// start time so a print whose screen vanished mid-job can't pin it forever.
+const livePrints = new Map<number, number>();
+let livePrintSeq = 0;
+const LIVE_PRINT_STALE_MS = 2 * 60_000;
+
+/** Mark a live print as started; call the returned function when it settles. */
+export function beginLivePrint(): () => void {
+  const id = ++livePrintSeq;
+  livePrints.set(id, Date.now());
+  return () => { livePrints.delete(id); };
+}
+
+/**
+ * True while any slip is being sent to a printer, so an update restart
+ * (lib/otaAutoUpdate) can't cut one off halfway.
+ */
+export function isPrinting(): boolean {
+  if (inFlight.size > 0) return true;
+  const now = Date.now();
+  for (const [id, at] of livePrints) {
+    if (now - at < LIVE_PRINT_STALE_MS) return true;
+    livePrints.delete(id);
+  }
+  return false;
+}
+
 export async function listJobs(): Promise<PrintJob[]> {
   try {
     const raw = await AsyncStorage.getItem(QUEUE_KEY);

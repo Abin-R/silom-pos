@@ -12,6 +12,7 @@ import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
 import { endSession, startAppLock } from "../lib/appLock";
 import { PrinterHost } from "../lib/printerHost";
+import { startOtaAutoUpdate } from "../lib/otaAutoUpdate";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
 // .env.production, so it only lands in release bundles) *and* a non-dev build.
@@ -85,6 +86,10 @@ function RootLayout() {
       }),
     [],
   );
+
+  // Over-the-air updates install themselves the first moment the till is
+  // idle, and keep whoever is signed in signed in. See lib/otaAutoUpdate.
+  useEffect(() => startOtaAutoUpdate(() => pathRef.current), []);
 
   const [fontsLoaded] = useFonts({
     Sarabun: require("../assets/fonts/Sarabun-Regular.ttf"),

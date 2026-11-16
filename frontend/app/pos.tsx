@@ -22,6 +22,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
 import { phoneMatchKey } from "../lib/phone";
 import { usePrinter } from "../lib/printerHost";
+import { setBusy } from "../lib/otaAutoUpdate";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { useSuggestions, type Suggestion } from "../lib/useSuggestions";
 import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "../lib/localPrinterConfig";
@@ -341,6 +342,24 @@ export default function POS() {
   const [showOpenShift, setShowOpenShift] = useState(false);
   const [startCash, setStartCash] = useState("0");
   const [openingShift, setOpeningShift] = useState(false);
+
+  // A sale in progress holds back an update restart (lib/otaAutoUpdate):
+  // items in the cart, or any of this screen's popups open — payment (which
+  // covers a QR waiting to be paid), the bill-done slip, opening a shift.
+  const saleBusy =
+    cart.length > 0 ||
+    showPayment ||
+    showCustomer ||
+    showParked ||
+    showCart ||
+    !!showSuccess ||
+    !!editItem ||
+    showOpenShift ||
+    openingShift;
+  useEffect(() => {
+    setBusy("sale", saleBusy);
+  }, [saleBusy]);
+  useEffect(() => () => setBusy("sale", false), []);
 
   // Receipts sitting in the retry queue = prints that silently failed. Polled
   // rather than pushed, because the queue is drained by a background timer in

@@ -33,6 +33,11 @@ let listener: ((d: Dialog | null) => void) | null = null;
 // A dialog raised before the host mounts would be dropped; hold one so the
 // very first error after boot still reaches the user.
 let pending: Dialog | null = null;
+// Whether a dialog is on screen — an update restart must not swallow one.
+let dialogOpen = false;
+export function isDialogOpen(): boolean {
+  return dialogOpen || pending !== null;
+}
 
 /** Drop-in replacement for Alert.alert. */
 export function showAlert(
@@ -141,6 +146,10 @@ export function DialogHost() {
       listener = null;
     };
   }, []);
+
+  useEffect(() => {
+    dialogOpen = dialog !== null;
+  }, [dialog]);
 
   if (!dialog) return null;
 
