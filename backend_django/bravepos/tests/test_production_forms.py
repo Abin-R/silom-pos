@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
+from unittest import skipUnless
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -300,6 +302,7 @@ class ProductionCompactTemplateTests(SimpleTestCase):
 
     template_dir = Path(__file__).resolve().parents[2] / "backoffice" / "templates" / "backoffice"
 
+    @skipUnless(shutil.which("node"), "Requires Node.js for compact-submit JavaScript regression")
     def test_compact_submit_omits_1003_legacy_fields_and_restores_them(self):
         node_program = r'''
 const fs = require('fs');
