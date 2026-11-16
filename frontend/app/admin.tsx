@@ -6086,6 +6086,7 @@ function SettingsView({
     { key: "Second screen", labelKey: "admin.second_screen", icon: "tv", color: "#3B82F6" },
     { key: "Users", labelKey: "admin.users", icon: "person", color: "#F97316" },
     { key: "Advanced", labelKey: "admin.advanced", icon: "settings", color: C.ink2Soft },
+    { key: "About", labelKey: "admin.about", icon: "information-circle", color: "#0EA5E9" },
     { key: "Backup & Restore", labelKey: "admin.backup_and_restore", icon: "cloud-upload", color: "#A855F7" },
     { key: "Sync", labelKey: "admin.sync", icon: "sync", color: "#06B6D4" },
     { key: "Loyalty", labelKey: "admin.loyalty", icon: "star", color: "#EAB308" },
@@ -6325,6 +6326,8 @@ function SettingsView({
           <LanguageSection />
         ) : active === "Advanced" ? (
           <AdvancedSection />
+        ) : active === "About" ? (
+          <AboutSection />
         ) : (
           <Empty
             icon="construct-outline"
@@ -6364,6 +6367,37 @@ function Field({ label, children, flex }: { label: string; children: any; flex?:
 //
 // English rather than translated, for the same reason the install page is:
 // read by whoever is debugging a tablet, not by a cashier mid-sale.
+// ---------- About ----------
+// Which version of the app this tablet is running, in plain words. Also the
+// quickest way to see that an over-the-air update has installed itself
+// (lib/otaAutoUpdate): the update date and ID change without the app being
+// closed.
+function AboutSection() {
+  useT();
+  const installed = Updates.createdAt
+    ? Updates.createdAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })
+    : "—";
+  return (
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }}>
+      <Text style={styles.h2}>{tr("admin.about")}</Text>
+      <Panel style={{ padding: 16 }}>
+        <KV k="App" v="Brave POS" />
+        <KV k="Version" v={Constants.expoConfig?.version ?? "—"} />
+        <KV
+          k="Running"
+          v={Updates.isEmbeddedLaunch ? "the version installed from Google Play" : "an over-the-air update"}
+        />
+        <KV k="Update published" v={Updates.isEmbeddedLaunch ? "—" : installed} />
+        <KV k="Update ID" v={Updates.updateId ? `…${Updates.updateId.slice(-6)}` : "none"} mono />
+      </Panel>
+      <Notice tone="info" icon="refresh-outline">
+        New versions install by themselves when the till is free: an empty
+        cart on the sales screen, or the login screen. Nobody has to close the app.
+      </Notice>
+    </ScrollView>
+  );
+}
+
 function AdvancedSection() {
   useT(); // re-render when the language changes, like every other section
   const [eventId, setEventId] = useState<string | null>(null);

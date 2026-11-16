@@ -25,6 +25,7 @@ const th = {
     address: "ที่อยู่",
     address_is_required: "กรุณากรอกที่อยู่",
     adjust: "ปรับปรุง",
+    about: "เกี่ยวกับ",
     advanced: "ขั้นสูง",
     after_gp: "หลังหัก GP",
     all: "ทั้งหมด",

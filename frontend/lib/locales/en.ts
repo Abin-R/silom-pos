@@ -26,6 +26,7 @@ const en = {
     address: "Address",
     address_is_required: "Address is required.",
     adjust: "Adjust",
+    about: "About",
     advanced: "Advanced",
     after_gp: "After GP",
     all: "All",
