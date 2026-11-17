@@ -566,6 +566,12 @@ const en = {
     reports: "Reports",
     sale: "Sale",
   },
+  ota: {
+    downloading: "Downloading app update…",
+    ready: "App update ready — installs when the till is free",
+    installing: "Updating Brave POS…",
+    installing_note: "Back in a few seconds. You stay signed in.",
+  },
   pos: {
     add_customer: "Add customer",
     all_orders: "All Orders",

@@ -13,6 +13,7 @@ import { throttleBeforeSend } from "../lib/sentryThrottle";
 import { endSession, startAppLock } from "../lib/appLock";
 import { PrinterHost } from "../lib/printerHost";
 import { startOtaAutoUpdate } from "../lib/otaAutoUpdate";
+import { OtaStatus } from "../components/OtaStatus";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
 // .env.production, so it only lands in release bundles) *and* a non-dev build.
@@ -119,6 +120,8 @@ function RootLayout() {
             a dialog raised from any screen renders over it. */}
         <DialogHost />
         <ToastHost />
+        {/* "Downloading update" / "Updating…" — see lib/otaAutoUpdate. */}
+        <OtaStatus />
       </PrinterHost>
     </SafeAreaProvider>
   );

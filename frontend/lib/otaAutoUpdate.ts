@@ -30,10 +30,13 @@ const RESUME_KEY = "bravepos:ota-resume:v1";
 // The marker only vouches for the launch straight after our own reload.
 const RESUME_MAX_AGE_MS = 60_000;
 
-const CHECK_EVERY_MS = 10 * 60_000;
+const CHECK_EVERY_MS = 30 * 60_000;
 // Expo asks apps not to poll in a tight loop; foregrounding a till often
 // must not turn into a check every time.
 const MIN_CHECK_GAP_MS = 5 * 60_000;
+// A sign-in always checks (checkOnLogin), but two staff signing in back to
+// back need not ask twice.
+const MIN_LOGIN_CHECK_GAP_MS = 30_000;
 const APPLY_TICK_MS = 2_000;
 // How long the till must stay idle before we restart — long enough that a
 // cashier tapping a product right after a sale is not cut off.
@@ -45,6 +48,34 @@ const SAFE_PATHS = new Set(["/", "/pos"]);
 
 const busy = new Set<string>();
 let updateReady = false;
+// How long the "Updating…" screen stays up before the reload, so staff see
+// why the till is about to blank for a moment.
+const INSTALL_NOTICE_MS = 1_500;
+
+/**
+ * What the till shows about updates (components/OtaStatus):
+ *  - downloading: a small note while the new version comes down
+ *  - ready: a small note until the till is free to install it
+ *  - installing: a full-screen "Updating…" just before the restart
+ */
+export type OtaStatus = "idle" | "downloading" | "ready" | "installing";
+let status: OtaStatus = "idle";
+const statusListeners = new Set<(s: OtaStatus) => void>();
+
+function setStatus(next: OtaStatus) {
+  if (status === next) return;
+  status = next;
+  statusListeners.forEach((l) => l(next));
+}
+
+/** Current update status, and a subscription to changes. */
+export function getOtaStatus(): OtaStatus {
+  return status;
+}
+export function subscribeOtaStatus(l: (s: OtaStatus) => void): () => void {
+  statusListeners.add(l);
+  return () => { statusListeners.delete(l); };
+}
 let checking = false;
 let lastCheckAt = 0;
 
@@ -58,14 +89,17 @@ function note(message: string, data?: Record<string, unknown>) {
   Sentry.addBreadcrumb({ category: "ota-auto", message, data, level: "info" });
 }
 
-async function checkAndFetch(): Promise<void> {
-  if (checking || updateReady) return;
-  if (Date.now() - lastCheckAt < MIN_CHECK_GAP_MS) return;
+let started = false;
+
+async function checkAndFetch(minGapMs = MIN_CHECK_GAP_MS): Promise<void> {
+  if (!started || checking || updateReady) return;
+  if (Date.now() - lastCheckAt < minGapMs) return;
   checking = true;
   lastCheckAt = Date.now();
   try {
     const check = await Updates.checkForUpdateAsync();
     if (!check.isAvailable) return;
+    setStatus("downloading");
     const fetched = await Updates.fetchUpdateAsync();
     if (fetched.isNew) {
       updateReady = true;
@@ -75,8 +109,18 @@ async function checkAndFetch(): Promise<void> {
     // Offline tills are normal; never alert, just leave a trail.
     note("check failed", { error: String(e?.message ?? e) });
   } finally {
+    setStatus(updateReady ? "ready" : "idle");
     checking = false;
   }
+}
+
+/**
+ * Every sign-in checks for an update, however recently the timer did.  If
+ * there is one it downloads now and installs as soon as the sales screen is
+ * idle — usually seconds after the PIN, before the first item is rung up.
+ */
+export function checkOnLogin(): void {
+  void checkAndFetch(MIN_LOGIN_CHECK_GAP_MS);
 }
 
 /**
@@ -98,12 +142,14 @@ export async function consumeResumeMarker(): Promise<boolean> {
 /** Start checking for and installing updates. Returns a cleanup function. */
 export function startOtaAutoUpdate(getPath: () => string): () => void {
   if (__DEV__ || Platform.OS === "web" || !Updates.isEnabled) return () => {};
+  started = true;
 
   // expo-updates' own check at launch may download an update in the
   // background; its native state says so, and that counts as ready too.
   const markIfPending = (pending: boolean | undefined) => {
     if (pending && !updateReady) {
       updateReady = true;
+      setStatus("ready");
       note("update downloaded at launch, waiting for an idle moment");
     }
   };
@@ -121,14 +167,26 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
   const apply = async () => {
     applying = true;
     note("restarting into the downloaded update", { path: getPath() });
+    setStatus("installing");
     try {
       await AsyncStorage.setItem(RESUME_KEY, JSON.stringify({ at: Date.now() }));
+      await new Promise((r) => setTimeout(r, INSTALL_NOTICE_MS));
+      // Something may have started while the notice was up (a self-order
+      // slip arriving); if so, stand down and wait for the next idle moment.
+      if (!isIdle()) {
+        await AsyncStorage.removeItem(RESUME_KEY);
+        setStatus("ready");
+        idleSince = null;
+        applying = false;
+        return;
+      }
       await Updates.reloadAsync();
     } catch (e: any) {
       // Reload refused — clear the marker so a later manual reopen is not
       // mistaken for our restart, and try again on a later tick.
       try { await AsyncStorage.removeItem(RESUME_KEY); } catch {}
       note("reload failed", { error: String(e?.message ?? e) });
+      setStatus("ready");
       applying = false;
     }
   };
@@ -158,5 +216,6 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
     clearInterval(poll);
     sub.remove();
     stateSub.remove();
+    started = false;
   };
 }
