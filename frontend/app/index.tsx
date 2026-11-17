@@ -40,7 +40,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setAuthToken, setSentryContext } from "../lib/api";
 import { endSession } from "../lib/appLock";
 import { getDeviceId } from "../lib/deviceId";
-import { consumeResumeMarker, setBusy } from "../lib/otaAutoUpdate";
+import { checkOnLogin, consumeResumeMarker, setBusy } from "../lib/otaAutoUpdate";
 import { C, MONO, R } from "../lib/theme";
 import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
@@ -238,6 +238,10 @@ export default function Login() {
       );
       await AsyncStorage.setItem(BRANCH_KEY, JSON.stringify(branch));
       setAuthToken(body.token);
+
+      // Every sign-in checks for an app update; one found installs once the
+      // sales screen is idle, and the cashier stays signed in through it.
+      checkOnLogin();
 
       const role = body.staff?.role || "cashier";
       // Tag every later error report with who was on the till and where, so an

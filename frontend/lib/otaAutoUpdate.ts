@@ -30,10 +30,13 @@ const RESUME_KEY = "bravepos:ota-resume:v1";
 // The marker only vouches for the launch straight after our own reload.
 const RESUME_MAX_AGE_MS = 60_000;
 
-const CHECK_EVERY_MS = 10 * 60_000;
+const CHECK_EVERY_MS = 30 * 60_000;
 // Expo asks apps not to poll in a tight loop; foregrounding a till often
 // must not turn into a check every time.
 const MIN_CHECK_GAP_MS = 5 * 60_000;
+// A sign-in always checks (checkOnLogin), but two staff signing in back to
+// back need not ask twice.
+const MIN_LOGIN_CHECK_GAP_MS = 30_000;
 const APPLY_TICK_MS = 2_000;
 // How long the till must stay idle before we restart — long enough that a
 // cashier tapping a product right after a sale is not cut off.
@@ -86,9 +89,11 @@ function note(message: string, data?: Record<string, unknown>) {
   Sentry.addBreadcrumb({ category: "ota-auto", message, data, level: "info" });
 }
 
-async function checkAndFetch(): Promise<void> {
-  if (checking || updateReady) return;
-  if (Date.now() - lastCheckAt < MIN_CHECK_GAP_MS) return;
+let started = false;
+
+async function checkAndFetch(minGapMs = MIN_CHECK_GAP_MS): Promise<void> {
+  if (!started || checking || updateReady) return;
+  if (Date.now() - lastCheckAt < minGapMs) return;
   checking = true;
   lastCheckAt = Date.now();
   try {
@@ -110,6 +115,15 @@ async function checkAndFetch(): Promise<void> {
 }
 
 /**
+ * Every sign-in checks for an update, however recently the timer did.  If
+ * there is one it downloads now and installs as soon as the sales screen is
+ * idle — usually seconds after the PIN, before the first item is rung up.
+ */
+export function checkOnLogin(): void {
+  void checkAndFetch(MIN_LOGIN_CHECK_GAP_MS);
+}
+
+/**
  * Was this launch our own update restart?  Reads and deletes the marker, so
  * it can only ever vouch for one launch.
  */
@@ -128,6 +142,7 @@ export async function consumeResumeMarker(): Promise<boolean> {
 /** Start checking for and installing updates. Returns a cleanup function. */
 export function startOtaAutoUpdate(getPath: () => string): () => void {
   if (__DEV__ || Platform.OS === "web" || !Updates.isEnabled) return () => {};
+  started = true;
 
   // expo-updates' own check at launch may download an update in the
   // background; its native state says so, and that counts as ready too.
@@ -201,5 +216,6 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
     clearInterval(poll);
     sub.remove();
     stateSub.remove();
+    started = false;
   };
 }
