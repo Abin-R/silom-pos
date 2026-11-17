@@ -23,6 +23,7 @@ import PhoneInput from "../components/PhoneInput";
 import { phoneMatchKey } from "../lib/phone";
 import { usePrinter } from "../lib/printerHost";
 import { setBusy } from "../lib/otaAutoUpdate";
+import { holdLock } from "../lib/appLock";
 import { useSelfOrderPrinting } from "../lib/useSelfOrderPrinting";
 import { useSuggestions, type Suggestion } from "../lib/useSuggestions";
 import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "../lib/localPrinterConfig";
@@ -2679,6 +2680,18 @@ function PaymentModal({
     ]);
   };
   const closePayment = () => leaveBeamQr(onClose);
+
+  // Leaving the app must not sign the till out while a QR is being made or
+  // waits to be paid: the sign-out closes this screen, and with it the only
+  // poll that saves the sale (lib/appLock). Card links count too: the
+  // customer pays those on their own phone just the same.
+  const qrWaiting = [beamStatus, beamCardStatus, omiseStatus].some(
+    (s) => s === "loading" || s === "pending",
+  );
+  useEffect(() => {
+    holdLock("payment-qr", visible && qrWaiting);
+  }, [visible, qrWaiting]);
+  useEffect(() => () => holdLock("payment-qr", false), []);
 
   // Create an Omise payment Link for a credit-card charge.  The backend adds
   // the 3.65% processing fee + 7% VAT on that fee on top of the goods total
