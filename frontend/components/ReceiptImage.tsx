@@ -10,7 +10,7 @@
 
 import React, { forwardRef } from "react";
 import { View, Text, Image, StyleSheet } from "react-native";
-import { DEFAULT_RECEIPT_RIGHT_PAD } from "../lib/receiptMargin";
+import { DEFAULT_RECEIPT_RIGHT_PAD, RECEIPT_LAYOUT_WIDTH } from "../lib/receiptMargin";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const qrcode: (typeNumber: number, errorCorrectionLevel: string) => {
   addData: (data: string) => void;
@@ -440,7 +440,9 @@ ReceiptImage.displayName = "ReceiptImage";
 
 const s = StyleSheet.create({
   root: {
-    width: RECEIPT_WIDTH,
+    // 576 on Android; narrower on iOS so the Star prints it larger
+    // (lib/receiptMargin.ios.ts).
+    width: RECEIPT_LAYOUT_WIDTH,
     backgroundColor: "#FFFFFF",
     paddingVertical: 24,
     // Asymmetric horizontal padding.  Empirically the printer's effective

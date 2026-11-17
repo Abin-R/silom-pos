@@ -6,6 +6,10 @@
 // the values the receipt, shift summary and admin picker used before the split.
 //
 // iOS: Metro picks receiptMargin.ios.ts instead (Star TSP143IIIU).
+
+// Width the slip is laid out at. On Android it is the 576-px image itself.
+export const RECEIPT_LAYOUT_WIDTH = 576;
+
 export const DEFAULT_RECEIPT_RIGHT_PAD = 170;
 
 // Admin "Receipt right margin" picker. `v` is stored in the local printer

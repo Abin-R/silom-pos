@@ -7,8 +7,7 @@
 
 import React, { forwardRef } from "react";
 import { View, Text, StyleSheet } from "react-native";
-import { RECEIPT_WIDTH } from "./ReceiptImage";
-import { DEFAULT_RECEIPT_RIGHT_PAD } from "../lib/receiptMargin";
+import { DEFAULT_RECEIPT_RIGHT_PAD, RECEIPT_LAYOUT_WIDTH } from "../lib/receiptMargin";
 import type { ReceiptShop } from "../lib/starPrinter";
 
 const FONT = "Sarabun";
@@ -197,7 +196,9 @@ ShiftSummaryImage.displayName = "ShiftSummaryImage";
 
 const s = StyleSheet.create({
   root: {
-    width: RECEIPT_WIDTH,
+    // 576 on Android; narrower on iOS so the Star prints it larger
+    // (lib/receiptMargin.ios.ts).
+    width: RECEIPT_LAYOUT_WIDTH,
     backgroundColor: "#FFFFFF",
     paddingVertical: 24,
     // Same asymmetric padding as ReceiptImage: the printer's effective right
