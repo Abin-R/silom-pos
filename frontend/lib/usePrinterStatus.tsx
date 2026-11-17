@@ -12,9 +12,10 @@
 // We poll every 30s while the hook is mounted.
 
 import { useEffect, useRef, useState } from "react";
-import { NativeModules, AppState } from "react-native";
+import { AppState } from "react-native";
+import { BravePosPrinter as NativeBravePosPrinter } from "./printerNative";
 
-const BravePosPrinter = (NativeModules as any).BravePosPrinter as {
+const BravePosPrinter = NativeBravePosPrinter as {
   ping(identifier: string): Promise<{ online: boolean; latencyMs?: number; error?: string }>;
 };
 

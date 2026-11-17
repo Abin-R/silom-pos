@@ -25,14 +25,15 @@
 // hidden overlay and one receiptRef, so concurrent captures are not possible.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View, NativeModules } from "react-native";
+import { View } from "react-native";
 import { captureRef } from "react-native-view-shot";
 import { ReceiptImage, RECEIPT_WIDTH } from "../components/ReceiptImage";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
 import { loadLocalPrinterConfig, loadPackerPrinterConfig, printerForSlip } from "./localPrinterConfig";
 import * as queue from "./printerQueue";
+import { BravePosPrinter as NativeBravePosPrinter } from "./printerNative";
 
-const BravePosPrinter = (NativeModules as any).BravePosPrinter as {
+const BravePosPrinter = NativeBravePosPrinter as {
   printImage(identifier: string, base64Png: string, widthDots: number): Promise<{ ok: boolean; error?: string }>;
 };
 

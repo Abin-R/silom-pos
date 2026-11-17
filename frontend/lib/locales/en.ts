@@ -69,6 +69,7 @@ const en = {
     close_shift: "CLOSE SHIFT",
     close_time: "Close time",
     confirm_save_document: "Confirm Save Document",
+    connect_a_star_tsp143_ipad: "Plug the Star TSP143IIIU into this iPad with its USB cable, turn it on, then tap Scan.",
     connect_an_epson_tm_t82x_to: "Connect an Epson TM-T82X to the same Wi-Fi/router as this tablet, then tap Scan. (USB-C is also supported if the printer is plugged in directly.)",
     connection_type: "Connection type",
     cost: "Cost",

@@ -13,7 +13,7 @@
  *   "USB:000000000000000000"
  * Pass it back to the native module verbatim — don't parse.
  */
-import { NativeModules } from 'react-native';
+import { BravePosPrinter as NativeBravePosPrinter } from './printerNative';
 // useStarPrinter hook + image-printing types defined below.  Keeping
 // `.ts` extension (not .tsx) means React/JSX-using parts live in a
 // separate .tsx file — see useStarPrinter.tsx.
@@ -42,7 +42,7 @@ type NativePrinter = {
   printImage(identifier: string, base64Png: string, widthDots: number): Promise<PrintResult>;
 };
 
-const BravePosPrinter: NativePrinter = NativeModules.BravePosPrinter;
+const BravePosPrinter: NativePrinter = NativeBravePosPrinter;
 
 // ─── Public types ──────────────────────────────────────────────────────────
 export type DiscoveredPrinter = {

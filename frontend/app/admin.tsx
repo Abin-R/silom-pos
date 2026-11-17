@@ -7236,7 +7236,7 @@ function PrintersSection({
         {/* ─── LOCAL TABLET PRINTER (Epson ePOS SDK) ─────────────────────────── */}
         <Text style={styles.h2}>{tr("admin.local_printer_this_tablet")}</Text>
         <Text style={styles.printerListMeta}>
-          {tr("admin.connect_an_epson_tm_t82x_to")}
+          {tr(Platform.OS === "ios" ? "admin.connect_a_star_tsp143_ipad" : "admin.connect_an_epson_tm_t82x_to")}
         </Text>
 
         {/* High-volume branch: two printers, one for each slip.  Everything
@@ -7364,28 +7364,31 @@ function PrintersSection({
 
         {/* Manual IP entry — use when Scan doesn't surface the network printer
             (router blocks multicast, separate VLAN, etc.).  Find the IP from
-            your router's "Connected Devices" page or the printer self-test. */}
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginTop: 10 }}>
-          <TextInput
-            style={[styles.input, { flex: 1 }]}
-            placeholder={tr("admin.or_enter_ip_e_g_192")}
-            value={manualIp}
-            onChangeText={setManualIp}
-            keyboardType="numeric"
-            autoCapitalize="none"
-            autoCorrect={false}
-            testID="local-printer-manual-ip"
-          />
-          <TouchableOpacity
-            style={[styles.secondaryBtn, !manualIp && { opacity: 0.5 }]}
-            onPress={addByIp}
-            disabled={!manualIp}
-            testID="local-printer-add-by-ip"
-          >
-            <Ionicons name="add" size={16} color={C.ink} />
-            <Text style={styles.secondaryBtnText}>{tr("admin.add_by_ip")}</Text>
-          </TouchableOpacity>
-        </View>
+            your router's "Connected Devices" page or the printer self-test.
+            Not on iPad: its Star printer is USB-only (lib/printerNative.ios.ts). */}
+        {Platform.OS !== "ios" && (
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginTop: 10 }}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder={tr("admin.or_enter_ip_e_g_192")}
+              value={manualIp}
+              onChangeText={setManualIp}
+              keyboardType="numeric"
+              autoCapitalize="none"
+              autoCorrect={false}
+              testID="local-printer-manual-ip"
+            />
+            <TouchableOpacity
+              style={[styles.secondaryBtn, !manualIp && { opacity: 0.5 }]}
+              onPress={addByIp}
+              disabled={!manualIp}
+              testID="local-printer-add-by-ip"
+            >
+              <Ionicons name="add" size={16} color={C.ink} />
+              <Text style={styles.secondaryBtnText}>{tr("admin.add_by_ip")}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Right margin — fixes right-edge clipping on printers whose printable
             area is narrower than the 576-dot head, by pushing content left.

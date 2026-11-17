@@ -68,6 +68,7 @@ const th = {
     close_shift: "ปิดรอบขาย",
     close_time: "เวลาปิดร้าน",
     confirm_save_document: "ยืนยันการบันทึกเอกสาร",
+    connect_a_star_tsp143_ipad: "เสียบเครื่องพิมพ์ Star TSP143IIIU เข้ากับ iPad เครื่องนี้ด้วยสาย USB เปิดเครื่อง แล้วกดสแกน",
     connect_an_epson_tm_t82x_to: "เชื่อมต่อเครื่องพิมพ์ Epson TM-T82X เข้ากับ Wi-Fi/เราเตอร์วงเดียวกับแท็บเล็ตนี้ แล้วกดสแกน (รองรับการต่อผ่าน USB-C โดยตรงด้วย)",
     connection_type: "ประเภทการเชื่อมต่อ",
     cost: "ต้นทุน",
