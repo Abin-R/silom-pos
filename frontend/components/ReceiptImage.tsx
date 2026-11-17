@@ -10,6 +10,7 @@
 
 import React, { forwardRef } from "react";
 import { View, Text, Image, StyleSheet } from "react-native";
+import { DEFAULT_RECEIPT_RIGHT_PAD } from "../lib/receiptMargin";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const qrcode: (typeNumber: number, errorCorrectionLevel: string) => {
   addData: (data: string) => void;
@@ -447,8 +448,9 @@ const s = StyleSheet.create({
     // paddingRight:130 still clipped "Admin"→"Adm", "299.00"→"299.0".
     // 170 gives a generous safety zone so longer dynamic values (bigger
     // amounts, longer staff names, etc.) still print intact.
+    // On iOS the Star prints the full width: see lib/receiptMargin.ios.ts.
     paddingLeft: 20,
-    paddingRight: 170,
+    paddingRight: DEFAULT_RECEIPT_RIGHT_PAD,
   },
   voidMark: {
     fontFamily: BOLD,

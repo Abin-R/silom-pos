@@ -48,6 +48,7 @@ import {
   type PrinterRole,
 } from "../lib/localPrinterConfig";
 import * as printerQueue from "../lib/printerQueue";
+import { DEFAULT_RECEIPT_RIGHT_PAD, RIGHT_PAD_OPTIONS } from "../lib/receiptMargin";
 import { apiErrorMessage, apiFetch, clearAuthToken, safeJson } from "../lib/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, MONO, R } from "../lib/theme";
@@ -7401,16 +7402,13 @@ function PrintersSection({
               {tr("admin.if_the_right_side_of_the")}
             </Text>
             <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-              {[
-                // Shown in mm; stored in printer dots (180 dpi → 1 dot ≈ 0.141 mm),
-                // so saved values stay valid.  170 / 210 / 250 / 290 / 330 dots.
-                { label: `${tr("admin.default")} (24 mm)`, v: undefined as number | undefined },
-                { label: "30 mm", v: 210 },
-                { label: "35 mm", v: 250 },
-                { label: "41 mm", v: 290 },
-                { label: "47 mm", v: 330 },
-              ].map((opt) => {
-                const isActive = (localCfg.receiptRightPad ?? 170) === (opt.v ?? 170);
+              {RIGHT_PAD_OPTIONS.map(({ mm, v }) => ({
+                // Shown in mm; stored in printer dots, so saved values stay
+                // valid.  Values per platform in lib/receiptMargin(.ios).ts.
+                label: v === undefined ? `${tr("admin.default")} (${mm} mm)` : `${mm} mm`,
+                v,
+              })).map((opt) => {
+                const isActive = (localCfg.receiptRightPad ?? DEFAULT_RECEIPT_RIGHT_PAD) === (opt.v ?? DEFAULT_RECEIPT_RIGHT_PAD);
                 return (
                   <TouchableOpacity
                     key={opt.label}

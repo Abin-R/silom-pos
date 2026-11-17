@@ -8,6 +8,7 @@
 import React, { forwardRef } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { RECEIPT_WIDTH } from "./ReceiptImage";
+import { DEFAULT_RECEIPT_RIGHT_PAD } from "../lib/receiptMargin";
 import type { ReceiptShop } from "../lib/starPrinter";
 
 const FONT = "Sarabun";
@@ -203,7 +204,7 @@ const s = StyleSheet.create({
     // boundary lands well before dot 576, so the amount column needs a wide
     // right gutter to avoid clipping.
     paddingLeft: 20,
-    paddingRight: 170,
+    paddingRight: DEFAULT_RECEIPT_RIGHT_PAD,
   },
   title: {
     fontFamily: BOLD,
