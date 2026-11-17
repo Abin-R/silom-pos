@@ -1,9 +1,11 @@
 /**
  * Login screen — PIN-pad style:
- *   1. Resolve this tablet's branch (last-used, else the first active one).
- *      There is no picker here — moving a tablet to another branch is an
- *      admin action under Settings → Branch, so a cashier can't sign in to
- *      the wrong shop's till by tapping the wrong row.
+ *   1. Resolve this tablet's branch: the saved one. On a fresh install (or if
+ *      the saved branch was deactivated) the screen asks which branch this
+ *      is, and the choice can be changed until the first sign-in saves it.
+ *      After that, moving a tablet is an admin action under Settings →
+ *      Branch, so a cashier can't sign in to the wrong shop's till by
+ *      tapping the wrong row.
  *   2. Fetch the staff list for that branch (admin + the branch's cashier).
  *   3. Tap a user, enter a 4-digit PIN on the keypad → auto-submits.
  *   4. POST /api/auth/pin-login with this tablet's device id → token + role.
@@ -143,6 +145,12 @@ export default function Login() {
   const [showStaffPicker, setShowStaffPicker] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState<string>("");
   const [branchLoading, setBranchLoading] = useState(true);
+  // The active branches, for the first-run picker.
+  const [branches, setBranches] = useState<Branch[]>([]);
+  // True once this tablet has a saved branch (set by the first sign-in, or by
+  // an admin in Settings → Branch). Until then the branch is a choice made on
+  // this screen and can be changed; after it, the chip is display-only.
+  const [branchSettled, setBranchSettled] = useState(false);
 
   const loadBranches = async () => {
     setBranchLoading(true);
@@ -155,10 +163,18 @@ export default function Login() {
         return;
       }
       const list: Branch[] = await r.json();
-      const saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
-      const initialBranch =
-        (saved && list.find((b) => b.id === saved.id)) || list[0] || null;
-      setBranch(initialBranch);
+      let saved: Branch | null = null;
+      try {
+        saved = savedBranchRaw ? (JSON.parse(savedBranchRaw) as Branch) : null;
+      } catch {
+        saved = null;
+      }
+      const savedActive = saved ? list.find((b) => b.id === saved!.id) || null : null;
+      setBranches(list);
+      // A fresh install, or a saved branch that has since been deactivated,
+      // asks which branch this is rather than guessing the first in the list.
+      setBranch(savedActive);
+      setBranchSettled(!!savedActive);
     } catch (e: any) {
       setBranchLoadError(`${e?.message || String(e)}\nURL: ${API}`);
     } finally {
@@ -269,6 +285,22 @@ export default function Login() {
     }
   };
 
+  const chooseBranch = (b: Branch) => {
+    setBranch(b);
+    setError("");
+  };
+  // Only offered before the first sign-in on this tablet.
+  const changeBranch = () => {
+    if (submitting) return;
+    setBranch(null);
+    setUsers([]);
+    setSelectedUser(null);
+    setShowStaffPicker(false);
+    setPin("");
+    setError("");
+  };
+  const choosingBranch = !branch && !branchLoading && !branchLoadError;
+
   const onDigit = (d: string) => {
     if (submitting) return;
     setShowStaffPicker(false);
@@ -304,16 +336,30 @@ export default function Login() {
 
   // ── Pieces ─────────────────────────────────────────────────────────────
 
-  // On the navy panel the branch reads as a fact about this terminal. It is
-  // display-only: changing it lives in Settings → Branch, behind admin.
+  // On the navy panel the branch reads as a fact about this terminal. Once the
+  // tablet has signed in somewhere it is display-only: changing it lives in
+  // Settings → Branch, behind admin. Before that first sign-in, the branch was
+  // just picked here, so a mis-tap can still be undone.
   const BranchChip = () => (
     <View>
-      <View style={s.branchChip} testID="branch-label">
-        <Ionicons name="location-outline" size={17} color={C.navMuted} />
-        <Text style={s.branchChipText} numberOfLines={1}>
-          {branch?.name
-            || (branchLoading ? tr("login.loading_branches") : branchLoadError ? tr("login.couldnt_load_branches") : tr("login.select_branch"))}
-        </Text>
+      <View style={s.branchChipRow}>
+        <View style={s.branchChip} testID="branch-label">
+          <Ionicons name="location-outline" size={17} color={C.navMuted} />
+          <Text style={s.branchChipText} numberOfLines={1}>
+            {branch?.name
+              || (branchLoading ? tr("login.loading_branches") : branchLoadError ? tr("login.couldnt_load_branches") : tr("login.select_branch"))}
+          </Text>
+        </View>
+        {!!branch && !branchSettled && (
+          <TouchableOpacity
+            onPress={changeBranch}
+            disabled={submitting}
+            style={s.branchChange}
+            testID="branch-change"
+          >
+            <Text style={s.branchChangeText}>{tr("login.change_branch")}</Text>
+          </TouchableOpacity>
+        )}
       </View>
       {!!branchLoadError && (
         <View style={{ marginTop: 10, gap: 8, alignItems: "flex-start" }}>
@@ -329,6 +375,42 @@ export default function Login() {
             textStyle={{ color: C.surface }}
             testID="branch-retry"
           />
+        </View>
+      )}
+    </View>
+  );
+
+  // First run: which shop is this tablet in? Saved on the first sign-in.
+  const renderBranchPicker = () => (
+    <View testID="branch-picker">
+      <Text style={s.h1}>{tr("login.which_branch_title")}</Text>
+      <Text style={s.h1sub}>{tr("login.which_branch_hint")}</Text>
+      {branches.length === 0 ? (
+        <Text style={s.emptyStaff}>{tr("login.no_active_branches")}</Text>
+      ) : (
+        <View style={s.branchList}>
+          <ScrollView
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
+            {branches.map((b, i) => (
+              <TouchableOpacity
+                key={b.id}
+                style={[s.sRow, i === branches.length - 1 && { borderBottomWidth: 0 }]}
+                onPress={() => chooseBranch(b)}
+                testID={`branch-${b.code || b.id}`}
+              >
+                <View style={s.sAv}>
+                  <Ionicons name="storefront-outline" size={18} color={C.ink2} />
+                </View>
+                <Text style={[s.sName, { flex: 1 }]} numberOfLines={1}>
+                  {b.name}
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color={C.ink3} />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
       )}
     </View>
@@ -548,18 +630,24 @@ export default function Login() {
             {/* No outside-tap backdrop: the list is in normal flow now, so a
                 full-bleed catcher would sit on top of it and eat every tap.
                 Closing happens on select, on the control, or on a digit. */}
-            <Text style={[s.h1, compact && { fontSize: 24 }]} numberOfLines={1}>
-              {selectedUser ? `Hi, ${selectedUser.name}` : tr("login.whos_on_the_till")}
-            </Text>
-            <Text style={s.h1sub}>
-              {selectedUser
-                ? tr("login.pin_hint")
-                : tr("login.staff_list_pin_hint")}
-            </Text>
-            <StaffSelect />
-            <Dots />
-            <Status />
-            <Pad />
+            {choosingBranch ? (
+              renderBranchPicker()
+            ) : (
+              <>
+                <Text style={[s.h1, compact && { fontSize: 24 }]} numberOfLines={1}>
+                  {selectedUser ? `Hi, ${selectedUser.name}` : tr("login.whos_on_the_till")}
+                </Text>
+                <Text style={s.h1sub}>
+                  {selectedUser
+                    ? tr("login.pin_hint")
+                    : tr("login.staff_list_pin_hint")}
+                </Text>
+                <StaffSelect />
+                <Dots />
+                <Status />
+                <Pad />
+              </>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -601,7 +689,9 @@ export default function Login() {
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        {!selectedUser ? (
+        {choosingBranch ? (
+          renderBranchPicker()
+        ) : !selectedUser ? (
           <>
             <Text style={s.h1}>{tr("login.whos_on_the_till")}</Text>
             <Text style={s.h1sub}>{tr("login.staff_list_hint")}</Text>
@@ -722,6 +812,24 @@ const s = StyleSheet.create({
     flexShrink: 1,
   },
   branchErr: { color: "#FFC9C9", fontSize: 12, lineHeight: 17 },
+  branchChipRow: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  branchChange: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  branchChangeText: { fontSize: 14, fontWeight: "700", color: C.surface },
+  branchList: {
+    marginTop: 24,
+    maxHeight: 420,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: R.card,
+    overflow: "hidden",
+    backgroundColor: C.surface,
+  },
   clock: {
     ...MONO,
     fontSize: 80,

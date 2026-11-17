@@ -553,6 +553,10 @@ const th = {
     signed_out_title: "\u0e04\u0e38\u0e13\u0e16\u0e39\u0e01\u0e2d\u0e2d\u0e01\u0e08\u0e32\u0e01\u0e23\u0e30\u0e1a\u0e1a\u0e41\u0e25\u0e49\u0e27",
     signed_out_body: "\u0e23\u0e2b\u0e31\u0e2a PIN \u0e02\u0e2d\u0e07\u0e04\u0e38\u0e13\u0e16\u0e39\u0e01\u0e23\u0e35\u0e40\u0e0b\u0e47\u0e15\u0e08\u0e32\u0e01\u0e2b\u0e25\u0e31\u0e07\u0e23\u0e49\u0e32\u0e19 \u0e43\u0e2a\u0e48\u0e23\u0e2b\u0e31\u0e2a PIN \u0e43\u0e2b\u0e21\u0e48\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e40\u0e02\u0e49\u0e32\u0e2a\u0e39\u0e48\u0e23\u0e30\u0e1a\u0e1a\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07",
     choose_user_first: "\u0e01\u0e23\u0e38\u0e13\u0e32\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e1e\u0e19\u0e31\u0e01\u0e07\u0e32\u0e19\u0e01\u0e48\u0e2d\u0e19",
+    which_branch_title: "เครื่องนี้อยู่สาขาไหน?",
+    which_branch_hint: "เลือกครั้งเดียว หลังเข้าสู่ระบบครั้งแรก เฉพาะแอดมินเท่านั้นที่ย้ายสาขาได้ (ตั้งค่า → สาขา)",
+    change_branch: "เปลี่ยน",
+    no_active_branches: "ยังไม่มีสาขาที่เปิดใช้งาน เพิ่มได้ที่หลังร้าน",
   },
   nav: {
     collapse: "ย่อแถบเมนู",

@@ -559,6 +559,10 @@ const en = {
     signed_out_title: "You were signed out",
     signed_out_body: "Your PIN was reset in the back office. Enter your new PIN to sign back in.",
     choose_user_first: "Please choose a user first.",
+    which_branch_title: "Which branch is this till?",
+    which_branch_hint: "Choose once. After the first sign-in, only an admin can move this till (Settings → Branch).",
+    change_branch: "Change",
+    no_active_branches: "No active branches. Add one in the back office.",
   },
   nav: {
     collapse: "Collapse",
