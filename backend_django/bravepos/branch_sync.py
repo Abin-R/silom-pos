@@ -24,6 +24,7 @@ not once per target, and a section can see which other sections are running
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
 
@@ -179,10 +180,22 @@ def add_stock_in_type(branch, name, name_th, active=True):
 
 
 def _stock_in_plan(target, ctx):
-    have = {_norm(r.name): r for r in StockInReason.objects.filter(branch=target)}
+    target_rows = list(StockInReason.objects.filter(branch=target))
+    have = {_norm(r.name): r for r in target_rows}
+    source_counts = Counter(_norm(r.name) for r in ctx["stock_in"])
+    target_counts = Counter(_norm(r.name) for r in target_rows)
     plan = []
+    reported = set()
     for r in ctx["stock_in"]:
-        dest = have.get(_norm(r.name))
+        key = _norm(r.name)
+        if source_counts[key] > 1 or target_counts[key] > 1:
+            if key not in reported:
+                plan.append(("skip", r, None, [
+                    f"{r.name} — duplicate type name in the source or target branch",
+                ]))
+                reported.add(key)
+            continue
+        dest = have.get(key)
         if dest is None:
             # A type the source has hidden is not offered there either, so a
             # branch that never had it gains nothing by getting it hidden.
@@ -202,11 +215,12 @@ def preview_stock_in(source, target, ctx):
             {"name_th": "Thai name", "active": "shown/hidden"}[f] for f in ch]}
             for a, r, _, ch in plan if a == "update"],
         "already": sum(1 for a, *_ in plan if a == "same"),
+        "skipped": [ch[0] for a, _, _, ch in plan if a == "skip"],
     }
 
 
 def apply_stock_in(source, target, ctx):
-    out = {"created": 0, "updated": 0}
+    out = {"created": 0, "updated": 0, "skipped": []}
     for action, r, dest, changed in _stock_in_plan(target, ctx):
         if action == "create":
             add_stock_in_type(target, r.name, r.name_th, r.active)
@@ -216,6 +230,8 @@ def apply_stock_in(source, target, ctx):
                 setattr(dest, f, getattr(r, f))
             dest.save(update_fields=changed)
             out["updated"] += 1
+        elif action == "skip":
+            out["skipped"].extend(changed)
     return out
 
 

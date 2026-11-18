@@ -180,6 +180,32 @@ class BranchSyncPageTests(TestCase):
         product.refresh_from_db()
         self.assertEqual(product.stock, 17)
 
+    def test_ambiguous_source_stock_in_names_are_reported_without_creates_or_edits(self):
+        StockInReason.objects.create(branch=self.source, name="Return", name_th="หนึ่ง")
+        StockInReason.objects.create(branch=self.source, name=" return ", name_th="สอง", active=False)
+        dest = StockInReason.objects.create(branch=self.other, name="RETURN", name_th="เดิม")
+        for branch in (self.target, self.other):
+            before = list(branch.stock_in_reasons.values().order_by("id"))
+            preview = self.client.get(self.url, self.params("stock_in", targets=[branch]))
+            self.assertContains(preview, "duplicate type name")
+            for _ in range(2):
+                response = self.sync("stock_in", targets=[branch])
+                self.assertContains(response, "Skipped 1 stock-in dropdowns")
+                self.assertContains(response, "no changes applied")
+                self.assertNotContains(response, f"already matched {self.source.name}")
+            self.assertEqual(before, list(branch.stock_in_reasons.values().order_by("id")))
+        dest.refresh_from_db()
+        self.assertEqual(dest.name_th, "เดิม")
+
+    def test_ambiguous_target_stock_in_names_are_left_untouched(self):
+        StockInReason.objects.create(branch=self.source, name="Return", name_th="ต้นทาง")
+        StockInReason.objects.create(branch=self.target, name="Return", name_th="หนึ่ง")
+        StockInReason.objects.create(branch=self.target, name="return", name_th="สอง", active=False)
+        before = list(self.target.stock_in_reasons.values().order_by("id"))
+        for _ in range(2):
+            self.assertContains(self.sync("stock_in"), "duplicate type name")
+        self.assertEqual(before, list(self.target.stock_in_reasons.values().order_by("id")))
+
     # ── Promotions ──────────────────────────────────────────────────────
     def promo(self, branch=None, **kw):
         kw.setdefault("name", "Staff 20%")

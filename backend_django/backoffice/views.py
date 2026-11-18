@@ -4284,7 +4284,8 @@ def _branch_sync_message(source, targets, sections, results):
         skipped = [x for r in reports for x in r.get("skipped", [])]
         label = s.label.lower()
         if not created and not updated:
-            line = f"{s.label}: {where} already matched {source.name}."
+            line = (f"{s.label}: no changes applied." if skipped else
+                    f"{s.label}: {where} already matched {source.name}.")
         else:
             line = f"{s.label}: {created} added, {updated} edited to match."
         if skipped:
