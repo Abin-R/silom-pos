@@ -1853,10 +1853,55 @@ class StockDocument(models.Model):
     created_by = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        # Register the creation event atomically, including direct ORM saves.
+        # Daily counter locks and chat delivery run only after this commits.
+        if self._state.adding and self.branch_id and self.type in ("in", "out"):
+            from django.db import router, transaction
+            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+            with transaction.atomic(using=using):
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
+
     class Meta:
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["branch", "type", "-created_at"]),
+        ]
+
+
+class StockDocumentAlertDay(models.Model):
+    """Serialize daily creations and reserve the second-document alert once.
+
+    Keep the reservation after a document is deleted. Chat delivery uses the
+    existing best-effort SeaTalk sender and must never undo stock changes.
+    """
+    branch = models.ForeignKey(Branch, on_delete=models.CASCADE)
+    document_type = models.CharField(max_length=8, choices=[("in", "Stock in"), ("out", "Stock out")])
+    day = models.DateField()
+    document_count = models.PositiveIntegerField(default=0)
+    triggered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "document_type", "day"], name="unique_stock_document_alert_day",
+            ),
+        ]
+
+
+class StockDocumentAlertEvent(models.Model):
+    """Durable creation records; deleting a document must not reset its count."""
+    document_id = models.UUIDField(unique=True)
+    branch = models.ForeignKey(Branch, on_delete=models.CASCADE)
+    document_type = models.CharField(max_length=8)
+    day = models.DateField()
+    created_at = models.DateTimeField()
+    processed = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["branch", "document_type", "day", "processed"]),
         ]
 
 

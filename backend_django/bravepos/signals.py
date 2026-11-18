@@ -9,6 +9,7 @@ from .gateways import seed_branch_payment
 from .models import (
     DEFAULT_PAYMENT_TYPES, DEFAULT_STOCK_OUT_REASONS, Branch, PaymentType,
     StockOutReason, StockInReason, DEFAULT_STOCK_IN_REASONS,
+    StockDocument,
 )
 from .staff_provisioning import ensure_branch_staff
 
@@ -88,3 +89,11 @@ def seed_new_branch_stock_in_reasons(sender, instance, created, raw=False, **kwa
             branch=instance, name=name,
             defaults={"name_th": name_th, "sort_order": i},
         )
+
+
+@receiver(post_save, sender=StockDocument)
+def record_stock_document_alert(sender, instance, created, raw=False, using="default", **kwargs):
+    if not created or raw or not instance.branch_id or instance.type not in ("in", "out"):
+        return
+    from .stock_alerts import record_document
+    record_document(instance, using)
