@@ -39,6 +39,7 @@ from bravepos.models import (
     Category,
     Customer,
     DiscountType,
+    GrabOrderHold,
     Order,
     OrderItem,
     PAYMENT_TYPE_NAME_MAX,
@@ -56,7 +57,7 @@ from bravepos.models import (
     StockOutReason,
     Unit,
 )
-from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
+from bravepos import appdist, catalog, crm, discounts, grab_sync, images, permissions, sale_windows
 from bravepos import branch_sync as sync_sections
 from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
@@ -1053,6 +1054,96 @@ def late_payment_settle(request, draft_id, action):
     if not back.startswith("/"):
         back = f"{reverse('backoffice:transactions')}?status=refund_due"
     return redirect(back)
+
+
+GRAB_REVIEW_DONE_DAYS = 30
+
+
+def _grab_review_row(hold) -> dict:
+    """One Grab order as the review page shows it."""
+    detail = {k: v for k, v in (hold.review_detail or {}).items() if not k.startswith("_")}
+    return {
+        "id": str(hold.id),
+        "order_id": hold.order_id,
+        "display_id": hold.display_id or hold.order_id,
+        "status": hold.status,
+        "grab_state": hold.grab_state,
+        "reason_label": hold.review_reason.replace("_", " ").capitalize(),
+        "reason_text": grab_sync.review_text(hold.review_reason, hold.review_detail),
+        "detail_text": json.dumps(detail, ensure_ascii=False)[:300] if detail else "",
+        "items": [{"name": i.get("name") or i.get("barcode") or "", "qty": int(i.get("qty") or 0)}
+                  for i in (hold.items or [])],
+        "first_seen_at": hold.first_seen_at,
+        "resolution": hold.resolution,
+        "resolved_by": hold.resolved_by,
+        "resolved_at": hold.resolved_at,
+    }
+
+
+@login_required
+def grab_review(request):
+    """Backoffice › Grab review: Grab orders the stock sync could not settle by
+    itself — a cancel after the driver may have left, an item that matches no
+    product, a till sale that took held units.  The branch picked in the header
+    is the branch shown.  Staff Deduct, Restore or Ignore each one."""
+    branches = list(Branch.objects.filter(active=True).order_by("name"))
+    branch = _select_branch(request, branches)
+    open_rows, settled = [], []
+    if branch is not None:
+        mine = GrabOrderHold.objects.filter(branch=branch)
+        open_rows = mine.filter(review_status="open").order_by("first_seen_at")
+        settled = (
+            mine.filter(
+                review_status="done",
+                resolved_at__gte=timezone.now() - timedelta(days=GRAB_REVIEW_DONE_DAYS))
+            .order_by("-resolved_at")[:100]
+        )
+    elsewhere = GrabOrderHold.objects.filter(review_status="open").exclude(
+        branch=branch).count() if branch is not None else 0
+    return render(request, "backoffice/grab_review.html", {
+        "active": "grab_review",
+        "page_title": "Grab review",
+        "branches": branches,
+        "branch": branch,
+        "date_from": timezone.localdate().isoformat(),
+        "date_to": timezone.localdate().isoformat(),
+        "open_rows": [_grab_review_row(h) for h in open_rows],
+        "settled_rows": [_grab_review_row(h) for h in settled],
+        "settled_days": GRAB_REVIEW_DONE_DAYS,
+        "open_elsewhere": elsewhere,
+    })
+
+
+_GRAB_REVIEW_DONE_TEXT = {
+    "deduct": "deducted from stock",
+    "restore": "restored",
+    "ignore": "ignored",
+}
+
+
+@login_required
+def grab_review_settle(request, hold_id, action):
+    """Backoffice › Grab review: Deduct / Restore / Ignore.  Only an order at an
+    active branch, and only while its review is still open."""
+    if request.method != "POST":
+        return redirect("backoffice:grab_review")
+    if action not in _GRAB_REVIEW_DONE_TEXT:
+        raise Http404
+    hold = GrabOrderHold.objects.select_related("branch").filter(
+        pk=hold_id, branch__active=True).first()
+    if hold is None:
+        raise Http404
+    by = getattr(request.user, "name", "") or getattr(request.user, "login_id", "") or "Backoffice"
+    try:
+        result = grab_sync.settle_review(hold.pk, action, by)
+    except grab_sync.ReviewNotOpen:
+        messages.error(request, f"{hold.display_id or hold.order_id} was already settled.")
+    else:
+        messages.success(
+            request,
+            f"Grab order {hold.display_id or hold.order_id}: "
+            f"{_GRAB_REVIEW_DONE_TEXT[action]} ({result.get('status', hold.status)}).")
+    return redirect("backoffice:grab_review")
 
 
 # English column headers — same column order and semantics as the
@@ -6279,7 +6370,32 @@ def branch_errors(b: Branch) -> list[str]:
                 "Every branch needs its own Revenue Department machine number — "
                 "check the number for this branch, or clear it on the other one first."
             )
+    if b.grab_merchant_id and b.grab_merchant_id not in grab_sync.GRAB_OUTLETS:
+        errors.append(
+            f'Grab merchant ID "{b.grab_merchant_id}" is not one of the known Grab outlets. '
+            "Pick the outlet from the list, or leave it blank for a branch that is not on Grab."
+        )
+    elif b.grab_merchant_id:
+        clash = Branch.objects.filter(grab_merchant_id=b.grab_merchant_id).exclude(pk=b.pk).first()
+        if clash:
+            errors.append(
+                f'Grab merchant ID "{b.grab_merchant_id}" already belongs to {clash.name}. '
+                "One Grab outlet is one branch — check the ID for this branch, "
+                "or clear it on the other one first."
+            )
     return errors
+
+
+def _grab_outlet_choices(b: Branch) -> list[tuple[str, str]]:
+    """``[(merchant id, Grab store name)]`` for the branch form's dropdown, by
+    name.  An ID already on the branch that is not a known outlet is added so
+    the form shows it rather than silently blanking it; saving then asks for a
+    real one (``branch_errors``)."""
+    choices = sorted(grab_sync.GRAB_OUTLETS.items(), key=lambda kv: kv[1])
+    current = b.grab_merchant_id
+    if current and current not in grab_sync.GRAB_OUTLETS:
+        choices.append((current, f"{current} (not a known outlet)"))
+    return choices
 
 
 def _taken_pos_ids(b: Branch) -> str:
@@ -6466,6 +6582,7 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.code = (post.get("code") or "").strip()
     b.tax_id = (post.get("tax_id") or "").strip()
     b.pos_id = (post.get("pos_id") or "").strip()
+    b.grab_merchant_id = (post.get("grab_merchant_id") or "").strip().upper()
     b.address = (post.get("address") or "").strip()
     b.phone = (post.get("phone") or "").strip()
     b.logo_url = (post.get("logo_url") or "").strip()
@@ -6611,6 +6728,7 @@ def branch_detail(request, branch_id):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(b),
+        "grab_outlets": _grab_outlet_choices(b),
         "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
         **_crm_context(b, request.POST if request.method == "POST" else None),
@@ -6646,6 +6764,7 @@ def branch_new(request):
             "payment_errors": errors,
             "form_errors": form_errors,
             "taken_pos_ids": _taken_pos_ids(b),
+            "grab_outlets": _grab_outlet_choices(b),
             "taken_names": _taken_branch_names(b),
             **_payment_context(b, request.user),
             **_crm_context(b, request.POST),
@@ -6664,6 +6783,7 @@ def branch_new(request):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(blank),
+        "grab_outlets": _grab_outlet_choices(blank),
         "taken_names": _taken_branch_names(blank),
         **_payment_context(blank, request.user),
         **_crm_context(blank),

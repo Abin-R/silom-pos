@@ -45,6 +45,10 @@ urlpatterns = [
     path("payment-types/<uuid:type_id>/move/<str:direction>", views.payment_type_move, name="payment_type_move"),
 
     path("transactions", views.transactions, name="transactions"),
+    # Grab orders the stock sync could not settle: staff deduct, restore or ignore.
+    path("grab-review", views.grab_review, name="grab_review"),
+    path("grab-review/<uuid:hold_id>/<str:action>", views.grab_review_settle,
+         name="grab_review_settle"),
     path("transactions/export", views.transactions_export, name="transactions_export"),
     path("transactions/late/<uuid:draft_id>/<str:action>", views.late_payment_settle,
          name="late_payment_settle"),
