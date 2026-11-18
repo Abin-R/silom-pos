@@ -1871,7 +1871,7 @@ class StockDocument(models.Model):
 
 
 class StockDocumentAlertDay(models.Model):
-    """Serialize daily creations and reserve the second-document alert once.
+    """Serialize daily creations and record when the alert threshold was reached.
 
     Keep the reservation after a document is deleted. Chat delivery uses the
     existing best-effort SeaTalk sender and must never undo stock changes.

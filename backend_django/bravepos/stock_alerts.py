@@ -1,4 +1,4 @@
-"""Alert Bot Testing on each branch's second receipt/issue per Bangkok day.
+"""Alert Bot Testing on each branch's second and later documents per shop day.
 
 Record each creation in the document transaction. Process daily row locks in
 a separate transaction after commit, outside branch/product business locks.
@@ -61,11 +61,13 @@ def process_day(branch_id, document_type, day, using="default"):
                 ).exclude(pk__in=events.values("document_id")).count()
             for event in events.filter(processed=False).order_by("created_at", "pk"):
                 daily.document_count += 1
-                if daily.document_count == 2 and daily.triggered_at is None:
-                    daily.triggered_at = event.created_at
+                if daily.document_count >= 2:
+                    if daily.triggered_at is None:
+                        daily.triggered_at = event.created_at
                     document_id = event.document_id
+                    count = daily.document_count
                     transaction.on_commit(
-                        lambda pk=document_id: notify_document(pk, day, using), using=using,
+                        lambda pk=document_id, n=count: notify_document(pk, day, n, using), using=using,
                     )
                 event.processed = True
                 event.save(update_fields=["processed"], using=using)
@@ -75,11 +77,11 @@ def process_day(branch_id, document_type, day, using="default"):
                       branch_id, document_type, day)
 
 
-def build_alert(document, day):
+def build_alert(document, day, document_count):
     kind = "stock-in" if document.type == "in" else "stock-out"
     when = timezone.localtime(document.created_at, timezone.get_default_timezone())
     return "\n".join([
-        f"BravePOS: Second {kind} document today",
+        f"BravePOS: {kind.capitalize()} document #{document_count} today",
         f"Branch: {document.branch.name}",
         f"Shop date: {day.isoformat()}",
         f"Document: {document.document_no}",
@@ -87,17 +89,17 @@ def build_alert(document, day):
         f"Time: {when:%d %b %Y %H:%M} ({timezone.get_default_timezone_name()})",
         f"Type: {document.reason or '—'}",
         f"Total: ฿{document.total:,.2f}",
-        "Daily document count: 2",
+        f"Daily document count: {document_count}",
     ])
 
 
-def notify_document(document_id, day, using="default"):
+def notify_document(document_id, day, document_count, using="default"):
     """Use the existing background sender; failures cannot undo a receipt."""
     try:
         document = StockDocument.objects.using(using).select_related("branch").get(pk=document_id)
         if not seatalk.is_configured():
             log.warning("Stock document alert not sent: SeaTalk is not configured")
             return
-        seatalk.send_group_text_async(BOT_TESTING_GROUP_ID, build_alert(document, day))
+        seatalk.send_group_text_async(BOT_TESTING_GROUP_ID, build_alert(document, day, document_count))
     except Exception:
         log.exception("Stock document alert failed for %s", document_id)

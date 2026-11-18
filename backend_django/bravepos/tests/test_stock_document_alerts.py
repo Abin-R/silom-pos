@@ -43,7 +43,7 @@ class StockDocumentAlertTests(TestCase):
                 document_no=f"DOC-{self.sequence}", **fields,
             )
 
-    def test_only_second_creation_sends_to_bot_testing_for_each_type(self):
+    def test_second_and_every_later_creation_sends_to_bot_testing_for_each_type(self):
         for kind in ("in", "out"):
             before = self.send.call_count
             self.create(kind)
@@ -52,12 +52,17 @@ class StockDocumentAlertTests(TestCase):
             self.assertEqual(self.send.call_count, before + 1)
             group, text = self.send.call_args.args
             self.assertEqual(group, BOT_TESTING_GROUP_ID)
-            for value in ("Second stock-", self.branch.name, second.document_no,
+            for value in ("document #2 today", self.branch.name, second.document_no,
                           "Nok", "Shop Supply", "125.50", "2026-11-18", "Asia/Bangkok"):
                 self.assertIn(value, text)
-            self.create(kind)
-            self.create(kind)
-            self.assertEqual(self.send.call_count, before + 1)
+            for count in (3, 4):
+                later = self.create(kind)
+                self.assertEqual(self.send.call_count, before + count - 1)
+                group, text = self.send.call_args.args
+                self.assertEqual(group, BOT_TESTING_GROUP_ID)
+                self.assertIn(later.document_no, text)
+                self.assertIn(f"document #{count} today", text)
+                self.assertIn(f"Daily document count: {count}", text)
             daily = StockDocumentAlertDay.objects.get(document_type=kind)
             self.assertEqual(daily.document_count, 4)
             self.assertIsNotNone(daily.triggered_at)
@@ -121,25 +126,28 @@ class StockDocumentAlertTests(TestCase):
             self.send.assert_not_called()
         self.assertIn("฿400.00", self.send.call_args.args[1])
 
-    def test_deletion_does_not_reset_daily_creation_count_or_resend(self):
+    def test_deletion_does_not_reset_daily_creation_count(self):
         first = self.create()
         first.delete()
         second = self.create()
         self.assertEqual(self.send.call_count, 1)
         second.delete()
         self.create()
-        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_count, 2)
+        self.assertIn("Daily document count: 3", self.send.call_args.args[1])
         self.assertEqual(StockDocumentAlertDay.objects.get().document_count, 3)
 
-    def test_midday_rollout_counts_existing_documents_but_never_alerts_retroactively(self):
+    def test_midday_rollout_alerts_new_documents_only_with_the_correct_count(self):
         for kind, previous in (("in", 1), ("out", 3)):
             StockDocument.objects.bulk_create([
                 StockDocument(branch=self.branch, type=kind, document_no=f"old-{kind}-{i}")
                 for i in range(previous)
             ])
-            self.create(kind)
-        self.assertEqual(self.send.call_count, 1)
-        self.assertIn("Second stock-in", self.send.call_args.args[1])
+            new = self.create(kind)
+            self.assertIn(new.document_no, self.send.call_args.args[1])
+            self.assertIn(f"Daily document count: {previous + 1}", self.send.call_args.args[1])
+        self.assertEqual(self.send.call_count, 2)
+        self.assertIn("Stock-out document #4", self.send.call_args.args[1])
         self.assertEqual(StockDocumentAlertDay.objects.get(document_type="out").document_count, 4)
 
     def test_no_seatalk_credentials_is_safe_and_does_not_send_elsewhere(self):
@@ -167,6 +175,21 @@ class StockDocumentAlertTests(TestCase):
         self.assertEqual(StockDocumentAlertEvent.objects.count(), 2)
         self.assertEqual(StockDocumentAlertDay.objects.get().document_count, 2)
         self.assertEqual(self.send.call_count, 1)
+
+    def test_batched_events_keep_each_count_and_do_not_resend_on_replay(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            with transaction.atomic():
+                docs = [StockDocument.objects.create(
+                    branch=self.branch, type="in", document_no=f"batch-{i}",
+                ) for i in range(1, 5)]
+        self.assertEqual(self.send.call_count, 3)
+        for count, call in enumerate(self.send.call_args_list, start=2):
+            self.assertIn(docs[count - 1].document_no, call.args[1])
+            self.assertIn(f"Daily document count: {count}", call.args[1])
+        with self.captureOnCommitCallbacks(execute=True):
+            process_day(self.branch.pk, "in", timezone.localdate(docs[0].created_at))
+        self.assertEqual(self.send.call_count, 3)
+        self.assertEqual(StockDocumentAlertDay.objects.get().document_count, 4)
 
     def test_processing_failure_keeps_document_and_retries_pending_events(self):
         with mock.patch("bravepos.stock_alerts.StockDocumentAlertDay.objects.using",
@@ -204,7 +227,7 @@ class StockDocumentAlertTests(TestCase):
                                    [{"product_id": str(self.product.id), "qty": 1}],
                                    {str(self.product.id): self.product}, {}, "Cashier")
         self.assertEqual(self.send.call_count, 1)
-        self.assertIn("Second stock-out", self.send.call_args.args[1])
+        self.assertIn("Stock-out document #2", self.send.call_args.args[1])
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 19)
 
@@ -224,7 +247,7 @@ class StockDocumentAlertTests(TestCase):
 
 @skipUnlessDBFeature("has_select_for_update")
 class ConcurrentStockDocumentAlertTests(TransactionTestCase):
-    def test_concurrent_creations_reserve_one_alert_per_type(self):
+    def test_concurrent_creations_alert_once_for_every_second_and_later_document(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
 
@@ -248,7 +271,11 @@ class ConcurrentStockDocumentAlertTests(TransactionTestCase):
                 futures = [pool.submit(create, i) for i in range(6)]
                 for future in futures:
                     future.result(timeout=30)
-        self.assertEqual(send.call_count, 2)
+        self.assertEqual(send.call_count, 4)
+        texts = [call.args[1] for call in send.call_args_list]
+        for kind in ("Stock-in", "Stock-out"):
+            for count in (2, 3):
+                self.assertEqual(sum(f"{kind} document #{count} today" in text for text in texts), 1)
         self.assertEqual(StockDocument.objects.count(), 6)
         self.assertEqual(StockDocumentAlertDay.objects.count(), 2)
         for daily in StockDocumentAlertDay.objects.all():
