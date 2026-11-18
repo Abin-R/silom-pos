@@ -58,6 +58,7 @@ import { phoneMatchKey } from "../lib/phone";
 import { permissionsOf, type Permission } from "../lib/permissions";
 import { methodLabel } from "../lib/payments";
 import { refreshRefundDue, useRefundDue, type LatePayment } from "../lib/refundDue";
+import { canSaveStockIn, loadStockInTypes, type StockInType } from "../lib/stockInTypes";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
@@ -3380,7 +3381,9 @@ function CreateStockDocModal({
   const [outReason, setOutReason] = useState("");
   const [outReasons, setOutReasons] = useState<StockOutReason[]>([]);
   const [inReason, setInReason] = useState("");
-  const [inReasons, setInReasons] = useState<StockOutReason[]>([]);
+  const [inReasons, setInReasons] = useState<StockInType[]>([]);
+  const [inReasonsLoadState, setInReasonsLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [inReasonsRetry, setInReasonsRetry] = useState(0);
   const [reasonPicker, setReasonPicker] = useState(false);
 
   useEffect(() => {
@@ -3400,21 +3403,41 @@ function CreateStockDocModal({
     }
   }, [visible, editing]);
 
-  // Only the active list: a type an admin deactivated should disappear from the
-  // picker without disturbing the documents that already recorded it.
+  // A Stock-In type is required to save, so distinguish a failed lookup from
+  // the legitimate empty state and give staff an in-place retry that leaves
+  // every draft field untouched.
   useEffect(() => {
-    if (!visible || (type !== "in" && type !== "out")) return;
+    if (!visible || type !== "in") return;
+    let cancelled = false;
+    (async () => {
+      setInReasonsLoadState("loading");
+      try {
+        const data = await loadStockInTypes(apiFetch, API);
+        if (!cancelled) {
+          setInReasons(data);
+          setInReasonsLoadState("ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setInReasons([]);
+          setInReasonsLoadState("error");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [visible, type, inReasonsRetry]);
+
+  // Keep Stock-Out's existing picker request behavior unchanged.
+  useEffect(() => {
+    if (!visible || type !== "out") return;
     let cancelled = false;
     (async () => {
       try {
-        const reasonsPath = type === "in" ? "stock-in-reasons" : "stock-out-reasons";
-        const r = await apiFetch(`${API}/${reasonsPath}?active=true`);
+        const r = await apiFetch(`${API}/stock-out-reasons?active=true`);
         const data = await r.json();
-        if (!cancelled) {
-          (type === "in" ? setInReasons : setOutReasons)(Array.isArray(data) ? data : []);
-        }
+        if (!cancelled) setOutReasons(Array.isArray(data) ? data : []);
       } catch {
-        if (!cancelled) (type === "in" ? setInReasons : setOutReasons)([]);
+        if (!cancelled) setOutReasons([]);
       }
     })();
     return () => { cancelled = true; };
@@ -3540,8 +3563,10 @@ function CreateStockDocModal({
 
   // Stock-in/out documents must record one selected type rather than silently
   // saving a blank value.
-  const missingReason = (type === "in" && !inReason) || (type === "out" && !outReason);
-  const canSave = lines.length > 0 && !missingReason;
+  const missingReason = type === "out" && !outReason;
+  const canSave = type === "in"
+    ? canSaveStockIn(lines.length, inReason)
+    : lines.length > 0 && !missingReason;
 
   const confirmSave = () => {
     if (!canSave) return;
@@ -3851,7 +3876,21 @@ function CreateStockDocModal({
             <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
               <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{type === "in" ? tr("admin.document_type") : tr("admin.reason")}</Text>
               <ScrollView style={{ maxHeight: 360 }}>
-                {(type === "in" ? inReasons : outReasons).length === 0 ? (
+                {type === "in" && inReasonsLoadState === "loading" ? (
+                  <ActivityIndicator color={C.brand} style={{ margin: 24 }} testID="stock-in-type-loading" />
+                ) : type === "in" && inReasonsLoadState === "error" ? (
+                  <View style={styles.emptyBox}>
+                    <Text style={styles.emptyText}>{tr("admin.couldnt_load_stock_in_types")}</Text>
+                    <TouchableOpacity
+                      style={styles.importBtn}
+                      onPress={() => setInReasonsRetry((n) => n + 1)}
+                      testID="stock-in-type-retry"
+                    >
+                      <Text style={styles.importBtnText}>{tr("admin.retry")}</Text>
+                      <Ionicons name="refresh" size={16} color={C.ink3} />
+                    </TouchableOpacity>
+                  </View>
+                ) : (type === "in" ? inReasons : outReasons).length === 0 ? (
                   <Text style={[styles.emptyText, { padding: 24 }]}>
                     {type === "in" ? tr("admin.no_stock_in_types_yet_add_them_in") : tr("admin.no_reasons_yet_add_them_in")}
                   </Text>
