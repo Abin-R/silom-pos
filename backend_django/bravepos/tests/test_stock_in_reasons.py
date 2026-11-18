@@ -26,9 +26,13 @@ class StockInReasonTests(TestCase):
 
     def test_new_branch_defaults_and_resave(self):
         self.assertEqual(list(self.branch.stock_in_reasons.values_list("name", flat=True)),
+                         [name for name, _ in DEFAULT_STOCK_IN_REASONS])
+        self.assertEqual(list(self.branch.stock_in_reasons.values_list("name", "name_th")),
                          DEFAULT_STOCK_IN_REASONS)
+        self.branch.stock_in_reasons.filter(name="Shop Supply").update(name_th="กำหนดเอง")
         self.branch.save()
         self.assertEqual(self.branch.stock_in_reasons.count(), 3)
+        self.assertEqual(self.branch.stock_in_reasons.get(name="Shop Supply").name_th, "กำหนดเอง")
 
     def test_migration_seeds_existing_branches_without_changing_documents(self):
         StockInReason.objects.all().delete()
@@ -37,7 +41,7 @@ class StockInReasonTests(TestCase):
         migration.seed(apps, SimpleNamespace(connection=connection))
         for branch in (self.branch, self.other):
             self.assertEqual(list(branch.stock_in_reasons.values_list("name", flat=True)),
-                             DEFAULT_STOCK_IN_REASONS)
+                             [name for name, _ in DEFAULT_STOCK_IN_REASONS])
         doc.refresh_from_db()
         self.assertEqual(doc.reason, "")
 
@@ -55,6 +59,49 @@ class StockInReasonTests(TestCase):
         self.assertFalse(closed.stock_in_reasons.filter(name="Customer Return").exists())
         self.assertContains(self.client.post(self.url, {"name": "customer return"}), "already a type")
         self.assertContains(self.client.post(self.url, {"name": " "}), "Enter a type name")
+
+    def test_thai_backfill_preserves_customizations_and_history(self):
+        migration = import_module("bravepos.migrations.0094_stock_in_default_thai_names")
+        self.branch.stock_in_reasons.filter(name="Shop Supply").update(
+            name_th="", active=False, sort_order=15)
+        self.branch.stock_in_reasons.filter(name="Entry Correction").update(name_th="กำหนดเอง")
+        self.branch.stock_in_reasons.filter(name="Branch Transfer").delete()
+        renamed = self.other.stock_in_reasons.get(name="Shop Supply")
+        renamed.name = "Custom Supply"
+        renamed.name_th = ""
+        renamed.save()
+        custom = StockInReason.objects.create(branch=self.branch, name="Custom", name_th="")
+        doc = StockDocument.objects.create(
+            branch=self.branch, type="in", document_no="snapshot", reason="Shop Supply")
+        self.other.stock_in_reasons.filter(name="Branch Transfer").update(name_th="")
+        before_count = StockInReason.objects.count()
+        for _ in range(2):
+            migration.fill_blank_thai_names(apps, SimpleNamespace(connection=connection))
+        supplied = self.branch.stock_in_reasons.get(name="Shop Supply")
+        self.assertEqual(supplied.name_th, "รับสินค้าจากร้าน")
+        self.assertFalse(supplied.active)
+        self.assertEqual(supplied.sort_order, 15)
+        self.assertEqual(self.branch.stock_in_reasons.get(name="Entry Correction").name_th, "กำหนดเอง")
+        self.assertFalse(self.branch.stock_in_reasons.filter(name="Branch Transfer").exists())
+        self.assertEqual(self.other.stock_in_reasons.get(name="Branch Transfer").name_th, "รับโอนระหว่างสาขา")
+        renamed.refresh_from_db()
+        custom.refresh_from_db()
+        doc.refresh_from_db()
+        self.assertEqual(renamed.name_th, "")
+        self.assertEqual(custom.name_th, "")
+        self.assertEqual(doc.reason, "Shop Supply")
+        self.assertEqual(StockInReason.objects.count(), before_count)
+
+    def test_thai_backfill_completes_original_english_only_seed(self):
+        StockInReason.objects.all().delete()
+        original = import_module("bravepos.migrations.0093_stock_in_reasons")
+        backfill = import_module("bravepos.migrations.0094_stock_in_default_thai_names")
+        editor = SimpleNamespace(connection=connection)
+        original.seed(apps, editor)
+        backfill.fill_blank_thai_names(apps, editor)
+        for branch in (self.branch, self.other):
+            self.assertEqual(list(branch.stock_in_reasons.values_list("name", "name_th")),
+                             DEFAULT_STOCK_IN_REASONS)
 
     def test_local_add_and_delete_do_not_touch_other_branch(self):
         self.client.post(self.url, {"name": "Local"})
@@ -133,6 +180,8 @@ class StockInReasonApiTests(TestCase):
         response = self.client.get("/api/stock-in-reasons?active=true", **self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertEqual([r["name"] for r in response.json()], ["Entry Correction", "Branch Transfer"])
+        self.assertEqual([r["name_th"] for r in response.json()],
+                         ["แก้ไขการบันทึกข้อมูล", "รับโอนระหว่างสาขา"])
         self.assertEqual(self.client.delete(f"/api/stock-in-reasons/{foreign.id}", **self.auth).status_code, 404)
 
     def test_receipt_snapshot_and_old_client_compatibility(self):

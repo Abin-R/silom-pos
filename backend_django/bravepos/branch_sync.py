@@ -1,7 +1,7 @@
 """Making other branches match one branch — the backoffice Sync branches page.
 
 Everything a branch owns is a set of per-branch rows: its products, its
-categories, its promotions, its stock-out types.  Opening a new shop, or
+categories, its promotions, its stock-in and stock-out types.  Opening a new shop, or
 adding something at one shop that the others should have, is the same job for
 each of them — "make that branch's list look like this one".  This module
 holds one *section* per list, in the order they must run, and the page drives
@@ -14,7 +14,7 @@ Every section follows the rule products always have:
   its own;
 * the preview names every row it would touch, and writes nothing.
 
-Adding a list (Stock-In types, when they exist) is one more `Section` in
+Adding a list is one more `Section` in
 `SECTIONS`: a ``preview`` and an ``apply`` that each take
 ``(source, target, ctx)``.
 
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import catalog, discounts
-from .models import DiscountType, StockOutReason
+from .models import DiscountType, StockInReason, StockOutReason
 
 
 @dataclass(frozen=True)
@@ -165,6 +165,60 @@ def apply_stock_out(source, target, ctx):
     return out
 
 
+# ── Stock-in types ─────────────────────────────────────────────────────────
+STOCK_IN_FIELDS = ("name_th", "active")
+
+
+def add_stock_in_type(branch, name, name_th, active=True):
+    """A new stock-in type at ``branch``, last in its list."""
+    last = StockInReason.objects.filter(branch=branch).order_by("-sort_order").first()
+    return StockInReason.objects.create(
+        branch=branch, name=name, name_th=name_th, active=active,
+        sort_order=(last.sort_order + 1) if last else 0,
+    )
+
+
+def _stock_in_plan(target, ctx):
+    have = {_norm(r.name): r for r in StockInReason.objects.filter(branch=target)}
+    plan = []
+    for r in ctx["stock_in"]:
+        dest = have.get(_norm(r.name))
+        if dest is None:
+            # A type the source has hidden is not offered there either, so a
+            # branch that never had it gains nothing by getting it hidden.
+            if r.active:
+                plan.append(("create", r, None, []))
+            continue
+        changed = [f for f in STOCK_IN_FIELDS if getattr(dest, f) != getattr(r, f)]
+        plan.append(("update" if changed else "same", r, dest, changed))
+    return plan
+
+
+def preview_stock_in(source, target, ctx):
+    plan = _stock_in_plan(target, ctx)
+    return {
+        "adding": [r.name for a, r, _, _ in plan if a == "create"],
+        "updating": [{"name": r.name, "changes": [
+            {"name_th": "Thai name", "active": "shown/hidden"}[f] for f in ch]}
+            for a, r, _, ch in plan if a == "update"],
+        "already": sum(1 for a, *_ in plan if a == "same"),
+    }
+
+
+def apply_stock_in(source, target, ctx):
+    out = {"created": 0, "updated": 0}
+    for action, r, dest, changed in _stock_in_plan(target, ctx):
+        if action == "create":
+            add_stock_in_type(target, r.name, r.name_th, r.active)
+            out["created"] += 1
+        elif action == "update":
+            for f in changed:
+                setattr(dest, f, getattr(r, f))
+            dest.save(update_fields=changed)
+            out["updated"] += 1
+    return out
+
+
 # ── Promotions ──────────────────────────────────────────────────────────────
 def _promo_plan(target, dt, assume=()):
     """``(action, reason)`` for one promotion at ``target``.
@@ -241,6 +295,9 @@ SECTIONS = [
     Section("products", "Products",
             "Products on sale, added or edited to match. Stock is never copied.",
             preview_products, apply_products),
+    Section("stock_in", "Stock-In Dropdowns",
+            "The Type list on Stock in and the till.",
+            preview_stock_in, apply_stock_in),
     Section("stock_out", "Stock-Out Dropdowns",
             "The Type list on Stock out and the till.",
             preview_stock_out, apply_stock_out),
@@ -258,6 +315,8 @@ def context(source, sections, *, retire=True):
         ctx["catalogue"] = catalog.source_catalogue(source)
     ctx["removed"] = (catalog.removed_catalogue(source)
                       if "products" in ctx["sections"] and retire else [])
+    if "stock_in" in ctx["sections"]:
+        ctx["stock_in"] = list(StockInReason.objects.filter(branch=source))
     if "stock_out" in ctx["sections"]:
         ctx["stock_out"] = list(StockOutReason.objects.filter(branch=source))
     if "promotions" in ctx["sections"]:

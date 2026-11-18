@@ -83,7 +83,8 @@ def seed_new_branch_stock_in_reasons(sender, instance, created, raw=False, **kwa
     """Give branches created after the migration the same stock-in types."""
     if not created or raw:
         return
-    for i, name in enumerate(DEFAULT_STOCK_IN_REASONS):
+    for i, (name, name_th) in enumerate(DEFAULT_STOCK_IN_REASONS):
         StockInReason.objects.get_or_create(
-            branch=instance, name=name, defaults={"sort_order": i},
+            branch=instance, name=name,
+            defaults={"name_th": name_th, "sort_order": i},
         )

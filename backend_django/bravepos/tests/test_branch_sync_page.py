@@ -1,7 +1,7 @@
 """Sync branches — the sections beyond products.
 
 Products have their own suite (test_product_sync_page); this covers
-categories, stock-out types, promotions, choosing sections, and the old
+categories, stock-in and stock-out types, promotions, choosing sections, and the old
 Catalogue address.
 
 Run:
@@ -18,7 +18,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bravepos.models import (
-    Category, DiscountType, ParentCategory, Product, Staff, StockOutReason,
+    Category, DiscountType, ParentCategory, Product, Staff, StockInReason, StockOutReason,
 )
 
 from .factories import make_branch, make_product
@@ -64,9 +64,9 @@ class BranchSyncPageTests(TestCase):
 
     def test_first_visit_ticks_every_section(self):
         res = self.client.get(self.url)
-        for label in ("Products", "Categories", "Promotions", "Stock-Out Dropdowns"):
+        for label in ("Products", "Categories", "Promotions", "Stock-Out Dropdowns", "Stock-In Dropdowns"):
             self.assertContains(res, label)
-        self.assertEqual(len(res.context["section_keys"]), 4)
+        self.assertEqual(len(res.context["section_keys"]), 5)
 
     def test_an_unticked_section_writes_nothing(self):
         make_product(self.source, name="Brownie")
@@ -116,6 +116,69 @@ class BranchSyncPageTests(TestCase):
         StockOutReason.objects.create(branch=self.source, name="Old", active=False)
         self.sync("stock_out")
         self.assertFalse(StockOutReason.objects.filter(branch=self.target, name="Old").exists())
+
+    # ── Stock-in types ──────────────────────────────────────────────────
+    def test_stock_in_preview_lists_changes_without_writing(self):
+        StockInReason.objects.create(branch=self.source, name="Shop Return", name_th="คืนสินค้า")
+        self.target.stock_in_reasons.filter(name="Shop Supply").update(name_th="", active=False)
+        before = list(StockInReason.objects.values().order_by("id"))
+        res = self.client.get(self.url, self.params("stock_in"))
+        self.assertContains(res, "Stock-In Dropdowns")
+        self.assertContains(res, "Shop Return")
+        self.assertContains(res, "Thai name")
+        self.assertContains(res, "shown/hidden")
+        self.assertEqual(res.context["section_keys"], ["stock_in"])
+        self.assertEqual(before, list(StockInReason.objects.values().order_by("id")))
+
+    def test_stock_in_sync_copies_missing_types_to_selected_branches_only(self):
+        StockInReason.objects.create(branch=self.source, name="Shop Return", name_th="คืนสินค้า")
+        local = StockInReason.objects.create(branch=self.target, name="Target only", sort_order=20)
+        hidden = StockInReason.objects.create(branch=self.source, name="Old intake", active=False)
+        inactive = make_branch(name="Inactive")
+        inactive.active = False
+        inactive.save()
+        res = self.sync("stock_in", targets=[self.target, self.other, self.source, inactive])
+        self.assertContains(res, "Stock-In Dropdowns")
+        for branch in (self.target, self.other):
+            copy = branch.stock_in_reasons.get(name="Shop Return")
+            self.assertEqual(copy.name_th, "คืนสินค้า")
+            self.assertTrue(copy.active)
+            self.assertFalse(branch.stock_in_reasons.filter(name=hidden.name).exists())
+        self.assertGreater(self.target.stock_in_reasons.get(name="Shop Return").sort_order, local.sort_order)
+        self.assertFalse(inactive.stock_in_reasons.filter(name="Shop Return").exists())
+        self.assertEqual(self.source.stock_in_reasons.filter(name="Shop Return").count(), 1)
+        self.assertTrue(StockInReason.objects.filter(pk=local.pk).exists())
+
+    def test_stock_in_sync_matches_names_and_updates_labels_and_visibility(self):
+        src = StockInReason.objects.create(branch=self.source, name="Shop Return", name_th="คืนสินค้า", active=False)
+        dest = StockInReason.objects.create(branch=self.target, name="shop return", name_th="old", sort_order=9)
+        self.sync("stock_in")
+        dest.refresh_from_db()
+        self.assertEqual(dest.name, "shop return")
+        self.assertEqual(dest.name_th, src.name_th)
+        self.assertFalse(dest.active)
+        self.assertEqual(dest.sort_order, 9)
+        self.assertEqual(self.target.stock_in_reasons.filter(name__iexact=src.name).count(), 1)
+        self.sync("stock_in")
+        self.assertEqual(self.target.stock_in_reasons.filter(name__iexact=src.name).count(), 1)
+        preview = self.client.get(self.url, self.params("stock_in")).context["previews"][0]["rows"][0]
+        self.assertEqual(preview["adding"], [])
+        self.assertEqual(preview["updating"], [])
+
+    def test_unticked_stock_in_section_leaves_types_untouched(self):
+        StockInReason.objects.create(branch=self.source, name="Source only", name_th="ต้นทาง")
+        before = list(StockInReason.objects.values().order_by("id"))
+        self.sync("stock_out")
+        self.assertEqual(before, list(StockInReason.objects.values().order_by("id")))
+
+    def test_stock_in_sync_does_not_change_stock_out_or_stock(self):
+        product = make_product(self.target, stock=17)
+        StockInReason.objects.create(branch=self.source, name="Shop Return", name_th="คืนสินค้า")
+        before = list(StockOutReason.objects.values().order_by("id"))
+        self.sync("stock_in")
+        self.assertEqual(before, list(StockOutReason.objects.values().order_by("id")))
+        product.refresh_from_db()
+        self.assertEqual(product.stock, 17)
 
     # ── Promotions ──────────────────────────────────────────────────────
     def promo(self, branch=None, **kw):

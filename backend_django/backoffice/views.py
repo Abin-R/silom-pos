@@ -3154,14 +3154,6 @@ def stock_out_type_delete(request, type_id):
     return redirect(reverse("backoffice:stock_out_types") + f"?branch={row.branch_id}")
 
 
-def _add_stock_in_type(branch, name, name_th):
-    last = StockInReason.objects.filter(branch=branch).order_by("-sort_order").first()
-    return StockInReason.objects.create(
-        branch=branch, name=name, name_th=name_th,
-        sort_order=(last.sort_order + 1) if last else 0,
-    )
-
-
 @login_required
 def stock_in_types(request):
     """The branch's stock-in reasons — what the Type dropdown offers here and
@@ -3179,14 +3171,14 @@ def stock_in_types(request):
             error = f"“{name}” is already a type."
         else:
             with transaction.atomic():
-                _add_stock_in_type(branch, name, name_th)
+                sync_sections.add_stock_in_type(branch, name, name_th)
                 added, updated = [], []
                 if request.POST.get("sync_all"):
                     for other in catalog.other_branches(branch):
                         row = StockInReason.objects.filter(
                             branch=other, name__iexact=name).first()
                         if row is None:
-                            _add_stock_in_type(other, name, name_th)
+                            sync_sections.add_stock_in_type(other, name, name_th)
                             added.append(other.name)
                         elif name_th and row.name_th != name_th:
                             row.name_th = name_th
@@ -4304,7 +4296,7 @@ def _branch_sync_message(source, targets, sections, results):
 @login_required
 def branch_sync(request):
     """Make other branches match one branch — products, categories,
-    promotions, stock-out types; whichever are ticked.
+    promotions, stock-in and stock-out types; whichever are ticked.
 
     The sections and what each one does live in `bravepos.branch_sync`; this
     is the page around them.  Every section adds what the target is missing

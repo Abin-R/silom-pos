@@ -1295,9 +1295,9 @@ class StockOutReason(models.Model):
 
 
 DEFAULT_STOCK_IN_REASONS = [
-    "Shop Supply",
-    "Entry Correction",
-    "Branch Transfer",
+    ("Shop Supply", "รับสินค้าจากร้าน"),
+    ("Entry Correction", "แก้ไขการบันทึกข้อมูล"),
+    ("Branch Transfer", "รับโอนระหว่างสาขา"),
 ]
 
 
