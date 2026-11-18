@@ -53,7 +53,7 @@ from bravepos.models import (
     StockDocument,
     StockDocumentItem,
     StockMovement,
-    StockOutReason,
+    StockOutReason, StockInReason,
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
@@ -2832,16 +2832,14 @@ def _stock_report_export(request, kind):
     if view == "documents":
         _write_export_header(writer, f"{conf['title']} documents", branch, dfrom, dto)
         header = ["Created", "Document No.", "Ref. No.", conf["party"]]
-        if kind == "out":
-            header.append("Reason")
+        header.append("Type" if kind == "in" else "Reason")
         writer.writerow(header + ["Lines", "Total", "Created by", "Note"])
         for d in _stock_report_docs(branch, kind, dfrom, dto, field, q):
             row = [
                 timezone.localtime(d.created_at).strftime("%d/%m/%Y %H:%M:%S"),
                 d.document_no, d.ref_no, d.vendor if kind == "in" else d.receiver,
             ]
-            if kind == "out":
-                row.append(d.reason)
+            row.append(d.reason)
             writer.writerow(row + [d.line_count, _csv_num(d.total), d.created_by, d.note])
         return response
 
@@ -3042,10 +3040,15 @@ def stock_in_new(request):
     branches, branch, _dfrom, _dto = _common_filters(request)
     error = None
     if request.method == "POST" and branch is not None:
-        lines, error = _stock_lines_post(request, branch)
+        reason = (request.POST.get("reason") or "").strip()
+        if not StockInReason.objects.filter(branch=branch, active=True, name=reason).exists():
+            error = "Choose a type."
+        else:
+            lines, error = _stock_lines_post(request, branch)
         if error is None:
             doc = save_stock_in_document(
                 branch, lines,
+                reason=reason,
                 vendor=(request.POST.get("vendor") or "").strip()[:200],
                 ref_no=(request.POST.get("ref_no") or "").strip()[:120],
                 note=(request.POST.get("note") or "").strip(),
@@ -3063,6 +3066,7 @@ def stock_in_new(request):
         "branches": branches,
         "branch": branch,
         "vendors": vendors,
+        "reasons": StockInReason.objects.filter(branch=branch, active=True) if branch else [],
         "posted": request.POST if error else None,
         "posted_lines": [
             {"id": pid, "qty": q, "price": pr} for pid, q, pr in zip(
@@ -3148,6 +3152,87 @@ def stock_out_type_delete(request, type_id):
             msg += " Also deleted at " + ", ".join(others) + "."
         messages.success(request, msg)
     return redirect(reverse("backoffice:stock_out_types") + f"?branch={row.branch_id}")
+
+
+def _add_stock_in_type(branch, name, name_th):
+    last = StockInReason.objects.filter(branch=branch).order_by("-sort_order").first()
+    return StockInReason.objects.create(
+        branch=branch, name=name, name_th=name_th,
+        sort_order=(last.sort_order + 1) if last else 0,
+    )
+
+
+@login_required
+def stock_in_types(request):
+    """The branch's stock-in reasons — what the Type dropdown offers here and
+    on the till.  Saved documents keep the reason as text, so deleting one
+    never rewrites history."""
+    branches, branch, _dfrom, _dto = _common_filters(request)
+    error = None
+    if request.method == "POST" and branch is not None:
+        name = (request.POST.get("name") or "").strip()[:120]
+        name_th = (request.POST.get("name_th") or "").strip()[:120]
+        existing = StockInReason.objects.filter(branch=branch)
+        if not name:
+            error = "Enter a type name."
+        elif existing.filter(name__iexact=name).exists():
+            error = f"“{name}” is already a type."
+        else:
+            with transaction.atomic():
+                _add_stock_in_type(branch, name, name_th)
+                added, updated = [], []
+                if request.POST.get("sync_all"):
+                    for other in catalog.other_branches(branch):
+                        row = StockInReason.objects.filter(
+                            branch=other, name__iexact=name).first()
+                        if row is None:
+                            _add_stock_in_type(other, name, name_th)
+                            added.append(other.name)
+                        elif name_th and row.name_th != name_th:
+                            row.name_th = name_th
+                            row.save(update_fields=["name_th"])
+                            updated.append(other.name)
+            msg = f"Added “{name}”."
+            if added:
+                msg += " Also added to " + ", ".join(added) + "."
+            if updated:
+                msg += " Thai name updated at " + ", ".join(updated) + "."
+            if request.POST.get("sync_all") and not added and not updated:
+                msg += " Every other branch already had it."
+            messages.success(request, msg)
+            return redirect(reverse("backoffice:stock_in_types") + f"?branch={branch.id}")
+    return render(request, "backoffice/stock_in_types.html", {
+        "active": "stock_in_new",
+        "branches": branches,
+        "branch": branch,
+        "types": StockInReason.objects.filter(branch=branch) if branch else [],
+        "sync_branches": _fanout_branch_names(branch) if branch else [],
+        "error": error,
+        "posted": request.POST if error else None,
+        "hide_dates": True,
+    })
+
+
+@login_required
+def stock_in_type_delete(request, type_id):
+    row = get_object_or_404(StockInReason, id=type_id)
+    if request.method == "POST":
+        # "Sync to all branches": the type with the same name goes everywhere.
+        # Saved documents keep the reason as text, so no history moves.
+        with transaction.atomic():
+            others = []
+            if request.POST.get("sync_all") and row.branch_id:
+                for other in catalog.other_branches(row.branch):
+                    n, _ = StockInReason.objects.filter(
+                        branch=other, name__iexact=row.name).delete()
+                    if n:
+                        others.append(other.name)
+            row.delete()
+        msg = f"Deleted “{row.name}”."
+        if others:
+            msg += " Also deleted at " + ", ".join(others) + "."
+        messages.success(request, msg)
+    return redirect(reverse("backoffice:stock_in_types") + f"?branch={row.branch_id}")
 
 
 # ─── Custom Pay types ───────────────────────────────────────────────────
@@ -7055,7 +7140,7 @@ def user_delete(request, staff_id):
 # ─── Audit log ──────────────────────────────────────────────────────────
 AUDIT_MODEL_CHOICES = [
     "Staff", "Branch", "Settings", "Product", "Category", "Unit",
-    "DrawerCategory", "StockOutReason", "Order", "OrderItem", "SelfOrder",
+    "DrawerCategory", "StockOutReason", "StockInReason", "Order", "OrderItem", "SelfOrder",
     "StockDocument", "StockDocumentItem", "StockMovement", "Shift",
     "ShiftMovement", "Customer", "DiscountType",
 ]

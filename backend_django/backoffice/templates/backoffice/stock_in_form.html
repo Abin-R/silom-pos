@@ -61,6 +61,15 @@
     <div class="form-grid">
       <div class="field"><label>Shop</label><b>{{ branch.name }}</b></div>
       <div class="field">
+        <label for="f-type">Type</label>
+        <select id="f-type" name="reason" required>
+          <option value="">Choose a type</option>
+          {% for r in reasons %}<option value="{{ r.name }}" {% if posted.reason == r.name %}selected{% endif %}>{{ r.name }}{% if r.name_th %} · {{ r.name_th }}{% endif %}</option>{% endfor %}
+        </select>
+        <a href="{% url 'backoffice:stock_in_types' %}?branch={{ branch.id }}">Manage types</a>
+        {% if not reasons %}<span class="hint">No types available. Add a type to record stock in.</span>{% endif %}
+      </div>
+      <div class="field">
         <label for="f-vendor">Supplier</label>
         <input id="f-vendor" type="text" name="vendor" maxlength="200" list="vendorList" value="{{ posted.vendor|default:'' }}" placeholder="Who delivered the stock">
         <datalist id="vendorList">{% for v in vendors %}<option value="{{ v }}">{% endfor %}</datalist>
@@ -70,7 +79,7 @@
         <input id="f-ref" type="text" name="ref_no" maxlength="120" value="{{ posted.ref_no|default:'' }}" placeholder="Supplier's bill or reference no.">
       </div>
       <div class="field wide">
-        <label for="f-note">Reason</label>
+        <label for="f-note">Note</label>
         <textarea id="f-note" name="note" rows="2" placeholder="Optional">{{ posted.note|default:'' }}</textarea>
       </div>
     </div>

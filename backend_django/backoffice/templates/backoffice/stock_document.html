@@ -25,7 +25,7 @@
     <div><div class="sub">Ref. No.</div><b>{{ doc.ref_no|default:"—" }}</b></div>
     <div><div class="sub">{{ party_label }}</div>
       <b>{% if kind == 'in' %}{{ doc.vendor|default:"—" }}{% else %}{{ doc.receiver|default:"—" }}{% endif %}</b></div>
-    {% if kind == 'out' %}<div><div class="sub">Reason</div><b>{{ doc.reason|default:"—" }}</b></div>{% endif %}
+    <div><div class="sub">{% if kind == 'in' %}Type{% else %}Reason{% endif %}</div><b>{{ doc.reason|default:"—" }}</b></div>
     <div><div class="sub">Created by</div><b>{{ doc.created_by|default:"—" }}</b></div>
     <div style="grid-column:1/-1"><div class="sub">Note</div><div>{{ doc.note|default:"—"|linebreaksbr }}</div></div>
   </div>

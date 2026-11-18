@@ -16,6 +16,7 @@ def _register(r):
     r.register(r'customers', views.CustomerViewSet, basename='customer')
     r.register(r'branches', views.BranchViewSet, basename='branch')
     r.register(r'shift-categories', views.DrawerCategoryViewSet, basename='shift-category')
+    r.register(r'stock-in-reasons', views.StockInReasonViewSet, basename='stock-in-reason')
     r.register(r'stock-out-reasons', views.StockOutReasonViewSet, basename='stock-out-reason')
     r.register(r'suggestion-overrides', views.SuggestionOverrideViewSet, basename='suggestion-override')
 

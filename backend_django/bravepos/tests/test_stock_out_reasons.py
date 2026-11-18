@@ -136,8 +136,8 @@ class StockOutReasonApiTests(TestCase):
         StockOutReason.objects.filter(branch=self.branch, name="Expired").delete()
         self.assertEqual(StockDocument.objects.get().reason, "Expired")
 
-    def test_reason_is_ignored_on_a_stock_in(self):
-        """Only stock-out has reasons; a stray field must not land on stock-in."""
+    def test_stock_out_type_is_rejected_on_a_stock_in(self):
+        """Stock-in types must come from the stock-in list, not stock-out."""
         res = self.client.post(
             "/api/stock-documents",
             {
@@ -150,8 +150,8 @@ class StockOutReasonApiTests(TestCase):
             content_type="application/json",
             **self.auth,
         )
-        self.assertEqual(res.status_code, 201, res.content)
-        self.assertEqual(StockDocument.objects.get(type="in").reason, "")
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertFalse(StockDocument.objects.filter(type="in").exists())
 
 
 class StockDocumentReasonMigrationTests(TestCase):

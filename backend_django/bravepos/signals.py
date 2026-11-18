@@ -8,7 +8,7 @@ from . import audit
 from .gateways import seed_branch_payment
 from .models import (
     DEFAULT_PAYMENT_TYPES, DEFAULT_STOCK_OUT_REASONS, Branch, PaymentType,
-    StockOutReason,
+    StockOutReason, StockInReason, DEFAULT_STOCK_IN_REASONS,
 )
 from .staff_provisioning import ensure_branch_staff
 
@@ -74,5 +74,16 @@ def seed_new_branch_payment_types(sender, instance, created, raw=False, **kwargs
         return
     for i, name in enumerate(DEFAULT_PAYMENT_TYPES):
         PaymentType.objects.get_or_create(
+            branch=instance, name=name, defaults={"sort_order": i},
+        )
+
+
+@receiver(post_save, sender=Branch)
+def seed_new_branch_stock_in_reasons(sender, instance, created, raw=False, **kwargs):
+    """Give branches created after the migration the same stock-in types."""
+    if not created or raw:
+        return
+    for i, name in enumerate(DEFAULT_STOCK_IN_REASONS):
+        StockInReason.objects.get_or_create(
             branch=instance, name=name, defaults={"sort_order": i},
         )

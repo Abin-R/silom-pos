@@ -35,7 +35,7 @@ from .models import (
     Branch, BranchSession, Category, Customer, DiscountType, DrawerCategory,
     Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
-    StockMovement, StockDocument, StockDocumentItem, StockOutReason,
+    StockMovement, StockDocument, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride, SuggestionRule, TillBeamCharge,
 )
 from .serializers import (
@@ -44,7 +44,7 @@ from .serializers import (
     OrderSerializer, ParkedOrderSerializer, ProductSerializer, SaleWindowSerializer,
     SettingsSerializer,
     ShiftSerializer, ShiftMovementSerializer, StockMovementSerializer,
-    StockDocumentSerializer, StockOutReasonSerializer,
+    StockDocumentSerializer, StockOutReasonSerializer, StockInReasonSerializer,
     SuggestionOverrideSerializer,
 )
 
@@ -727,6 +727,20 @@ class StockOutReasonViewSet(BranchScopedMixin, viewsets.ModelViewSet):
     """
     queryset = StockOutReason.objects.all()
     serializer_class = StockOutReasonSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        active = self.request.query_params.get('active')
+        if active in ('true', 'false'):
+            qs = qs.filter(active=(active == 'true'))
+        return qs
+
+
+class StockInReasonViewSet(TillPermissionMixin, BranchScopedMixin, viewsets.ModelViewSet):
+    """Stock-in types for the session branch; inventory permission gates writes."""
+    queryset = StockInReason.objects.all()
+    serializer_class = StockInReasonSerializer
+    write_permission = 'manage_inventory'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -2065,6 +2079,12 @@ def stock_documents(request):
         denied = perm_denied(staff, 'adjust_stock')
     if denied is not None:
         return denied
+    in_reason = ''
+    if doc_type == 'in':
+        in_reason = str(payload.get('reason') or '').strip()
+        if in_reason and not StockInReason.objects.filter(
+                branch=branch, active=True, name=in_reason).exists():
+            return Response({'detail': 'Choose a valid stock-in type.'}, status=400)
     items = payload.get('items') or []
     if not items:
         return Response({'detail': 'At least one item is required'}, status=400)
@@ -2093,9 +2113,9 @@ def stock_documents(request):
             ref_no=payload.get('ref_no', '') or '',
             vendor=payload.get('vendor', '') or '',
             receiver=payload.get('receiver', '') or '',
-            # Stock-out only.  Snapshotted as text, not an FK, so renaming or
+            # Snapshotted as text, not an FK, so renaming or
             # deleting the reason later can't rewrite a saved document.
-            reason=(payload.get('reason', '') or '') if doc_type == 'out' else '',
+            reason=(payload.get('reason', '') or '') if doc_type == 'out' else in_reason,
             note=payload.get('note', '') or '',
             tax_included=bool(payload.get('tax_included', False)),
             avg_cost=bool(payload.get('avg_cost', False)),
@@ -2236,7 +2256,7 @@ def save_stock_out_document(branch, lines, reason, receiver='', ref_no='',
 
 
 def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
-                           created_by=''):
+                           created_by='', reason=''):
     """Create a stock-in document from ``[(product, qty, price, discount)]``.
 
     The backoffice's Create stock in page saves through here — the mirror of
@@ -2247,7 +2267,7 @@ def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
     with transaction.atomic():
         doc = StockDocument.objects.create(
             branch=branch, type='in', document_no=doc_no,
-            ref_no=ref_no, vendor=vendor, note=note, created_by=created_by,
+            ref_no=ref_no, vendor=vendor, reason=reason, note=note, created_by=created_by,
         )
         total = Decimal(0)
         for product, qty, price, discount in lines:
@@ -2262,7 +2282,7 @@ def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
             product.save(update_fields=['stock'])
             StockMovement.objects.create(
                 branch=branch, product=product, product_name=product.name,
-                type='in', qty=int(qty), note=note, document_no=doc_no,
+                type='in', qty=int(qty), note=reason or note, document_no=doc_no,
                 created_by=created_by,
             )
         doc.subtotal = doc.total = total

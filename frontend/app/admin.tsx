@@ -58,6 +58,7 @@ import { phoneMatchKey } from "../lib/phone";
 import { permissionsOf, type Permission } from "../lib/permissions";
 import { methodLabel } from "../lib/payments";
 import { refreshRefundDue, useRefundDue, type LatePayment } from "../lib/refundDue";
+import { canSaveStockIn, loadStockInTypes, type StockInType } from "../lib/stockInTypes";
 import {
   Btn, Col, Empty, KV, Lbl, MixRow, Money, Notice, Panel, PanelHead, Pill,
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
@@ -3162,7 +3163,11 @@ function StockDocuments({
         <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.date")}</Text>
         <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.document_no")}</Text>
         <Text style={[styles.docColCell, { flex: 1 }]}>{cfg.refCol ? tr(cfg.refCol) : null}</Text>
-        {type === "out" && <Text style={[styles.docColCell, { width: 150 }]}>{tr("admin.reason")}</Text>}
+        {(type === "in" || type === "out") && (
+          <Text style={[styles.docColCell, { width: 150 }]}>
+            {type === "in" ? tr("admin.document_type") : tr("admin.reason")}
+          </Text>
+        )}
         {cfg.hasPrice && <Text style={[styles.docColCell, { width: 90, textAlign: "right" }]}>{tr("common.total")}</Text>}
         {cfg.hasAdjustType && <Text style={[styles.docColCell, { width: 110 }]}>{tr("admin.document_type")}</Text>}
         <Text style={[styles.docColCell, { width: 100, textAlign: "right" }]}>{tr("admin.created_by")}</Text>
@@ -3182,7 +3187,9 @@ function StockDocuments({
               ? item.ref_no
               : (item.document_name || item.note || "");
             if (compact) {
-              const outReason = type === "out" ? (item.reason || item.note || "") : "";
+              const stockReason = type === "in"
+                ? (item.reason || "")
+                : type === "out" ? (item.reason || item.note || "") : "";
               return (
                 <TouchableOpacity style={styles.docCard} testID={`doc-${item.id}`} onPress={() => open(item)}>
                   <View style={styles.docCardLine}>
@@ -3194,9 +3201,9 @@ function StockDocuments({
                     <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
                     <Text style={[styles.docCell, { color: C.ink3 }]} numberOfLines={1}>{item.created_by || ""}</Text>
                   </View>
-                  {!!(refText || outReason) && (
+                  {!!(refText || stockReason) && (
                     <Text style={[styles.docCell, { color: C.ink2Soft }]} numberOfLines={1}>
-                      {[refText, outReason].filter(Boolean).join(" · ")}
+                      {[refText, stockReason].filter(Boolean).join(" · ")}
                     </Text>
                   )}
                 </TouchableOpacity>
@@ -3207,11 +3214,11 @@ function StockDocuments({
                 <Text style={[styles.docCell, { width: 150 }]}>{thaiDate(dt)} {dt.toTimeString().slice(0, 5)}</Text>
                 <Text style={[styles.docCell, { width: 150, color: C.ink }]}>{item.document_no}</Text>
                 <Text style={[styles.docCell, { flex: 1 }]} numberOfLines={1}>{refText}</Text>
-                {type === "out" && (
-                  // Blank for anything saved before reasons existed — those
+                {(type === "in" || type === "out") && (
+                  // Blank for documents saved before types existed — those
                   // documents legitimately have none, so don't invent one.
                   <Text style={[styles.docCell, { width: 150 }]} numberOfLines={1}>
-                    {item.reason || item.note || ""}
+                    {type === "in" ? (item.reason || "") : (item.reason || item.note || "")}
                   </Text>
                 )}
                 {cfg.hasPrice && <Text style={[styles.docCell, { width: 90, textAlign: "right" }]}>{(item.total || 0).toFixed(2)}</Text>}
@@ -3264,7 +3271,9 @@ function StockDocViewModal({
   ];
   if (cfg.partyLabel) fields.push([tr(cfg.partyLabel), type === "in" ? doc.vendor : doc.receiver]);
   if (cfg.refLabel) fields.push([tr(cfg.refLabel), doc.ref_no]);
-  if (type === "out") fields.push([tr("admin.reason"), doc.reason]);
+  if (type === "in" || type === "out") {
+    fields.push([type === "in" ? tr("admin.document_type") : tr("admin.reason"), doc.reason]);
+  }
   if (cfg.hasName) fields.push([tr("admin.document_name"), doc.document_name]);
   if (cfg.hasAdjustType) fields.push([tr("admin.document_type"), doc.adjust_type]);
   if (doc.note) fields.push([tr("admin.note"), doc.note]);
@@ -3324,9 +3333,9 @@ function StockDocViewModal({
   );
 }
 
-// Predefined stock-out reason, managed per branch in Settings → Stock-out
-// reasons.  Replaces the free-text remark staff used to type, which arrived
-// spelled a different way every time and could not be grouped or counted.
+// Predefined stock-in/out type, managed per branch.  It replaces the free-text
+// remark staff used to type, which arrived spelled a different way every time
+// and could not be grouped or counted.
 type StockOutReason = {
   id: string; name: string; name_th?: string;
   sort_order?: number; active?: boolean;
@@ -3366,17 +3375,21 @@ function CreateStockDocModal({
   const [importOpen, setImportOpen] = useState(false);
   const [keypad, setKeypad] = useState<{ idx: number; field: DraftField } | null>(null);
   const [saving, setSaving] = useState(false);
-  // Stock-out reason.  Kept separate from `reason` above, which belongs to the
-  // reconcile flow — the two never coexist, but sharing one slot invites a
+  // Stock-in/out types stay separate from `reason` above, which belongs to the
+  // reconcile flow — the forms never coexist, but sharing one slot invites a
   // stray value from whichever form was opened last.
   const [outReason, setOutReason] = useState("");
   const [outReasons, setOutReasons] = useState<StockOutReason[]>([]);
+  const [inReason, setInReason] = useState("");
+  const [inReasons, setInReasons] = useState<StockInType[]>([]);
+  const [inReasonsLoadState, setInReasonsLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [inReasonsRetry, setInReasonsRetry] = useState(0);
   const [reasonPicker, setReasonPicker] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
-      setTaxIncluded(false); setAvgCost(false); setOutReason("");
+      setTaxIncluded(false); setAvgCost(false); setOutReason(""); setInReason("");
       if (editing) {
         // Reopening a saved check document: on-hand stays the figure from
         // when each line was added, the quantity is what was saved.
@@ -3390,8 +3403,31 @@ function CreateStockDocModal({
     }
   }, [visible, editing]);
 
-  // Only the active list: a reason an admin deactivated should disappear from
-  // the picker without disturbing the documents that already recorded it.
+  // A Stock-In type is required to save, so distinguish a failed lookup from
+  // the legitimate empty state and give staff an in-place retry that leaves
+  // every draft field untouched.
+  useEffect(() => {
+    if (!visible || type !== "in") return;
+    let cancelled = false;
+    (async () => {
+      setInReasonsLoadState("loading");
+      try {
+        const data = await loadStockInTypes(apiFetch, API);
+        if (!cancelled) {
+          setInReasons(data);
+          setInReasonsLoadState("ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setInReasons([]);
+          setInReasonsLoadState("error");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [visible, type, inReasonsRetry]);
+
+  // Keep Stock-Out's existing picker request behavior unchanged.
   useEffect(() => {
     if (!visible || type !== "out") return;
     let cancelled = false;
@@ -3506,7 +3542,7 @@ function CreateStockDocModal({
         qty: parseFloat(l.qty) || 0, price: parseFloat(l.price) || 0,
         discount: parseFloat(l.discount) || 0, total: lineTotal(l),
       }));
-      if (type === "in") body.vendor = party;
+      if (type === "in") { body.vendor = party; body.reason = inReason; }
       if (type === "out") { body.receiver = party; body.reason = outReason; }
     }
     try {
@@ -3525,10 +3561,12 @@ function CreateStockDocModal({
     setSaving(false);
   };
 
-  // A stock-out with no reason is the thing this feature exists to stop, so
-  // Save stays disabled until one is picked rather than silently saving blank.
+  // Stock-in/out documents must record one selected type rather than silently
+  // saving a blank value.
   const missingReason = type === "out" && !outReason;
-  const canSave = lines.length > 0 && !missingReason;
+  const canSave = type === "in"
+    ? canSaveStockIn(lines.length, inReason)
+    : lines.length > 0 && !missingReason;
 
   const confirmSave = () => {
     if (!canSave) return;
@@ -3621,22 +3659,21 @@ function CreateStockDocModal({
                   <Text style={styles.docFieldLabel}>{cfg.partyLabel ? tr(cfg.partyLabel) : null}</Text>
                   <TextInput style={styles.docInput} value={party} onChangeText={setParty} placeholder="" />
                 </View>
-                {type === "out" ? (
-                  // Reason replaces the free-text note on a stock-out: the
-                  // whole point is that the answer is one of a known set, so
-                  // the export can group by it.
+                {type === "in" || type === "out" ? (
+                  // Type replaces the free-text note: the answer is one of a
+                  // known set, so the export can group by it.
                   <View style={styles.docField}>
-                    <Text style={styles.docFieldLabel}>{tr("admin.reason")}</Text>
+                    <Text style={styles.docFieldLabel}>{type === "in" ? tr("admin.document_type") : tr("admin.reason")}</Text>
                     <TouchableOpacity
                       style={[styles.docInput, styles.docSelect]}
                       onPress={() => setReasonPicker(true)}
-                      testID="stock-out-reason"
+                      testID={type === "in" ? "stock-in-type" : "stock-out-reason"}
                     >
                       <Text
-                        style={[styles.docSelectText, !outReason && { color: C.ink3 }]}
+                        style={[styles.docSelectText, !(type === "in" ? inReason : outReason) && { color: C.ink3 }]}
                         numberOfLines={1}
                       >
-                        {outReason || tr("admin.choose_a_reason")}
+                        {type === "in" ? (inReason || tr("admin.choose_a_type")) : (outReason || tr("admin.choose_a_reason"))}
                       </Text>
                       <Ionicons name="chevron-down" size={16} color={C.ink3} />
                     </TouchableOpacity>
@@ -3824,7 +3861,7 @@ function CreateStockDocModal({
           onDone={(v) => { if (keypad) setField(keypad.idx, keypad.field, v); setKeypad(null); }}
         />
 
-        {/* Stock-out reason picker */}
+        {/* Stock-in/out type picker */}
         <Modal
           visible={reasonPicker}
           transparent
@@ -3837,19 +3874,33 @@ function CreateStockDocModal({
             onPress={() => setReasonPicker(false)}
           >
             <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
-              <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{tr("admin.reason")}</Text>
+              <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{type === "in" ? tr("admin.document_type") : tr("admin.reason")}</Text>
               <ScrollView style={{ maxHeight: 360 }}>
-                {outReasons.length === 0 ? (
+                {type === "in" && inReasonsLoadState === "loading" ? (
+                  <ActivityIndicator color={C.brand} style={{ margin: 24 }} testID="stock-in-type-loading" />
+                ) : type === "in" && inReasonsLoadState === "error" ? (
+                  <View style={styles.emptyBox}>
+                    <Text style={styles.emptyText}>{tr("admin.couldnt_load_stock_in_types")}</Text>
+                    <TouchableOpacity
+                      style={styles.importBtn}
+                      onPress={() => setInReasonsRetry((n) => n + 1)}
+                      testID="stock-in-type-retry"
+                    >
+                      <Text style={styles.importBtnText}>{tr("admin.retry")}</Text>
+                      <Ionicons name="refresh" size={16} color={C.ink3} />
+                    </TouchableOpacity>
+                  </View>
+                ) : (type === "in" ? inReasons : outReasons).length === 0 ? (
                   <Text style={[styles.emptyText, { padding: 24 }]}>
-                    {tr("admin.no_reasons_yet_add_them_in")}
+                    {type === "in" ? tr("admin.no_stock_in_types_yet_add_them_in") : tr("admin.no_reasons_yet_add_them_in")}
                   </Text>
                 ) : (
-                  outReasons.map((r) => (
+                  (type === "in" ? inReasons : outReasons).map((r) => (
                     <TouchableOpacity
                       key={r.id}
                       style={styles.catRow}
-                      onPress={() => { setOutReason(r.name); setReasonPicker(false); }}
-                      testID={`stock-out-reason-${r.id}`}
+                      onPress={() => { (type === "in" ? setInReason : setOutReason)(r.name); setReasonPicker(false); }}
+                      testID={`${type === "in" ? "stock-in-type" : "stock-out-reason"}-${r.id}`}
                     >
                       <Text style={styles.catRowText}>{r.name}</Text>
                       {!!r.name_th && r.name_th !== r.name && (

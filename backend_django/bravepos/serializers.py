@@ -8,7 +8,7 @@ from .customers import to_e164
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
-    DrawerCategory, StockDocument, StockDocumentItem, StockOutReason,
+    DrawerCategory, StockDocument, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride,
 )
 
@@ -395,6 +395,12 @@ class DrawerCategorySerializer(serializers.ModelSerializer):
 class StockOutReasonSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockOutReason
+        fields = ['id', 'name', 'name_th', 'sort_order', 'active']
+
+
+class StockInReasonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockInReason
         fields = ['id', 'name', 'name_th', 'sort_order', 'active']
 
 

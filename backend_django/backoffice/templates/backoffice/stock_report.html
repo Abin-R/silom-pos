@@ -71,7 +71,7 @@
         <tr>
           <th style="width:150px">Created</th><th>Document No.</th><th>Ref. No.</th>
           <th>{{ party_label }}</th>
-          {% if kind == 'out' %}<th>Reason</th>{% endif %}
+          <th>{% if kind == 'in' %}Type{% else %}Reason{% endif %}</th>
           <th class="r">Lines</th><th class="r">Total</th><th>Created by</th><th>Note</th>
         </tr>
       </thead>
@@ -83,14 +83,14 @@
             <a href="{% if kind == 'in' %}{% url 'backoffice:stock_in_document' d.id %}{% else %}{% url 'backoffice:stock_out_document' d.id %}{% endif %}?{{ qs }}">{{ d.document_no }}</a></td>
           <td>{{ d.ref_no|default:"—" }}</td>
           <td>{% if kind == 'in' %}{{ d.vendor|default:"—" }}{% else %}{{ d.receiver|default:"—" }}{% endif %}</td>
-          {% if kind == 'out' %}<td>{{ d.reason|default:"—" }}</td>{% endif %}
+          <td>{{ d.reason|default:"—" }}</td>
           <td class="r money">{{ d.line_count }}</td>
           <td class="r money" style="font-weight:660">฿{{ d.total|floatformat:2|intcomma }}</td>
           <td>{{ d.created_by|default:"—" }}</td>
           <td class="sub">{{ d.note|default:"" }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="{% if kind == 'out' %}9{% else %}8{% endif %}" class="empty">
+        <tr><td colspan="9" class="empty">
           <svg><use href="#i-inbox"/></svg>
           {% if q %}No document matches “{{ q }}”.{% else %}No {{ title|lower }} documents between {{ date_from }} and {{ date_to }}.{% endif %}
         </td></tr>
@@ -99,7 +99,7 @@
       {% if rows %}
       <tfoot>
         <tr>
-          <td colspan="{% if kind == 'out' %}6{% else %}5{% endif %}">{{ paginator.count }} document{{ paginator.count|pluralize }}</td>
+          <td colspan="6">{{ paginator.count }} document{{ paginator.count|pluralize }}</td>
           <td class="r money">฿{{ doc_value|floatformat:2|intcomma }}</td>
           <td colspan="2"></td>
         </tr>
