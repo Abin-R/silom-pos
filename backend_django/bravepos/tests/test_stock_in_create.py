@@ -35,6 +35,7 @@ class CreateStockInTests(TestCase):
             "product_id": [str(p.id) for p, _q, _pr in lines],
             "qty": [str(q) for _p, q, _pr in lines],
             "price": [str(pr) for _p, _q, pr in lines],
+            "reason": "Shop Supply",
             **extra})
 
     def test_save_adds_stock_and_writes_the_ledger(self):

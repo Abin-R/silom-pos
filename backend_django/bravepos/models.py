@@ -1294,6 +1294,32 @@ class StockOutReason(models.Model):
         return self.name
 
 
+DEFAULT_STOCK_IN_REASONS = [
+    "Shop Supply",
+    "Entry Correction",
+    "Branch Transfer",
+]
+
+
+class StockInReason(models.Model):
+    """Branch-scoped types for stock received; documents snapshot the name."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="stock_in_reasons",
+    )
+    name = models.CharField(max_length=120)
+    name_th = models.CharField(max_length=120, blank=True, default="")
+    sort_order = models.IntegerField(default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        indexes = [models.Index(fields=["branch"])]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 # ─── Discount presets ────────────────────────────────────────────────────────
 # What the till's Custom Pay list offered before it could be configured.  Every
 # branch starts from these (migration 0083, `signals.seed_new_branch_payment_types`)
@@ -1813,9 +1839,9 @@ class StockDocument(models.Model):
     ref_no = models.CharField(max_length=120, blank=True, default="")  # purchasing / ref doc no.
     vendor = models.CharField(max_length=200, blank=True, default="")    # stock-in
     receiver = models.CharField(max_length=200, blank=True, default="")  # stock-out
-    # Snapshot of the chosen StockOutReason name at the time of the document,
+    # Snapshot of the chosen stock-in or stock-out type at the time of the document,
     # so renaming or deleting a reason later never rewrites history — the same
-    # reasoning as ShiftMovement.category.  Stock-out only; blank elsewhere.
+    # reasoning as ShiftMovement.category. Blank on older documents and other types.
     reason = models.CharField(max_length=120, blank=True, default="")
     note = models.TextField(blank=True, default="")
     tax_included = models.BooleanField(default=False)

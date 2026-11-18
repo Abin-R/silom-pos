@@ -39,7 +39,7 @@ _local = threading.local()
 AUDITED = {
     "Staff", "Branch", "Settings",
     "Product", "ProductSaleWindow", "ParentCategory", "Category", "Unit", "DrawerCategory",
-    "StockOutReason", "PaymentType",
+    "StockOutReason", "StockInReason", "PaymentType",
     "StockMovement", "StockDocument", "StockDocumentItem",
     "ProductionCutoffPolicy", "ProductionRequest", "ProductionRequestItem",
     "Shift", "ShiftMovement",
