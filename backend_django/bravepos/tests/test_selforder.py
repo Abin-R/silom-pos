@@ -30,7 +30,7 @@ from bravepos import gateways, selforder
 from bravepos.gateways import compute_order_charges
 from bravepos.models import (
     Branch, Category, DiscountType, Order, Product, SelfOrder, Settings, StockDocument,
-    SuggestionRule,
+    StockMovement, SuggestionRule,
 )
 from bravepos.orders import create_order_from_items
 
@@ -410,11 +410,14 @@ class SelfOrderDiscountTests(TestCase):
         cake_line = order.items.get(product_id=self.cake.id)
         self.assertEqual(cake_line.discount, Decimal('18.75'))
         self.assertEqual(cake_line.discount_code, 'PR-0001')
-        # The cookie is not on the bill; it leaves stock on a "Free item" document.
+        # The cookie is not on the bill; it leaves stock on a "Free item" history line.
         self.assertFalse(order.items.filter(product_id=self.cookie.id).exists())
         self.cookie.refresh_from_db()
         self.assertEqual(self.cookie.stock, 9)
-        self.assertTrue(StockDocument.objects.filter(ref_no=order.order_number).exists())
+        self.assertFalse(StockDocument.objects.filter(ref_no=order.order_number).exists())
+        self.assertTrue(StockMovement.objects.filter(
+            product=self.cookie, type='out', document_no=order.order_number,
+            note__startswith='Free item').exists())
 
     def _free_cookie(self):
         return self._preset([self.latte], name='Free cookie', kind='free', value=0,

@@ -1391,7 +1391,7 @@ class DiscountType(models.Model):
     # Free item: choosing the discount on a product gives ``free_qty`` pcs of
     # ``free_product`` — or of whichever ``free_category`` product the cashier
     # picks at the till.  Not a bill line: the order only takes it out of
-    # stock (a "Free item" stock-out document).  One-product discounts only.
+    # stock (a "Free item" stock-history line).  One-product discounts only.
     KIND_FREE = "free"
     KIND_CHOICES = [
         (KIND_PERCENT, "Percentage"),

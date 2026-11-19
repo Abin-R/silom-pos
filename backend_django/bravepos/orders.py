@@ -24,12 +24,11 @@ from .gateways import (
     get_shop_settings,
 )
 from .models import (
-    Branch, DiscountType, Order, OrderItem, Product, Shift, StockDocument,
-    StockDocumentItem, StockMovement,
+    Branch, DiscountType, Order, OrderItem, Product, Shift, StockMovement,
 )
 
-# The reason a promotion's free item leaves stock under — what the Stock out
-# report shows and filters by.
+# How a promotion's free item is labelled in stock history: the start of its
+# StockMovement note, which is also how a void finds it to put it back.
 FREE_ITEM_REASON = 'Free item'
 
 # Sentinel so a caller can pass ``shift=None`` to mean "no shift" and be
@@ -351,23 +350,27 @@ def create_order_from_items(
     )
 
 
+def _free_item_movements(order):
+    """The stock-history lines a sale's free items left on: type ``out``, the
+    order number as document, a note starting "Free item"."""
+    return StockMovement.objects.filter(
+        branch_id=order.branch_id, type='out', document_no=order.order_number,
+        note__startswith=FREE_ITEM_REASON, product__branch_id=order.branch_id,
+    ).select_related('product')
+
+
 def _bill_stock_lines(order):
     """Yield ``(product, qty, document_no)`` for everything this sale took out
-    of stock: its lines, then its free items, which left through a stock-out
-    document of their own.  A line whose product was from another branch or
-    has since been deleted was not deducted, or has nowhere to go back to."""
+    of stock: its lines, then its free items, read back from their stock
+    history lines.  A line whose product was from another branch or has since
+    been deleted was not deducted, or has nowhere to go back to."""
     items = order.items.filter(
         product__isnull=False, product__branch_id=order.branch_id,
     ).select_related('product')
     for item in items:
         yield item.product, item.qty, order.order_number
-    free_docs = StockDocument.objects.filter(
-        branch_id=order.branch_id, type='out', ref_no=order.order_number,
-        reason=FREE_ITEM_REASON,
-    )
-    for doc in free_docs:
-        for line in doc.items.filter(product__isnull=False).select_related('product'):
-            yield line.product, int(line.qty), doc.document_no
+    for move in _free_item_movements(order):
+        yield move.product, move.qty, order.order_number
 
 
 def return_bill_stock(order, staff):
@@ -408,10 +411,11 @@ def _bill_for_payment(branch, gateway_ids):
 
 
 def _record_free_items(branch, order, free_items, products_by_id, promo_codes, staff):
-    """Take a sale's free items out of stock as one "Free item" stock-out
-    document, referenced to the order, so the Stock out report shows what was
-    given away, with which promotion and on which bill."""
-    lines = []
+    """Take a sale's free items out of stock when the bill is saved, the same
+    way its sold lines leave: a stock decrement plus one stock-history line
+    per item, on the order number.  No stock-out document: nobody filed one,
+    so it must not show in the Stock-out report or count as a submission.
+    The note ("Free item · <promo> · order <no>") is how a void finds them."""
     for it in free_items:
         prod = products_by_id.get(str(it.get('product_id') or ''))
         qty = int(it.get('qty', 1) or 1)
@@ -419,32 +423,11 @@ def _record_free_items(branch, order, free_items, products_by_id, promo_codes, s
             continue  # a product from another branch, or retired since
         label = str(it.get('discount_label') or '')
         code = promo_codes.get(str(it.get('discount_type_id') or ''), '')
-        lines.append((prod, qty, ' '.join(filter(None, [code, label]))))
-    if not lines:
-        return
-
-    from .views import _next_stock_doc_no  # views imports this module
-    doc_no = _next_stock_doc_no(branch, 'out')
-    promos = ', '.join(sorted({promo for _, _, promo in lines if promo}))
-    total = sum((p.price * q for p, q, _ in lines), Decimal('0'))
-    doc = StockDocument.objects.create(
-        branch=branch, type='out', document_no=doc_no,
-        ref_no=order.order_number,
-        receiver=order.customer_name or '',
-        reason=FREE_ITEM_REASON,
-        note=f'{promos} · order {order.order_number}' if promos else f'Order {order.order_number}',
-        subtotal=total, total=total,
-        created_by=staff or '',
-    )
-    for prod, qty, promo in lines:
-        StockDocumentItem.objects.create(
-            document=doc, product=prod, barcode=prod.barcode or '',
-            product_name=prod.name, qty=qty, price=prod.price, total=prod.price * qty,
-        )
+        promo = ' '.join(filter(None, [code, label]))
         Product.objects.filter(pk=prod.pk).update(stock=F('stock') - qty)
         StockMovement.objects.create(
             branch=branch, product=prod, product_name=prod.name, type='out', qty=qty,
             note=f'{FREE_ITEM_REASON} · {promo} · order {order.order_number}' if promo
             else f'{FREE_ITEM_REASON} · order {order.order_number}',
-            document_no=doc_no,
+            document_no=order.order_number, created_by=staff or '',
         )

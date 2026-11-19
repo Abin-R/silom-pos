@@ -78,18 +78,14 @@ def process_day(branch_id, document_type, day, using="default"):
 
 
 def build_alert(document, day, document_count):
-    kind = "stock-in" if document.type == "in" else "stock-out"
-    when = timezone.localtime(document.created_at, timezone.get_default_timezone())
+    """Only what was asked for: branch, date, type and how many times."""
+    kind = "Stock In" if document.type == "in" else "Stock Out"
     return "\n".join([
-        f"BravePOS: {kind.capitalize()} document #{document_count} today",
+        "BravePOS: repeat stock submission",
         f"Branch: {document.branch.name}",
-        f"Shop date: {day.isoformat()}",
-        f"Document: {document.document_no}",
-        f"Staff: {document.created_by or '—'}",
-        f"Time: {when:%d %b %Y %H:%M} ({timezone.get_default_timezone_name()})",
-        f"Type: {document.reason or '—'}",
-        f"Total: ฿{document.total:,.2f}",
-        f"Daily document count: {document_count}",
+        f"Date: {day:%d/%m/%Y}",
+        f"Type: {kind}",
+        f"Times today: {document_count}",
     ])
 
 

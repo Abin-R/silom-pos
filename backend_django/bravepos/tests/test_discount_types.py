@@ -23,7 +23,7 @@ from django.urls import reverse
 from bravepos import seatalk
 from bravepos.models import (
     Branch, BranchSession, Category, DiscountCondition, DiscountType, Order, OrderItem,
-    Product, Staff, StockDocument,
+    Product, Staff, StockDocument, StockMovement,
 )
 from bravepos.tests.factories import make_branch, make_product, make_shop, open_shift
 
@@ -674,11 +674,12 @@ class FreeItemOffTheBillTests(TillTestCase):
                          (Decimal("200.00"), Decimal("0.00"), "none"))
         self.latte.refresh_from_db()
         self.assertEqual(self.latte.stock, 49)
-        doc = StockDocument.objects.get(type="out")
-        self.assertEqual((doc.reason, doc.ref_no), ("Free item", order.order_number))
-        self.assertIn(self.promo.code, doc.note)
-        item = doc.items.get()
-        self.assertEqual((item.product_id, item.qty), (self.latte.id, 1))
+        # No stock-out document: the free item leaves on a stock history line.
+        self.assertFalse(StockDocument.objects.filter(type="out").exists())
+        move = StockMovement.objects.get(product=self.latte, type="out")
+        self.assertEqual((move.qty, move.document_no), (1, order.order_number))
+        self.assertTrue(move.note.startswith("Free item"))
+        self.assertIn(self.promo.code, move.note)
 
     def test_current_till_sends_free_items_apart(self):
         res = self.client.post("/api/orders", {

@@ -344,7 +344,7 @@
         <label for="f-freeqty">Pieces free</label>
         <input id="f-freeqty" type="number" name="free_qty" min="1" step="1" value="{{ dt.free_qty|default:1 }}">
         <span class="hint">Given each time the cashier picks this discount. It is not added to the bill —
-          only taken out of stock, as a “Free item” stock-out.</span>
+          only taken out of stock when the bill is paid (shown as “Free item” in stock history).</span>
       </div>
     </div>
 

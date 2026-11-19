@@ -146,10 +146,42 @@ class VoidAndRefundTests(TestCase):
         self.assertEqual(self._stock(self.gift), 17)
         self._cancel(order, 'void')
         self.assertEqual(self._stock(self.gift), 20)
-        doc = StockDocument.objects.get(ref_no=order.order_number)
+        # Free items leave on a history line, not a stock-out document.
+        self.assertFalse(StockDocument.objects.filter(ref_no=order.order_number).exists())
         self.assertTrue(StockMovement.objects.filter(
-            type='return', product=self.gift, document_no=doc.document_no,
+            type='return', product=self.gift, qty=3, document_no=order.order_number,
         ).exists())
+
+    def test_old_free_item_document_is_converted_and_still_voids(self):
+        # A sale saved before this change: its free item left on a "Free item"
+        # stock-out document.  Migration 0096 turns it into a history line on
+        # the order number, and a void still puts the item back.
+        import importlib
+        from django.apps import apps
+        from types import SimpleNamespace
+        from bravepos.models import StockDocumentItem
+        order = self._sell()
+        doc = StockDocument.objects.create(
+            branch=self.branch, type='out', document_no='#OLD-FREE', ref_no=order.order_number,
+            reason='Free item', note=f'PR-0013 Free Cookie · order {order.order_number}',
+            created_by='Nok',
+        )
+        StockDocumentItem.objects.create(document=doc, product=self.gift, product_name='Cookie', qty=3)
+        Product.objects.filter(pk=self.gift.pk).update(stock=17)
+        StockMovement.objects.create(
+            branch=self.branch, product=self.gift, product_name='Cookie', type='out', qty=3,
+            note=f'Free item · PR-0013 Free Cookie · order {order.order_number}',
+            document_no='#OLD-FREE',
+        )
+        migration = importlib.import_module('bravepos.migrations.0096_free_items_off_stock_documents')
+        migration.forwards(apps, SimpleNamespace(connection=SimpleNamespace(alias='default')))
+        self.assertFalse(StockDocument.objects.filter(pk=doc.pk).exists())
+        self.assertFalse(StockDocumentItem.objects.filter(document_id=doc.pk).exists())
+        move = StockMovement.objects.get(product=self.gift, type='out')
+        self.assertEqual((move.document_no, move.created_by), (order.order_number, 'Nok'))
+        self.assertEqual(self._stock(self.gift), 17)  # converting moves no stock
+        self._cancel(order, 'void')
+        self.assertEqual(self._stock(self.gift), 20)
 
     def test_rewinding_stock_sees_the_return(self):
         order = self._sell()
