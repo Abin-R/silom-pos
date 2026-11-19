@@ -12,6 +12,8 @@ Config is env vars, all read at call time:
 * ``SEATALK_DISCOUNT_GROUP_ID`` — the group "Other" discount alerts go to.
 * ``SEATALK_BEAM_GROUP_ID`` — the group for a paid till Beam QR that no bill
   carries.  Optional: unset, those alerts go to the discount group.
+* ``SEATALK_STOCK_GROUP_ID`` — repeat stock-in/out submission alerts
+  (``stock_alerts``).  Optional: unset, they go to Bot Testing.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.

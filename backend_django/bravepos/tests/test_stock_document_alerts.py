@@ -70,6 +70,15 @@ class StockDocumentAlertTests(TestCase):
             self.assertEqual(daily.document_count, 4)
             self.assertIsNotNone(daily.triggered_at)
 
+    def test_group_comes_from_env_and_falls_back_to_bot_testing(self):
+        with mock.patch.dict("os.environ", {"SEATALK_STOCK_GROUP_ID": " STOCK-AUDIT "}):
+            self.create()
+            self.create()
+        self.assertEqual(self.send.call_args.args[0], "STOCK-AUDIT")
+        with mock.patch.dict("os.environ", {"SEATALK_STOCK_GROUP_ID": ""}):
+            self.create()
+        self.assertEqual(self.send.call_args.args[0], BOT_TESTING_GROUP_ID)
+
     def test_branches_and_types_count_independently(self):
         other = make_branch(name="Other")
         self.create("in")

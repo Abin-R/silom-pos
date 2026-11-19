@@ -1,4 +1,7 @@
-"""Alert Bot Testing on each branch's second and later documents per shop day.
+"""Alert a SeaTalk group on each branch's second and later documents per shop day.
+
+The group is ``SEATALK_STOCK_GROUP_ID`` (prod: Stock Audit Alerts); unset, it
+falls back to Bot Testing so a dev box never posts to a production group.
 
 Record each creation in the document transaction. Process daily row locks in
 a separate transaction after commit, outside branch/product business locks.
@@ -6,6 +9,7 @@ This avoids a lock-order inversion with automatic promotional stock-outs.
 """
 from datetime import datetime, time, timedelta
 import logging
+import os
 
 from django.db import transaction
 from django.utils import timezone
@@ -17,6 +21,10 @@ log = logging.getLogger(__name__)
 
 # Bot Testing, also used by the connected shop backoffice. Not a credential.
 BOT_TESTING_GROUP_ID = "MzM0NzQ2MjIyOTM5"
+
+
+def group_id():
+    return (os.environ.get("SEATALK_STOCK_GROUP_ID") or "").strip() or BOT_TESTING_GROUP_ID
 
 
 def record_document(document, using="default"):
@@ -96,6 +104,6 @@ def notify_document(document_id, day, document_count, using="default"):
         if not seatalk.is_configured():
             log.warning("Stock document alert not sent: SeaTalk is not configured")
             return
-        seatalk.send_group_text_async(BOT_TESTING_GROUP_ID, build_alert(document, day, document_count))
+        seatalk.send_group_text_async(group_id(), build_alert(document, day, document_count))
     except Exception:
         log.exception("Stock document alert failed for %s", document_id)
