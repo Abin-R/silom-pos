@@ -2858,22 +2858,70 @@ def _stock_report_export(request, kind):
     return response
 
 
-def _stock_document(request, kind, doc_id):
-    """One stock document, read-only: its header and every line as saved."""
+def _stock_doc_reasons(doc):
+    """The Type choices for editing ``doc``: its branch's active reasons, plus
+    the one already on the document if it has since been renamed or retired —
+    so opening Edit and saving never silently changes the type."""
+    model = StockInReason if doc.type == "in" else StockOutReason
+    reasons = [(r.name, f"{r.name} · {r.name_th}" if r.name_th else r.name)
+               for r in model.objects.filter(branch=doc.branch, active=True)]
+    if doc.reason and doc.reason not in {name for name, _ in reasons}:
+        reasons.insert(0, (doc.reason, doc.reason))
+    return reasons
+
+
+def _stock_document(request, kind, doc_id, editing=False):
+    """One stock document: its header and every line as saved.
+
+    With ``editing``, only the Type and Note can change — every other field
+    (and every line) stays read-only, because the stock has already moved.
+    """
     conf = _STOCK_REPORT_KINDS[kind]
     doc = get_object_or_404(StockDocument.objects.select_related("branch"), id=doc_id, type=kind)
+    back = request.GET.urlencode()
+    view_url = reverse(f"backoffice:{conf['active']}_document", args=[doc.id]) + (f"?{back}" if back else "")
+    reasons = _stock_doc_reasons(doc) if editing else []
+    error = None
+    if editing and request.method == "POST":
+        reason = (request.POST.get("reason") or "").strip()
+        note = (request.POST.get("note") or "").strip()
+        if reason not in {name for name, _ in reasons} and not (reason == "" and doc.reason == ""):
+            error = "Choose a type."
+        else:
+            changed = [f for f, v in (("reason", reason), ("note", note)) if getattr(doc, f) != v]
+            if changed:
+                # The ledger rows label each movement "type, else note" — the
+                # product history shows that — so they follow the edit.
+                old_label = doc.reason or doc.note or doc.document_name
+                doc.reason, doc.note = reason, note
+                new_label = doc.reason or doc.note or doc.document_name
+                with transaction.atomic():
+                    doc.save(update_fields=changed)
+                    if new_label != old_label:
+                        StockMovement.objects.filter(
+                            branch=doc.branch, type=kind, document_no=doc.document_no,
+                            note=old_label,
+                        ).update(note=new_label)
+                messages.success(request, f"{doc.document_no} was updated.")
+            return redirect(view_url)
     items = list(
         doc.items.select_related("product__unit")
         .annotate(image_len=Length("product__image_url") + Length("product__image_base64"))
         .order_by("id")
     )
-    back = request.GET.urlencode()
     return render(request, "backoffice/stock_document.html", {
         "active": conf["active"],
         "kind": kind,
         "title": conf["title"],
         "party_label": conf["party"],
         "doc": doc,
+        "editing": editing,
+        "reasons": reasons,
+        "posted": request.POST if error else None,
+        "error": error,
+        "view_url": view_url,
+        "edit_url": reverse(f"backoffice:{conf['active']}_document_edit", args=[doc.id])
+                    + (f"?{back}" if back else ""),
         "items": items,
         # Ids only — the bytes are fetched one by one by stock_document_image.
         "doc_images": list(doc.images.only("id", "original_name", "width", "height")),
@@ -2914,11 +2962,22 @@ def stock_out_document(request, doc_id):
     return _stock_document(request, "out", doc_id)
 
 
+@login_required
+def stock_in_document_edit(request, doc_id):
+    return _stock_document(request, "in", doc_id, editing=True)
+
+
+@login_required
+def stock_out_document_edit(request, doc_id):
+    return _stock_document(request, "out", doc_id, editing=True)
+
+
 # ─── Create stock out / stock-out types ─────────────────────────────────
 # The backoffice side of the till's Stock-Out form: pick a reason (the
 # branch's StockOutReason list — "Manage types" edits it), add products and
 # the quantity that left, save.  Saving deducts stock straight away, so unlike
-# a check document a stock-out can't be edited afterwards.
+# a check document a stock-out's lines can't be edited afterwards — only its
+# Type and Note (stock_out_document_edit).
 
 def _stock_out_reasons(branch):
     return list(StockOutReason.objects.filter(branch=branch, active=True))
@@ -3062,7 +3121,8 @@ def _stock_pickable_with_cost(branch):
 # The backoffice side of the till's Stock-In form: who supplied it, their bill
 # no., and the products received.  "Import documents" loads check-stock
 # documents' quantities, as the till's Import Documents does.  Saving adds to
-# stock at once, so a saved stock-in is read-only.
+# stock at once, so a saved stock-in's lines are read-only — only its Type and
+# Note can be edited (stock_in_document_edit).
 
 def _stock_in_importable(branch):
     """The branch's check-stock documents with their lines, newest first."""

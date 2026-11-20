@@ -1,9 +1,11 @@
 {% extends "backoffice/base.html" %}
 {% load humanize backoffice_ui %}
 {% comment %}
-  One stock document, read-only. Saved documents can't be edited anywhere —
-  their stock has already moved — so nothing here looks like an input.
-  A mistake is corrected with a new Adjust or opposite-direction document.
+  One stock document. Its lines, quantities, supplier/receiver and Ref. No.
+  can't be edited anywhere — the stock has already moved — so a wrong line is
+  corrected with a new Adjust or opposite-direction document.  Only the Type
+  and Note can be changed: the Edit page (``editing``) turns just those two
+  into inputs and leaves everything else as it was.
 {% endcomment %}
 
 {% block title %}{{ doc.document_no }}{% endblock %}
@@ -13,10 +15,18 @@
 {% endblock %}
 
 {% block topbar_end %}
-  <a class="btn" href="{{ back_url }}"><svg><use href="#i-back"/></svg> Back</a>
+  {% if not editing and user.role != 'viewer' %}
+    <a class="btn" href="{{ edit_url }}"><svg><use href="#i-pencil"/></svg> Edit</a>
+  {% endif %}
+  <a class="btn" href="{% if editing %}{{ view_url }}{% else %}{{ back_url }}{% endif %}"><svg><use href="#i-back"/></svg> Back</a>
 {% endblock %}
 
 {% block content %}
+{% if editing %}
+<form method="post" style="display:contents">
+  {% csrf_token %}
+  {% if error %}<div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
+{% endif %}
 <div class="panel" style="flex:none">
   <div class="panel-h">Information</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px 28px;padding:18px 20px">
@@ -25,11 +35,38 @@
     <div><div class="sub">Ref. No.</div><b>{{ doc.ref_no|default:"—" }}</b></div>
     <div><div class="sub">{{ party_label }}</div>
       <b>{% if kind == 'in' %}{{ doc.vendor|default:"—" }}{% else %}{{ doc.receiver|default:"—" }}{% endif %}</b></div>
+    {% if editing %}
+    <div class="field">
+      <label for="f-reason">{% if kind == 'in' %}Type{% else %}Reason{% endif %}</label>
+      {% firstof posted.reason doc.reason as cur_reason %}
+      <select id="f-reason" name="reason" {% if doc.reason %}required{% endif %}>
+        {% if not doc.reason %}<option value="">Choose a type…</option>{% endif %}
+        {% for value, label in reasons %}
+          <option value="{{ value }}" {% if value == cur_reason %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% else %}
     <div><div class="sub">{% if kind == 'in' %}Type{% else %}Reason{% endif %}</div><b>{{ doc.reason|default:"—" }}</b></div>
+    {% endif %}
     <div><div class="sub">Created by</div><b>{{ doc.created_by|default:"—" }}</b></div>
+    {% if editing %}
+    <div class="field" style="grid-column:1/-1">
+      <label for="f-note">Note</label>
+      <textarea id="f-note" name="note" rows="3" placeholder="Optional">{% if posted %}{{ posted.note }}{% else %}{{ doc.note }}{% endif %}</textarea>
+    </div>
+    {% else %}
     <div style="grid-column:1/-1"><div class="sub">Note</div><div>{{ doc.note|default:"—"|linebreaksbr }}</div></div>
+    {% endif %}
   </div>
+  {% if editing %}
+  <div class="form-actions">
+    <button type="submit" class="btn btn-blue"><svg><use href="#i-check"/></svg> Save changes</button>
+    <a class="btn" href="{{ view_url }}">Cancel</a>
+  </div>
+  {% endif %}
 </div>
+{% if editing %}</form>{% endif %}
 
 {% if doc_images %}
 <div class="panel" style="flex:none">
