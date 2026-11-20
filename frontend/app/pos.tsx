@@ -3139,7 +3139,7 @@ function PaymentModal({
                     />
                     <View style={styles.beamWaiting}>
                       <ActivityIndicator size="small" color={C.brand} />
-                      <Text style={styles.beamWaitingText}>{tr("pos.waiting_for_customer_to_scan")}</Text>
+                      <Text style={styles.beamWaitingText}>{tr("pos.waiting_for_customer_to_pay")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.beamCancelBtn}
