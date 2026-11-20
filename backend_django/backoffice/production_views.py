@@ -307,8 +307,8 @@ def production_request(request):
         else:
             pieces = sum(item.requested_qty for item in saved.items.all()) if saved else 0
             messages.success(request, f"Saved {branch.name}'s request for {_day(day)} ({pieces:,} pieces).")
-            return redirect(reverse("backoffice:production_request") + "?" + urlencode({
-                "branch": str(branch.id), "date": day.isoformat()}))
+            # Back to the list of requests, where the saved one now shows.
+            return redirect("backoffice:production_requests")
 
     deadline = production.locks_at(day, branch=branch) if branch else production.locks_at(day)
     delivery_day = bool(branch) and production.is_delivery_date(branch, day)
@@ -553,7 +553,8 @@ DELIVERY_GRID_DAYS = 28
 
 
 def _delivery_grid(branches, days, now, posted_on=None, blocked=()):
-    """Rows of cells for the Delivery dates page.
+    """Rows of cells for the Delivery dates page: one row per branch, one
+    cell per date.
 
     A cell is editable while its date is still open for that branch and, if
     ticked, nobody has requested anything on it yet (un-ticking that would be
@@ -572,9 +573,9 @@ def _delivery_grid(branches, days, now, posted_on=None, blocked=()):
     first_open = {b.id: production.earliest_open_date(now=now, branch=b) for b in branches}
     blocked = set(blocked)
     rows = []
-    for day in days:
+    for b in branches:
         cells = []
-        for b in branches:
+        for day in days:
             key = f"{b.id}_{day.isoformat()}"
             was = (b.id, day) in ticked
             has_request = (b.id, day) in requested
@@ -582,6 +583,8 @@ def _delivery_grid(branches, days, now, posted_on=None, blocked=()):
             cells.append({
                 "key": key,
                 "branch_name": b.name,
+                "day": day,
+                "weekend": day.weekday() >= 5,
                 "was": was,
                 "on": (key in posted_on) if posted_on is not None and open_ else was,
                 "has_request": has_request,
@@ -589,7 +592,7 @@ def _delivery_grid(branches, days, now, posted_on=None, blocked=()):
                 "editable": open_ and not (was and has_request),
                 "blocked": key in blocked,
             })
-        rows.append({"day": day, "weekend": day.weekday() >= 5, "cells": cells})
+        rows.append({"branch": b, "cells": cells})
     return rows, first_open
 
 
@@ -651,18 +654,25 @@ def production_delivery_dates(request):
                     "because those dates had already closed for the branch."))
             return redirect(here)
 
+    # One row per branch (its lead time beside its name), one column per date.
     rows, first_open = _delivery_grid(branches, days, now, posted_on, blocked)
-    columns = [{
-        "branch": b,
-        "lead": posted_leads.get(str(b.id), str(b.production_lead_days)),
-        "lead_saved": b.production_lead_days,
-        "first_open": first_open[b.id],
-    } for b in branches]
+    for row in rows:
+        b = row["branch"]
+        row["lead"] = posted_leads.get(str(b.id), str(b.production_lead_days))
+        row["lead_saved"] = b.production_lead_days
+    columns = [{"day": d, "weekend": d.weekday() >= 5} for d in days]
+    months = []
+    for d in days:
+        if months and months[-1]["key"] == (d.year, d.month):
+            months[-1]["span"] += 1
+        else:
+            months.append({"key": (d.year, d.month), "day": d, "span": 1})
     return render(request, "backoffice/production_delivery_dates.html", {
         "active": "production_delivery_dates",
         "hide_branch": True,
         "hide_dates": True,
         "columns": columns,
+        "months": months,
         "rows": rows,
         "start": start,
         "end": days[-1],

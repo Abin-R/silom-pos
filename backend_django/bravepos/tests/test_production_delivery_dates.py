@@ -221,7 +221,7 @@ class DeliveryDatesPageTests(TestCase):
         production.save_request(self.alpha, days(5), {str(product.id): 4})
         body = self.client.get(self.url).content.decode()
         self.assertNotIn(f'name="cell" value="{self.key(self.alpha, 5)}"', body)
-        self.assertIn("Requested", body)
+        self.assertIn("dd-req", body)
 
     def test_closed_dates_are_skipped(self):
         production_policy.update_lead_days(self.alpha, 5)

@@ -67,12 +67,12 @@
       {# Branches ask the kitchen for stock; the kitchen reads the totals; the packer records what was sent. #}
       <div class="grp">Production</div>
       {% if user.role != 'viewer' and user.role != 'packer' %}
+      <a class="nv {% if active == 'production_delivery_dates' %}on{% endif %}" href="{% url 'backoffice:production_delivery_dates' %}">
+        <svg><use href="#i-cal"/></svg>Delivery dates</a>
       <a class="nv {% if active == 'production_request' %}on{% endif %}" href="{% url 'backoffice:production_request' %}">
         <svg><use href="#i-plus"/></svg>Request production</a>
       <a class="nv {% if active == 'production_requests' %}on{% endif %}" href="{% url 'backoffice:production_requests' %}">
         <svg><use href="#i-orders"/></svg>Requests</a>
-      <a class="nv {% if active == 'production_delivery_dates' %}on{% endif %}" href="{% url 'backoffice:production_delivery_dates' %}">
-        <svg><use href="#i-cal"/></svg>Delivery dates</a>
       {% endif %}
       {% if user.role != 'packer' %}
       <a class="nv {% if active == 'production_kitchen' %}on{% endif %}" href="{% url 'backoffice:production_kitchen' %}">

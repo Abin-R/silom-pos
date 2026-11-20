@@ -5,7 +5,8 @@
   production for a ticked date that is still open: a request locks at the
   shop's cut-off time, the branch's lead time in days before delivery.
 
-  Four weeks at a time: dates down the side, branches across.  Only boxes the
+  Four weeks at a time: a row per branch (its lead time beside its name), a
+  column per date.  Clicking a date ticks it for every branch.  Only boxes the
   user changed are sent (each editable cell posts `cell`, its tick posts `on`,
   and its saved state posts `was`), so two people editing different cells
   don't undo each other.  A ticked date that already has a request can't be
@@ -27,29 +28,35 @@
 
 {% block extra_head %}
 <style>
-  .dd-tbl th, .dd-tbl td { padding: 8px 10px; text-align: center; white-space: nowrap; }
-  .dd-tbl thead th { white-space: normal; vertical-align: bottom; min-width: 92px; max-width: 120px; text-transform: none; font-size: 12px; line-height: 1.25; }
-  .dd-tbl th:first-child, .dd-tbl td:first-child {
-    position: sticky; left: 0; z-index: 1; background: var(--card); text-align: left;
-    border-right: 2px solid var(--line); min-width: 130px;
+  .dd-tbl { border-collapse: separate; border-spacing: 0; }
+  .dd-tbl th, .dd-tbl td { padding: 6px 4px; text-align: center; white-space: nowrap; }
+  .dd-tbl thead th { text-transform: none; vertical-align: bottom; min-width: 40px; padding: 8px 4px; }
+  .dd-tbl .dd-bcol {
+    position: sticky; left: 0; z-index: 2; background: var(--card); text-align: left;
+    border-right: 2px solid var(--line); min-width: 210px; padding: 8px 14px;
   }
-  .dd-tbl thead th:first-child { background: var(--sunk); }
-  .dd-tbl tr.dd-weekend td { background: var(--sunk); }
-  .dd-tbl tr.dd-weekend td:first-child { background: var(--sunk); }
-  .dd-day { font-weight: 620; font-family: var(--mono); font-size: 13px; }
-  .dd-wd { display: block; font-size: 11.5px; color: var(--mut); font-weight: 550; }
-  .dd-lead { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 6px; font-weight: 500; color: var(--mut); }
-  .dd-lead input { width: 52px; height: 30px; text-align: center; font-family: var(--mono); font-size: 13px; padding: 0 4px; }
+  .dd-tbl thead th.dd-bcol { background: var(--sunk); }
+  .dd-tbl .dd-we { background: var(--sunk); }
+  .dd-tbl th.dd-month { text-align: left; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase;
+                        color: var(--mut); border-left: 2px solid var(--line); padding: 8px 8px 0; }
+  .dd-tbl .dd-new-month { border-left: 2px solid var(--line); }
+  .dd-col-btn { background: none; border: 0; padding: 2px 4px; cursor: pointer; color: inherit; border-radius: 6px; line-height: 1.15; }
+  .dd-col-btn:hover { color: var(--blue); background: var(--blue-soft); }
+  .dd-num { display: block; font-family: var(--mono); font-size: 14px; font-weight: 650; color: var(--txt); }
+  .dd-wd { display: block; font-size: 10.5px; color: var(--mut); font-weight: 600; }
+  .dd-branch { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+  .dd-branch b { font-weight: 620; white-space: normal; max-width: 150px; line-height: 1.25; }
+  .dd-lead { display: flex; align-items: center; gap: 4px; color: var(--mut); font-size: 12px; font-weight: 550; flex: none; }
+  .dd-lead input { width: 48px; height: 30px; text-align: center; font-family: var(--mono); font-size: 13px; padding: 0 4px; }
   .dd-lead input.dd-dirty { border-color: var(--blue); background: var(--blue-soft); }
-  .dd-box { width: 20px; height: 20px; cursor: pointer; accent-color: var(--blue); }
+  .dd-box { width: 20px; height: 20px; cursor: pointer; accent-color: var(--blue); margin: 0; vertical-align: middle; }
   .dd-box:disabled { cursor: not-allowed; }
   td.dd-dirty { background: var(--blue-soft) !important; }
   td.dd-bad { background: var(--red-soft) !important; }
-  td.dd-closed .dd-box { opacity: .45; }
-  .dd-tag { display: block; font-size: 10.5px; color: var(--amber); font-weight: 600; margin-top: 2px; }
-  .dd-legend { font-size: 12.5px; color: var(--mut); display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
-  .dd-row-btn { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; }
-  .dd-row-btn:hover .dd-day { color: var(--blue); }
+  td.dd-closed .dd-box { opacity: .4; }
+  td.dd-req { box-shadow: inset 0 -3px 0 var(--amber); }
+  .dd-legend { font-size: 12.5px; color: var(--mut); display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+  .dd-key-req { display: inline-block; width: 16px; height: 12px; vertical-align: -1px; box-shadow: inset 0 -3px 0 var(--amber); background: var(--card); border: 1px solid var(--line); margin-right: 4px; }
 </style>
 {% endblock %}
 
@@ -60,12 +67,12 @@
 
 <div class="dd-legend">
   <span>Tick the days the kitchen delivers to each branch. Supervisors can only request for ticked dates.</span>
-  <span><b style="color:var(--amber)">Requested</b> = a branch has asked for stock on that date, so it can't be un-ticked.</span>
+  <span><i class="dd-key-req"></i>A branch has already requested stock for that date, so it can't be un-ticked.</span>
   <span>Greyed boxes are dates already closed for that branch.</span>
-  <span>Tip: click a date to tick or un-tick its whole row.</span>
+  <span>Tip: click a date to tick or un-tick it for every branch.</span>
 </div>
 
-{% if not columns %}
+{% if not rows %}
 <div class="panel"><div class="empty">There are no active branches.</div></div>
 {% else %}
 <form method="post" id="ddForm" class="panel panel-grow">
@@ -74,43 +81,51 @@
     <table class="tbl dd-tbl">
       <thead>
         <tr>
-          <th>Date</th>
+          <th rowspan="2" class="dd-bcol" style="vertical-align:bottom">Branch <span class="sub" style="display:inline;margin-left:6px">lead time (days)</span></th>
+          {% for m in months %}
+          <th class="dd-month" colspan="{{ m.span }}">{{ m.day|date:"F Y" }}</th>
+          {% endfor %}
+        </tr>
+        <tr>
           {% for c in columns %}
-          <th title="{{ c.branch.name }}">
-            {{ c.branch.name }}
-            <label class="dd-lead" title="Lead time: a request locks at {{ cutoff|time:'H:i' }}, this many days before delivery">
-              <input class="inp" type="number" inputmode="numeric" min="1" max="{{ max_lead }}" step="1"
-                     name="lead_{{ c.branch.id }}" value="{{ c.lead }}" data-saved="{{ c.lead_saved }}"
-                     aria-label="Lead time in days for {{ c.branch.name }}">
-              <span>d</span>
-            </label>
-            <input type="hidden" name="lead_was_{{ c.branch.id }}" value="{{ c.lead_saved }}">
+          <th class="{% if c.weekend %}dd-we{% endif %}{% ifchanged c.day.month %}{% if not forloop.first %} dd-new-month{% endif %}{% endifchanged %}" data-col="{{ forloop.counter0 }}">
+            <button type="button" class="dd-col-btn" data-col="{{ forloop.counter0 }}"
+                    title="Tick or un-tick {{ c.day|date:'D d M' }} for every branch">
+              <span class="dd-wd">{{ c.day|date:"D" }}</span>
+              <span class="dd-num">{{ c.day|date:"j" }}</span>
+            </button>
           </th>
           {% endfor %}
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
-        <tr class="{% if row.weekend %}dd-weekend{% endif %}">
-          <td>
-            <button type="button" class="dd-row-btn" title="Tick or un-tick every open box on {{ row.day|date:'D d M' }}">
-              <span class="dd-day">{{ row.day|date:"d M" }}</span>
-              <span class="dd-wd">{{ row.day|date:"l" }}</span>
-            </button>
+        <tr>
+          <td class="dd-bcol">
+            <div class="dd-branch">
+              <b>{{ row.branch.name }}</b>
+              <label class="dd-lead" title="Lead time: a request locks at {{ cutoff|time:'H:i' }}, this many days before delivery">
+                <input class="inp" type="number" inputmode="numeric" min="1" max="{{ max_lead }}" step="1"
+                       name="lead_{{ row.branch.id }}" value="{{ row.lead }}" data-saved="{{ row.lead_saved }}"
+                       aria-label="Lead time in days for {{ row.branch.name }}">
+                <span>d</span>
+              </label>
+              <input type="hidden" name="lead_was_{{ row.branch.id }}" value="{{ row.lead_saved }}">
+            </div>
           </td>
           {% for cell in row.cells %}
-          <td class="{% if cell.closed %}dd-closed{% endif %}{% if cell.blocked %} dd-bad{% endif %}">
+          <td class="{% if cell.weekend %}dd-we{% endif %}{% if cell.closed %} dd-closed{% endif %}{% if cell.blocked %} dd-bad{% endif %}{% if cell.has_request %} dd-req{% endif %}{% ifchanged cell.day.month %}{% if not forloop.first %} dd-new-month{% endif %}{% endifchanged %}" data-col="{{ forloop.counter0 }}">
             {% if cell.editable %}
               <input type="hidden" name="cell" value="{{ cell.key }}">
               {% if cell.was %}<input type="hidden" name="was" value="{{ cell.key }}">{% endif %}
               <input class="dd-box" type="checkbox" name="on" value="{{ cell.key }}"
                      data-saved="{{ cell.was|yesno:'1,0' }}"{% if cell.on %} checked{% endif %}
-                     aria-label="{{ row.day|date:'D d M' }} delivery to {{ cell.branch_name }}">
+                     aria-label="{{ cell.day|date:'D d M' }} delivery to {{ cell.branch_name }}">
             {% else %}
               <input class="dd-box" type="checkbox" disabled{% if cell.was %} checked{% endif %}
+                     aria-label="{{ cell.day|date:'D d M' }} delivery to {{ cell.branch_name }}"
                      title="{% if cell.closed %}Requests for this date have closed for this branch{% else %}Has a production request, so it can't be un-ticked{% endif %}">
             {% endif %}
-            {% if cell.has_request %}<span class="dd-tag">Requested</span>{% endif %}
           </td>
           {% endfor %}
         </tr>
@@ -143,12 +158,12 @@
   }
   form.addEventListener("change", refresh);
   form.addEventListener("input", refresh);
-  // Clicking a date ticks its whole row, or un-ticks it if every open box is ticked.
+  // Clicking a date ticks it for every branch, or un-ticks it if every open box is ticked.
   form.addEventListener("click", function (e) {
-    var btn = e.target.closest(".dd-row-btn");
+    var btn = e.target.closest(".dd-col-btn");
     if (!btn) return;
-    var row = btn.closest("tr");
-    var open = Array.prototype.slice.call(row.querySelectorAll("input.dd-box:not(:disabled)"));
+    var open = Array.prototype.slice.call(
+      form.querySelectorAll('td[data-col="' + btn.dataset.col + '"] input.dd-box:not(:disabled)'));
     var all = open.every(function (b) { return b.checked; });
     open.forEach(function (b) { b.checked = !all; });
     refresh();

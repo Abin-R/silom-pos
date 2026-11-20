@@ -355,9 +355,11 @@ class StockSupervisorPageTests(Catalogue, TestCase):
         response = post_production(self.client, self.url(), {
             f"qty_{self.pid(self.emq, 'Red Velvet Cookie')}": "12",
             f"qty_{self.pid(self.emq, 'Oreo Confetti Cookie')}": ""})
-        self.assertRedirects(response, self.url())
+        self.assertRedirects(response, reverse("backoffice:production_requests"),
+                             fetch_redirect_response=False)
         self.assertEqual(ProductionRequestItem.objects.get().requested_qty, 12)
         history = self.client.get(reverse("backoffice:production_requests"))
+        self.assertContains(history, "Saved Alpha Mall&#x27;s request")
         self.assertContains(history, "Red Velvet Cookie ×12")
         self.assertContains(history, "Open")
 
