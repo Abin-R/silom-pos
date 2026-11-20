@@ -2304,13 +2304,63 @@ def save_stock_in_document(branch, lines, vendor='', ref_no='', note='',
     return doc
 
 
-@api_view(['GET', 'PUT'])
+def stock_document_reason_names(doc):
+    """The types a saved stock in / out may be set to: its branch's active
+    ones, plus the one already on it (renamed or retired since) so editing
+    the note alone never forces a type change."""
+    model = StockInReason if doc.type == 'in' else StockOutReason
+    names = list(model.objects.filter(branch=doc.branch, active=True).values_list('name', flat=True))
+    if doc.reason and doc.reason not in names:
+        names.insert(0, doc.reason)
+    return names
+
+
+def update_stock_document_info(doc, reason, note):
+    """Change a saved stock in / out's Type and Note — nothing else.
+
+    The lines, quantities and parties stay as filed because the stock has
+    already moved.  The ledger rows label each movement "type, else note"
+    (the product history shows that), so they follow the edit.
+    Returns an error message, or None once saved.
+    """
+    if doc.type not in ('in', 'out'):
+        return 'Only stock in and stock out documents can be edited this way'
+    reason = (reason or '').strip()[:120]
+    note = (note or '').strip()
+    if reason not in stock_document_reason_names(doc) and not (reason == '' == doc.reason):
+        return 'Choose a type.'
+    changed = [f for f, v in (('reason', reason), ('note', note)) if getattr(doc, f) != v]
+    if not changed:
+        return None
+    old_label = doc.reason or doc.note or doc.document_name
+    doc.reason, doc.note = reason, note
+    new_label = doc.reason or doc.note or doc.document_name
+    with transaction.atomic():
+        doc.save(update_fields=changed)
+        if new_label != old_label:
+            StockMovement.objects.filter(
+                branch=doc.branch, type=doc.type, document_no=doc.document_no, note=old_label,
+            ).update(note=new_label)
+    return None
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
 @require_session
 def stock_document_detail(request, doc_id):
     branch = request.session_obj.branch
     doc = StockDocument.objects.filter(id=doc_id, branch=branch).prefetch_related('items').first()
     if not doc:
         return Response({'detail': 'Not found'}, status=404)
+    if request.method == 'PATCH':
+        # Stock in / out: only the Type and Note, as in the backoffice.
+        denied = perm_denied(request.session_obj.staff, 'manage_inventory')
+        if denied is not None:
+            return denied
+        error = update_stock_document_info(
+            doc, request.data.get('reason', doc.reason), request.data.get('note', doc.note))
+        if error:
+            return Response({'detail': error}, status=400)
+        doc = StockDocument.objects.prefetch_related('items').get(id=doc.id)
     if request.method == 'PUT':
         denied = perm_denied(request.session_obj.staff, 'manage_inventory')
         if denied is not None:

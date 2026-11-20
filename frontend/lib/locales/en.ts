@@ -450,6 +450,7 @@ const en = {
     couldnt_save_customer: "Couldn't save customer",
     customer: "Customer",
     discount: "Discount",
+    edit: "Edit",
     favorite: "Favorite",
     item: "item",
     items: "items",

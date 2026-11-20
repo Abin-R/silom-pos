@@ -3239,7 +3239,14 @@ function StockDocuments({
         onClose={() => { setCreating(false); setEditing(null); }}
         onSaved={() => { setCreating(false); setEditing(null); load(); onChanged(); }}
       />
-      <StockDocViewModal doc={viewing} type={type} onClose={() => setViewing(null)} />
+      <StockDocViewModal
+        // A different document starts afresh (not in edit mode).
+        key={viewing?.id || "none"}
+        doc={viewing}
+        type={type}
+        onClose={() => setViewing(null)}
+        onSaved={(d) => { setViewing(d); load(); }}
+      />
       <DateRangeModal
         visible={showCalendar}
         initial={range}
@@ -3250,15 +3257,68 @@ function StockDocuments({
   );
 }
 
-// A saved stock-in / stock-out / adjust document, read-only: its header and
-// every line as it was filed.  These have already moved stock, so a mistake is
-// corrected with a new document rather than by editing this one.
+// A saved stock-in / stock-out / adjust document: its header and every line as
+// it was filed.  These have already moved stock, so a wrong line is corrected
+// with a new document.  Stock in / out can still change their Type and Note
+// (Edit) — the same two fields the backoffice lets you edit.
 function StockDocViewModal({
-  doc, type, onClose,
-}: { doc: StockDoc | null; type: DocType; onClose: () => void }) {
+  doc, type, onClose, onSaved,
+}: { doc: StockDoc | null; type: DocType; onClose: () => void; onSaved: (d: StockDoc) => void }) {
   useT(); // re-render this screen when the language changes
   const cfg = DOC_CONFIG[type];
   const reconcile = cfg.mode === "reconcile";
+  const canEdit = type === "in" || type === "out";
+  const [editing, setEditing] = useState(false);
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  const [reasons, setReasons] = useState<{ id: string; name: string; name_th?: string }[] | null>(null);
+  const [reasonPicker, setReasonPicker] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // The branch's active types, loaded when Edit opens.  A type renamed or
+  // retired since stays on offer, so saving a note never changes the type.
+  useEffect(() => {
+    if (!editing || !doc) return;
+    let cancelled = false;
+    (async () => {
+      let list: { id: string; name: string; name_th?: string }[] = [];
+      try {
+        if (type === "in") {
+          list = await loadStockInTypes(apiFetch, API);
+        } else {
+          const r = await apiFetch(`${API}/stock-out-reasons?active=true`);
+          const data = await r.json();
+          list = Array.isArray(data) ? data : [];
+        }
+      } catch { list = []; }
+      if (doc.reason && !list.some((r) => r.name === doc.reason)) {
+        list = [{ id: "current", name: doc.reason }, ...list];
+      }
+      if (!cancelled) setReasons(list);
+    })();
+    return () => { cancelled = true; };
+  }, [editing, doc, type]);
+
+  const save = async () => {
+    if (!doc || saving) return;
+    setSaving(true);
+    try {
+      const res = await apiFetch(`${API}/stock-documents/${doc.id}`, {
+        method: "PATCH", body: JSON.stringify({ reason, note }),
+      });
+      if (res.ok) {
+        setEditing(false);
+        onSaved(await res.json());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showAlert(tr("admin.save_failed"), err?.detail || tr("admin.please_try_again"));
+      }
+    } catch {
+      showAlert(tr("admin.save_failed"), tr("admin.please_try_again"));
+    }
+    setSaving(false);
+  };
+
   if (!doc) return null;
   const dt = new Date(doc.created_at);
   const num = (v?: number) => {
@@ -3271,24 +3331,36 @@ function StockDocViewModal({
   ];
   if (cfg.partyLabel) fields.push([tr(cfg.partyLabel), type === "in" ? doc.vendor : doc.receiver]);
   if (cfg.refLabel) fields.push([tr(cfg.refLabel), doc.ref_no]);
-  if (type === "in" || type === "out") {
-    fields.push([type === "in" ? tr("admin.document_type") : tr("admin.reason"), doc.reason]);
-  }
+  const typeLabel = type === "in" ? tr("admin.document_type") : tr("admin.reason");
+  if (canEdit && !editing) fields.push([typeLabel, doc.reason]);
   if (cfg.hasName) fields.push([tr("admin.document_name"), doc.document_name]);
   if (cfg.hasAdjustType) fields.push([tr("admin.document_type"), doc.adjust_type]);
-  if (doc.note) fields.push([tr("admin.note"), doc.note]);
+  if (doc.note && !editing) fields.push([tr("admin.note"), doc.note]);
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.pickerOverlay}>
         <View style={[styles.pickerCard, { maxWidth: 720 }]} testID="stockdoc-view">
           <View style={styles.pickerHead}>
-            <Text style={styles.pickerTitle}>{doc.document_no}</Text>
+            <Text style={[styles.pickerTitle, { flex: 1 }]}>{doc.document_no}</Text>
+            {canEdit && !editing && (
+              <TouchableOpacity
+                style={[styles.createDocBtn, { marginRight: 12 }]}
+                onPress={() => {
+                  setReason(doc.reason || ""); setNote(doc.note || ""); setReasons(null);
+                  setEditing(true);
+                }}
+                testID="stockdoc-edit"
+              >
+                <Ionicons name="create-outline" size={16} color={C.brand} />
+                <Text style={styles.createDocBtnText}>{tr("common.edit")}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={onClose} testID="stockdoc-view-close">
               <Ionicons name="close" size={24} color={C.ink} />
             </TouchableOpacity>
           </View>
-          <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+          <ScrollView contentContainerStyle={{ paddingBottom: 16 }} keyboardShouldPersistTaps="handled">
             <View style={[styles.docForm, styles.docFormRow]}>
               {fields.map(([label, value]) => (
                 <View key={label} style={styles.docField}>
@@ -3297,6 +3369,58 @@ function StockDocViewModal({
                 </View>
               ))}
             </View>
+            {editing && (
+              // Only these two change; everything above stays as filed.
+              <View style={styles.docForm}>
+                <View style={styles.docFormRow}>
+                  <View style={styles.docField}>
+                    <Text style={styles.docFieldLabel}>{typeLabel}</Text>
+                    <TouchableOpacity
+                      style={[styles.docInput, styles.docSelect]}
+                      onPress={() => setReasonPicker(true)}
+                      testID="stockdoc-edit-type"
+                    >
+                      <Text style={[styles.docSelectText, !reason && { color: C.ink3 }]} numberOfLines={1}>
+                        {reason || (type === "in" ? tr("admin.choose_a_type") : tr("admin.choose_a_reason"))}
+                      </Text>
+                      <Ionicons name="chevron-down" size={16} color={C.ink3} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={styles.docFormRow}>
+                  <View style={styles.docField}>
+                    <Text style={styles.docFieldLabel}>{tr("admin.note")}</Text>
+                    <TextInput
+                      style={[styles.docInput, { minHeight: 64, textAlignVertical: "top" }]}
+                      value={note}
+                      onChangeText={setNote}
+                      multiline
+                      testID="stockdoc-edit-note"
+                    />
+                  </View>
+                </View>
+                <View style={[styles.docFormRow, { justifyContent: "flex-end", gap: 10 }]}>
+                  <TouchableOpacity
+                    style={styles.createDocBtn}
+                    onPress={() => setEditing(false)}
+                    disabled={saving}
+                    testID="stockdoc-edit-cancel"
+                  >
+                    <Text style={styles.createDocBtnText}>{tr("common.cancel")}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.createDocBtn, { backgroundColor: C.brand, borderColor: C.brand }]}
+                    onPress={save}
+                    disabled={saving}
+                    testID="stockdoc-edit-save"
+                  >
+                    {saving
+                      ? <ActivityIndicator color={C.surface} size="small" />
+                      : <Text style={[styles.createDocBtnText, { color: C.surface }]}>{tr("common.save")}</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
             <View style={styles.docColHead}>
               <Text style={[styles.docColCell, { flex: 1 }]}>{tr("admin.product_name_2")}</Text>
               {reconcile && <Text style={[styles.docColCell, { width: 80, textAlign: "right" }]}>{tr(cfg.reconcileCols!.before)}</Text>}
@@ -3329,6 +3453,34 @@ function StockDocViewModal({
           </ScrollView>
         </View>
       </View>
+      <Modal visible={reasonPicker} transparent animationType="fade" onRequestClose={() => setReasonPicker(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setReasonPicker(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.smallModal}>
+            <Text style={[styles.modalTitle, { textAlign: "center", paddingTop: 18 }]}>{typeLabel}</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {reasons === null ? (
+                <ActivityIndicator color={C.brand} style={{ margin: 24 }} />
+              ) : reasons.length === 0 ? (
+                <Text style={[styles.emptyText, { padding: 24 }]}>
+                  {type === "in" ? tr("admin.no_stock_in_types_yet_add_them_in") : tr("admin.no_reasons_yet_add_them_in")}
+                </Text>
+              ) : (
+                reasons.map((r) => (
+                  <TouchableOpacity
+                    key={r.id}
+                    style={styles.catRow}
+                    onPress={() => { setReason(r.name); setReasonPicker(false); }}
+                    testID={`stockdoc-edit-type-${r.id}`}
+                  >
+                    <Text style={styles.catRowText}>{r.name}</Text>
+                    {!!r.name_th && r.name_th !== r.name && <Text style={styles.catRowSub}>{r.name_th}</Text>}
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </Modal>
   );
 }

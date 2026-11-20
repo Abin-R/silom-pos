@@ -63,7 +63,10 @@ from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
 from bravepos.production_policy import lock_settings, update_cutoff
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
-from bravepos.views import save_check_document, save_stock_in_document, save_stock_out_document
+from bravepos.views import (
+    save_check_document, save_stock_in_document, save_stock_out_document,
+    stock_document_reason_names, update_stock_document_info,
+)
 
 
 def _parse_date(s: str | None, default: date) -> date:
@@ -2859,15 +2862,10 @@ def _stock_report_export(request, kind):
 
 
 def _stock_doc_reasons(doc):
-    """The Type choices for editing ``doc``: its branch's active reasons, plus
-    the one already on the document if it has since been renamed or retired —
-    so opening Edit and saving never silently changes the type."""
+    """The Type choices for editing ``doc`` as ``(value, label)``."""
     model = StockInReason if doc.type == "in" else StockOutReason
-    reasons = [(r.name, f"{r.name} · {r.name_th}" if r.name_th else r.name)
-               for r in model.objects.filter(branch=doc.branch, active=True)]
-    if doc.reason and doc.reason not in {name for name, _ in reasons}:
-        reasons.insert(0, (doc.reason, doc.reason))
-    return reasons
+    th = dict(model.objects.filter(branch=doc.branch, active=True).values_list("name", "name_th"))
+    return [(n, f"{n} · {th[n]}" if th.get(n) else n) for n in stock_document_reason_names(doc)]
 
 
 def _stock_document(request, kind, doc_id, editing=False):
@@ -2883,25 +2881,10 @@ def _stock_document(request, kind, doc_id, editing=False):
     reasons = _stock_doc_reasons(doc) if editing else []
     error = None
     if editing and request.method == "POST":
-        reason = (request.POST.get("reason") or "").strip()
-        note = (request.POST.get("note") or "").strip()
-        if reason not in {name for name, _ in reasons} and not (reason == "" and doc.reason == ""):
-            error = "Choose a type."
-        else:
-            changed = [f for f, v in (("reason", reason), ("note", note)) if getattr(doc, f) != v]
-            if changed:
-                # The ledger rows label each movement "type, else note" — the
-                # product history shows that — so they follow the edit.
-                old_label = doc.reason or doc.note or doc.document_name
-                doc.reason, doc.note = reason, note
-                new_label = doc.reason or doc.note or doc.document_name
-                with transaction.atomic():
-                    doc.save(update_fields=changed)
-                    if new_label != old_label:
-                        StockMovement.objects.filter(
-                            branch=doc.branch, type=kind, document_no=doc.document_no,
-                            note=old_label,
-                        ).update(note=new_label)
+        before = (doc.reason, doc.note)
+        error = update_stock_document_info(doc, request.POST.get("reason"), request.POST.get("note"))
+        if error is None:
+            if (doc.reason, doc.note) != before:
                 messages.success(request, f"{doc.document_no} was updated.")
             return redirect(view_url)
     items = list(

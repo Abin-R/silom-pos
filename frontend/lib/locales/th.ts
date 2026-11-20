@@ -444,6 +444,7 @@ const th = {
     couldnt_save_customer: "บันทึกข้อมูลลูกค้าไม่สำเร็จ",
     customer: "ลูกค้า",
     discount: "ส่วนลด",
+    edit: "แก้ไข",
     favorite: "รายการโปรด",
     item: "รายการ",
     items: "รายการ",

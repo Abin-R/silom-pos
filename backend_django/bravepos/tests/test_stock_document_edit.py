@@ -11,7 +11,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.urls import reverse
 
-from bravepos.models import StockDocument, StockInReason, StockMovement
+from bravepos.models import BranchSession, Staff, StockDocument, StockInReason, StockMovement
 from bravepos.tests.test_user_management_and_audit import make_user, sign_in
 from bravepos.views import save_stock_in_document, save_stock_out_document
 
@@ -90,3 +90,51 @@ class EditStockDocumentTests(_Base):
         self.assertEqual(self._edit(self.out, reason="Expired", note="x").status_code, 403)
         self.out.refresh_from_db()
         self.assertEqual(self.out.note, "bin day")
+
+
+class TillEditStockDocumentTests(_Base):
+    """``PATCH /api/stock-documents/<id>`` — the till's Edit, same rule."""
+
+    def setUp(self):
+        super().setUp()
+        self.staff = Staff.objects.create(name="Nok", email="nok@test.local",
+                                          password_hash="x", role="cashier")
+        self.staff.branches.add(self.branch)
+        self.token = BranchSession.objects.create(
+            token="tk7" * 12, branch=self.branch, staff=self.staff).token
+
+    def _patch(self, doc, body):
+        return self.client.patch(f"/api/stock-documents/{doc.id}", body,
+                                 content_type="application/json",
+                                 HTTP_AUTHORIZATION=f"Bearer {self.token}")
+
+    def test_type_and_note_only(self):
+        res = self._patch(self.out, {"reason": "Damaged (In-Store)", "note": "dropped",
+                                     "receiver": "X", "ref_no": "Y", "items": []})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual((res.json()["reason"], res.json()["note"]), ("Damaged (In-Store)", "dropped"))
+        self.out.refresh_from_db()
+        self.assertEqual((self.out.receiver, self.out.ref_no, self.out.items.count()), ("Nok", "B-12", 1))
+        self.assertEqual(StockMovement.objects.get(document_no=self.out.document_no).note,
+                         "Damaged (In-Store)")
+
+    def test_note_alone_keeps_the_type(self):
+        self.assertEqual(self._patch(self.inn, {"note": "late van"}).status_code, 200)
+        self.inn.refresh_from_db()
+        self.assertEqual((self.inn.reason, self.inn.note), ("Purchase", "late van"))
+
+    def test_unknown_type_refused(self):
+        res = self._patch(self.out, {"reason": "Not a type"})
+        self.assertEqual(res.status_code, 400)
+        self.out.refresh_from_db()
+        self.assertEqual(self.out.reason, "Expired")
+
+    def test_needs_manage_inventory(self):
+        self.staff.permissions = []
+        self.staff.save()
+        self.assertEqual(self._patch(self.out, {"note": "x"}).status_code, 403)
+
+    def test_other_branch_not_found(self):
+        other = save_stock_out_document(
+            make_branch(name="Paragon"), [], "Expired")
+        self.assertEqual(self._patch(other, {"note": "x"}).status_code, 404)
