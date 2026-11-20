@@ -14,7 +14,11 @@ from django.test import TestCase
 from PIL import Image
 from django.urls import reverse
 
-from bravepos.models import StockDocument, StockDocumentImage, StockMovement, StockOutReason
+import base64
+
+from bravepos.models import (
+    BranchSession, Staff, StockDocument, StockDocumentImage, StockMovement, StockOutReason,
+)
 from bravepos.tests.test_user_management_and_audit import make_user, sign_in
 
 from .factories import make_branch, make_product
@@ -147,6 +151,54 @@ class StockOutImagesTests(_Base):
         sign_in(self.client, make_user(username="acc", email="acc@example.com", role="viewer"))
         self.assertEqual(self.client.get(url).status_code, 200)
         self.assertNotEqual(self.client_class().get(url).status_code, 200)
+
+
+def _data_uri(size=(2400, 1800)):
+    buf = io.BytesIO()
+    Image.new("RGB", size, (30, 90, 160)).save(buf, "JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class TillStockOutImagesTests(TestCase):
+    """The till posts its photos as data URIs inside the JSON body."""
+
+    def setUp(self):
+        self.branch = make_branch(name="Silom Till")
+        self.product = make_product(self.branch, name="Croissant", stock=8)
+        staff = Staff.objects.create(name="Till Admin", role="admin")
+        staff.branches.add(self.branch)
+        self.token = BranchSession.objects.create(
+            branch=self.branch, staff=staff, token="till-images").token
+
+    def _post(self, **extra):
+        return self.client.post("/api/stock-documents", {
+            "type": "out", "reason": "Expired",
+            "items": [{"product_id": str(self.product.id), "qty": 2}], **extra,
+        }, content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {self.token}")
+
+    def test_photos_are_saved_with_the_document(self):
+        res = self._post(images=[_data_uri(), _data_uri((300, 400))])
+        self.assertEqual(res.status_code, 201, res.content)
+        doc = StockDocument.objects.get(type="out")
+        self.assertEqual([(i.width, i.height) for i in doc.images.all()], [(1600, 1200), (300, 400)])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 6)
+
+    def test_no_photos_is_still_fine(self):
+        self.assertEqual(self._post().status_code, 201)
+        self.assertFalse(StockDocumentImage.objects.exists())
+
+    def test_bad_photo_or_too_many_refuses_the_document(self):
+        junk = "data:image/jpeg;base64," + base64.b64encode(b"not a jpeg").decode()
+        for images_, msg in (([_data_uri((20, 20)), junk], "Image 2 is not an image."),
+                             (["https://example.com/a.jpg"], "Image 1 is not an image."),
+                             ([_data_uri((20, 20))] * 11, "Attach at most 10 images.")):
+            with self.subTest(msg=msg):
+                res = self._post(images=images_)
+                self.assertEqual((res.status_code, res.json()["detail"]), (400, msg))
+        self.assertFalse(StockDocument.objects.exists())
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 8)
 
 
 class StockOutTypesTests(_Base):

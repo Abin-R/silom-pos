@@ -35,7 +35,7 @@ from .models import (
     Branch, BranchSession, Category, Customer, DiscountType, DrawerCategory,
     Order, OrderItem,
     ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
-    StockMovement, StockDocument, StockDocumentItem, StockOutReason, StockInReason,
+    StockMovement, StockDocument, StockDocumentImage, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride, SuggestionRule, TillBeamCharge,
 )
 from .serializers import (
@@ -2088,6 +2088,15 @@ def stock_documents(request):
     items = payload.get('items') or []
     if not items:
         return Response({'detail': 'At least one item is required'}, status=400)
+    photos = []
+    if doc_type == 'out':
+        # Photos taken with the stock-out (damage, a signed note), resized on
+        # the tablet and re-encoded here.  Checked before anything is saved so
+        # a bad one refuses the document instead of moving stock without it.
+        try:
+            photos = images.compress_data_uri_attachments(payload.get('images'))
+        except images.InvalidImage as exc:
+            return Response({'detail': str(exc)}, status=400)
 
     def _dec(v):
         return Decimal(str(v if v not in (None, '') else 0))
@@ -2172,6 +2181,10 @@ def stock_documents(request):
                     staff=staff,
                     created_by=staff_name,
                 )
+        StockDocumentImage.objects.bulk_create([
+            StockDocumentImage(document=doc, data=data, width=w, height=h)
+            for data, w, h in photos
+        ])
 
     return Response(StockDocumentSerializer(doc).data, status=201)
 

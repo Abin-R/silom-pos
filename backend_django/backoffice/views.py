@@ -2956,9 +2956,6 @@ def _stock_lines_post(request, branch):
     return lines, None
 
 
-STOCK_DOC_MAX_IMAGES = 10
-
-
 def _stock_doc_images_post(request):
     """Compress the photos attached to a stock document form.
 
@@ -2967,8 +2964,8 @@ def _stock_doc_images_post(request):
     instead of leaving one saved without its photos.
     """
     files = request.FILES.getlist("images")
-    if len(files) > STOCK_DOC_MAX_IMAGES:
-        return None, f"Attach at most {STOCK_DOC_MAX_IMAGES} images."
+    if len(files) > images.ATTACHMENT_MAX_COUNT:
+        return None, f"Attach at most {images.ATTACHMENT_MAX_COUNT} images."
     out = []
     for f in files:
         try:

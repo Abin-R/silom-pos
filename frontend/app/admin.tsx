@@ -3348,6 +3348,12 @@ type DraftLine = {
   before: string; reconcile: string;
 };
 
+// Stock-out photos: same cap as the server (bravepos.images.ATTACHMENT_MAX_COUNT
+// / ATTACHMENT_MAX_DIM).  Resized here so ten of them stay well under the
+// 10 MB request limit; the server re-encodes whatever arrives.
+const DOC_PHOTO_MAX = 10;
+const DOC_PHOTO_DIM = 1600;
+
 // Create-document form (image 5) + Select Products popup (images 6/7).
 // Two layouts: "purchase" (in/out — qty·price) and "reconcile" (adjust/check
 // — Before / counted / delta), driven by DOC_CONFIG[type].mode.
@@ -3385,10 +3391,13 @@ function CreateStockDocModal({
   const [inReasonsLoadState, setInReasonsLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [inReasonsRetry, setInReasonsRetry] = useState(0);
   const [reasonPicker, setReasonPicker] = useState(false);
+  const [photos, setPhotos] = useState<string[]>([]); // data: URIs, already resized
+  const [pickingPhotos, setPickingPhotos] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
+      setPhotos([]);
       setTaxIncluded(false); setAvgCost(false); setOutReason(""); setInReason("");
       if (editing) {
         // Reopening a saved check document: on-hand stays the figure from
@@ -3509,6 +3518,45 @@ function CreateStockDocModal({
 
   const removeLine = (idx: number) => setLines((prev) => prev.filter((_, i) => i !== idx));
 
+  // Gallery only: the camera may need a permission the installed builds lack,
+  // and this has to ship as an OTA update.
+  const pickPhotos = async () => {
+    const room = DOC_PHOTO_MAX - photos.length;
+    if (pickingPhotos || room <= 0) return;
+    setPickingPhotos(true);
+    try {
+      // The permission prompt and the gallery both take the app to the
+      // background; neither should sign the admin out mid-document.
+      const perm = await whileAway(() => ImagePicker.requestMediaLibraryPermissionsAsync());
+      if (!perm.granted) return;
+      const result = await whileAway(() => ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        selectionLimit: room,
+        quality: 1,
+      }));
+      if (result.canceled || !result.assets?.length) return;
+      const added: string[] = [];
+      for (const a of result.assets.slice(0, room)) {
+        const w = a.width || 0, h = a.height || 0;
+        const resize = Math.max(w, h) > DOC_PHOTO_DIM
+          ? [{ resize: w >= h ? { width: DOC_PHOTO_DIM } : { height: DOC_PHOTO_DIM } }]
+          : [];
+        const m = await ImageManipulator.manipulateAsync(
+          a.uri, resize,
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+        );
+        if (m.base64) added.push(`data:image/jpeg;base64,${m.base64}`);
+      }
+      setPhotos((prev) => [...prev, ...added].slice(0, DOC_PHOTO_MAX));
+    } catch (e) {
+      console.warn(tr("admin.image_pick_failed"), e);
+      showAlert(tr("admin.image_pick_failed"), tr("admin.please_try_again"));
+    } finally {
+      setPickingPhotos(false);
+    }
+  };
+
   const save = async () => {
     if (!lines.length || saving) return;
     setSaving(true);
@@ -3543,7 +3591,10 @@ function CreateStockDocModal({
         discount: parseFloat(l.discount) || 0, total: lineTotal(l),
       }));
       if (type === "in") { body.vendor = party; body.reason = inReason; }
-      if (type === "out") { body.receiver = party; body.reason = outReason; }
+      if (type === "out") {
+        body.receiver = party; body.reason = outReason;
+        if (photos.length) body.images = photos;
+      }
     }
     try {
       const res = editing
@@ -3685,6 +3736,44 @@ function CreateStockDocModal({
                   </View>
                 )}
               </View>
+              {type === "out" && (
+                <View style={styles.docFormRow}>
+                <View style={styles.docField}>
+                  <Text style={styles.docFieldLabel}>{tr("admin.images")}</Text>
+                  <View style={styles.docPhotos}>
+                    {photos.map((uri, i) => (
+                      <View key={i} style={styles.docPhoto}>
+                        <Image source={{ uri }} style={styles.docPhotoImg} />
+                        <TouchableOpacity
+                          style={styles.docPhotoRemove}
+                          onPress={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}
+                          hitSlop={8}
+                          testID={`stock-out-photo-remove-${i}`}
+                        >
+                          <Ionicons name="close" size={14} color={C.surface} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    {photos.length < DOC_PHOTO_MAX && (
+                      <TouchableOpacity
+                        style={[styles.docPhoto, styles.docPhotoAdd]}
+                        onPress={pickPhotos}
+                        disabled={pickingPhotos}
+                        testID="stock-out-add-photos"
+                      >
+                        {pickingPhotos ? <ActivityIndicator color={C.ink3} /> : (
+                          <>
+                            <Ionicons name="images-outline" size={22} color={C.ink3} />
+                            <Text style={styles.docPhotoAddText} numberOfLines={2}>{tr("admin.add_images")}</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <Text style={styles.docPhotoHint}>{tr("admin.images_hint")}</Text>
+                </View>
+                </View>
+              )}
             </View>
           )}
 
@@ -8811,6 +8900,22 @@ const styles = StyleSheet.create({
   docFormRow: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
   docField: { flex: 1, minWidth: 160, gap: 4 },
   docFieldLabel: { fontSize: 12, color: C.ink2Soft, fontWeight: "600" },
+  docPhotos: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  docPhoto: {
+    width: 76, height: 76, borderRadius: 10, overflow: "hidden",
+    borderWidth: 1, borderColor: C.line, backgroundColor: C.surface,
+  },
+  docPhotoImg: { width: "100%", height: "100%" },
+  docPhotoRemove: {
+    position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11,
+    backgroundColor: "rgba(17,24,39,0.65)", alignItems: "center", justifyContent: "center",
+  },
+  docPhotoAdd: {
+    borderStyle: "dashed", borderColor: C.lineStrong, alignItems: "center",
+    justifyContent: "center", gap: 2, paddingHorizontal: 4,
+  },
+  docPhotoAddText: { fontSize: 11, color: C.ink3, fontWeight: "600", textAlign: "center" },
+  docPhotoHint: { fontSize: 11, color: C.ink3 },
   docFieldDate: { fontSize: 14, color: C.brand, fontWeight: "700", paddingVertical: 8 },
   docInput: {
     borderWidth: 1, borderColor: C.line, borderRadius: 8,

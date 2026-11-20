@@ -167,6 +167,7 @@ def normalize(value: str) -> str:
 
 ATTACHMENT_MAX_DIM = 1600
 ATTACHMENT_QUALITY = 78
+ATTACHMENT_MAX_COUNT = 10  # per document, on both the backoffice form and the till
 
 
 class InvalidImage(ValueError):
@@ -193,3 +194,26 @@ def compress_attachment(fileobj) -> tuple[bytes, int, int]:
         return _to_jpeg(img, ATTACHMENT_QUALITY), img.width, img.height
     except Exception as exc:
         raise InvalidImage(str(exc)) from exc
+
+
+def compress_data_uri_attachments(values) -> list[tuple[bytes, int, int]]:
+    """``compress_attachment`` for the till, which sends photos as base64
+    ``data:`` URIs inside its JSON body.  Raises ``InvalidImage`` with a
+    message fit to show staff: too many photos, or the Nth one is unreadable.
+    """
+    if not values:
+        return []
+    if not isinstance(values, list):
+        raise InvalidImage('Images must be a list.')
+    if len(values) > ATTACHMENT_MAX_COUNT:
+        raise InvalidImage(f'Attach at most {ATTACHMENT_MAX_COUNT} images.')
+    out = []
+    for n, value in enumerate(values, start=1):
+        decoded = decode(value) if isinstance(value, str) else None
+        if decoded is None:
+            raise InvalidImage(f'Image {n} is not an image.')
+        try:
+            out.append(compress_attachment(io.BytesIO(decoded[0])))
+        except InvalidImage:
+            raise InvalidImage(f'Image {n} is not an image.') from None
+    return out
