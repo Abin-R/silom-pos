@@ -14,6 +14,8 @@
       "infoPlist": {
         "UISupportedExternalAccessoryProtocols": ["jp.star-m.starpro"],
         "ITSAppUsesNonExemptEncryption": false,
+        "NSBluetoothAlwaysUsageDescription": "Brave POS uses Bluetooth to find and connect to receipt printers.",
+        "NSLocalNetworkUsageDescription": "Brave POS uses your local network to find and print to receipt printers.",
         "AppStoreID": "6835755529",
         "AppStoreCountry": "th"
       }
