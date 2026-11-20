@@ -259,6 +259,13 @@ class Branch(models.Model):
     # test-branch-first reason as the flags above.
     common_queue_enabled = models.BooleanField(default=False)
 
+    # Production lead time: how many days before a delivery this branch's
+    # production request locks, at the shop's cut-off time.  1 is the original
+    # rule (the evening before).  Set by logistics on the Delivery dates page;
+    # this is the displayed value, and ``ProductionLeadTime`` keeps the history
+    # that stops a change from reopening a date that has already closed.
+    production_lead_days = models.PositiveSmallIntegerField(default=1)
+
     # ── CRM link ───────────────────────────────────────────────────────
     # This shop's id in the Rolling Pinn CRM (crm.rollingpinn.com), which keeps
     # its own branch list for the customer-facing loyalty app.  Set from the
@@ -1954,6 +1961,59 @@ class StockDocumentImage(models.Model):
 
 
 # ─── Production requests (branch → central kitchen) ─────────────────────────
+class ProductionLeadTime(models.Model):
+    """An append-only, effective-dated lead time for one branch.
+
+    The same idea as ``ProductionCutoffPolicy``: a row applies to delivery
+    dates from ``effective_from`` until a newer row for the branch takes
+    over, and ``effective_from`` is the first date still open when the change
+    was made, so shortening a lead time cannot reopen a closed date.  A
+    branch with no row has the original lead time of 1 day.
+    """
+    id = models.BigAutoField(primary_key=True)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="production_lead_times",
+    )
+    lead_days = models.PositiveSmallIntegerField()
+    effective_from = models.DateField()
+    activated_at = models.DateTimeField()
+    changed_by_name = models.CharField(max_length=120, blank=True, default="")
+
+    class Meta:
+        ordering = ["branch", "effective_from", "id"]
+        indexes = [
+            models.Index(fields=["branch", "effective_from", "id"], name="bravepos_plt_branch_eff_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.branch_id} {self.lead_days}d from {self.effective_from}"
+
+
+class ProductionDeliveryDate(models.Model):
+    """A date the kitchen delivers to a branch, ticked by logistics.  A
+    branch's production request can only be made for these dates."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="production_delivery_dates",
+    )
+    delivery_date = models.DateField()
+    created_by_name = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["delivery_date", "branch__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "delivery_date"],
+                name="production_delivery_date_one_per_branch",
+            ),
+        ]
+        indexes = [models.Index(fields=["delivery_date"], name="bravepos_pdd_date_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.branch_id} {self.delivery_date}"
+
+
 class ProductionCutoffPolicy(models.Model):
     """An append-only, effective-dated production request deadline rule.
 

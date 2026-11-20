@@ -11,9 +11,11 @@ import datetime
 from django.db import transaction
 from django.utils import timezone
 
-from .models import ProductionCutoffPolicy, Settings
+from .models import Branch, ProductionCutoffPolicy, ProductionLeadTime, Settings
 
 DEFAULT_CUTOFF = datetime.time(23, 30)
+DEFAULT_LEAD_DAYS = 1
+MAX_LEAD_DAYS = 30
 
 
 def cutoff_time() -> datetime.time:
@@ -65,36 +67,69 @@ def is_legacy_deadline(delivery_date) -> bool:
     return arithmetic_deadline < policy.activated_at
 
 
-def locks_at(delivery_date, cutoff=None) -> datetime.datetime:
-    """Return the aware deadline for a delivery date in the shop timezone.
+def lead_policy_for(branch, delivery_date):
+    """The branch's lead-time row in force for ``delivery_date``, if any."""
+    if branch is None:
+        return None
+    return (
+        ProductionLeadTime.objects
+        .filter(branch=branch, effective_from__lte=delivery_date)
+        .order_by("-id")
+        .first()
+    )
 
-    Passing ``cutoff`` deliberately preserves the old arithmetic-only helper
-    contract for tests.  Runtime callers must omit it so an effective-dated
-    policy and its activation time are honoured.
+
+def locks_at(delivery_date, cutoff=None, branch=None) -> datetime.datetime:
+    """Return the aware deadline for a delivery date in the shop timezone:
+    the cut-off time, the branch's lead time in days before delivery.
+
+    Without a branch the lead time is the original 1 day.  Passing ``cutoff``
+    deliberately preserves the old arithmetic-only helper contract for tests
+    (the branch's lead time still applies, its activation clamp does not).
+    Runtime callers must omit it so effective-dated policies and their
+    activation times are honoured: a rule activated after a date's arithmetic
+    deadline closes that date at activation, never retroactively earlier.
     """
-    policy = None
+    clamps = []
     if cutoff is None:
         policy = policy_for_date(delivery_date)
         cutoff = policy.cutoff if policy else cutoff_time()
+        if policy is not None:
+            clamps.append(policy.activated_at)
+        lead = lead_policy_for(branch, delivery_date)
+        if lead is not None:
+            clamps.append(lead.activated_at)
+        lead_days = lead.lead_days if lead is not None else DEFAULT_LEAD_DAYS
+    else:
+        lead = lead_policy_for(branch, delivery_date)
+        lead_days = lead.lead_days if lead is not None else DEFAULT_LEAD_DAYS
 
-    day_before = delivery_date - datetime.timedelta(days=1)
-    deadline = timezone.make_aware(datetime.datetime.combine(day_before, cutoff))
-    if policy is not None and policy.activated_at > deadline:
-        return policy.activated_at
-    return deadline
+    day = delivery_date - datetime.timedelta(days=lead_days)
+    deadline = timezone.make_aware(datetime.datetime.combine(day, cutoff))
+    return max([deadline] + clamps)
 
 
-def is_open(delivery_date, now=None, cutoff=None) -> bool:
+def is_open(delivery_date, now=None, cutoff=None, branch=None) -> bool:
     """Whether a request remains editable. Equality with the deadline is closed."""
-    return (now or timezone.now()) < locks_at(delivery_date, cutoff=cutoff)
+    return (now or timezone.now()) < locks_at(delivery_date, cutoff=cutoff, branch=branch)
 
 
-def earliest_open_date(now=None, cutoff=None) -> datetime.date:
+def earliest_open_date(now=None, cutoff=None, branch=None) -> datetime.date:
     """Return the first future delivery date which remains open."""
     now = now or timezone.now()
     day = timezone.localdate(now) + datetime.timedelta(days=1)
-    while not is_open(day, now=now, cutoff=cutoff):
+    while not is_open(day, now=now, cutoff=cutoff, branch=branch):
         day += datetime.timedelta(days=1)
+    return day
+
+
+def earliest_open_date_everywhere(now=None) -> datetime.date:
+    """The first delivery date still open for every active branch, so a
+    shop-wide rule change starting there cannot reopen any branch's date."""
+    now = now or timezone.now()
+    day = earliest_open_date(now=now)
+    for branch in Branch.objects.filter(active=True):
+        day = max(day, earliest_open_date(now=now, branch=branch))
     return day
 
 
@@ -122,7 +157,9 @@ def update_cutoff(cutoff: datetime.time) -> ProductionCutoffPolicy:
 
     The boundary is found using the old schedule while the settings singleton
     is locked.  This means an admin can alter still-open dates but cannot
-    reopen dates which have already closed, even with no request row.
+    reopen dates which have already closed, even with no request row.  With
+    per-branch lead times the boundary is the first date open for *every*
+    branch: a date already closed for a long-lead branch keeps its old rule.
     """
     if not isinstance(cutoff, datetime.time):
         raise TypeError("cutoff must be a datetime.time")
@@ -130,7 +167,7 @@ def update_cutoff(cutoff: datetime.time) -> ProductionCutoffPolicy:
     with transaction.atomic():
         settings = lock_settings()
         now = timezone.now()
-        effective_from = earliest_open_date(now=now)
+        effective_from = earliest_open_date_everywhere(now=now)
         policy = ProductionCutoffPolicy.objects.create(
             effective_from=effective_from,
             cutoff=cutoff,
@@ -140,3 +177,29 @@ def update_cutoff(cutoff: datetime.time) -> ProductionCutoffPolicy:
         settings.production_cutoff = cutoff
         settings.save(update_fields=["production_cutoff"])
         return policy
+
+
+def update_lead_days(branch, lead_days: int, changed_by_name: str = "") -> ProductionLeadTime:
+    """Append a lead-time row for ``branch`` and update its displayed value.
+
+    Call while holding the settings lock (``lock_settings()``), which every
+    production writer takes first.  The new lead time applies from the
+    branch's first still-open delivery date under the old rules, so a shorter
+    lead time cannot reopen a date that has closed, and a longer one closes
+    the affected dates now rather than retroactively.
+    """
+    if isinstance(lead_days, bool) or not isinstance(lead_days, int):
+        raise TypeError("lead_days must be an int")
+    if not DEFAULT_LEAD_DAYS <= lead_days <= MAX_LEAD_DAYS:
+        raise ValueError(f"lead_days must be {DEFAULT_LEAD_DAYS}-{MAX_LEAD_DAYS}")
+    now = timezone.now()
+    row = ProductionLeadTime.objects.create(
+        branch=branch,
+        lead_days=lead_days,
+        effective_from=earliest_open_date(now=now, branch=branch),
+        activated_at=now,
+        changed_by_name=changed_by_name,
+    )
+    Branch.objects.filter(pk=branch.pk).update(production_lead_days=lead_days)
+    branch.production_lead_days = lead_days
+    return row

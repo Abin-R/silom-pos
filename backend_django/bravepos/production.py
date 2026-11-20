@@ -43,10 +43,10 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
-    Branch, Product, ProductionRequest, ProductionRequestItem,
+    Branch, Product, ProductionDeliveryDate, ProductionRequest, ProductionRequestItem,
 )
 from .production_policy import (
-    cutoff_time, deadline_provenance, earliest_open_date, is_legacy_deadline, is_open, latest_locked_date, lock_settings,
+    MAX_LEAD_DAYS, cutoff_time, deadline_provenance, update_lead_days, earliest_open_date, is_legacy_deadline, is_open, latest_locked_date, lock_settings,
     locks_at,
 )
 
@@ -87,6 +87,14 @@ class CatalogueConflict(ProductionSaveError):
 
 class InvalidRows(ProductionSaveError):
     """The submitted rows are malformed, unknown, or out of scope."""
+
+
+class NotADeliveryDate(ProductionSaveError):
+    """Logistics has not ticked this date for the branch."""
+
+    def __init__(self, branch=None, delivery_date=None):
+        name = getattr(branch, "name", "this branch")
+        super().__init__(f"{delivery_date} is not a delivery date for {name}; nothing was saved.")
 
 
 # ── Which branches ──────────────────────────────────────────────────────────
@@ -337,7 +345,7 @@ def save_request(
             str(key) in catalogue_ids and qty > 0 for key, qty in wanted.items()
         )
         if not has_positive_catalogue_line:
-            if not is_open(delivery_date):
+            if not is_open(delivery_date, branch=branch):
                 raise RequestLocked(delivery_date)
             return None
     if existing is None:
@@ -404,8 +412,14 @@ def save_request(
     if strict and unknown:
         raise InvalidRows("Some request rows are no longer available; nothing was saved.", keys=unknown)
 
+    # Web saves only for dates logistics has ticked.  Checked under the
+    # settings lock, which the Delivery dates page also takes, so a date
+    # cannot be un-ticked between this check and the write.
+    if strict and not is_delivery_date(branch, delivery_date):
+        raise NotADeliveryDate(branch, delivery_date)
+
     # Fresh policy authorization happens after every write lock is held.
-    if not is_open(delivery_date):
+    if not is_open(delivery_date, branch=branch):
         raise RequestLocked(delivery_date)
 
     requested_changed = False
@@ -432,7 +446,7 @@ def save_request(
             continue
         # Recheck immediately before each write so a lock wait cannot carry a
         # once-open request beyond its deadline.
-        if not is_open(delivery_date):
+        if not is_open(delivery_date, branch=branch):
             raise RequestLocked(delivery_date)
         item.requested_qty = qty
         item.revision = getattr(item, "revision", 0) + 1
@@ -440,7 +454,7 @@ def save_request(
         requested_changed = True
 
     if requested_changed:
-        if not is_open(delivery_date):
+        if not is_open(delivery_date, branch=branch):
             raise RequestLocked(delivery_date)
         req.revision = getattr(req, "revision", 0) + 1
         req.updated_by_name = name
@@ -452,7 +466,7 @@ def request_status(req, now=None, cutoff=None) -> dict:
     """What the history list says about one request: ``open`` until the
     cut-off, then ``locked``, ``packing`` once the packer has entered some
     lines and ``packed`` once every line has a number."""
-    deadline = locks_at(req.delivery_date, cutoff)
+    deadline = locks_at(req.delivery_date, cutoff, branch=req.branch)
     lines = [it for it in req.items.all() if it.requested_qty or it.packed_qty is not None]
     packed = sum(1 for it in lines if it.packed_qty is not None)
     if (now or timezone.now()) < deadline:
@@ -695,3 +709,99 @@ def save_packed(delivery_date, values, user=None, *, expected_revisions=None, st
         item.save(update_fields=["packed_qty", "packed_by_name", "packed_at", "revision"])
         changed += 1
     return changed
+
+
+# ── Delivery dates (ticked by logistics) ────────────────────────────────────
+def is_delivery_date(branch, delivery_date) -> bool:
+    return ProductionDeliveryDate.objects.filter(
+        branch=branch, delivery_date=delivery_date).exists()
+
+
+def requestable_dates(branch, now=None, horizon_days=120) -> list:
+    """The branch's ticked delivery dates whose requests are still open,
+    soonest first — what the supervisor's date picker offers."""
+    now = now or timezone.now()
+    today = timezone.localdate(now)
+    days = (ProductionDeliveryDate.objects
+            .filter(branch=branch, delivery_date__gt=today,
+                    delivery_date__lte=today + datetime.timedelta(days=horizon_days))
+            .order_by("delivery_date").values_list("delivery_date", flat=True))
+    return [d for d in days if is_open(d, now=now, branch=branch)]
+
+
+def final_at(delivery_date):
+    """When every branch's numbers for ``delivery_date`` are final: the
+    latest deadline among the branches delivering that day (ticked, or with a
+    request).  Branches lock at different times once lead times differ, so
+    the kitchen's total is only final when the last one locks."""
+    branch_ids = set(ProductionDeliveryDate.objects.filter(
+        delivery_date=delivery_date).values_list("branch_id", flat=True))
+    branch_ids |= set(ProductionRequest.objects.filter(
+        delivery_date=delivery_date).values_list("branch_id", flat=True))
+    branches = list(Branch.objects.filter(pk__in=branch_ids))
+    if not branches:
+        return locks_at(delivery_date)
+    return max(locks_at(delivery_date, branch=b) for b in branches)
+
+
+def blocks_untick(branch, delivery_date) -> bool:
+    """A date can't be un-ticked while the branch has asked for something on
+    it, or the packer has recorded anything for it."""
+    return ProductionRequestItem.objects.filter(
+        request__branch=branch, request__delivery_date=delivery_date,
+    ).filter(Q(requested_qty__gt=0) | Q(packed_qty__isnull=False)).exists()
+
+
+class ScheduleRefused(ProductionSaveError):
+    """Some un-ticked dates still have requests; nothing was saved."""
+
+
+@transaction.atomic
+def save_delivery_schedule(changes, lead_changes, user=None) -> dict:
+    """Apply the Delivery dates page.
+
+    ``changes`` maps ``(branch, date)`` to True (tick) or False (un-tick) —
+    only cells the user changed, so two people editing different cells don't
+    undo each other.  ``lead_changes`` maps a branch to its new lead time.
+
+    All or nothing: if any un-ticked date still has a request, raises
+    ``ScheduleRefused`` (``keys`` lists the cells) and saves nothing.  Cells
+    whose date has closed for that branch are skipped and counted, never
+    changed.  Takes the settings lock first, like every production writer,
+    so a supervisor save can't slip between the check and the write.
+    """
+    name = getattr(user, "name", "") or getattr(user, "username", "") or ""
+    lock_settings()
+
+    for branch, lead in lead_changes.items():
+        if isinstance(lead, bool) or not isinstance(lead, int) or not 1 <= lead <= MAX_LEAD_DAYS:
+            raise InvalidRows(f"Lead time must be a whole number of days from 1 to {MAX_LEAD_DAYS}.",
+                              keys=[str(branch.pk)])
+
+    blocked = [f"{branch.pk}_{day.isoformat()}" for (branch, day), wanted in changes.items()
+               if not wanted and blocks_untick(branch, day)]
+    if blocked:
+        raise ScheduleRefused(
+            "Some dates you un-ticked already have a production request; nothing was saved.",
+            keys=blocked)
+
+    lead_changed = 0
+    for branch, lead in lead_changes.items():
+        if lead != branch.production_lead_days:
+            update_lead_days(branch, lead, name)
+            lead_changed += 1
+
+    added = removed = skipped = 0
+    for (branch, day), wanted in changes.items():
+        # Judged after any lead-time change above, with a fresh clock.
+        if not is_open(day, branch=branch):
+            skipped += 1
+            continue
+        if wanted:
+            _, created = ProductionDeliveryDate.objects.get_or_create(
+                branch=branch, delivery_date=day, defaults={"created_by_name": name})
+            added += int(created)
+        else:
+            removed += ProductionDeliveryDate.objects.filter(
+                branch=branch, delivery_date=day).delete()[0]
+    return {"added": added, "removed": removed, "skipped": skipped, "lead_changed": lead_changed}

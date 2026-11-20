@@ -42,6 +42,7 @@ AUDITED = {
     "StockOutReason", "StockInReason", "PaymentType",
     "StockMovement", "StockDocument", "StockDocumentItem",
     "ProductionCutoffPolicy", "ProductionRequest", "ProductionRequestItem",
+    "ProductionLeadTime", "ProductionDeliveryDate",
     "Shift", "ShiftMovement",
     "Customer", "PeakProductMap", "SuggestionOverride", "AppRelease",
     "Order", "OrderItem", "SelfOrder", "DiscountType",

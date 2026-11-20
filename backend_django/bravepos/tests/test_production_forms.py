@@ -18,6 +18,7 @@ from django.utils import timezone
 from backoffice import production_forms
 from backoffice.production_views import _request_payload
 from bravepos import production
+from bravepos.tests.test_production_requests import whitelist
 from bravepos.models import (
     Branch, Category, Product, ProductionCutoffPolicy, ProductionRequestItem,
     Settings,
@@ -109,6 +110,7 @@ class ProductionFormContextTests(TestCase):
         self.user = make_user(username="forms", email="forms@example.com", role="stock_supervisor")
         sign_in(self.client, self.user)
         self.day = timezone.localdate() + timedelta(days=3)
+        whitelist(self.branch)
         self.url = reverse("backoffice:production_request") + f"?branch={self.branch.id}&date={self.day.isoformat()}"
 
     def test_request_get_exposes_baseline_and_strict_payload_saves(self):

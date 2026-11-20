@@ -93,6 +93,8 @@ urlpatterns = [
     path("production/kitchen/export", production_views.production_kitchen_export,
          name="production_kitchen_export"),
     path("production/packing", production_views.production_packing, name="production_packing"),
+    path("production/delivery-dates", production_views.production_delivery_dates,
+         name="production_delivery_dates"),
     path("production/packing/export", production_views.production_packing_export,
          name="production_packing_export"),
 

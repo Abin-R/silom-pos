@@ -49,7 +49,7 @@ class LogisticBackofficeTests(TestCase):
                      "report_daily_export"):
             with self.subTest(name=name):
                 response = self.client.get(reverse(f"backoffice:{name}"))
-                self.assertContains(response, "Ninja windows only", status_code=403)
+                self.assertContains(response, "Ninja windows and Delivery dates only", status_code=403)
 
     def test_writes_elsewhere_refused(self, _get):
         self.assertEqual(self.client.post(reverse("backoffice:product_new")).status_code, 403)

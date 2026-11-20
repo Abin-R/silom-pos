@@ -13,7 +13,11 @@ Delivery {{ day|date:"D d M Y" }}
 <svg>
 <use href="#i-cal"/>
 </svg>
-<input type="date" name="date" value="{{ day|date:'Y-m-d' }}" min="{{ earliest|date:'Y-m-d' }}" form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
+<select name="date" form="filterForm" onchange="this.form.submit()" aria-label="Delivery date">
+{% if not day_in_list %}<option value="{{ day|date:'Y-m-d' }}" selected>{{ day|date:"D d M Y" }}{% if not delivery_day %} (not a delivery date){% else %} (closed){% endif %}</option>{% endif %}
+{% for d in open_dates %}<option value="{{ d|date:'Y-m-d' }}"{% if d == day %} selected{% endif %}>{{ d|date:"D d M Y" }}</option>{% endfor %}
+</select>
+<svg class="cv"><use href="#i-chev"/></svg>
 </div>
 {% if branch and is_open and not conflict and not resave_blocked and not reload_confirmation %}
 <button type="submit" form="prForm" class="btn btn-blue" data-compact-save
@@ -106,6 +110,16 @@ You can change this request until
 <use href="#i-alert"/>
 </svg>
 <span>
+{% if not delivery_day %}
+{{ day|date:"D d M" }} is not a delivery date for {{ branch.name }}.
+{% if retained_readonly %}<b>Nothing was saved; this is your retained draft.</b>{% endif %}
+{% if earliest %}
+ The next date you can request for is
+<a href="?branch={{ branch.id }}&amp;date={{ earliest|date:'Y-m-d' }}">{{ earliest|date:"D d M" }}</a>.
+{% else %}
+ No delivery dates are open for {{ branch.name }} yet. Logistics sets them on the Delivery dates page.
+{% endif %}
+{% else %}
 Requests for {{ day|date:"D d M" }} are closed
 {% if deadline_legacy %}
  under the adopted cutoff policy; the original deadline is unavailable
@@ -118,11 +132,16 @@ This request can no longer be changed.
 {% else %}
 {{ branch.name }} didn't request anything.
 {% endif %}
+{% if earliest %}
  The first date you can still request for is
 <a href="?branch={{ branch.id }}&amp;date={{ earliest|date:'Y-m-d' }}">
 {{ earliest|date:"D d M" }}
 </a>
 .
+{% else %}
+ No delivery dates are open for {{ branch.name }} yet.
+{% endif %}
+{% endif %}
 </span>
 </div>
 {% endif %}

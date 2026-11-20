@@ -17,7 +17,7 @@ from rest_framework.test import APIClient
 
 from bravepos import production
 from bravepos.models import (
-    Branch, Category, ParentCategory, Product, ProductionRequest,
+    Branch, Category, ParentCategory, Product, ProductionDeliveryDate, ProductionRequest,
     ProductionRequestItem, Settings, StockDocument, StockMovement,
 )
 from bravepos.tests.test_user_management_and_audit import make_user, sign_in
@@ -41,6 +41,15 @@ def open_day():
 def locked_day():
     """A delivery date whose requests have always already locked."""
     return today() - datetime.timedelta(days=1)
+
+
+def whitelist(*branches, first=-3, last=14):
+    """Tick delivery dates for ``branches`` from ``first`` to ``last`` days
+    from today, as logistics would.  Web saves need a ticked date."""
+    for branch in branches:
+        for offset in range(first, last + 1):
+            ProductionDeliveryDate.objects.get_or_create(
+                branch=branch, delivery_date=today() + datetime.timedelta(days=offset))
 
 
 class _ProductionForm(HTMLParser):
@@ -99,6 +108,7 @@ class Catalogue:
                                      ("Strawberry Mousse Pop", mousse, 1)):
                 self.products[(branch.name, name)] = Product.objects.create(
                     branch=branch, name=name, category=cat, sort_order=order)
+        whitelist(self.emq, self.icon)
 
     def pid(self, branch, name):
         return str(self.products[(branch.name, name)].id)

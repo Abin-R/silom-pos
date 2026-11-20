@@ -51,6 +51,8 @@
       <div class="grp">Logistics</div>
       <a class="nv {% if active == 'ninja_windows' %}on{% endif %}" href="{% url 'backoffice:ninja_windows' %}">
         <svg><use href="#i-truck"/></svg>Ninja windows</a>
+      <a class="nv {% if active == 'production_delivery_dates' %}on{% endif %}" href="{% url 'backoffice:production_delivery_dates' %}">
+        <svg><use href="#i-cal"/></svg>Delivery dates</a>
       {% elif user.role == 'stock_supervisor' %}
       <div class="grp">Production</div>
       <a class="nv {% if active == 'production_request' %}on{% endif %}" href="{% url 'backoffice:production_request' %}">
@@ -69,6 +71,8 @@
         <svg><use href="#i-plus"/></svg>Request production</a>
       <a class="nv {% if active == 'production_requests' %}on{% endif %}" href="{% url 'backoffice:production_requests' %}">
         <svg><use href="#i-orders"/></svg>Requests</a>
+      <a class="nv {% if active == 'production_delivery_dates' %}on{% endif %}" href="{% url 'backoffice:production_delivery_dates' %}">
+        <svg><use href="#i-cal"/></svg>Delivery dates</a>
       {% endif %}
       {% if user.role != 'packer' %}
       <a class="nv {% if active == 'production_kitchen' %}on{% endif %}" href="{% url 'backoffice:production_kitchen' %}">

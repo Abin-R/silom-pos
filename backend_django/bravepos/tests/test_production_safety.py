@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from bravepos import production
 from bravepos.models import Branch, Product, ProductionRequest, ProductionRequestItem
+from bravepos.tests.test_production_requests import whitelist
 
 
 def open_day():
@@ -22,6 +23,7 @@ class ProductionSafetyTests(TestCase):
         self.other_product = Product.objects.create(
             branch=self.other_branch, name="Other cookie", barcode="other",
         )
+        whitelist(self.branch, self.other_branch)
         self.day = open_day()
 
     def request(self, wanted, **kwargs):

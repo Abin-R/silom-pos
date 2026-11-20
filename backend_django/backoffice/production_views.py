@@ -143,10 +143,11 @@ def _packing_scope(request, *, post=False):
     if category_reset:
         category = None
         raw_category = ""
+    final = production.final_at(day)
     return {
         "view": view, "dates": dates, "day": day, "raw_category": raw_category,
         "category": category, "categories": categories, "category_reset": category_reset,
-        "deadline": production.locks_at(day), "is_open": production.is_open(day, now),
+        "deadline": final, "is_open": now < final,
     }
 
 
@@ -231,8 +232,18 @@ def production_request(request):
     branches = production.active_branches()
     branch = _select_branch(request, branches)
     now = timezone.now()
-    earliest = production.earliest_open_date(now)
-    day = _parse_date(request.GET.get("date"), earliest)
+    # Only dates logistics has ticked for this branch, and still open under
+    # its lead time, can be requested.
+    open_dates = production.requestable_dates(branch, now) if branch else []
+    earliest = open_dates[0] if open_dates else None
+    day = _parse_date(request.GET.get("date"), earliest or (timezone.localdate(now) + timedelta(days=1)))
+    # Switching branch keeps the date in the URL, which is usually not one of
+    # the new branch's delivery dates.  With nothing requested there either,
+    # show the branch's next open date instead of an empty read-only page.
+    if (request.method == "GET" and branch and earliest and day != earliest
+            and not production.is_delivery_date(branch, day)
+            and not ProductionRequest.objects.filter(branch=branch, delivery_date=day).exists()):
+        day = earliest
     error = None
     posted, conflicts, unknown_rows = {}, {}, []
     status = 200
@@ -278,6 +289,9 @@ def production_request(request):
         except production.RequestLocked:
             error = f"Requests for {_day(day)} are closed. Nothing was saved."
             retained_readonly = True
+        except production.NotADeliveryDate:
+            error = f"{_day(day)} is not a delivery date for {branch.name}. Nothing was saved."
+            retained_readonly = True
         except getattr(production, "RevisionConflict", ()) as exc:
             error = f"Nothing was saved: this request changed in another session. Review the saved quantities before reloading."
             conflicts = getattr(exc, "conflicts", {}) or {}
@@ -296,8 +310,9 @@ def production_request(request):
             return redirect(reverse("backoffice:production_request") + "?" + urlencode({
                 "branch": str(branch.id), "date": day.isoformat()}))
 
-    deadline = production.locks_at(day)
-    is_open = production.is_open(day)
+    deadline = production.locks_at(day, branch=branch) if branch else production.locks_at(day)
+    delivery_day = bool(branch) and production.is_delivery_date(branch, day)
+    is_open = delivery_day and production.is_open(day, branch=branch)
     retained_rows = {row["key"]: row for row in getattr(retained_payload, "rows", [])}
     req, rows, unknown_rows = _request_rows_context(branch, day, posted, conflicts, retained_rows) if branch else (None, [], [])
     total = sum(int(row["shown"] or 0) for row in rows if str(row["shown"] or "").isdigit())
@@ -310,7 +325,12 @@ def production_request(request):
     response = render(request, "backoffice/production_request.html", {
         "active": "production_request", "branches": branches, "branch": branch,
         "hide_dates": True, "day": day, "earliest": earliest, "is_open": is_open,
-        "deadline": deadline, "req": req, "groups": production.group_by_category(rows),
+        "open_dates": open_dates, "delivery_day": delivery_day,
+        "day_in_list": day in open_dates,
+        "lead_days": getattr(branch, "production_lead_days", 1),
+        "deadline": deadline, "req": req,
+        # Nothing to show for a non-delivery date nobody requested on.
+        "groups": production.group_by_category(rows) if (delivery_day or req or posted) else [],
         "total": total, "lines": sum(1 for row in rows if row["qty"]), "error": error,
         "max_qty": MAX_QTY,
         "request_revision": retained_payload.request_revision if retained_payload else getattr(req, "revision", 0),
@@ -363,8 +383,8 @@ def _kitchen_scope(request):
     now = timezone.now()
     day = _parse_date(request.GET.get("date"), production.latest_locked_date(now))
     raw_group = request.GET.get("group") or ""
-    deadline = production.locks_at(day)
-    return day, raw_group, _filter_param(raw_group), deadline, production.is_open(day, now), production.is_legacy_deadline(day)
+    deadline = production.final_at(day)
+    return day, raw_group, _filter_param(raw_group), deadline, now < deadline, production.is_legacy_deadline(day)
 
 
 @login_required
@@ -526,3 +546,129 @@ def production_packing_export(request):
                 values.extend([packed, cell.packed_by_name])
                 writer.writerow(values)
     return response
+
+
+# ── Delivery dates (logistics) ──────────────────────────────────────────────
+DELIVERY_GRID_DAYS = 28
+
+
+def _delivery_grid(branches, days, now, posted_on=None, blocked=()):
+    """Rows of cells for the Delivery dates page.
+
+    A cell is editable while its date is still open for that branch and, if
+    ticked, nobody has requested anything on it yet (un-ticking that would be
+    refused).  Openness only grows with the date, so each branch's first open
+    date decides every cell in its column — 13 lookups, not 364.
+    """
+    from bravepos.models import ProductionDeliveryDate, ProductionRequestItem
+    from django.db.models import Q
+    ticked = set(ProductionDeliveryDate.objects
+                 .filter(branch__in=branches, delivery_date__in=days)
+                 .values_list("branch_id", "delivery_date"))
+    requested = set(ProductionRequestItem.objects
+                    .filter(request__branch__in=branches, request__delivery_date__in=days)
+                    .filter(Q(requested_qty__gt=0) | Q(packed_qty__isnull=False))
+                    .values_list("request__branch_id", "request__delivery_date"))
+    first_open = {b.id: production.earliest_open_date(now=now, branch=b) for b in branches}
+    blocked = set(blocked)
+    rows = []
+    for day in days:
+        cells = []
+        for b in branches:
+            key = f"{b.id}_{day.isoformat()}"
+            was = (b.id, day) in ticked
+            has_request = (b.id, day) in requested
+            open_ = day >= first_open[b.id]
+            cells.append({
+                "key": key,
+                "branch_name": b.name,
+                "was": was,
+                "on": (key in posted_on) if posted_on is not None and open_ else was,
+                "has_request": has_request,
+                "closed": not open_,
+                "editable": open_ and not (was and has_request),
+                "blocked": key in blocked,
+            })
+        rows.append({"day": day, "weekend": day.weekday() >= 5, "cells": cells})
+    return rows, first_open
+
+
+@login_required
+def production_delivery_dates(request):
+    now = timezone.now()
+    first_day = timezone.localdate(now) + timedelta(days=1)
+    start = max(_parse_date(request.GET.get("start"), first_day), first_day)
+    days = [start + timedelta(days=i) for i in range(DELIVERY_GRID_DAYS)]
+    branches = production.active_branches()
+    by_id = {str(b.id): b for b in branches}
+    here = reverse("backoffice:production_delivery_dates") + (
+        f"?start={start.isoformat()}" if start != first_day else "")
+
+    error, blocked, posted_on, posted_leads = None, (), None, {}
+    if request.method == "POST":
+        on = set(request.POST.getlist("on"))
+        was = set(request.POST.getlist("was"))
+        changes = {}
+        for key in request.POST.getlist("cell"):
+            branch_id, _, day_text = key.partition("_")
+            branch = by_id.get(branch_id)
+            try:
+                day = datetime.date.fromisoformat(day_text)
+            except ValueError:
+                continue
+            if branch is None:
+                continue
+            if (key in on) != (key in was):
+                changes[(branch, day)] = key in on
+        lead_changes = {}
+        for branch in branches:
+            raw = (request.POST.get(f"lead_{branch.id}") or "").strip()
+            posted_leads[str(branch.id)] = raw
+            if raw == (request.POST.get(f"lead_was_{branch.id}") or "").strip():
+                continue
+            lead_changes[branch] = int(raw) if raw.isdigit() else -1
+        try:
+            result = production.save_delivery_schedule(changes, lead_changes, request.user)
+        except production.ScheduleRefused as exc:
+            error, blocked, posted_on = str(exc), exc.keys, on
+        except production.InvalidRows as exc:
+            error, posted_on = f"{exc} Nothing was saved.", on
+        else:
+            parts = []
+            if result["added"]:
+                parts.append(f"{result['added']} date{'' if result['added'] == 1 else 's'} added")
+            if result["removed"]:
+                parts.append(f"{result['removed']} removed")
+            if result["lead_changed"]:
+                parts.append(f"{result['lead_changed']} lead time{'' if result['lead_changed'] == 1 else 's'} changed")
+            if parts:
+                messages.success(request, "Saved: " + ", ".join(parts) + ".")
+            else:
+                messages.info(request, "Nothing had changed, so nothing was saved.")
+            if result["skipped"]:
+                messages.warning(request, (
+                    f"{result['skipped']} change{'' if result['skipped'] == 1 else 's'} skipped "
+                    "because those dates had already closed for the branch."))
+            return redirect(here)
+
+    rows, first_open = _delivery_grid(branches, days, now, posted_on, blocked)
+    columns = [{
+        "branch": b,
+        "lead": posted_leads.get(str(b.id), str(b.production_lead_days)),
+        "lead_saved": b.production_lead_days,
+        "first_open": first_open[b.id],
+    } for b in branches]
+    return render(request, "backoffice/production_delivery_dates.html", {
+        "active": "production_delivery_dates",
+        "hide_branch": True,
+        "hide_dates": True,
+        "columns": columns,
+        "rows": rows,
+        "start": start,
+        "end": days[-1],
+        "prev_start": max(start - timedelta(days=DELIVERY_GRID_DAYS), first_day) if start > first_day else None,
+        "next_start": start + timedelta(days=DELIVERY_GRID_DAYS),
+        "error": error,
+        "cutoff": production.cutoff_time(),
+        "max_lead": production.MAX_LEAD_DAYS,
+    }, status=409 if blocked else (400 if error else 200))

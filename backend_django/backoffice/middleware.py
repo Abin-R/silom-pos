@@ -161,8 +161,10 @@ PACKER_WRITE_URL_NAMES = frozenset({
 LOGISTIC_URL_NAMES = frozenset({
     "login", "logout", "app_css", "favicon", "apple_touch_icon",
     "ninja_windows",
+    # Which days the kitchen delivers to each branch, and lead times.
+    "production_delivery_dates",
 })
-LOGISTIC_WRITE_URL_NAMES = frozenset({"logout", "ninja_windows"})
+LOGISTIC_WRITE_URL_NAMES = frozenset({"logout", "ninja_windows", "production_delivery_dates"})
 
 # What a "stock_supervisor" account may open: the production request form,
 # which it may save, and the history of its branches' requests. No dashboard —
