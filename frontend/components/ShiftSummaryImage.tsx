@@ -6,7 +6,7 @@
 // Mirrors the reference SilomPOS close-shift slip the user provided.
 
 import React, { forwardRef } from "react";
-import { View, Text, StyleSheet, type ViewInstance } from "react-native";
+import { View, Text, StyleSheet } from "react-native";
 import { DEFAULT_RECEIPT_RIGHT_PAD, RECEIPT_LAYOUT_WIDTH } from "../lib/receiptMargin";
 import type { ReceiptShop } from "../lib/starPrinter";
 
@@ -89,7 +89,7 @@ type Props = {
   printedAt?: string; // ISO; defaults handled by the caller
 };
 
-export const ShiftSummaryImage = forwardRef<ViewInstance, Props>(({ summary, shop, printedAt }, ref) => {
+export const ShiftSummaryImage = forwardRef<View, Props>(({ summary, shop, printedAt }, ref) => {
   const taxPercent = Number(shop?.tax_percent ?? 7);
   const posNumber = shop?.pos_number || "001";
 

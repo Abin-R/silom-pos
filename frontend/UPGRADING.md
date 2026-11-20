@@ -58,28 +58,6 @@ patch goes missing, update the regexes in [plugins/withBravePosPrinter.js](plugi
 The on-device printer can only be validated with a real build — run `eas build -p android
 --profile preview` yourself (not auto-triggered) and test printing.
 
-## Things that bit us on the 56 → 58 jump (watch for analogues)
-
-- **Bump `version` in [app.json](app.json) on every SDK bump.** `runtimeVersion` uses the
-  `appVersion` policy, so an `eas update` of new-SDK JS under the old version would be served
-  to tills still running the old native build — and crash them. 58 shipped as 1.5.0. Until the
-  1.5.0 build is on every till, OTA hotfixes for the old fleet must come from the 1.4.1 code.
-- **R8 is on by default in Android release builds (SDK 58).** We opt out with
-  `enableMinifyInReleaseBuilds: false` under `expo-build-properties` → `android`, because the
-  printer bridge and the Star/Epson SDKs may rely on reflection. Turning it on is its own change,
-  with ProGuard keep rules and an on-device print test.
-- **Strict TypeScript API (RN 0.87+).** `View` is no longer a valid ref type: use
-  `useRef<ViewInstance>` / `forwardRef<ViewInstance, Props>` (`import { type ViewInstance }
-  from "react-native"`). Only the print refs (receipt, shift summary) needed this.
-- **`react-native-view-shot` went 5 → 6.** Our `captureRef` options (`format`, `quality`,
-  `result: "base64"`, `width`) are unchanged, but the width-forcing is what keeps receipts
-  inside the 576-dot head — check a real print on every view-shot major.
-- **Doctor flags `react-native-star-io10` as untested on New Architecture.** It has run on the
-  New Architecture since SDK 56 (which is New-Arch only), so it's in
-  `expo.doctor.reactNativeDirectoryCheck.exclude`.
-- **SDK 58 generates `SceneDelegate.swift` on iOS** (iOS 27 scene life cycle); no app code
-  touches the app delegate, so nothing to migrate.
-
 ## Things that bit us on the 56 → 57 jump (watch for analogues)
 
 - **`expo install --fix` downgrades Sentry.** Expo's `bundledNativeModules.json` pins

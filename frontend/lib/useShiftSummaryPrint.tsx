@@ -6,7 +6,7 @@
 // reprinting from the shift History tab.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { View, type ViewInstance } from "react-native";
+import { View } from "react-native";
 import { captureRef } from "react-native-view-shot";
 import { RECEIPT_WIDTH } from "../components/ReceiptImage";
 import { ShiftSummaryImage, type ShiftSummary } from "../components/ShiftSummaryImage";
@@ -31,7 +31,7 @@ type Pending = {
 };
 
 export function useShiftSummaryPrint() {
-  const ref = useRef<ViewInstance>(null);
+  const ref = useRef<View>(null);
   const [pending, setPending] = useState<Pending | null>(null);
 
   useEffect(() => {
