@@ -11,7 +11,9 @@ from datetime import datetime, time, timedelta
 import logging
 import os
 
+from django.conf import settings
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 
 from . import seatalk
@@ -85,8 +87,15 @@ def process_day(branch_id, document_type, day, using="default"):
                       branch_id, document_type, day)
 
 
+def document_url(document):
+    """The backoffice page of ``document`` — the one that tripped the alert."""
+    name = "stock_in_document" if document.type == "in" else "stock_out_document"
+    path = reverse(f"backoffice:{name}", args=[document.pk])
+    return f"{settings.BRAVEPOS['PUBLIC_BASE_URL'].rstrip('/')}{path}"
+
+
 def build_alert(document, day, document_count):
-    """Only what was asked for: branch, date, type and how many times."""
+    """Branch, date, type, how many times, and a link to the document."""
     kind = "Stock In" if document.type == "in" else "Stock Out"
     return "\n".join([
         "BravePOS: repeat stock submission",
@@ -94,6 +103,7 @@ def build_alert(document, day, document_count):
         f"Date: {day:%d/%m/%Y}",
         f"Type: {kind}",
         f"Times today: {document_count}",
+        f"Document: {document_url(document)}",
     ])
 
 

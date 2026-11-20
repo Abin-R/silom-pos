@@ -59,6 +59,8 @@ class StockDocumentAlertTests(TestCase):
                 "Date: 18/11/2026",
                 f"Type: {'Stock In' if kind == 'in' else 'Stock Out'}",
                 "Times today: 2",
+                "Document: https://pos.rollingpinn.com/backoffice/inventory/"
+                f"stock-{kind}/{second.id}",
             ]))
             for count in (3, 4):
                 later = self.create(kind)
