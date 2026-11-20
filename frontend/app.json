@@ -2,7 +2,7 @@
   "expo": {
     "name": "Brave POS",
     "slug": "brave-pos",
-    "version": "1.4.1",
+    "version": "1.5.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "bravepos",
@@ -54,7 +54,8 @@
         {
           "android": {
             "minSdkVersion": 29,
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": false
           }
         }
       ],

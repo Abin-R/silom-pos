@@ -9,7 +9,7 @@
 // 576 px to match the TM-T82X print head exactly.
 
 import React, { forwardRef } from "react";
-import { View, Text, Image, StyleSheet } from "react-native";
+import { View, Text, Image, StyleSheet, type ViewInstance } from "react-native";
 import { DEFAULT_RECEIPT_RIGHT_PAD, RECEIPT_LAYOUT_WIDTH } from "../lib/receiptMargin";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const qrcode: (typeNumber: number, errorCorrectionLevel: string) => {
@@ -134,7 +134,7 @@ const ORDER_TYPE_LABELS: Record<string, string> = {
   delivery: "เดลิเวอรี / Delivery",
 };
 
-export const ReceiptImage = forwardRef<View, Props>(({ order, shop, onLogoReady, rightPad }, ref) => {
+export const ReceiptImage = forwardRef<ViewInstance, Props>(({ order, shop, onLogoReady, rightPad }, ref) => {
   // Prefer the backoffice-edited address_line_1/2 fields; fall back to the
   // legacy `address` blob (split on newlines) and only use the hardcoded
   // default block when no shop data exists at all.
