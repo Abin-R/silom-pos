@@ -136,7 +136,7 @@ VIEWER_URL_NAMES = frozenset({
     "report_tax", "report_tax_export",
     "inventory", "inventory_export",
     "stock_in", "stock_in_export", "stock_in_document",
-    "stock_out", "stock_out_export", "stock_out_document",
+    "stock_out", "stock_out_export", "stock_out_document", "stock_document_image",
     # The kitchen's production totals — read only, like everything above.
     "production_kitchen", "production_kitchen_export",
 })

@@ -51,6 +51,7 @@ from bravepos.models import (
     Shift,
     Staff,
     StockDocument,
+    StockDocumentImage,
     StockDocumentItem,
     StockMovement,
     StockOutReason, StockInReason,
@@ -2874,6 +2875,8 @@ def _stock_document(request, kind, doc_id):
         "party_label": conf["party"],
         "doc": doc,
         "items": items,
+        # Ids only — the bytes are fetched one by one by stock_document_image.
+        "doc_images": list(doc.images.only("id", "original_name", "width", "height")),
         "qty_total": sum((it.qty or 0 for it in items), Decimal(0)),
         "back_url": reverse(f"backoffice:{conf['active']}") + (f"?{back}" if back else ""),
         "hide_branch": True,
@@ -2953,6 +2956,29 @@ def _stock_lines_post(request, branch):
     return lines, None
 
 
+STOCK_DOC_MAX_IMAGES = 10
+
+
+def _stock_doc_images_post(request):
+    """Compress the photos attached to a stock document form.
+
+    Returns ``(images, error)``, images as ``[(name, jpeg, width, height)]``.
+    Runs before anything is saved, so a bad file refuses the whole document
+    instead of leaving one saved without its photos.
+    """
+    files = request.FILES.getlist("images")
+    if len(files) > STOCK_DOC_MAX_IMAGES:
+        return None, f"Attach at most {STOCK_DOC_MAX_IMAGES} images."
+    out = []
+    for f in files:
+        try:
+            data, width, height = images.compress_attachment(f)
+        except images.InvalidImage:
+            return None, f"{f.name} is not an image — only photos can be attached."
+        out.append(((f.name or "")[:200], data, width, height))
+    return out, None
+
+
 def _stock_out_post(request, branch):
     """Validate the posted form and save it.  Returns ``(doc, error)``."""
     reason = (request.POST.get("reason") or "").strip()
@@ -2961,16 +2987,36 @@ def _stock_out_post(request, branch):
     lines, error = _stock_lines_post(request, branch)
     if error:
         return None, error
+    photos, error = _stock_doc_images_post(request)
+    if error:
+        return None, error
 
     created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
-    doc = save_stock_out_document(
-        branch, lines, reason,
-        receiver=(request.POST.get("receiver") or "").strip()[:200],
-        ref_no=(request.POST.get("ref_no") or "").strip()[:120],
-        note=(request.POST.get("note") or "").strip(),
-        created_by=created_by,
-    )
+    with transaction.atomic():
+        doc = save_stock_out_document(
+            branch, lines, reason,
+            receiver=(request.POST.get("receiver") or "").strip()[:200],
+            ref_no=(request.POST.get("ref_no") or "").strip()[:120],
+            note=(request.POST.get("note") or "").strip(),
+            created_by=created_by,
+        )
+        StockDocumentImage.objects.bulk_create([
+            StockDocumentImage(document=doc, data=data, width=w, height=h, original_name=name)
+            for name, data, w, h in photos
+        ])
     return doc, None
+
+
+@login_required
+def stock_document_image(request, image_id):
+    """One photo of a stock document. A row never changes once saved, so the
+    URL (its id) can be cached for good — privately, as it sits behind login."""
+    img = get_object_or_404(StockDocumentImage, id=image_id)
+    data = bytes(img.data)
+    response = HttpResponse(data, content_type=img.content_type)
+    response["Content-Length"] = str(len(data))
+    response["Cache-Control"] = "private, max-age=31536000, immutable"
+    return response
 
 
 @login_required
@@ -2982,6 +3028,9 @@ def stock_out_new(request):
         if error is None:
             messages.success(request, f"{doc.document_no} was saved and stock deducted.")
             return redirect("backoffice:stock_out_document", doc_id=doc.id)
+        if request.FILES.getlist("images"):
+            # A browser can't put files back into a re-drawn form.
+            error += " Attach the images again."
     return render(request, "backoffice/stock_out_form.html", {
         "active": "stock_out_new",
         "branches": branches,

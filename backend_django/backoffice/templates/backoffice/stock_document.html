@@ -31,6 +31,26 @@
   </div>
 </div>
 
+{% if doc_images %}
+<div class="panel" style="flex:none">
+  <div class="panel-h">
+    Images
+    <div class="spacer"></div>
+    <span class="tag t-info">{{ doc_images|length }}</span>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;padding:16px 20px">
+    {% for im in doc_images %}
+      {% url 'backoffice:stock_document_image' im.id as im_url %}
+      <a href="{{ im_url }}" target="_blank" rel="noopener" title="{{ im.original_name }}"
+         style="display:block;width:132px;height:132px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--line2)">
+        <img src="{{ im_url }}" alt="{{ im.original_name|default:'Stock document image' }}" loading="lazy"
+             width="132" height="132" style="width:100%;height:100%;object-fit:cover;display:block">
+      </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <div class="panel panel-grow">
   <div class="panel-h">
     Products

@@ -6,12 +6,15 @@ Run:
 """
 from __future__ import annotations
 
+import io
 from decimal import Decimal
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from PIL import Image
 from django.urls import reverse
 
-from bravepos.models import StockDocument, StockMovement, StockOutReason
+from bravepos.models import StockDocument, StockDocumentImage, StockMovement, StockOutReason
 from bravepos.tests.test_user_management_and_audit import make_user, sign_in
 
 from .factories import make_branch, make_product
@@ -82,6 +85,68 @@ class CreateStockOutTests(_Base):
         self.assertContains(self._create([(other, 1, "0")]), "Add at least one product.")
         other.refresh_from_db()
         self.assertEqual(other.stock, 9)
+
+
+def _photo(name="shelf.png", size=(3000, 2000), fmt="PNG", mode="RGBA"):
+    buf = io.BytesIO()
+    Image.new(mode, size, (200, 40, 40, 255) if mode == "RGBA" else (200, 40, 40)).save(buf, fmt)
+    return SimpleUploadedFile(name, buf.getvalue(), content_type=f"image/{fmt.lower()}")
+
+
+class StockOutImagesTests(_Base):
+    def test_images_are_compressed_and_kept_with_the_document(self):
+        self._create([(self.mousse, 1, "40")],
+                     images=[_photo(), _photo("box.jpg", (800, 1200), "JPEG", "RGB")])
+        doc = StockDocument.objects.get(type="out")
+        imgs = list(doc.images.all())
+        self.assertEqual([i.original_name for i in imgs], ["shelf.png", "box.jpg"])
+        big = imgs[0]
+        self.assertEqual((big.width, big.height, big.content_type), (1600, 1067, "image/jpeg"))
+        self.assertEqual(Image.open(io.BytesIO(bytes(big.data))).format, "JPEG")
+        self.assertEqual((imgs[1].width, imgs[1].height), (800, 1200))
+
+    def test_document_page_shows_images_and_list_does_not(self):
+        self._create([(self.mousse, 1, "40")], images=[_photo()])
+        doc = StockDocument.objects.get(type="out")
+        url = reverse("backoffice:stock_document_image", args=[doc.images.get().id])
+        page = self.client.get(reverse("backoffice:stock_out_document", args=[doc.id]))
+        self.assertContains(page, url)
+        listing = self.client.get(reverse("backoffice:stock_out"), {"branch": str(self.branch.id)})
+        self.assertContains(listing, doc.document_no)
+        self.assertNotContains(listing, "stock-images")
+        res = self.client.get(url)
+        self.assertEqual((res.status_code, res["Content-Type"]), (200, "image/jpeg"))
+        self.assertIn("private", res["Cache-Control"])
+
+    def test_document_without_images_has_no_images_panel(self):
+        self._create([(self.mousse, 1, "40")])
+        doc = StockDocument.objects.get(type="out")
+        page = self.client.get(reverse("backoffice:stock_out_document", args=[doc.id]))
+        self.assertNotContains(page, "stock-images")
+
+    def test_non_image_refuses_the_whole_document(self):
+        fake = SimpleUploadedFile("bill.png", b"%PDF-1.4 not really", content_type="image/png")
+        res = self._create([(self.mousse, 2, "40")], images=[_photo(), fake])
+        self.assertContains(res, "bill.png is not an image")
+        self.assertContains(res, "Attach the images again.")
+        self.assertFalse(StockDocument.objects.exists())
+        self.assertFalse(StockDocumentImage.objects.exists())
+        self.mousse.refresh_from_db()
+        self.assertEqual(self.mousse.stock, 10)
+
+    def test_at_most_ten_images(self):
+        photos = [_photo(f"p{i}.png", (20, 20)) for i in range(11)]
+        self.assertContains(self._create([(self.mousse, 1, "40")], images=photos),
+                            "Attach at most 10 images.")
+        self.assertFalse(StockDocument.objects.exists())
+
+    def test_viewer_can_open_images_but_signed_out_cannot(self):
+        self._create([(self.mousse, 1, "40")], images=[_photo()])
+        url = reverse("backoffice:stock_document_image",
+                      args=[StockDocumentImage.objects.get().id])
+        sign_in(self.client, make_user(username="acc", email="acc@example.com", role="viewer"))
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertNotEqual(self.client_class().get(url).status_code, 200)
 
 
 class StockOutTypesTests(_Base):

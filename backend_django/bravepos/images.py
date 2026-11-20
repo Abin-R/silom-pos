@@ -95,6 +95,19 @@ def _to_jpeg(img: Image.Image, quality: int) -> bytes:
     return buf.getvalue()
 
 
+def _flatten_rgb(img: Image.Image) -> Image.Image:
+    """JPEG has no alpha. Flattening onto white keeps transparent PNG logos
+    looking right — converting straight to RGB makes them black."""
+    if img.mode in ('RGBA', 'LA', 'P'):
+        img = img.convert('RGBA')
+        flat = Image.new('RGB', img.size, (255, 255, 255))
+        flat.paste(img, mask=img.split()[-1])
+        return flat
+    if img.mode != 'RGB':
+        return img.convert('RGB')
+    return img
+
+
 def normalize(value: str) -> str:
     """Return an image field value that is safe to store.
 
@@ -133,16 +146,7 @@ def normalize(value: str) -> str:
         # telling the browser to rotate it.
         img = ImageOps.exif_transpose(img)
 
-        # JPEG has no alpha. Flattening onto white keeps transparent PNG logos
-        # looking right — converting straight to RGB makes them black.
-        if img.mode in ('RGBA', 'LA', 'P'):
-            img = img.convert('RGBA')
-            flat = Image.new('RGB', img.size, (255, 255, 255))
-            flat.paste(img, mask=img.split()[-1])
-            img = flat
-        elif img.mode != 'RGB':
-            img = img.convert('RGB')
-
+        img = _flatten_rgb(img)
         img.thumbnail((MAX_DIM, MAX_DIM), Image.LANCZOS)
 
         for quality in _QUALITY_STEPS:
@@ -152,3 +156,40 @@ def normalize(value: str) -> str:
         return out
     except Exception:
         return ''
+
+
+# ─── Stock document photos ──────────────────────────────────────────────────
+# Unlike a product thumbnail these are evidence — a damaged box, a signed
+# delivery note — so they keep enough resolution to read handwriting.  The
+# backoffice form already shrinks them in the browser (to get under nginx's
+# 10 MB request cap); this re-encode is the backstop that holds whatever the
+# browser sent.
+
+ATTACHMENT_MAX_DIM = 1600
+ATTACHMENT_QUALITY = 78
+
+
+class InvalidImage(ValueError):
+    """The upload is not an image Pillow can read."""
+
+
+def compress_attachment(fileobj) -> tuple[bytes, int, int]:
+    """Downscale an uploaded photo and re-encode it as JPEG.
+
+    Returns ``(jpeg_bytes, width, height)``.  Raises ``InvalidImage`` for
+    anything that is not a readable image — the extension and the browser's
+    content type are not trusted.  Re-encoding also drops EXIF, so a phone's
+    GPS position never reaches the database.
+    """
+    try:
+        img = Image.open(fileobj)
+        img.load()
+    except Exception as exc:  # UnidentifiedImageError, OSError, DecompressionBombError
+        raise InvalidImage(str(exc)) from exc
+    try:
+        img = ImageOps.exif_transpose(img)
+        img = _flatten_rgb(img)
+        img.thumbnail((ATTACHMENT_MAX_DIM, ATTACHMENT_MAX_DIM), Image.LANCZOS)
+        return _to_jpeg(img, ATTACHMENT_QUALITY), img.width, img.height
+    except Exception as exc:
+        raise InvalidImage(str(exc)) from exc

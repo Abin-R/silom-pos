@@ -1928,6 +1928,31 @@ class StockDocumentItem(models.Model):
     reconcile_qty = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
 
+class StockDocumentImage(models.Model):
+    """A photo attached to a stock document (the backoffice's Create stock out).
+
+    Stored in the database like product images — this project has no media
+    storage, and the database is what gets backed up. Each photo is downscaled
+    and re-encoded as JPEG on upload (``images.compress_attachment``), so a row
+    is a few hundred KB, not a multi-MB phone original. Lists never load these;
+    only the single-document page links to them, and they are served one by one
+    by ``backoffice.views.stock_document_image``.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(
+        StockDocument, on_delete=models.CASCADE, related_name="images",
+    )
+    data = models.BinaryField()
+    content_type = models.CharField(max_length=40, default="image/jpeg")
+    width = models.PositiveIntegerField(default=0)
+    height = models.PositiveIntegerField(default=0)
+    original_name = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
 # ─── Production requests (branch → central kitchen) ─────────────────────────
 class ProductionCutoffPolicy(models.Model):
     """An append-only, effective-dated production request deadline rule.

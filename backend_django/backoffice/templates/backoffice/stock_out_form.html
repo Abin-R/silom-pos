@@ -6,6 +6,11 @@
   document is read-only; a mistake is corrected with Stock in or Adjust.
 
   The price column starts at the product's cost, like the till's form.
+
+  Images: optional photos (damage, a signed note). The page shrinks each one
+  in the browser before upload — phone originals would trip nginx's 10 MB
+  request cap — and the server re-encodes whatever arrives. Only the saved
+  document's own page shows them, never the list.
 {% endcomment %}
 
 {% block title %}Create stock out{% endblock %}
@@ -44,6 +49,15 @@
   .ck-dlg-list tr.dis { cursor: default; opacity: .5; }
   .ck-dlg-f { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
   .ck-dlg-f .sub { margin-right: auto; }
+  .so-imgs { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .so-img { position: relative; width: 92px; height: 92px; border-radius: 10px; overflow: hidden;
+            border: 1px solid var(--line); background: var(--line2); }
+  .so-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .so-img .ico-btn { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px;
+                     background: rgba(17, 24, 39, .65); color: #fff; border-radius: 50%; }
+  .so-img .ico-btn svg { width: 14px; height: 14px; }
+  .so-img-hint { font-size: 12.5px; color: var(--mut2); margin-top: 6px; }
+  .so-img-err { font-size: 12.5px; color: var(--red, #dc2626); margin-top: 6px; }
   @media (max-width: 640px) {
     .ck-hide-sm { display: none; }
     .ck-qty { width: 72px; }
@@ -55,7 +69,7 @@
 {% if not branch %}
   <div class="panel"><div class="ck-empty">Add a branch first — a stock-out belongs to one.</div></div>
 {% else %}
-<form method="post" id="ckForm">
+<form method="post" id="ckForm" enctype="multipart/form-data">
   {% csrf_token %}
   {% if error %}<div class="banner b-red" role="alert" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><span>{{ error }}</span></div>{% endif %}
 
@@ -84,6 +98,15 @@
       <div class="field wide">
         <label for="f-note">Note</label>
         <textarea id="f-note" name="note" rows="2" placeholder="Optional">{{ posted.note|default:'' }}</textarea>
+      </div>
+      <div class="field wide">
+        <label for="soImgInput">Images</label>
+        <div class="so-imgs" id="soImgs">
+          <button type="button" class="btn btn-sm" id="soImgAdd"><svg><use href="#i-plus"/></svg> Add images</button>
+        </div>
+        <input id="soImgInput" type="file" name="images" accept="image/*" multiple hidden>
+        <div class="so-img-hint">Optional · photos only · up to 10 · resized before upload</div>
+        <div class="so-img-err" id="soImgErr" hidden></div>
       </div>
     </div>
   </div>
@@ -310,7 +333,109 @@
     if (!rows.querySelector("tr")) {
       e.preventDefault();
       empty.textContent = "Add at least one product before saving.";
+    } else if (imgBusy) {
+      e.preventDefault();
+      imgErr.textContent = "Still preparing the images — try Save again in a moment.";
+      imgErr.hidden = false;
     }
+  });
+
+  // ── Images ──────────────────────────────────────────────────────────────
+  // The chosen photos live in imgFiles (already shrunk); the file input is
+  // re-filled from that list after every change so the form posts exactly
+  // what the thumbnails show, and picking again adds rather than replaces.
+  var MAX_IMAGES = 10, MAX_DIM = 1600, QUALITY = 0.8;
+  var imgInput = document.getElementById("soImgInput");
+  var imgBox = document.getElementById("soImgs");
+  var imgAdd = document.getElementById("soImgAdd");
+  var imgErr = document.getElementById("soImgErr");
+  var ckSave = document.getElementById("ckSave");
+  var imgFiles = [];
+  var imgBusy = 0;
+
+  function shrink(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var im = new Image();
+      im.onload = function () {
+        var scale = Math.min(1, MAX_DIM / Math.max(im.naturalWidth, im.naturalHeight));
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(im.naturalWidth * scale));
+        c.height = Math.max(1, Math.round(im.naturalHeight * scale));
+        var ctx = c.getContext("2d");
+        ctx.fillStyle = "#fff";  // JPEG has no transparency
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (blob) {
+          if (!blob) return reject();
+          var name = (file.name || "image").replace(/\.[^.]*$/, "") + ".jpg";
+          resolve(new File([blob], name, { type: "image/jpeg" }));
+        }, "image/jpeg", QUALITY);
+      };
+      im.onerror = function () { URL.revokeObjectURL(url); reject(); };
+      im.src = url;
+    });
+  }
+  function syncInput() {
+    try {
+      var dt = new DataTransfer();
+      imgFiles.forEach(function (f) { dt.items.add(f); });
+      imgInput.files = dt.files;
+    } catch (err) { /* very old browser: the last pick is posted as chosen */ }
+  }
+  function drawImages() {
+    imgBox.querySelectorAll(".so-img").forEach(function (n) {
+      if (n.dataset.url) URL.revokeObjectURL(n.dataset.url);
+      n.remove();
+    });
+    imgFiles.forEach(function (f, i) {
+      var url = URL.createObjectURL(f);
+      var cell = el("div", { "class": "so-img", "data-url": url });
+      cell.appendChild(el("img", { src: url, alt: f.name }));
+      var x = el("button", { type: "button", "class": "ico-btn", "data-i": String(i), "aria-label": "Remove " + f.name });
+      x.appendChild(icon("i-x"));
+      cell.appendChild(x);
+      imgBox.insertBefore(cell, imgAdd);
+    });
+    imgAdd.hidden = imgFiles.length >= MAX_IMAGES;
+  }
+  imgAdd.addEventListener("click", function () { imgInput.click(); });
+  imgBox.addEventListener("click", function (e) {
+    var b = e.target.closest(".so-img .ico-btn");
+    if (!b) return;
+    imgFiles.splice(Number(b.dataset.i), 1);
+    syncInput();
+    drawImages();
+  });
+  imgInput.addEventListener("change", function () {
+    var picked = Array.prototype.slice.call(imgInput.files || []);
+    var problems = [];
+    var room = MAX_IMAGES - imgFiles.length;
+    if (picked.length > room) {
+      problems.push("Only " + MAX_IMAGES + " images per document — the extra were left out.");
+      picked = picked.slice(0, Math.max(0, room));
+    }
+    imgBusy += 1;
+    ckSave.disabled = true;
+    Promise.all(picked.map(function (f) {
+      if (f.type && f.type.indexOf("image/") !== 0) {
+        problems.push(f.name + " is not an image.");
+        return null;
+      }
+      return shrink(f).catch(function () {
+        problems.push("Couldn't read " + f.name + " — use a JPEG or PNG photo.");
+        return null;
+      });
+    })).then(function (done) {
+      done.forEach(function (f) { if (f) imgFiles.push(f); });
+      imgBusy -= 1;
+      ckSave.disabled = imgBusy > 0;
+      syncInput();
+      drawImages();
+      imgErr.textContent = problems.join(" ");
+      imgErr.hidden = !problems.length;
+    });
   });
 
   posted.forEach(function (l) { if (byId[l.id]) addRow(byId[l.id], l.qty, l.price); });
