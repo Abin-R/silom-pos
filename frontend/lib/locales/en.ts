@@ -727,7 +727,7 @@ const en = {
     vat_7_pct_on_fee: "VAT 7% on fee",
     visa_mastercard_jcb_scan_to_pay: "VISA · Mastercard · JCB · scan to pay by card",
     waiting_for_card_payment: "Waiting for card payment…",
-    waiting_for_customer_to_scan: "Waiting for customer to scan…",
+    waiting_for_customer_to_pay: "Waiting for customer to pay…",
     beam_leave_title: "Customer may have already paid",
     beam_leave_message: "Beam has not confirmed this QR yet. If the customer has just paid, keep waiting: the sale saves itself when the payment arrives. Cancel only if the customer has not paid.",
     beam_keep_waiting: "Keep waiting",

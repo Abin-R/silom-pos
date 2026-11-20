@@ -719,7 +719,7 @@ const th = {
     vat_7_pct_on_fee: "VAT 7% ของค่าธรรมเนียม",
     visa_mastercard_jcb_scan_to_pay: "VISA · Mastercard · JCB · สแกนเพื่อชำระด้วยบัตร",
     waiting_for_card_payment: "รอการชำระเงินด้วยบัตร…",
-    waiting_for_customer_to_scan: "รอลูกค้าสแกน…",
+    waiting_for_customer_to_pay: "รอลูกค้าชำระเงิน…",
     beam_leave_title: "ลูกค้าอาจชำระเงินแล้ว",
     beam_leave_message: "Beam ยังไม่ยืนยัน QR นี้ หากลูกค้าเพิ่งชำระเงิน กรุณารอสักครู่ ระบบจะบันทึกการขายให้อัตโนมัติเมื่อได้รับเงิน กดยกเลิกเฉพาะเมื่อลูกค้ายังไม่ได้ชำระเงิน",
     beam_keep_waiting: "รอต่อ",
