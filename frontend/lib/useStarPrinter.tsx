@@ -25,7 +25,7 @@
 // hidden overlay and one receiptRef, so concurrent captures are not possible.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { View, type ViewInstance } from "react-native";
 import { captureRef } from "react-native-view-shot";
 import { ReceiptImage, RECEIPT_WIDTH } from "../components/ReceiptImage";
 import type { PrinterConfig, ReceiptOrder, ReceiptShop } from "./starPrinter";
@@ -49,7 +49,7 @@ const QUEUE_POLL_MS = 30_000;
 const LAYOUT_SETTLE_MS = 300;     // wait for Sarabun glyphs to shape
 
 export function useStarPrinter() {
-  const receiptRef = useRef<View>(null);
+  const receiptRef = useRef<ViewInstance>(null);
 
   // FIFO of prints awaiting capture.  jobs[0] is the one being worked on.
   // Appending never changes jobs[0]'s identity, so enqueuing a new print
