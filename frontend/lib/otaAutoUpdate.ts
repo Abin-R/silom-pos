@@ -85,6 +85,15 @@ export function setBusy(key: string, on: boolean): void {
   else busy.delete(key);
 }
 
+/**
+ * Is the till free to be interrupted — on the PIN or sales screen, with no
+ * cart, payment, popup or print in progress?  Also used by lib/storeUpdate
+ * to decide when the store-update prompt may appear.
+ */
+export function isTillIdle(path: string): boolean {
+  return SAFE_PATHS.has(path) && busy.size === 0 && !isDialogOpen() && !isPrinting();
+}
+
 function note(message: string, data?: Record<string, unknown>) {
   Sentry.addBreadcrumb({ category: "ota-auto", message, data, level: "info" });
 }
@@ -161,8 +170,7 @@ export function startOtaAutoUpdate(getPath: () => string): () => void {
   let idleSince: number | null = null;
   let applying = false;
 
-  const isIdle = () =>
-    SAFE_PATHS.has(getPath()) && busy.size === 0 && !isDialogOpen() && !isPrinting();
+  const isIdle = () => isTillIdle(getPath());
 
   const apply = async () => {
     applying = true;

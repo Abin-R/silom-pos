@@ -3854,6 +3854,11 @@ expo-image@~58.0.18:
   dependencies:
     sf-symbols-typescript "^2.2.0"
 
+expo-in-app-updates@^0.13.0:
+  version "0.13.0"
+  resolved "https://registry.yarnpkg.com/expo-in-app-updates/-/expo-in-app-updates-0.13.0.tgz#00e4cd58c1980345d8943021158fe764bb316f35"
+  integrity sha512-AhPQxLr1D6/ggfVNvbJNfw20qbzei55ddY7VosKEDnAtLYED780vyVP+ApFQMJeW0qYLJ63WH4KjBpw7OlrziQ==
+
 expo-json-utils@~58.0.1:
   version "58.0.1"
   resolved "https://registry.yarnpkg.com/expo-json-utils/-/expo-json-utils-58.0.1.tgz#8ed0287cb8c398cf185dbec9242865107119f972"

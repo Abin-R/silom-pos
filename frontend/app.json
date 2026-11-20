@@ -13,7 +13,9 @@
       "bundleIdentifier": "com.bravebrand.pos",
       "infoPlist": {
         "UISupportedExternalAccessoryProtocols": ["jp.star-m.starpro"],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "AppStoreID": "6835755529",
+        "AppStoreCountry": "th"
       }
     },
     "android": {

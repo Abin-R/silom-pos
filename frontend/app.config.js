@@ -33,6 +33,12 @@ const VARIANTS = {
   },
 };
 
+function withoutKeys(obj, keys) {
+  const copy = { ...(obj || {}) };
+  for (const k of keys) delete copy[k];
+  return copy;
+}
+
 module.exports = ({ config }) => {
   const variant = VARIANTS[process.env.APP_VARIANT];
   // No variant, or one we don't recognise: hand back app.json verbatim rather
@@ -44,7 +50,13 @@ module.exports = ({ config }) => {
     ...config,
     name: variant.name,
     scheme: variant.scheme,
-    ios: { ...config.ios, bundleIdentifier: variant.iosBundleIdentifier },
+    ios: {
+      ...config.ios,
+      bundleIdentifier: variant.iosBundleIdentifier,
+      // AppStoreID points the store-update check (lib/storeUpdate) at the
+      // real app's listing; the test app must not offer to "update" to it.
+      infoPlist: withoutKeys(config.ios?.infoPlist, ["AppStoreID", "AppStoreCountry"]),
+    },
     android: { ...config.android, package: variant.androidPackage },
   };
 };

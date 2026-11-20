@@ -13,6 +13,7 @@ import { throttleBeforeSend } from "../lib/sentryThrottle";
 import { endSession, startAppLock } from "../lib/appLock";
 import { PrinterHost } from "../lib/printerHost";
 import { startOtaAutoUpdate } from "../lib/otaAutoUpdate";
+import { startStoreUpdateCheck } from "../lib/storeUpdate";
 import { OtaStatus } from "../components/OtaStatus";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
@@ -91,6 +92,10 @@ function RootLayout() {
   // Over-the-air updates install themselves the first moment the till is
   // idle, and keep whoever is signed in signed in. See lib/otaAutoUpdate.
   useEffect(() => startOtaAutoUpdate(() => pathRef.current), []);
+
+  // A newer store build (native changes OTA can't carry): offer it once the
+  // till is free. See lib/storeUpdate.
+  useEffect(() => startStoreUpdateCheck(() => pathRef.current), []);
 
   const [fontsLoaded] = useFonts({
     Sarabun: require("../assets/fonts/Sarabun-Regular.ttf"),
