@@ -735,6 +735,13 @@ class Settings(models.Model):
     # Admins change the time; nobody can reopen a locked request.
     production_cutoff = models.TimeField(default=datetime.time(23, 30))
 
+    # Tills on a build older than the one live in Google Play / the App Store
+    # are sent straight to the store's update screen and cannot be used until
+    # they update (frontend lib/storeUpdate.ts). This is the off switch for
+    # when that goes wrong: a bad build, or tills that cannot install it.
+    # Read by tills through the public /api/app-config.
+    force_app_update = models.BooleanField(default=True)
+
     # Printer
     printer_enabled = models.BooleanField(default=False)
     printer_transport = models.CharField(max_length=16, default="disabled")

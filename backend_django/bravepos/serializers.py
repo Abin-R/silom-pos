@@ -276,7 +276,9 @@ class SettingsSerializer(serializers.ModelSerializer):
         # Older till clients may continue sending this key; DRF ignores a
         # read-only field rather than letting a POS PUT bypass the append-only
         # admin policy transition.
-        read_only_fields = ('id', 'production_cutoff')
+        # force_app_update is the backoffice's off switch for forced till
+        # updates; a till must not be able to switch it off for everyone.
+        read_only_fields = ('id', 'production_cutoff', 'force_app_update')
 
 
 class OrderItemSerializer(serializers.ModelSerializer):

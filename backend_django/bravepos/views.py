@@ -34,7 +34,7 @@ from .gateways import GatewayConfigError, GatewayError, get_shop_settings
 from .models import (
     Branch, BranchSession, Category, Customer, DiscountType, DrawerCategory,
     Order, OrderItem,
-    ParkedOrder, Product, SelfOrder, Shift, ShiftMovement, Staff,
+    ParkedOrder, Product, SelfOrder, Settings, Shift, ShiftMovement, Staff,
     StockMovement, StockDocument, StockDocumentImage, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride, SuggestionRule, TillBeamCharge,
 )
@@ -211,6 +211,19 @@ class TillPermissionMixin:
 @api_view(['GET'])
 def api_root(_request):
     return Response({'service': 'bravepos', 'status': 'ok'})
+
+
+@api_view(['GET'])
+def app_config(_request):
+    """Public: what a till needs to know before anyone signs in.
+
+    The forced store update (frontend lib/storeUpdate.ts) runs on the PIN
+    screen, where a till may hold no session, so this needs no auth. It only
+    reveals whether forced updates are on. A till asks only after the store
+    has reported a newer build, so a normal day sends no requests here.
+    """
+    row = Settings.objects.filter(id='shop').only('force_app_update').first()
+    return Response({'force_app_update': row.force_app_update if row else True})
 
 
 # ─── Auth (email + password, branch-scoped session) ──────────────────────────

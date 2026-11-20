@@ -29,6 +29,8 @@ _register(router_no_slash)
 urlpatterns = [
     # Healthcheck
     path('', views.api_root),
+    # Forced store update switch, read before sign-in.
+    path('app-config', views.app_config),
 
     # Discount presets for the cart-item dropdown (branch-gated).
     path('discount-types', views.discount_types),

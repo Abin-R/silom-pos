@@ -6877,6 +6877,11 @@ def shop_settings(request):
             except Exception:
                 pass
             settings_row.service_charge_enabled = settings_row.service_charge_percent > 0
+            # Admins only, and only when the form carried the tick: a cashier's
+            # form has no such field and must not switch forced updates off.
+            if (getattr(request.user, "role", "") == "admin"
+                    and request.POST.get("force_app_update_shown")):
+                settings_row.force_app_update = bool(request.POST.get("force_app_update"))
 
         requested_cutoff = None
         cutoff_baseline = None

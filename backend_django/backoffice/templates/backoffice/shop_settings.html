@@ -84,6 +84,19 @@
           {% endif %}
           <span class="hint">On the day before delivery. Changes apply only to delivery dates that are still open; closed dates never reopen. Only admins can change the time.</span>
         </div>
+        <div class="field wide">
+          {% if can_edit_cutoff %}
+          <input type="hidden" name="force_app_update_shown" value="1">
+          <label class="check">
+            <input type="checkbox" name="force_app_update" {% if settings.force_app_update %}checked{% endif %}>
+            Force app updates on the tills
+          </label>
+          {% else %}
+          <label>Force app updates on the tills</label>
+          <b>{% if settings.force_app_update %}On{% else %}Off{% endif %}</b>
+          {% endif %}
+          <span class="hint">When a new version is live in Google Play or the App Store, tills open its update screen and cannot be used until they update. Untick if a new version is faulty or a till cannot install it; tills then open normally. Only admins can change this.</span>
+        </div>
       </div>
     </div>
 

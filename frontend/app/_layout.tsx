@@ -93,8 +93,8 @@ function RootLayout() {
   // idle, and keep whoever is signed in signed in. See lib/otaAutoUpdate.
   useEffect(() => startOtaAutoUpdate(() => pathRef.current), []);
 
-  // A newer store build (native changes OTA can't carry): offer it once the
-  // till is free. See lib/storeUpdate.
+  // A newer store build (native changes OTA can't carry): open the store's
+  // update screen once the till is free; no "Later". See lib/storeUpdate.
   useEffect(() => startStoreUpdateCheck(() => pathRef.current), []);
 
   const [fontsLoaded] = useFonts({

@@ -586,11 +586,6 @@ const en = {
     installing_note: "Back in a few seconds. You stay signed in.",
   },
   store_update: {
-    title: "App update available",
-    message_android: "A new version of Brave POS is on Google Play. Updating takes a minute or two, then the app reopens and asks for your PIN.",
-    message_ios: "A new version of Brave POS is on the App Store. Tap Update now to open it there.",
-    update: "Update now",
-    later: "Later",
     failed: "Couldn't start the update. Try again later, or update from the store.",
   },
   pos: {
