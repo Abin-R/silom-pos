@@ -47,6 +47,7 @@ import {
 } from "../lib/loyalty";
 import { t as tr, useT } from "../lib/i18n";
 import { useRefundDue } from "../lib/refundDue";
+import { checkTillStock } from "../lib/grabHolds";
 import {
   comboSetsWith,
   freeProductFor,
@@ -284,6 +285,10 @@ export default function POS() {
   // catalogue's "Till order" view); a category shows its part of that list.
   const [activeCat, setActiveCat] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
+  // The hold check freezes every paid/free cart mutation until its answer is
+  // known, so the payment sheet can only open for the cart BravePOS checked.
+  const checkingRef = useRef(false);
+  const parkingRef = useRef(false);
   const [editItem, setEditItem] = useState<CartItem | null>(null); // cart-item edit modal
   // The branch's discount presets, or null when the branch doesn't use them —
   // null keeps the cart-item modal's plain ฿/% box, exactly as before.
@@ -297,6 +302,7 @@ export default function POS() {
   // Every cart change goes through here so combinations and free items are
   // recomputed from what is actually in the cart (lib/discountRules).
   const commitCart = useCallback((fn: (c: CartItem[]) => CartItem[]) => {
+    if (checkingRef.current || parkingRef.current) return;
     setCart((c) => reconcileDiscounts(fn(c), presetsRef.current));
   }, []);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -663,6 +669,7 @@ export default function POS() {
   };
 
   const clearCart = () => {
+    if (checkingRef.current || parkingRef.current) return;
     setCart([]);
     setCustomer(null);
   };
@@ -683,7 +690,11 @@ export default function POS() {
    * without a word, so letting this through means the reward is handed across
    * the counter with nothing recording it.
    */
-  const startPayment = (afterClose?: () => void) => {
+  // The same fact for the screen: Pay shows "Checking…" and is disabled while
+  // the Grab-holds check is out (it can take a few seconds on a poor line).
+  const [checkingGrab, setCheckingGrab] = useState(false);
+
+  const startPayment = async (afterClose?: () => void) => {
     const stranded = rewardsBelowMinimum(loyalty, total);
     if (stranded.length) {
       const r = stranded[0];
@@ -694,6 +705,40 @@ export default function POS() {
         }),
       );
       return;
+    }
+    // Units BravePOS is holding for Grab orders cannot be sold here. Checked
+    // before the payment screen so no money is taken for a blocked sale, for
+    // any payment method, and with no override. A check that cannot be
+    // answered blocks as well: a sale never passes unchecked.
+    if (checkingRef.current || parkingRef.current) return;
+    checkingRef.current = true;
+    setCheckingGrab(true);
+    try {
+      const check = await checkTillStock(
+        (body, signal) =>
+          apiFetch(`${API}/grab/till-check`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal,
+          }),
+        cart,
+      );
+      if (check.status === "blocked") {
+        showToast(
+          check.blocked
+            .map((b) => tr("pos.grab_held", { name: b.name, count: b.can_sell }))
+            .join("\n"),
+        );
+        return;
+      }
+      if (check.status === "unavailable") {
+        showToast(tr("pos.grab_check_failed"));
+        return;
+      }
+    } finally {
+      checkingRef.current = false;
+      setCheckingGrab(false);
     }
     afterClose?.();
     setShowPayment(true);
@@ -868,28 +913,24 @@ export default function POS() {
   };
 
   const parkCurrentOrder = async () => {
-    if (cart.length === 0) return;
-    // `name`, not `label` — the backend's ParkedOrderSerializer requires
-    // `name` and has no `subtotal` field, so sending either of the old keys
-    // made every park attempt fail its validation with HTTP 400.  Clearing
-    // the cart unconditionally afterwards meant the cashier lost the order
-    // outright: the modal closed as if it had saved, and there was nothing
-    // to retrieve.
-    const res = await apiFetch(`${API}/parked-orders`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: `Order ${new Date().toLocaleTimeString().slice(0, 5)}`,
-        items: cart,
-      }),
-    });
-    if (!res.ok) {
-      showAlert(tr("pos.couldnt_park_order"), tr("pos.please_try_again"));
-      return;
+    if (cart.length === 0 || checkingRef.current || parkingRef.current) return;
+    parkingRef.current = true;
+    try {
+      const res = await apiFetch(`${API}/parked-orders`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `Order ${new Date().toLocaleTimeString().slice(0, 5)}`, items: cart }),
+      });
+      if (!res.ok) {
+        showAlert(tr("pos.couldnt_park_order"), tr("pos.please_try_again"));
+        return;
+      }
+      setCart([]);
+      setCustomer(null);
+      setShowParked(false);
+      refreshBadges();
+    } finally {
+      parkingRef.current = false;
     }
-    clearCart();
-    setShowParked(false);
-    refreshBadges();
   };
 
   // A product card is flex:1, so a lone item on the last row stretches to the
@@ -1305,6 +1346,7 @@ export default function POS() {
               onRemoveCustomer={() => setCustomer(null)}
               onPickCustomer={() => setShowCustomer(true)}
               onPay={() => startPayment()}
+              checking={checkingGrab}
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
@@ -1453,6 +1495,7 @@ export default function POS() {
               // the note on onPickCustomer above — but only once the bill has
               // actually passed, or the sheet closes on a refusal.
               onPay={() => startPayment(() => setShowCart(false))}
+              checking={checkingGrab}
               onInc={(pid) => updateQty(pid, 1)}
               onDec={(pid) => updateQty(pid, -1)}
               onRemove={removeItem}
@@ -1507,9 +1550,13 @@ export default function POS() {
         onClose={() => setShowParked(false)}
         currentCart={cart}
         onPark={parkCurrentOrder}
-        onRetrieve={(items) => {
-          commitCart(() => items);
+        onRetrieve={async (items) => {
+          if (checkingRef.current || parkingRef.current) return false;
+          parkingRef.current = true;
+          setCart(reconcileDiscounts(items, presetsRef.current));
           setShowParked(false);
+          parkingRef.current = false;
+          return true;
         }}
       />
       <SuccessModal
@@ -2102,6 +2149,7 @@ function CartSidebar({
   onRemoveCustomer,
   onPickCustomer,
   onPay,
+  checking,
   onInc,
   onDec,
   onRemove,
@@ -2127,6 +2175,8 @@ function CartSidebar({
    *  control can be: there is no action bar under the grid to carry it. */
   onPickCustomer: () => void;
   onPay: () => void;
+  /** The Grab-holds check is out: Pay is disabled and says so. */
+  checking?: boolean;
   onInc: (pid: string) => void;
   onDec: (pid: string) => void;
   onRemove: (pid: string) => void;
@@ -2338,15 +2388,18 @@ function CartSidebar({
         style={[
           styles.checkout,
           dense && styles.checkoutDense,
-          cart.length === 0 && styles.checkoutOff,
+          (cart.length === 0 || checking) && styles.checkoutOff,
         ]}
-        disabled={cart.length === 0}
+        disabled={cart.length === 0 || checking}
         onPress={onPay}
         activeOpacity={0.85}
         testID="pay-btn"
+        accessibilityState={{ disabled: cart.length === 0 || !!checking, busy: !!checking }}
       >
         <Ionicons name="lock-closed-outline" size={20} color={C.surface} />
-        <Text style={styles.checkoutText}>{tr("pos.checkout")}</Text>
+        <Text style={styles.checkoutText}>
+          {checking ? tr("pos.grab_checking") : tr("pos.checkout")}
+        </Text>
         <View style={{ flex: 1 }} />
         <Money style={styles.checkoutAmt}>{THB(total)}</Money>
       </TouchableOpacity>
@@ -4660,10 +4713,11 @@ function ParkedOrdersModal({
   onClose: () => void;
   currentCart: CartItem[];
   onPark: () => void;
-  onRetrieve: (items: CartItem[]) => void;
+  onRetrieve: (items: CartItem[]) => Promise<boolean>;
 }) {
   useT(); // re-render this screen when the language changes
   const [parked, setParked] = useState<ParkedOrder[]>([]);
+  const retrievingRef = useRef(new Set<string>());
 
   const load = async () => {
     const res = await apiFetch(`${API}/parked-orders`);
@@ -4704,12 +4758,17 @@ function ParkedOrdersModal({
     }
   };
 
-  const retrieve = (item: ParkedOrder) => {
+  const retrieve = async (item: ParkedOrder) => {
     // Guarded the same way: without it a double-tap loads the cart twice as
     // well as firing the second DELETE.
-    if (deletingRef.current.has(item.id)) return;
-    onRetrieve(item.items);
-    del(item.id);
+    if (deletingRef.current.has(item.id) || retrievingRef.current.has(item.id)) return;
+    retrievingRef.current.add(item.id);
+    try {
+      const applied = await onRetrieve(item.items);
+      if (applied) await del(item.id);
+    } finally {
+      retrievingRef.current.delete(item.id);
+    }
   };
 
   return (

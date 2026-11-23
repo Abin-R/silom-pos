@@ -8,14 +8,16 @@ service layer.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, Max, Q
 from django.utils import timezone as djtz
 
+from . import grab_sync, stock_pool
 from .gateways import (
     BEAM_CARD_METHOD,
     BEAM_METHODS,
@@ -24,8 +26,10 @@ from .gateways import (
     get_shop_settings,
 )
 from .models import (
-    Branch, DiscountType, Order, OrderItem, Product, Shift, StockMovement,
+    Branch, DiscountType, GrabOrderHold, Order, OrderItem, Product, Shift, StockMovement,
 )
+
+logger = logging.getLogger('bravepos')
 
 # How a promotion's free item is labelled in stock history: the start of its
 # StockMovement note, which is also how a void finds it to put it back.
@@ -43,6 +47,12 @@ _UNSET = object()
 # the loser gets an IntegrityError.  Retrying is enough because the window is
 # tiny and each retry re-reads the (now higher) max.
 ORDER_NUMBER_MAX_RETRIES = 6
+
+# PostgreSQL picks one transaction to abort when two wait on each other (40P01),
+# or when it cannot serialise them (40001).  The whole sale rolled back, so
+# trying it again is safe; after this many tries the error is raised.
+DEADLOCK_MAX_TRIES = 3
+_RETRYABLE_PGCODES = ('40P01', '40001')
 
 
 def _next_order_number() -> str:
@@ -222,13 +232,33 @@ def create_order_from_items(
         shift = Shift.objects.filter(branch=branch, status='open').first()
 
     last_error: Exception | None = None
-    for _attempt in range(ORDER_NUMBER_MAX_RETRIES):
+    deadlocks = 0
+    attempt = 0
+    while attempt < ORDER_NUMBER_MAX_RETRIES:
+        attempt += 1
         try:
             with transaction.atomic():
                 # Serialise order creation for this branch.  Makes the
                 # read-then-insert of queue_number safe; order_number is global
                 # so it can still collide across branches — the retry covers that.
-                Branch.objects.select_for_update().filter(pk=branch.pk).first()
+                #
+                # ``no_key``: FOR NO KEY UPDATE, not FOR UPDATE.  Every insert of a
+                # stock movement (a Grab convert, a stock count) takes a share lock
+                # on its branch row for the foreign key, and FOR UPDATE would make
+                # each of those wait for the whole sale — while holding product rows
+                # this sale is about to ask for, which is a deadlock.  Two sales
+                # still wait for each other, which is all this lock is for.
+                Branch.objects.select_for_update(no_key=True).filter(pk=branch.pk).first()
+
+                # Then the products this sale moves, in id order.  The Grab sync
+                # (convert, correct, restore) and the stock screens lock the same
+                # rows in the same order, so none of them can wait on another in
+                # a circle.  Locked here, once, rather than row by row as each
+                # line is decremented in the order the cashier rang them up.
+                if products_by_id:
+                    list(Product.objects.select_for_update()
+                         .filter(pk__in=[p.pk for p in products_by_id.values()])
+                         .order_by('id').values_list('pk', flat=True))
 
                 # One payment is one bill.  The till's paid-yet? poll does not
                 # wait for one check to answer before starting the next, so a
@@ -242,6 +272,13 @@ def create_order_from_items(
                     if existing is not None:
                         existing.replayed = True
                         return existing
+
+                # Units held for a Grab order are not the till's to sell.  The
+                # till asked before it took payment (``grab/till-check``); this
+                # is the same check again under the lock, for a hold that landed
+                # in the seconds between.  It cannot refuse: the customer has
+                # already paid, and refusing would lose the record of the money.
+                grab_short = _grab_shortfalls(branch, items, free_items)
 
                 order = Order.objects.create(
                     branch=branch,
@@ -338,10 +375,38 @@ def create_order_from_items(
                         )
                 _record_free_items(branch, order, free_items, products_by_id,
                                    promo_codes, staff)
+                if grab_short:
+                    # So someone checks the Grab bag — after the sale commits, so
+                    # it holds no product lock while it takes the Grab hold rows
+                    # (the other order would be a circle) and never delays the
+                    # sale.  It never raises.
+                    transaction.on_commit(lambda: grab_sync.till_took_held(
+                        branch, order.order_number, grab_short, source))
                 return order
         except IntegrityError as e:
             # Almost certainly the unique order_number. Re-derive and try again.
             last_error = e
+            continue
+        except OperationalError as e:
+            # A deadlock or serialisation failure rolled the sale back whole, so it
+            # is safe to run again.  Anything else, or the last try failing, is
+            # raised: the caller gets an error, never a half-made sale, and the
+            # log says what happened (the till keeps the payment to re-submit —
+            # ``reuse_paid_bill`` makes that safe).
+            cause = getattr(e, '__cause__', None)
+            # psycopg 3 calls this ``sqlstate``; psycopg 2 exposed ``pgcode``.
+            # Accept both while the project can be run with either driver.
+            code = getattr(cause, 'sqlstate', None) or getattr(cause, 'pgcode', None)
+            if code not in _RETRYABLE_PGCODES:
+                raise
+            deadlocks += 1
+            logger.warning(
+                'Sale at %s rolled back by the database (%s), try %s of %s',
+                branch.name, code, deadlocks, DEADLOCK_MAX_TRIES)
+            if deadlocks >= DEADLOCK_MAX_TRIES:
+                logger.exception('Sale at %s lost to repeated database deadlocks', branch.name)
+                raise
+            attempt -= 1
             continue
 
     raise IntegrityError(
@@ -357,6 +422,55 @@ def _free_item_movements(order):
         branch_id=order.branch_id, type='out', document_no=order.order_number,
         note__startswith=FREE_ITEM_REASON, product__branch_id=order.branch_id,
     ).select_related('product')
+
+def _grab_shortfalls(branch, items, free_items) -> list[dict]:
+    """The lines of this sale that take units held for Grab, or ``[]``.
+
+    Only a branch linked to Grab has any.  A failure to find out must not lose a
+    sale that is already paid for, so it is logged and answers ``[]``; the
+    savepoint keeps a failed query from spoiling the sale's transaction.
+    """
+    if not branch.grab_merchant_id:
+        return []
+    wanted: dict[str, int] = {}
+    for it in list(items) + list(free_items):
+        try:
+            pid = str(uuid.UUID(str(it.get('product_id') or '')))
+            qty = int(it.get('qty', 1) or 1)
+        except (TypeError, ValueError):
+            continue
+        if qty > 0:
+            wanted[pid] = wanted.get(pid, 0) + qty
+    try:
+        with transaction.atomic():
+            shortfalls = stock_pool.till_shortfalls(branch, wanted)
+            if not shortfalls:
+                return []
+            # Keep the exact held row that made this sale short.  The callback
+            # runs after the sale commits (so it never takes a hold lock while
+            # holding product locks).  A conversion may take this hold row and
+            # wait for the sale's product lock in between; by the callback it is
+            # then converted, so looking again only for ``status=held`` loses the
+            # review.  This is deliberately a plain read: locking a hold after
+            # products would recreate that lock cycle.
+            holds = list(
+                GrabOrderHold.objects.filter(branch=branch, status=GrabOrderHold.HELD)
+                .only('id', 'items').order_by('-first_seen_at')
+            )
+            for short in shortfalls:
+                target = next(
+                    (hold for hold in holds
+                     if any(str(item.get('product_id')) == short['product_id']
+                            for item in hold.items or [])),
+                    None,
+                )
+                if target is not None:
+                    short['_hold_id'] = str(target.pk)
+            return shortfalls
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.exception('Grab hold check failed for a sale at %s', branch.name)
+        return []
+
 
 
 def _bill_stock_lines(order):

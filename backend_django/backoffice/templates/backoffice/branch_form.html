@@ -86,6 +86,17 @@
           can't issue a full tax invoice yet, so the till stops offering one.</span>
       </div>
       <div class="field">
+        <label for="f-grabid">Grab outlet</label>
+        <select id="f-grabid" name="grab_merchant_id">
+          <option value="">Not on Grab</option>
+          {% for merchant_id, store_name in grab_outlets %}
+          <option value="{{ merchant_id }}" {% if merchant_id == branch_obj.grab_merchant_id %}selected{% endif %}>{{ store_name }}{% if merchant_id in store_name %}{% else %} · {{ merchant_id }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <span class="hint">This branch's outlet on Grab, used to sync stock with Grab —
+          one outlet per branch, never shared. Blank means this branch is not synced.</span>
+      </div>
+      <div class="field">
         <label for="f-phone">Phone</label>
         <input id="f-phone" type="text" name="phone" value="{{ branch_obj.phone }}"
                placeholder="Blank inherits the shop phone">

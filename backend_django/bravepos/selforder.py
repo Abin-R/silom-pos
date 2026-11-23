@@ -44,7 +44,7 @@ from django.db.models import Q
 from django.utils import timezone as djtz
 from django.utils.dateparse import parse_datetime
 
-from . import discount_rules, discounts, gateways, images
+from . import discount_rules, discounts, gateways, images, stock_pool
 from .gateways import BEAM_CARD_METHOD, BEAM_QR_METHOD, compute_order_charges
 from .models import Branch, Order, Product, SelfOrder, Shift
 from .orders import create_order_from_items
@@ -133,33 +133,15 @@ def menu_image_ref(branch, product) -> str:
 
 
 def held_quantities(branch, exclude_pk=None) -> dict[str, int]:
-    """Units per product id under a live hold at this branch.
+    """Units per product id self-order may not sell: its own live holds, plus
+    Grab's (orders not packed yet and, while the Grab sync is down, whatever
+    Grab can still sell).  See ``stock_pool``.
 
     Free lines count: they leave the shelf like any other.  A draft stops
     counting the moment its hold lapses, it fails, or it is paid, and paying
     moves the stock in the same transaction, so a unit is never counted twice.
     """
-    drafts = SelfOrder.objects.filter(
-        branch=branch, status='pending', hold_expires_at__gt=djtz.now(),
-    )
-    if exclude_pk is not None:
-        drafts = drafts.exclude(pk=exclude_pk)
-    held: dict[str, int] = {}
-    for items in drafts.values_list('items', flat=True):
-        for pid, qty in _line_quantities(items).items():
-            held[pid] = held.get(pid, 0) + qty
-    return held
-
-
-def _line_quantities(items: list[dict]) -> dict[str, int]:
-    """Units per product id in one draft.  A product can sit on two lines, once
-    paid and once free."""
-    out: dict[str, int] = {}
-    for it in items:
-        pid = str(it.get('product_id') or '')
-        if pid:
-            out[pid] = out.get(pid, 0) + int(it.get('qty') or 0)
-    return out
+    return stock_pool.withheld_for_other_channels(branch, exclude_pk=exclude_pk)
 
 
 def is_sold_out(product, held: int = 0) -> bool:
@@ -439,7 +421,7 @@ def free_item_stock(branch, items: list[dict], exclude_pk=None) -> dict[str, str
     free_pids = {it['product_id'] for it in items if it.get('is_free')}
     if not free_pids:
         return {}
-    wanted = _line_quantities(items)
+    wanted = stock_pool.line_quantities(items)
     held = held_quantities(branch, exclude_pk=exclude_pk)
     out: dict[str, str] = {}
     for p in Product.objects.filter(pk__in=free_pids, branch=branch):
@@ -594,13 +576,14 @@ def _hold_stock(draft: SelfOrder) -> None:
             'This order has timed out. Please go back to the menu and order again.'
         )
 
-    wanted = _line_quantities(draft.items)
+    wanted = stock_pool.line_quantities(draft.items)
     free_pids = {str(it.get('product_id')) for it in draft.items if it.get('is_free')}
     with transaction.atomic():
         locked = SelfOrder.objects.select_for_update().get(pk=draft.pk)
         if locked.status != 'pending':
             raise SelfOrderError('This order is no longer awaiting payment.')
-        Branch.objects.select_for_update().filter(pk=draft.branch_id).first()
+        # no_key: the same lock as a till sale takes (see ``create_order_from_items``).
+        Branch.objects.select_for_update(no_key=True).filter(pk=draft.branch_id).first()
 
         held = held_quantities(draft.branch, exclude_pk=draft.pk)
         tracked = Product.objects.filter(

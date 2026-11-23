@@ -89,6 +89,10 @@
         <svg><use href="#i-bars"/></svg>Sales</a>
       <a class="nv {% if active == 'transactions' %}on{% endif %}" href="{% url 'backoffice:transactions' %}">
         <svg><use href="#i-orders"/></svg>Transactions{% if nav_refund_due %}<u class="alert" title="{{ nav_refund_due }} late payment{{ nav_refund_due|pluralize }} to refund">{{ nav_refund_due }}</u>{% endif %}</a>
+      {% if user.role != 'viewer' %}
+      <a class="nv {% if active == 'grab_review' %}on{% endif %}" href="{% url 'backoffice:grab_review' %}">
+        <svg><use href="#i-check"/></svg>Grab review{% if nav_grab_review %}<u class="alert" title="{{ nav_grab_review }} Grab order{{ nav_grab_review|pluralize }} to review">{{ nav_grab_review }}</u>{% endif %}</a>
+      {% endif %}
       <a class="nv {% if active == 'report_sku' %}on{% endif %}" href="{% url 'backoffice:report_sku' %}">
         <svg><use href="#i-tag"/></svg>Product performance</a>
       <a class="nv {% if active == 'report_sell' %}on{% endif %}" href="{% url 'backoffice:report_sell' %}">

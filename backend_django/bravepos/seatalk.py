@@ -13,7 +13,10 @@ Config is env vars, all read at call time:
 * ``SEATALK_BEAM_GROUP_ID`` — the group for a paid till Beam QR that no bill
   carries.  Optional: unset, those alerts go to the discount group.
 * ``SEATALK_STOCK_GROUP_ID`` — repeat stock-in/out submission alerts
-  (``stock_alerts``).  Optional: unset, they go to Bot Testing.
+  (``stock_alerts``). Optional: unset, they go to Bot Testing.
+* ``SEATALK_GRAB_GROUP_ID`` — the group the Grab stock sync's alerts go to
+  (orders for staff to review, the poller going quiet). No fallback: unset
+  means no Grab alerts.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.
@@ -54,6 +57,10 @@ def discount_group_id() -> str:
 
 def beam_group_id() -> str:
     return (os.environ.get("SEATALK_BEAM_GROUP_ID") or "").strip() or discount_group_id()
+
+
+def grab_group_id() -> str:
+    return (os.environ.get("SEATALK_GRAB_GROUP_ID") or "").strip()
 
 
 def is_configured() -> bool:

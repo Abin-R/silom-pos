@@ -1,0 +1,147 @@
+{% extends "backoffice/base.html" %}
+{% load humanize %}
+{% comment %}
+  Grab review.  A Grab order the stock sync could not settle by itself: a
+  cancel that came after the driver may have taken the food, an item that
+  matches no product at this branch, a bundle that does not add up, an order
+  that has sat open for hours, or a till sale that took units held for it.
+
+  Deduct   — a held order is deducted from stock now; a converted one is left as it is.
+  Restore  — a held order is released; a converted order returns only the reviewed quantities after staff physically receive them.
+  Ignore   — close the review, no stock change (a held order is released
+             without deducting; a converted one keeps its deduction).
+
+  Follows the late self-order payments page (Transactions › Refund due): a
+  list of what is waiting, a button per decision, and who settled what below.
+{% endcomment %}
+
+{% block title %}Grab review{% endblock %}
+{% block page_title %}Grab review{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">Grab orders that need a person to decide · {{ branch.name|default:"no branch" }}</div>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+  .grab-review .review-field-label { display: none; }
+  .grab-review .review-action-cell { white-space: nowrap; }
+  .grab-review .review-detail { word-break: break-all; }
+  .grab-review .review-visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0);
+    white-space: nowrap; border: 0;
+  }
+  @media (max-width: 720px) {
+    .grab-review, .grab-review .panel, .grab-review .panel-scroll { min-width: 0; }
+    .grab-review .panel-h { flex-wrap: wrap; }
+    .grab-review .panel-scroll .tbl { display: block; min-width: 0; }
+    .grab-review .tbl thead {
+      position: absolute; width: 1px; height: 1px; padding: 0;
+      margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0);
+      white-space: nowrap; border: 0;
+    }
+    .grab-review .tbl tbody, .grab-review .tbl tr { display: block; width: 100%; }
+    .grab-review .review-row { padding: 4px 0; border-bottom: 1px solid var(--line2); }
+    .grab-review .review-row:last-child { border-bottom: 0; }
+    .grab-review .tbl .review-row td {
+      display: block; width: 100%; min-width: 0; box-sizing: border-box;
+      text-align: left; white-space: normal; overflow-wrap: anywhere; border-bottom: 0;
+    }
+    .grab-review .review-field-label {
+      display: block; margin-bottom: 4px; font-size: 11.5px;
+      font-weight: 650; letter-spacing: .03em; text-transform: uppercase; color: var(--mut);
+    }
+    .grab-review .review-detail { word-break: normal; }
+    .grab-review .review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .grab-review .review-actions form { flex: 1 1 100%; min-width: 0; }
+    .grab-review .tbl .empty { display: block; width: 100%; box-sizing: border-box; white-space: normal; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row grab-review" style="flex:1;flex-direction:column;gap:14px;align-items:stretch">
+  <div class="panel">
+    <div class="panel-h">Waiting for a decision
+      <div class="spacer"></div>
+      <span style="font-size:13px;color:var(--mut)">{{ open_rows|length }} open{% if open_elsewhere %} · {{ open_elsewhere }} at other branches{% endif %}</span>
+    </div>
+    <div class="panel-scroll">
+      <table class="tbl" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th style="width:120px" role="columnheader" scope="col" id="grab-open-0">Order</th><th style="width:150px" role="columnheader" scope="col" id="grab-open-1">Why</th><th role="columnheader" scope="col" id="grab-open-2">Items</th>
+            <th style="width:150px" role="columnheader" scope="col" id="grab-open-3">Grab state</th><th style="width:130px" role="columnheader" scope="col" id="grab-open-4">Seen</th>
+            <th class="r" style="width:300px" role="columnheader" scope="col" id="grab-open-5"><span class="review-visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          {% for r in open_rows %}
+          <tr role="row" class="review-row">
+            <td class="money" style="font-weight:650" role="cell" headers="grab-open-0"><span class="review-field-label" aria-hidden="true">Order</span>{{ r.display_id }}
+              <div style="font-size:11px;color:var(--mut);font-weight:400">{{ r.order_id }}</div></td>
+            <td role="cell" headers="grab-open-1"><span class="review-field-label" aria-hidden="true">Why</span><span class="tag t-low">{{ r.reason_label }}</span>
+              <div style="font-size:12px;color:var(--mut);margin-top:4px">{{ r.reason_text }}.</div>
+              {% if r.detail_text %}<div class="review-detail" style="font-size:11px;color:var(--mut2);margin-top:2px">{{ r.detail_text }}</div>{% endif %}
+            </td>
+            <td role="cell" headers="grab-open-2"><span class="review-field-label" aria-hidden="true">Items</span>{% for it in r.items %}{{ it.name }} ×{{ it.qty }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+              {% if r.returns %}<div style="font-size:12px;color:var(--mut);margin-top:4px">Return after physical receipt: {% for it in r.returns %}{{ it.name }} ({{ it.barcode }}) ×{{ it.qty }}{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+            <td role="cell" headers="grab-open-3"><span class="review-field-label" aria-hidden="true">Grab state</span>{{ r.grab_state|default:"—" }}
+              <div style="font-size:11px;color:var(--mut)">{{ r.status }}</div></td>
+            <td class="money" role="cell" headers="grab-open-4"><span class="review-field-label" aria-hidden="true">Seen</span>{{ r.first_seen_at|date:"d M, H:i" }}</td>
+            <td class="r review-action-cell" role="cell" headers="grab-open-5"><span class="review-field-label" aria-hidden="true">Actions</span>
+              <div class="review-actions">
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'deduct' %}" style="display:inline"
+                    onsubmit="return confirm('Deduct {{ r.display_id|escapejs }}? A held order is taken out of stock now; one already deducted is left as it is.')">
+                {% csrf_token %}<input type="hidden" name="expected_signature" value="{{ r.expected_signature }}"><input type="hidden" name="proposal_version" value="{{ r.proposal_version }}"><button class="btn btn-sm" type="submit">Deduct</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'restore' %}" style="display:inline"
+                    onsubmit="return confirm('Restore {{ r.display_id|escapejs }}? Confirm staff physically received and unpacked exactly the listed return quantities; only those quantities will return to stock.')">
+                {% csrf_token %}<input type="hidden" name="expected_signature" value="{{ r.expected_signature }}"><input type="hidden" name="proposal_version" value="{{ r.proposal_version }}"><button class="btn btn-sm" type="submit">Restore</button>
+              </form>
+              <form method="post" action="{% url 'backoffice:grab_review_settle' r.id 'ignore' %}" style="display:inline"
+                    onsubmit="return confirm('Ignore {{ r.display_id|escapejs }}? The review closes and stock is not changed.')">
+                {% csrf_token %}<input type="hidden" name="expected_signature" value="{{ r.expected_signature }}"><input type="hidden" name="proposal_version" value="{{ r.proposal_version }}"><button class="btn btn-sm" type="submit">Ignore</button>
+              </form>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr role="row"><td colspan="6" class="empty">
+            <svg><use href="#i-inbox"/></svg>
+            Nothing to review. Grab orders the sync cannot settle appear here.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">Settled in the last {{ settled_days }} days</div>
+    <div class="panel-scroll">
+      <table class="tbl" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th style="width:120px" role="columnheader" scope="col" id="grab-settled-0">Order</th><th role="columnheader" scope="col" id="grab-settled-1">Why</th><th role="columnheader" scope="col" id="grab-settled-2">Outcome</th><th role="columnheader" scope="col" id="grab-settled-3">By</th>
+            <th style="width:130px" role="columnheader" scope="col" id="grab-settled-4">When</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          {% for r in settled_rows %}
+          <tr role="row" class="review-row">
+            <td class="money" role="cell" headers="grab-settled-0"><span class="review-field-label" aria-hidden="true">Order</span>{{ r.display_id }}</td>
+            <td role="cell" headers="grab-settled-1"><span class="review-field-label" aria-hidden="true">Why</span>{{ r.reason_label }}</td>
+            <td role="cell" headers="grab-settled-2"><span class="review-field-label" aria-hidden="true">Outcome</span>{% if r.resolution == 'deduct' %}<span class="tag t-ok">Deducted</span>{% elif r.resolution == 'restore' %}<span class="tag t-info">Restored</span>{% else %}<span class="tag t-out">Ignored</span>{% endif %}</td>
+            <td role="cell" headers="grab-settled-3"><span class="review-field-label" aria-hidden="true">By</span>{{ r.resolved_by|default:"—" }}</td>
+            <td class="money" role="cell" headers="grab-settled-4"><span class="review-field-label" aria-hidden="true">When</span>{{ r.resolved_at|date:"d M, H:i" }}</td>
+          </tr>
+          {% empty %}
+          <tr role="row"><td colspan="5" class="empty">None yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

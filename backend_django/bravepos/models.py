@@ -215,6 +215,10 @@ class Branch(models.Model):
     phone = models.CharField(max_length=32, blank=True, default="")
     tax_id = models.CharField(max_length=64, blank=True, default="")
     pos_id = models.CharField(max_length=64, blank=True, default="")
+    # The merchant ID this branch's Grab outlet goes by (e.g. "3-C2M2RUXENZCZGT").
+    # The Grab stock sync finds the branch from it; blank means the branch is
+    # not synced, which is also the per-branch off switch.
+    grab_merchant_id = models.CharField(max_length=32, blank=True, default="")
     logo_url = models.TextField(blank=True, default="")
     open_time = models.CharField(max_length=8, default="09:00")
     close_time = models.CharField(max_length=8, default="22:00")
@@ -332,6 +336,14 @@ class Branch(models.Model):
                 fields=["pos_id"],
                 condition=~models.Q(pos_id=""),
                 name="branch_pos_id_unique_when_set",
+            ),
+            # One Grab outlet is one POS branch, or a Grab order could be taken
+            # off the wrong branch's shelf.  Blank is exempt: most branches are
+            # not on Grab.
+            models.UniqueConstraint(
+                fields=["grab_merchant_id"],
+                condition=~models.Q(grab_merchant_id=""),
+                name="branch_grab_merchant_id_unique_when_set",
             ),
             # One CRM shop is one POS branch.  Null is exempt and is where a
             # branch starts: not every branch has to be linked, and the ones
@@ -552,6 +564,11 @@ class StockMovement(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # "Movements at this branch since ...": the Grab stock read's
+            # ``target_changed_at`` and the count guard.  Built by 0093.
+            models.Index(fields=["branch", "created_at"], name="stockmov_branch_created_idx"),
+        ]
 
 
 # ─── Customers ───────────────────────────────────────────────────────────────
@@ -1171,6 +1188,105 @@ class TillBeamCharge(models.Model):
 
     def __str__(self):
         return f"TillBeamCharge {self.charge_id} ({self.status})"
+
+
+# ─── Grab stock sync ─────────────────────────────────────────────────────────
+class GrabOrderHold(models.Model):
+    """One Grab order, from the moment Grab lowers its own count for it.
+
+    While ``held`` its ``items`` are units that are spoken for but still on the
+    shelf: ``stock_pool.grab_held`` takes them off what the till, self-order and
+    Grab may sell.  Packing the order (``Ready``) converts the hold into a
+    deduction (``deducted`` + 'out' ``StockMovement`` rows) in one transaction;
+    a cancel before that releases it.  See ``bravepos.grab_sync``.
+
+    The review flag is separate from ``status``, so an order can be "converted
+    and under review".  A held row under review stays held: Grab stays low and
+    the till stays blocked until staff decide.
+    """
+    HELD, CONVERTED, RELEASED, RESTORED = "held", "converted", "released", "restored"
+    STATUS_CHOICES = [
+        (HELD, "Held"), (CONVERTED, "Converted"),
+        (RELEASED, "Released"), (RESTORED, "Restored"),
+    ]
+    REVIEW_REASONS = (
+        "unclear_pickup", "unmapped_item", "bundle_mismatch",
+        "large_order_mismatch", "restore_required", "correction_return",
+        "stale", "till_took_held",
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    branch = models.ForeignKey(
+        "Branch", on_delete=models.CASCADE, related_name="grab_order_holds",
+    )
+    # Grab's order ID (27 characters).  ``display_id`` ("GF-921") repeats, so it
+    # is never a key.
+    order_id = models.CharField(max_length=64)
+    display_id = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=HELD)
+    # [{product_id, barcode, qty, grab_item_id, name, bundle_item_id}].  While
+    # held these are the held units.
+    items = models.JSONField(default=list, blank=True)
+    # {product_id: qty}: what has been deducted from stock, net of corrections.
+    deducted = models.JSONField(default=dict, blank=True)
+    grab_state = models.CharField(max_length=32, blank=True, default="")
+    placed_at = models.DateTimeField(null=True, blank=True)
+    ready_at = models.DateTimeField(null=True, blank=True)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    # When the held units last changed (created, edited, released, converted):
+    # what ``target_changed_at`` reports.  ``last_seen_at`` moves every cycle,
+    # so it cannot say that.
+    changed_at = models.DateTimeField(default=timezone.now)
+    converted_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    close_reason = models.CharField(max_length=64, blank=True, default="")
+    review_status = models.CharField(max_length=8, blank=True, default="")
+    review_reason = models.CharField(max_length=32, blank=True, default="")
+    review_detail = models.JSONField(default=dict, blank=True)
+    resolved_by = models.CharField(max_length=120, blank=True, default="")
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution = models.CharField(max_length=16, blank=True, default="")
+
+    class Meta:
+        ordering = ["-first_seen_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "order_id"], name="grab_hold_branch_order_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["branch", "status"]),
+            models.Index(fields=["review_status", "branch"]),
+        ]
+
+    def __str__(self):
+        return f"Grab {self.display_id or self.order_id} ({self.status})"
+
+
+class GrabSyncStatus(models.Model):
+    """The poller's last word on one branch: is it alive, and what does Grab show.
+
+    A table of its own, not columns on ``Branch``, because till checkout locks
+    the Branch row on every sale and a heartbeat every two minutes has no
+    business queueing behind it.  ``stock_pool.outage_shown`` reads it.
+    """
+    branch = models.OneToOneField(
+        "Branch", on_delete=models.CASCADE, related_name="grab_sync_status",
+    )
+    last_ok_at = models.DateTimeField(null=True, blank=True)
+    push_live = models.BooleanField(default=False)
+    # Blank when healthy.
+    problem = models.TextField(blank=True, default="")
+    # {barcode: units Grab shows}, from the last complete cycle.
+    grab_shown = models.JSONField(default=dict, blank=True)
+    # Set by the watchdog when it alerts for an outage, cleared when it ends,
+    # so each outage is announced once.
+    outage_alerted_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"GrabSyncStatus {self.branch_id}"
 
 
 # ─── Shifts ──────────────────────────────────────────────────────────────────
