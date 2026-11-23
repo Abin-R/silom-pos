@@ -13,6 +13,7 @@
 //      wifi connection leaves no trace anywhere off the tablet.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
+import { getDeviceHeaders } from "./deviceHeaders";
 
 const ROOT = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -144,6 +145,8 @@ export function clearAuthToken(): void {
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = await getToken();
   const headers: Record<string, string> = {
+    // Device + app version for the backoffice Devices page (lib/deviceHeaders).
+    ...(await getDeviceHeaders()),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
