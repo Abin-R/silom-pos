@@ -3537,6 +3537,11 @@ function CreateStockDocModal({
   const [importOpen, setImportOpen] = useState(false);
   const [keypad, setKeypad] = useState<{ idx: number; field: DraftField } | null>(null);
   const [saving, setSaving] = useState(false);
+  // One save per opening of the form. `saving` is state, so two taps inside
+  // one render both read it as false — Khlong San's stock out was saved twice,
+  // 86 ms apart, on 2026-11-21. A ref takes effect on the first tap; it stays
+  // set after a successful save and is released only when the save fails.
+  const saveLock = useRef(false);
   // Stock-in/out types stay separate from `reason` above, which belongs to the
   // reconcile flow — the forms never coexist, but sharing one slot invites a
   // stray value from whichever form was opened last.
@@ -3552,6 +3557,7 @@ function CreateStockDocModal({
 
   useEffect(() => {
     if (visible) {
+      saveLock.current = false;
       setLines([]); setRef(""); setDocName(""); setParty(""); setNote(""); setReason("");
       setPhotos([]);
       setTaxIncluded(false); setAvgCost(false); setOutReason(""); setInReason("");
@@ -3714,7 +3720,8 @@ function CreateStockDocModal({
   };
 
   const save = async () => {
-    if (!lines.length || saving) return;
+    if (!lines.length || saveLock.current) return;
+    saveLock.current = true;
     setSaving(true);
     const body: any = { type };
     if (isCheck) {
@@ -3759,10 +3766,12 @@ function CreateStockDocModal({
       if (res.ok) {
         onSaved();
       } else {
+        saveLock.current = false;
         const err = await res.json().catch(() => ({}));
         showAlert(tr("admin.save_failed"), err?.detail || tr("admin.please_try_again"));
       }
     } catch {
+      saveLock.current = false;
       showAlert(tr("admin.save_failed"), tr("admin.please_try_again"));
     }
     setSaving(false);
@@ -3776,7 +3785,7 @@ function CreateStockDocModal({
     : lines.length > 0 && !missingReason;
 
   const confirmSave = () => {
-    if (!canSave) return;
+    if (!canSave || saveLock.current) return;
     if (Platform.OS === "web") { save(); return; }
     showAlert(tr("admin.confirm_save_document"), tr("admin.are_you_sure_you_want_to"), [
       { text: "Cancel", style: "cancel" },
@@ -3795,8 +3804,8 @@ function CreateStockDocModal({
             <Text style={styles.docBackText}>{tr("common.back")}</Text>
           </TouchableOpacity>
           <Text style={[styles.docTopTitle, compact && styles.docTopTitleCompact]} numberOfLines={1}>{editing ? `${tr("admin.check_stock")} · ${editing.document_no}` : tr(cfg.title)}</Text>
-          <TouchableOpacity onPress={confirmSave} disabled={!canSave} testID="doc-save">
-            <Text style={[styles.docSaveText, !canSave && { color: C.lineStrong }]}>{tr("common.save")}</Text>
+          <TouchableOpacity onPress={confirmSave} disabled={!canSave || saving} testID="doc-save">
+            <Text style={[styles.docSaveText, (!canSave || saving) && { color: C.lineStrong }]}>{tr("common.save")}</Text>
           </TouchableOpacity>
         </View>
 
