@@ -11,7 +11,6 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { C } from "../lib/theme";
-import { redactProps } from "../lib/logrocket";
 import {
   FlatList,
   Modal,
@@ -78,9 +77,8 @@ export default function PhoneInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [country.code, local]);
 
-  // A customer's number: blacked out in the session replay (lib/logrocket).
   return (
-    <View {...redactProps}>
+    <View>
       <View style={styles.row}>
         <TouchableOpacity
           style={styles.countryBtn}

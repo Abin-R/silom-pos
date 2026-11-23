@@ -6,17 +6,17 @@
 //   * the PIN — the keypad is redacted on the login screen, and touches on
 //     redacted views are dropped (captureRedactedViewTouches), because the
 //     tap positions on a keypad *are* the PIN;
-//   * customer details — the phone field (components/PhoneInput), every
-//     field of the tax-invoice / new-member forms (TiField in app/admin) and
-//     the card's last 4 digits (app/pos) sit inside a `redactProps` view.
-//     Wrappers, not the inputs' own testIDs: on iOS LogRocket only honours
-//     a testID on a view that isn't accessible, and an input always is;
-//   * request and response bodies, query strings and the bearer token —
-//     customers, orders, payments and login all carry personal data, and a
-//     list of "sensitive routes" would miss the next one someone adds.  The
-//     network log keeps method, path, status and timing, which is what a
-//     "save failed" replay needs.
+//   * the card's last 4 digits — the input (app/pos) sits inside a
+//     `redactProps` view;
+//   * the session token and cookies — stripped from the headers.
 //
+// Customer details (phone, tax-invoice and member forms) are recorded on
+// purpose, and so is the network log in full: URL with host and query
+// string, request and response bodies.  Inside the bodies the same three
+// secrets are scrubbed — the PIN travels in the pin-login body, the token
+// comes back in its response, and the card digits ride along in the order's
+// payment_method ("Credit · VISA ····1234").
+
 // The SDK is native.  A till on a build without it (anything before 1.5.1)
 // gets init → console.warn → no-op, and web gets a no-op too, so this file is
 // safe to reach through an OTA.  Loaded with require() inside a try so even an
@@ -43,10 +43,36 @@ if (Platform.OS !== "web") {
   }
 }
 
-/** Path only: no host, no query string (searches carry phone numbers). */
-function pathOf(url: string | null | undefined): string | null {
-  if (!url) return url ?? null;
-  return url.replace(/^[a-z]+:\/\/[^/]+/i, "").split("?")[0];
+/** Body keys whose values are secrets: pin, new_pin, token, access_token… */
+const SECRET_KEY = /(^|_)(pin|token|password|secret)($|_)/i;
+/** The card's last 4, as the till writes them into payment_method. */
+const CARD_DIGITS = /····\s*\d{4}/g;
+
+function scrubValue(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(CARD_DIGITS, "····####");
+  if (Array.isArray(v)) return v.map(scrubValue);
+  if (v && typeof v === "object") {
+    const out: { [k: string]: unknown } = {};
+    for (const [k, val] of Object.entries(v)) {
+      out[k] = SECRET_KEY.test(k) ? "[redacted]" : scrubValue(val);
+    }
+    return out;
+  }
+  return v;
+}
+
+/** Keep the body, minus the PIN, the token and the card digits. */
+function scrubBody(body: string | null | undefined): string | null | undefined {
+  if (!body) return body;
+  // Most bodies (the catalogue, order lists) hold none of it: skip the
+  // parse/stringify round trip on the till's JS thread.
+  if (!/pin|token|password|secret|····/i.test(body)) return body;
+  try {
+    return JSON.stringify(scrubValue(JSON.parse(body)));
+  } catch {
+    // Not JSON (an image, a form): only the card-digit pattern can be found.
+    return body.replace(CARD_DIGITS, "····####");
+  }
 }
 
 function withoutAuth(headers: { [k: string]: string | null | undefined }) {
@@ -68,15 +94,13 @@ export function initLogRocket(): void {
       network: {
         requestSanitizer: (req) => ({
           ...req,
-          url: pathOf(req.url),
           headers: withoutAuth(req.headers),
-          body: null,
+          body: scrubBody(req.body),
         }),
         responseSanitizer: (res) => ({
           ...res,
-          url: pathOf(res.url),
           headers: withoutAuth(res.headers),
-          body: null,
+          body: scrubBody(res.body),
         }),
       },
     });

@@ -64,7 +64,6 @@ import {
   Rank, SearchField, Spacer, Stat, TCell, THead, TRow, TText, Tag, Toggle,
 } from "../lib/ui";
 import { t as tr, useT, LANGUAGES, formatShortDate } from "../lib/i18n";
-import { redactProps } from "../lib/logrocket";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 // Server-rendered backoffice (Django) lives under /backoffice/ on the same host.
@@ -2728,11 +2727,8 @@ function TiField({
   error?: string;
   testID?: string;
 }) {
-  // Buyer and member details: blacked out in the session replay
-  // (lib/logrocket). A wrapper rather than the input's own testID, because on
-  // iOS LogRocket only honours a testID on a view that isn't accessible.
   return (
-    <View {...redactProps}>
+    <View>
       <Text style={styles.tiLabel}>
         {label}
         {required && <Text style={styles.tiRequired}>*</Text>}
