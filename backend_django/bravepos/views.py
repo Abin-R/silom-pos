@@ -26,6 +26,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
+from . import till_devices
 from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
 from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
@@ -78,6 +79,9 @@ def get_session(request):
     sess.last_seen_at = djtz.now()
     if not BranchSession.objects.filter(pk=sess.pk).update(last_seen_at=sess.last_seen_at):
         return None
+    # Which tablet, on which app build and OTA — for the backoffice Devices
+    # page.  Throttled and exception-proof; see bravepos/till_devices.py.
+    till_devices.touch(request, sess)
     # Single choke point for POS API auth — tell the audit log who is acting
     # so writes made further down the view stack are attributed to this staff
     # member rather than landing as anonymous.

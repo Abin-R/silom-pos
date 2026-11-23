@@ -1,0 +1,140 @@
+{% extends "backoffice/base.html" %}
+{% comment %}
+  Every tablet that has talked to the POS API, grouped by the branch it was
+  last signed in to. Rows come from bravepos/till_devices.py; status is worked
+  out in views._device_statuses (no call to EAS).
+{% endcomment %}
+
+{% block title %}Devices{% endblock %}
+{% block page_title %}Devices{% endblock %}
+{% block page_sub %}
+  <div class="tb-sub">
+    {{ device_count }} device{{ device_count|pluralize }}
+    {% if not show_all %}· seen in the last {{ recent_days }} days{% endif %}
+    {% if behind_count %}· <b style="color:var(--amber-d)">{{ behind_count }} behind on updates</b>{% endif %}
+  </div>
+{% endblock %}
+
+{% block content %}
+<form method="get" class="filters">
+  <div class="ctl">
+    <svg><use href="#i-store"/></svg>
+    <select name="branch" onchange="this.form.submit()">
+      <option value="">All branches</option>
+      {% for b in all_branches %}
+        <option value="{{ b.id }}" {% if selected_branch == b.id|stringformat:'s' %}selected{% endif %}>
+          {{ b.name }}{% if not b.active %} (inactive){% endif %}</option>
+      {% endfor %}
+      <option value="none" {% if selected_branch == 'none' %}selected{% endif %}>No branch</option>
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </div>
+  <label class="ctl" style="gap:8px;cursor:pointer">
+    <input type="checkbox" name="all" value="1" {% if show_all %}checked{% endif %}
+           onchange="this.form.submit()">
+    Include devices not seen for {{ recent_days }}+ days
+  </label>
+</form>
+
+{% if version_counts %}
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
+  {% for version, count in version_counts %}
+    <span class="tag {% if version == 'Unknown' %}t-out{% else %}t-info{% endif %}">
+      {% if version == 'Unknown' %}Version unknown{% else %}v{{ version }}{% endif %} · {{ count }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% for group in branch_groups %}
+<div class="panel" style="margin-bottom:14px">
+  <div class="panel-h">{{ group.name }}
+    <span class="sm">· {{ group.devices|length }} device{{ group.devices|length|pluralize }}</span></div>
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Device</th>
+        <th style="width:110px">OS</th>
+        <th style="width:110px">App version</th>
+        <th style="width:190px">Update (OTA)</th>
+        <th style="width:120px">Status</th>
+        <th style="width:150px">Signed in as</th>
+        <th class="r" style="width:130px">Last seen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in group.devices %}
+      <tr>
+        <td>
+          {% if d.model %}
+            <b style="font-weight:620;color:var(--txt)">{{ d.model }}</b>
+            {% if d.manufacturer %}<span style="color:var(--mut)"> · {{ d.manufacturer|capfirst }}</span>{% endif %}
+          {% else %}
+            <span style="color:var(--mut)">Unknown device</span>
+          {% endif %}
+          <div class="money" style="color:var(--mut2);font-size:11.5px;margin-top:2px"
+               title="{{ d.device_id }}">id {{ d.device_id|slice:":8" }}</div>
+        </td>
+        <td style="color:var(--mut)">
+          {% if d.os_version %}{% if d.platform == 'ios' %}iOS{% else %}Android{% endif %} {{ d.os_version }}{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if d.app_version %}
+            <span class="money" {% if d.version_behind %}style="color:var(--amber-d);font-weight:600" title="A newer app version is in use on other devices"{% endif %}>
+              {{ d.app_version }}</span>
+            {% if d.channel and d.channel != 'production' %}
+              <div style="color:var(--mut);font-size:11.5px">{{ d.channel }} channel</div>{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if not d.reports_version %}—
+          {% elif d.update_id %}
+            <span class="money" title="{{ d.update_id }}">…{{ d.short_update }}</span>
+            {% if d.update_published_at %}
+              <div style="color:var(--mut);font-size:11.5px">published {{ d.update_published_at|date:"j M, H:i" }}</div>{% endif %}
+          {% else %}
+            <span style="color:var(--mut)">Built-in (no OTA)</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if d.status == 'latest' %}<span class="tag t-ok">Latest</span>
+          {% elif d.status == 'behind' %}<span class="tag t-low">Behind</span>
+          {% elif d.status == 'old_app' %}<span class="tag t-red" title="Sideloaded build from the old Expo project — it never receives updates. Reinstall from Google Play.">Old app</span>
+          {% else %}<span class="tag t-out" title="This tablet's app is older than the version reporting, so it hasn't said which version it runs yet.">Unknown</span>{% endif %}
+        </td>
+        <td style="color:var(--mut)">{{ d.staff.name|default:"—" }}</td>
+        <td class="r" style="color:var(--mut)" title="{{ d.last_seen_at|date:'j M Y, H:i' }}">
+          {{ d.last_seen_at|timesince }} ago</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% empty %}
+<div class="panel">
+  <div class="empty">
+    <svg><use href="#i-tablet"/></svg>
+    No devices yet. A tablet shows up here the next time it talks to the server
+    while someone is signed in.
+  </div>
+</div>
+{% endfor %}
+
+<div class="panel" style="margin-top:14px">
+  <div class="panel-h">How this works</div>
+  <div style="padding:14px 16px;color:var(--mut);font-size:13.5px;line-height:1.7">
+    Each tablet reports its model, Android version, app version and update with
+    the calls it already makes while someone is signed in, and this page keeps
+    one row per tablet. A signed-in tablet is at most about a minute out of date.
+    <br>
+    <b style="color:var(--txt)">Latest</b> / <b style="color:var(--txt)">Behind</b> compare a tablet's
+    update with the newest one any tablet on the same app version is running.
+    <b style="color:var(--txt)">Unknown</b> means the tablet's app is too old to report yet — it
+    fills in once the tablet installs the next update.
+    <b style="color:var(--txt)">Old app</b> is the sideloaded build that never receives updates;
+    reinstall it from Google Play.
+    <br>
+    The update number matches the one on the tablet's menu bar and in
+    Settings → About (<code>OTA …b32167</code>).
+  </div>
+</div>
+{% endblock %}

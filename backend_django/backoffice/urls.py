@@ -172,6 +172,9 @@ urlpatterns = [
     path("app-releases/<uuid:release_id>/delete", views.app_release_delete,
          name="app_release_delete"),
 
+    # Devices — which tablet runs which app version / OTA, by branch
+    path("devices", views.devices, name="devices"),
+
     # Ninja delivery windows — stored in the Shopify Django app
     path("ninja-windows", views.ninja_windows, name="ninja_windows"),
 

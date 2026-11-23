@@ -2327,3 +2327,61 @@ class AppRelease(models.Model):
     @property
     def size_mb(self) -> float:
         return round(self.size_bytes / (1024 * 1024), 1) if self.size_bytes else 0.0
+
+
+# ─── Till devices ───────────────────────────────────────────────────────────
+class TillDevice(models.Model):
+    """One row per tablet (or phone) that has ever talked to the POS API.
+
+    Answers "which tablet, at which branch, runs which app build and OTA" —
+    something nothing else could: Sentry only sees a 1.4.1 till when it throws,
+    Play Console has too few devices to report, and ``BranchSession`` rows are
+    deleted on logout, taking the tablet with them.
+
+    Written by ``till_devices.touch`` from inside ``views.get_session``, i.e. on
+    the authenticated API calls the till already makes, from the ``X-App-*`` /
+    ``X-Device-*`` headers ``frontend/lib/deviceHeaders.ts`` adds.  A till whose
+    bundle predates those headers is still recorded — keyed by the ``device_id``
+    it sent at PIN login — with the version columns left blank.
+
+    Not in ``audit.AUDITED``: it is telemetry, rewritten every minute.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # The random id the app keeps for its lifetime (frontend/lib/deviceId.ts).
+    device_id = models.CharField(max_length=64, unique=True)
+    branch = models.ForeignKey(
+        "Branch", null=True, blank=True, on_delete=models.SET_NULL, related_name="devices",
+    )
+    staff = models.ForeignKey(
+        Staff, null=True, blank=True, on_delete=models.SET_NULL, related_name="devices",
+    )
+    platform = models.CharField(max_length=16, blank=True, default="")      # android / ios
+    manufacturer = models.CharField(max_length=64, blank=True, default="")  # samsung
+    model = models.CharField(max_length=64, blank=True, default="")         # SM-X230
+    os_version = models.CharField(max_length=32, blank=True, default="")    # 16
+    app_version = models.CharField(max_length=32, blank=True, default="")   # 1.4.1
+    runtime_version = models.CharField(max_length=32, blank=True, default="")
+    channel = models.CharField(max_length=32, blank=True, default="")       # production / preview
+    # Blank on a till running the bundle shipped inside the APK (no OTA yet).
+    update_id = models.CharField(max_length=64, blank=True, default="")
+    update_published_at = models.DateTimeField(null=True, blank=True)
+    is_embedded = models.BooleanField(null=True, blank=True)
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+
+    def __str__(self) -> str:
+        return f"{self.manufacturer} {self.model} ({self.device_id[:6]})".strip()
+
+    @property
+    def reports_version(self) -> bool:
+        """False for a till whose bundle predates the version headers."""
+        return bool(self.app_version or self.runtime_version)
+
+    @property
+    def short_update(self) -> str:
+        """Last 6 characters of the OTA id — what the till's nav rail and
+        Settings → About show (``OTA …b32167``), so the two can be matched."""
+        return self.update_id[-6:] if self.update_id else ""

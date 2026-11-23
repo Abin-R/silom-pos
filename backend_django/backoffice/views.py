@@ -55,6 +55,7 @@ from bravepos.models import (
     StockDocumentItem,
     StockMovement,
     StockOutReason, StockInReason,
+    TillDevice,
     Unit,
 )
 from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
@@ -7590,6 +7591,119 @@ def app_release_delete(request, release_id):
         release.delete()
         messages.success(request, f"Version {version} removed from the list.")
     return redirect(reverse("backoffice:app_release_list"))
+
+
+# ─── Devices ────────────────────────────────────────────────────────────
+# Every tablet that has talked to the POS API, by branch: model, Android
+# version, app version and OTA.  Rows are written by bravepos/till_devices.py
+# from headers the app sends; this page only reads them.
+
+DEVICE_RECENT_DAYS = 30
+
+
+def _version_key(version: str):
+    """``"1.4.10"`` sorts after ``"1.4.9"``; anything unparsable sorts first."""
+    parts = []
+    for piece in (version or "").split("."):
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            return ()
+    return tuple(parts)
+
+
+def _device_statuses(devices):
+    """Tag each device with ``status`` and ``version_behind``.
+
+    No call to EAS: "latest" is the newest OTA any tablet on the same app
+    version and channel is running.  That can only lag the truth by as long as
+    it takes the first tablet to pick an update up — minutes.
+
+    * unknown — its app predates the version headers, so it reports nothing
+    * old_app — the ``preview`` channel: the sideloaded build from the old Expo
+      project, which our updates never reach
+    * latest / behind — against the newest OTA on its app version + channel
+    """
+    newest_ota = {}
+    newest_version = {}
+    for d in devices:
+        if not d.reports_version:
+            continue
+        key = (d.runtime_version, d.channel)
+        if d.update_published_at and (newest_ota.get(key) is None
+                                      or d.update_published_at > newest_ota[key]):
+            newest_ota[key] = d.update_published_at
+        if d.channel != "preview":
+            best = newest_version.get(d.platform)
+            if best is None or _version_key(d.app_version) > _version_key(best):
+                newest_version[d.platform] = d.app_version
+
+    for d in devices:
+        d.version_behind = False
+        if not d.reports_version:
+            d.status = "unknown"
+            continue
+        if d.channel == "preview":
+            d.status = "old_app"
+            continue
+        newest = newest_ota.get((d.runtime_version, d.channel))
+        if newest is None or (d.update_published_at and d.update_published_at >= newest):
+            d.status = "latest"
+        else:
+            d.status = "behind"
+        best = newest_version.get(d.platform)
+        d.version_behind = bool(best) and _version_key(d.app_version) < _version_key(best)
+
+
+@login_required
+def devices(request):
+    """Which tablet is at which branch, on which app version and OTA."""
+    show_all = request.GET.get("all") == "1"
+    branch_id = request.GET.get("branch") or ""
+
+    qs = TillDevice.objects.select_related("branch", "staff")
+    if not show_all:
+        qs = qs.filter(last_seen_at__gte=timezone.now() - timedelta(days=DEVICE_RECENT_DAYS))
+    rows = list(qs)
+    # Status is judged against every tablet in view, *before* the branch
+    # filter — "behind" means behind the fleet, not behind its neighbour.
+    _device_statuses(rows)
+    if branch_id == "none":
+        rows = [d for d in rows if d.branch_id is None]
+    elif branch_id:
+        rows = [d for d in rows if str(d.branch_id) == branch_id]
+
+    groups = {}
+    for d in rows:
+        name = d.branch.name if d.branch else "No branch"
+        groups.setdefault(name, []).append(d)
+    branch_groups = [
+        {"name": name, "devices": sorted(ds, key=lambda d: d.last_seen_at, reverse=True)}
+        for name, ds in sorted(groups.items(), key=lambda kv: (kv[0] == "No branch", kv[0].lower()))
+    ]
+
+    versions = {}
+    for d in rows:
+        label = d.app_version if d.reports_version else "Unknown"
+        versions[label] = versions.get(label, 0) + 1
+    # Newest version first, "Unknown" last.
+    version_counts = sorted(
+        versions.items(),
+        key=lambda kv: (kv[0] == "Unknown", tuple(-n for n in _version_key(kv[0]))))
+
+    return render(request, "backoffice/devices.html", {
+        "active": "devices",
+        "branch_groups": branch_groups,
+        "device_count": len(rows),
+        "behind_count": sum(1 for d in rows if d.status == "behind"),
+        "version_counts": version_counts,
+        "all_branches": Branch.objects.order_by("name"),
+        "selected_branch": branch_id,
+        "show_all": show_all,
+        "recent_days": DEVICE_RECENT_DAYS,
+        "hide_branch": True,
+        "hide_dates": True,
+    })
 
 
 # ─── Ninja delivery windows ─────────────────────────────────────────────
