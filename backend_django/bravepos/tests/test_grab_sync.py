@@ -1385,6 +1385,12 @@ class ReviewPageTests(SeaTalkMixin, GrabTestCase):
         return [form for form in parser.forms
                 if "/grab-review/" in form["attrs"].get("action", "")]
 
+    def test_compact_review_rules_extend_through_tablet_widths(self):
+        res = self.client.get(self.page + f"?branch={self.silom.id}")
+        self.assertContains(res, "@media (max-width: 1400px)", count=1)
+        self.assertNotContains(res, "@media (max-width: 720px)")
+        self.assertContains(res, ".grab-review .review-actions form { flex: 1 1 100%; min-width: 0; }")
+
     def test_responsive_rows_keep_one_signed_form_per_action(self):
         hold = self.open_converted("restore_required")
         res = self.client.get(self.page + f"?branch={self.silom.id}")
