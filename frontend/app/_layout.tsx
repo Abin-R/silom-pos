@@ -10,6 +10,7 @@ import { setUnauthorizedHandler } from "../lib/api";
 import { DialogHost, showAlert, ToastHost } from "../lib/dialog";
 import { initLanguage, t as tr } from "../lib/i18n";
 import { throttleBeforeSend } from "../lib/sentryThrottle";
+import { initLogRocket } from "../lib/logrocket";
 import { endSession, startAppLock } from "../lib/appLock";
 import { PrinterHost } from "../lib/printerHost";
 import { startOtaAutoUpdate } from "../lib/otaAutoUpdate";
@@ -38,6 +39,9 @@ Sentry.init({
   // log scale — see lib/sentryThrottle.
   beforeSend: throttleBeforeSend,
 });
+
+// Session replay beside Sentry's error reports. See lib/logrocket.
+initLogRocket();
 
 // Set Sarabun as the default font for all Text and TextInput components
 // so Thai characters render correctly on web and native.

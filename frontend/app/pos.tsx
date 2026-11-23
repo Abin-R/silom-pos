@@ -20,6 +20,7 @@ import { StatusBar } from "expo-status-bar";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
+import { redactProps } from "../lib/logrocket";
 import { phoneMatchKey } from "../lib/phone";
 import { usePrinter } from "../lib/printerHost";
 import { setBusy } from "../lib/otaAutoUpdate";
@@ -3420,16 +3421,19 @@ function PaymentModal({
                   <Text style={styles.creditAmtLabel}>{tr("pos.thb")}</Text>
                   <Text style={styles.creditAmtVal}>{total.toFixed(2)}</Text>
                 </View>
-                <TextInput
-                  placeholder={tr("pos.card_number_last_4_digits")}
-                  placeholderTextColor={C.ink3}
-                  style={styles.creditInput}
-                  value={cardLast4}
-                  onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, "").slice(0, 4))}
-                  maxLength={4}
-                  keyboardType="number-pad"
-                  testID="card-last4"
-                />
+                {/* Blacked out in the session replay (lib/logrocket). */}
+                <View {...redactProps}>
+                  <TextInput
+                    placeholder={tr("pos.card_number_last_4_digits")}
+                    placeholderTextColor={C.ink3}
+                    style={styles.creditInput}
+                    value={cardLast4}
+                    onChangeText={(v) => setCardLast4(v.replace(/[^0-9]/g, "").slice(0, 4))}
+                    maxLength={4}
+                    keyboardType="number-pad"
+                    testID="card-last4"
+                  />
+                </View>
                 <Text style={styles.creditDivider}>{tr("pos.choose_card_type")}</Text>
                 <View style={styles.creditGrid}>
                   {[

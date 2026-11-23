@@ -46,6 +46,7 @@ import { checkOnLogin, consumeResumeMarker, setBusy } from "../lib/otaAutoUpdate
 import { C, MONO, R } from "../lib/theme";
 import { Btn } from "../lib/ui";
 import { isWideSize } from "../components/AppShell";
+import { redactProps } from "../lib/logrocket";
 import { t as tr, useT, formatLongDate, formatClock } from "../lib/i18n";
 
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
@@ -539,8 +540,10 @@ export default function Login() {
   // so the cards give up their padding first — the pad has to stay tappable.
   const compact = isWide && height < 780;
 
+  // Blacked out in the session replay, taps included: where a finger lands on
+  // this keypad is the PIN. See lib/logrocket.
   const Pad = () => (
-    <View style={[s.pad, compact && { maxWidth: 380 }]}>
+    <View style={[s.pad, compact && { maxWidth: 380 }]} {...redactProps}>
       {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
         <Key
           key={d}

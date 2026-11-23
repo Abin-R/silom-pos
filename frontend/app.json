@@ -2,7 +2,7 @@
   "expo": {
     "name": "Brave POS",
     "slug": "brave-pos",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "bravepos",
@@ -63,6 +63,7 @@
           }
         }
       ],
+      "@logrocket/react-native",
       "expo-font",
       "expo-image",
       "expo-status-bar"

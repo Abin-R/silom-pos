@@ -13,6 +13,7 @@
 //      wifi connection leaves no trace anywhere off the tablet.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sentry from "@sentry/react-native";
+import { identifyLogRocket } from "./logrocket";
 
 const ROOT = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 const AUTH_KEY = "bravepos:auth:v1";
@@ -240,6 +241,8 @@ export function setSentryContext(ctx: {
   );
   Sentry.setTag("branch", ctx.branchName ?? "unknown");
   Sentry.setTag("role", ctx.role ?? "unknown");
+  // Same who/where on the session replay.
+  identifyLogRocket(ctx);
 }
 
 export const API_ROOT = ROOT;
