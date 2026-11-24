@@ -161,6 +161,27 @@ class ProductSerializer(serializers.ModelSerializer):
                     f'"{other.name}" in this branch.']})
         return attrs
 
+    # The opening count is a stock change like any other, so it gets its movement:
+    # without one the product's history starts mid-air and nothing that looks
+    # for "what touched this product's stock" (the Grab sync's change feed, the
+    # Inventory screen's ledger) can see where the first units came from.
+    def create(self, validated_data):
+        from django.db import transaction
+
+        with transaction.atomic():
+            product = super().create(validated_data)
+            opening = int(product.stock or 0)
+            if opening:
+                request = self.context.get('request')
+                staff = getattr(getattr(request, 'session_obj', None), 'staff', None)
+                StockMovement.objects.create(
+                    branch=product.branch, product=product, product_name=product.name,
+                    type='in' if opening > 0 else 'adjust', qty=opening,
+                    note='Opening stock', staff=staff,
+                    created_by=(staff.name if staff else '') or '',
+                )
+        return product
+
     # ``stock`` is the opening count on create and nothing after.  Stock moves
     # through stock movements / documents so every change is on record; the
     # till's Edit Product form used to send back the number it loaded, which

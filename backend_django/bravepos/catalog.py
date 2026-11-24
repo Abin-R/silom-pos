@@ -33,7 +33,7 @@ changing both at once still finds every copy.
 from __future__ import annotations
 
 from . import sale_windows
-from .models import Branch, Category, ParentCategory, Product, Unit
+from .models import Branch, Category, ParentCategory, Product, StockMovement, Unit
 
 # Copied verbatim from source to target.  Everything absent from this list is
 # either identity (id, branch), a foreign key resolved per-branch below
@@ -217,6 +217,16 @@ def unit_for(target, unit):
     return dest
 
 
+def _copy_movement(product, type_, qty, was=None):
+    """The stock a catalogue copy set, on record.  A copy that moves stock
+    without a movement leaves a change nothing else can see."""
+    note = "Catalogue copy" if was is None else f"Catalogue copy (was {was})"
+    StockMovement.objects.create(
+        branch=product.branch, product=product, product_name=product.name,
+        type=type_, qty=qty, note=note, created_by="Catalogue copy",
+    )
+
+
 def upsert_product(target, prod, category, *, update_existing, copy_stock=False):
     """Give ``target`` a product matching ``prod``.  Returns (row, action, changed)."""
     dest = find_product(target.products, [prod.barcode], [prod.name])
@@ -229,6 +239,8 @@ def upsert_product(target, prod, category, *, update_existing, copy_stock=False)
         dest.unit = unit
         dest.stock = prod.stock if copy_stock else 0
         dest.save()
+        if dest.stock:
+            _copy_movement(dest, "in" if dest.stock > 0 else "adjust", dest.stock)
         return dest, "created", []
 
     if not update_existing:
@@ -245,6 +257,7 @@ def upsert_product(target, prod, category, *, update_existing, copy_stock=False)
         changed.append("unit")
 
     if changed:
+        stock_before = dest.stock
         for field in changed:
             if field == "category":
                 dest.category = category
@@ -255,6 +268,8 @@ def upsert_product(target, prod, category, *, update_existing, copy_stock=False)
         # update_fields so a sync cannot clobber a column it was not asked to
         # touch — notably stock, edited from the POS while this runs.
         dest.save(update_fields=changed)
+        if "stock" in changed:
+            _copy_movement(dest, "adjust", dest.stock, was=stock_before)
         return dest, "updated", changed
     return dest, "skipped", []
 

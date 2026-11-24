@@ -13,7 +13,10 @@ Config is env vars, all read at call time:
 * ``SEATALK_BEAM_GROUP_ID`` — the group for a paid till Beam QR that no bill
   carries.  Optional: unset, those alerts go to the discount group.
 * ``SEATALK_STOCK_GROUP_ID`` — repeat stock-in/out submission alerts
-  (``stock_alerts``).  Optional: unset, they go to Bot Testing.
+  (``stock_alerts``). Optional: unset, they go to Bot Testing.
+
+The Grab stock sync's alerts (the poller going quiet) go to ``GRAB_GROUP_ID``,
+set here in code — Bot Testing for now.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.
@@ -54,6 +57,15 @@ def discount_group_id() -> str:
 
 def beam_group_id() -> str:
     return (os.environ.get("SEATALK_BEAM_GROUP_ID") or "").strip() or discount_group_id()
+
+
+# Where the Grab stock sync alerts go: Bot Testing (the group stock_alerts also
+# falls back to).  A group ID, not a credential.  Change it here.
+GRAB_GROUP_ID = "MzM0NzQ2MjIyOTM5"
+
+
+def grab_group_id() -> str:
+    return GRAB_GROUP_ID
 
 
 def is_configured() -> bool:

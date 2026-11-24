@@ -3,7 +3,7 @@ so the existing frontend doesn't need to change a single fetch URL."""
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from . import views
+from . import grab_views, views
 
 # Register the same ViewSets through two routers — one with the trailing slash,
 # one without — so both `/api/categories` (what the frontend sends) and
@@ -51,6 +51,12 @@ urlpatterns = [
 
     # Product creation from Shopster — no session; the body names the branch.
     path('shopster/create-product/', views.shopster_create_product),
+
+    # Grab stock sync — called by the poller with an X-API-Key, no session.
+    path('grab/outlets', grab_views.grab_outlets),
+    path('grab/orders/deduct', grab_views.grab_deduct_orders),
+    path('grab/heartbeat', grab_views.grab_heartbeat),
+    path('grab/stock', grab_views.grab_stock),
 
     # Settings — single document, GET + PUT.
     path('settings', views.settings_view),

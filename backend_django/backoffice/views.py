@@ -58,7 +58,7 @@ from bravepos.models import (
     TillDevice,
     Unit,
 )
-from bravepos import appdist, catalog, crm, discounts, images, permissions, sale_windows
+from bravepos import appdist, catalog, crm, discounts, grab_sync, images, permissions, sale_windows
 from bravepos import branch_sync as sync_sections
 from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
@@ -6482,7 +6482,32 @@ def branch_errors(b: Branch) -> list[str]:
                 "Every branch needs its own Revenue Department machine number — "
                 "check the number for this branch, or clear it on the other one first."
             )
+    if b.grab_merchant_id and b.grab_merchant_id not in grab_sync.GRAB_OUTLETS:
+        errors.append(
+            f'Grab merchant ID "{b.grab_merchant_id}" is not one of the known Grab outlets. '
+            "Pick the outlet from the list, or leave it blank for a branch that is not on Grab."
+        )
+    elif b.grab_merchant_id:
+        clash = Branch.objects.filter(grab_merchant_id=b.grab_merchant_id).exclude(pk=b.pk).first()
+        if clash:
+            errors.append(
+                f'Grab merchant ID "{b.grab_merchant_id}" already belongs to {clash.name}. '
+                "One Grab outlet is one branch — check the ID for this branch, "
+                "or clear it on the other one first."
+            )
     return errors
+
+
+def _grab_outlet_choices(b: Branch) -> list[tuple[str, str]]:
+    """``[(merchant id, Grab store name)]`` for the branch form's dropdown, by
+    name.  An ID already on the branch that is not a known outlet is added so
+    the form shows it rather than silently blanking it; saving then asks for a
+    real one (``branch_errors``)."""
+    choices = sorted(grab_sync.GRAB_OUTLETS.items(), key=lambda kv: kv[1])
+    current = b.grab_merchant_id
+    if current and current not in grab_sync.GRAB_OUTLETS:
+        choices.append((current, f"{current} (not a known outlet)"))
+    return choices
 
 
 def _taken_pos_ids(b: Branch) -> str:
@@ -6669,6 +6694,12 @@ def _apply_branch_form(b: Branch, post, user=None) -> Branch:
     b.code = (post.get("code") or "").strip()
     b.tax_id = (post.get("tax_id") or "").strip()
     b.pos_id = (post.get("pos_id") or "").strip()
+    grab_id = (post.get("grab_merchant_id") or "").strip().upper()
+    if grab_id != b.grab_merchant_id:
+        # Linking (or relinking) starts the Grab stock sync for this branch from
+        # now: orders placed before it are never deducted.  Unlinking stops it.
+        b.grab_linked_at = timezone.now() if grab_id else None
+    b.grab_merchant_id = grab_id
     b.address = (post.get("address") or "").strip()
     b.phone = (post.get("phone") or "").strip()
     b.logo_url = (post.get("logo_url") or "").strip()
@@ -6814,6 +6845,7 @@ def branch_detail(request, branch_id):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(b),
+        "grab_outlets": _grab_outlet_choices(b),
         "taken_names": _taken_branch_names(b),
         **_payment_context(b, request.user),
         **_crm_context(b, request.POST if request.method == "POST" else None),
@@ -6849,6 +6881,7 @@ def branch_new(request):
             "payment_errors": errors,
             "form_errors": form_errors,
             "taken_pos_ids": _taken_pos_ids(b),
+            "grab_outlets": _grab_outlet_choices(b),
             "taken_names": _taken_branch_names(b),
             **_payment_context(b, request.user),
             **_crm_context(b, request.POST),
@@ -6867,6 +6900,7 @@ def branch_new(request):
         "payment_errors": errors,
         "form_errors": form_errors,
         "taken_pos_ids": _taken_pos_ids(blank),
+        "grab_outlets": _grab_outlet_choices(blank),
         "taken_names": _taken_branch_names(blank),
         **_payment_context(blank, request.user),
         **_crm_context(blank),
