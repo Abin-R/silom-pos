@@ -45,6 +45,20 @@ Sentry.init({
 (TextInput as any).defaultProps = (TextInput as any).defaultProps || {};
 (TextInput as any).defaultProps.style = { fontFamily: "Sarabun" };
 
+// Android can rebuild the activity while the till is away, so the AppState
+// "active" event may land before the navigator has rendered again — and
+// expo-router throws rather than queue the navigation.  Uncaught inside the
+// AppState listener, that was a fatal crash on resume (REACT-NATIVE-C, test
+// branch, 1.5.1).  Retry until the navigator is back.  Both ways back to the
+// PIN pad below — the 401 handler and the app lock — fire from outside render.
+function toPinPad(tries = 0): void {
+  try {
+    router.replace("/");
+  } catch {
+    if (tries < 20) setTimeout(() => toPinPad(tries + 1), 250);
+  }
+}
+
 function RootLayout() {
   // Resolve the saved (or device) language before the first paint. It is one
   // AsyncStorage read; rendering ahead of it would flash English at a Thai
@@ -65,7 +79,7 @@ function RootLayout() {
   // owned by /pos would go with it the moment it unmounted.
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      router.replace("/");
+      toPinPad();
       showAlert(tr("login.signed_out_title"), tr("login.signed_out_body"));
     });
     return () => setUnauthorizedHandler(null);
@@ -82,7 +96,7 @@ function RootLayout() {
     () =>
       startAppLock(() => {
         if (pathRef.current === "/") return;
-        router.replace("/");
+        toPinPad();
         endSession();
       }),
     [],
