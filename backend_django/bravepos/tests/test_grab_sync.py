@@ -349,9 +349,6 @@ class HeartbeatTests(GrabTestCase):
 class WatchdogTests(GrabTestCase):
     def setUp(self):
         super().setUp()
-        env = mock.patch.dict(os.environ, {"SEATALK_GRAB_GROUP_ID": "grp-1"})
-        env.start()
-        self.addCleanup(env.stop)
         sender = mock.patch("bravepos.seatalk.send_group_text", return_value=True)
         self.sent = sender.start()
         self.addCleanup(sender.stop)

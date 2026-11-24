@@ -13,7 +13,7 @@ server's crontab (paths as in ``deploy.sh``):
 Only branches with a Grab merchant ID whose poller has sent at least one
 heartbeat are watched.  One alert when the quiet spell starts and one when it
 ends, however often this runs; ``GrabSyncStatus.quiet_alerted_at`` remembers.
-Alerts go to ``SEATALK_GRAB_GROUP_ID``; when SeaTalk is not configured or a
+Alerts go to ``seatalk.GRAB_GROUP_ID``; when SeaTalk is not configured or a
 send fails, nothing is remembered as sent, so the next run tries again.
 """
 from __future__ import annotations
