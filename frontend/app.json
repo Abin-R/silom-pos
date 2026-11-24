@@ -60,6 +60,9 @@
             "minSdkVersion": 29,
             "usesCleartextTraffic": true,
             "enableMinifyInReleaseBuilds": false
+          },
+          "ios": {
+            "useFrameworks": "dynamic"
           }
         }
       ],
