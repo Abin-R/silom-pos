@@ -11,7 +11,8 @@ Every section follows the rule products always have:
 
 * **add** what the target is missing, **edit** what it has to match;
 * rows only the target has are **left alone** — a branch may run things of
-  its own;
+  its own.  The exception is payment types, which mirror: the target's
+  Custom Pay list becomes the source's exactly, extras deleted;
 * the preview names every row it would touch, and writes nothing.
 
 Adding a list is one more `Section` in
@@ -28,7 +29,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
 
-from . import catalog, discounts, payment_types
+from . import catalog, discounts
 from .models import DiscountType, PaymentType, StockInReason, StockOutReason
 
 
@@ -236,62 +237,82 @@ def apply_stock_in(source, target, ctx):
 
 
 # ── Payment types (the till's Custom Pay list) ─────────────────────────────
+# The one section that mirrors rather than merges: after a sync the target's
+# list is the source's — same types, same spelling, same shown/hidden, same
+# order — and a type only the target had is deleted.  Safe because a sale
+# keeps the payment name as text (`PaymentType`), so deleting a type never
+# touches a past sale or report.
 def _payment_plan(target, ctx):
-    """Matched by name ignoring case, as `payment_types.find` does.  A name
-    that differs only in case is edited to the source's spelling — the till
-    shows it as written.  A name held twice (``QR`` and ``qr``) at either end
-    cannot be matched to one row, so it is reported and left alone."""
-    target_rows = list(PaymentType.objects.filter(branch=target))
-    have = {_norm(r.name): r for r in target_rows}
-    source_counts = Counter(_norm(r.name) for r in ctx["payment_types"])
-    target_counts = Counter(_norm(r.name) for r in target_rows)
-    plan, reported = [], set()
-    for r in ctx["payment_types"]:
-        key = _norm(r.name)
-        if source_counts[key] > 1 or target_counts[key] > 1:
-            if key not in reported:
-                plan.append(("skip", r, None, [
-                    f"{r.name} — the name is held twice in the source or target branch",
-                ]))
-                reported.add(key)
-            continue
-        dest = have.get(key)
-        if dest is None:
-            # Hidden at the source means not offered there; a branch that
-            # never had it gains nothing by getting it hidden.
-            if r.active:
-                plan.append(("create", r, None, []))
-            continue
-        changed = [f for f in ("name", "active") if getattr(dest, f) != getattr(r, f)]
-        plan.append(("update" if changed else "same", r, dest, changed))
-    return plan
+    """``(pairs, removing)``: each source row with the target row it becomes
+    (``None`` = create), and the target rows nobody claimed.
+
+    Exact name first, then ignoring case, so ``QR``/``qr`` at the target
+    becomes the source's spelling instead of a second row beside it."""
+    source_rows = ctx["payment_types"]
+    left = list(PaymentType.objects.filter(branch=target))
+    pairs = {}
+    for match in (lambda a, b: a.name == b.name,
+                  lambda a, b: _norm(a.name) == _norm(b.name)):
+        for r in source_rows:
+            if r.pk in pairs:
+                continue
+            dest = next((d for d in left if match(r, d)), None)
+            if dest is not None:
+                pairs[r.pk] = dest
+                left.remove(dest)
+    return [(r, pairs.get(r.pk)) for r in source_rows], left
 
 
 def preview_payment_types(source, target, ctx):
-    plan = _payment_plan(target, ctx)
+    pairs, removing = _payment_plan(target, ctx)
+    adding, updating, already = [], [], 0
+    for r, dest in pairs:
+        if dest is None:
+            adding.append(r.name if r.active else f"{r.name} (hidden)")
+            continue
+        changes = []
+        if dest.name != r.name:
+            changes.append(f"spelling “{dest.name}” → “{r.name}”")
+        if dest.active != r.active:
+            changes.append("shown" if r.active else "hidden")
+        if changes:
+            updating.append({"name": r.name, "changes": changes})
+        else:
+            already += 1
+    now = list(PaymentType.objects.filter(branch=target).values_list("name", flat=True))
+    after = [r.name for r, _ in pairs]
     return {
-        "adding": [r.name for a, r, _, _ in plan if a == "create"],
-        "updating": [{"name": r.name, "changes": [
-            {"name": "spelling", "active": "shown/hidden"}[f] for f in ch]}
-            for a, r, _, ch in plan if a == "update"],
-        "already": sum(1 for a, *_ in plan if a == "same"),
-        "skipped": [ch[0] for a, _, _, ch in plan if a == "skip"],
+        "adding": adding,
+        "updating": updating,
+        "removing": [d.name for d in removing],
+        # The whole list as the till will show it, whenever that differs —
+        # an order-only change has nothing else to show it by.
+        "final_order": after if now != after else [],
+        "already": already,
     }
 
 
 def apply_payment_types(source, target, ctx):
-    out = {"created": 0, "updated": 0, "skipped": []}
-    for action, r, dest, changed in _payment_plan(target, ctx):
-        if action == "create":
-            payment_types.create(target, r.name, active=r.active)
+    pairs, removing = _payment_plan(target, ctx)
+    out = {"created": 0, "updated": 0, "removed": len(removing), "reordered": 0}
+    # Deletes first, so a freed name can be taken in the same run.
+    PaymentType.objects.filter(pk__in=[d.pk for d in removing]).delete()
+    for position, (r, dest) in enumerate(pairs):
+        if dest is None:
+            PaymentType.objects.create(branch=target, name=r.name, active=r.active,
+                                       sort_order=position)
             out["created"] += 1
-        elif action == "update":
-            for f in changed:
-                setattr(dest, f, getattr(r, f))
-            dest.save(update_fields=changed)
+            continue
+        changed = [f for f in ("name", "active") if getattr(dest, f) != getattr(r, f)]
+        if changed:
             out["updated"] += 1
-        elif action == "skip":
-            out["skipped"].extend(changed)
+        if dest.sort_order != position:
+            changed.append("sort_order")
+            out["reordered"] = 1
+        for f in changed:
+            setattr(dest, f, getattr(r, f) if f != "sort_order" else position)
+        if changed:
+            dest.save(update_fields=changed)
     return out
 
 
@@ -378,7 +399,8 @@ SECTIONS = [
             "The Type list on Stock out and the till.",
             preview_stock_out, apply_stock_out),
     Section("payment_types", "Payment Types",
-            "The Custom Pay list on the till.",
+            "The Custom Pay list on the till — made identical: same types and "
+            "order, and types only the target has are deleted.",
             preview_payment_types, apply_payment_types),
     Section("promotions", "Promotions",
             "Running, scheduled and paused promotions — not ended ones.",

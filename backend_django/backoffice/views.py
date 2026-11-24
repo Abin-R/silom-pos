@@ -4400,12 +4400,18 @@ def _branch_sync_message(source, targets, sections, results):
         created = sum(r.get("created", 0) for r in reports)
         updated = sum(r.get("updated", 0) for r in reports)
         skipped = [x for r in reports for x in r.get("skipped", [])]
+        removed = sum(r.get("removed", 0) for r in reports)
+        reordered = sum(r.get("reordered", 0) for r in reports)
         label = s.label.lower()
-        if not created and not updated:
+        if not created and not updated and not removed and not reordered:
             line = (f"{s.label}: no changes applied." if skipped else
                     f"{s.label}: {where} already matched {source.name}.")
         else:
             line = f"{s.label}: {created} added, {updated} edited to match."
+            if removed:
+                line += f" {removed} deleted that {source.name} does not have."
+            if reordered:
+                line += f" Till order set to match at {reordered} branch{'es' if reordered != 1 else ''}."
         if skipped:
             line += f" Skipped {len(skipped)} {label}: " + "; ".join(skipped) + "."
         lines.append(line)

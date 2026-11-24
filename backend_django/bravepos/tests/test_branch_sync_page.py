@@ -119,46 +119,68 @@ class BranchSyncPageTests(TestCase):
         self.sync("stock_out")
         self.assertFalse(StockOutReason.objects.filter(branch=self.target, name="Old").exists())
 
-    # ── Payment types ───────────────────────────────────────────────────
-    def test_a_missing_payment_type_is_added_and_extras_survive(self):
-        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
-        PaymentType.objects.create(branch=self.target, name="Silom terminal", sort_order=99)
+    # ── Payment types (mirror: the target ends up identical) ────────────
+    def set_payments(self, branch, *names, hidden=()):
+        PaymentType.objects.filter(branch=branch).delete()
+        for i, name in enumerate(names):
+            PaymentType.objects.create(branch=branch, name=name, sort_order=i,
+                                       active=name not in hidden)
+
+    def payments(self, branch):
+        return [(r.name, r.active) for r in PaymentType.objects.filter(branch=branch)]
+
+    def test_payment_types_end_up_identical_in_the_same_order(self):
+        # BIO HOUSE → test branch, as seen on prod: the target has the seven
+        # defaults plus Grab; afterwards it has exactly BIO HOUSE's four.
+        self.set_payments(self.source, "EDC", "Grab", "QR", "Brave Brand Co.,Ltd")
+        self.set_payments(self.target, "EDC", "EDC Bangkok", "Brave Brand Co.,Ltd",
+                          "Thai Dot Com Pay", "คนละครึ่ง", "EDC SCB", "QR", "Grab")
         res = self.client.get(self.url, self.params("payment_types"))
-        self.assertContains(res, "Grab")
-        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Grab").exists())
+        self.assertContains(res, "EDC Bangkok")       # named as a delete
+        self.assertContains(res, "Till order after sync")
+        self.assertEqual(len(self.payments(self.target)), 8)   # a GET writes nothing
 
-        self.sync("payment_types")
-        self.assertTrue(PaymentType.objects.filter(branch=self.target, name="Grab", active=True).exists())
-        self.assertTrue(PaymentType.objects.filter(branch=self.target, name="Silom terminal").exists())
-        self.assertFalse(PaymentType.objects.filter(branch=self.other, name="Grab").exists())
-
-    def test_a_payment_type_is_edited_to_match_spelling_and_visibility(self):
-        PaymentType.objects.filter(branch=self.source, name="QR").update(active=False)
-        PaymentType.objects.create(branch=self.source, name="LINE MAN", sort_order=99)
-        PaymentType.objects.create(branch=self.target, name="Line Man", sort_order=99)
-        self.sync("payment_types")
-        self.assertFalse(PaymentType.objects.get(branch=self.target, name="QR").active)
-        self.assertEqual(
-            list(PaymentType.objects.filter(branch=self.target, name__iexact="line man")
-                 .values_list("name", flat=True)), ["LINE MAN"])
-
-    def test_a_hidden_payment_type_is_not_created_elsewhere(self):
-        PaymentType.objects.create(branch=self.source, name="Old EDC", active=False, sort_order=99)
-        self.sync("payment_types")
-        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Old EDC").exists())
-
-    def test_a_payment_name_held_twice_is_skipped_and_named(self):
-        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=98)
-        PaymentType.objects.create(branch=self.target, name="Grab", active=False, sort_order=98)
-        PaymentType.objects.create(branch=self.target, name="GRAB", sort_order=99)
         res = self.sync("payment_types")
-        self.assertContains(res, "held twice")
-        self.assertFalse(PaymentType.objects.get(branch=self.target, name="Grab").active)
+        self.assertEqual(self.payments(self.target), self.payments(self.source))
+        self.assertContains(res, "4 deleted")
+        self.assertEqual(len(self.payments(self.other)), 7)    # not ticked, untouched
+
+    def test_a_hidden_payment_type_travels_hidden(self):
+        self.set_payments(self.source, "EDC", "Old EDC", hidden=("Old EDC",))
+        self.set_payments(self.target, "EDC")
+        self.sync("payment_types")
+        self.assertEqual(self.payments(self.target), [("EDC", True), ("Old EDC", False)])
+
+    def test_payment_spelling_and_visibility_are_edited_not_duplicated(self):
+        self.set_payments(self.source, "LINE MAN", "QR", hidden=("QR",))
+        self.set_payments(self.target, "QR", "Line Man")
+        before = {r.name.lower(): r.pk for r in PaymentType.objects.filter(branch=self.target)}
+        self.sync("payment_types")
+        self.assertEqual(self.payments(self.target), [("LINE MAN", True), ("QR", False)])
+        after = {r.name.lower(): r.pk for r in PaymentType.objects.filter(branch=self.target)}
+        self.assertEqual(before, after)   # same rows, edited in place
+
+    def test_an_order_only_difference_is_previewed_and_fixed(self):
+        self.set_payments(self.source, "EDC", "QR")
+        self.set_payments(self.target, "QR", "EDC")
+        res = self.client.get(self.url, self.params("payment_types"))
+        self.assertContains(res, "Till order after sync")
+        res = self.sync("payment_types")
+        self.assertEqual(self.payments(self.target), [("EDC", True), ("QR", True)])
+        self.assertContains(res, "Till order set to match")
+
+    def test_payment_types_already_identical_say_so(self):
+        self.set_payments(self.source, "EDC", "QR")
+        self.set_payments(self.target, "EDC", "QR")
+        res = self.client.get(self.url, self.params("payment_types"))
+        self.assertNotContains(res, "Till order after sync")
+        res = self.sync("payment_types")
+        self.assertContains(res, "Payment Types: Silom already matched BIO HOUSE.")
 
     def test_unticked_payment_types_are_untouched(self):
-        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
+        self.set_payments(self.source, "Grab")
         self.sync("stock_out")
-        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Grab").exists())
+        self.assertEqual(len(self.payments(self.target)), 7)
 
     # ── Stock-in types ──────────────────────────────────────────────────
     def test_stock_in_preview_lists_changes_without_writing(self):
@@ -325,7 +347,7 @@ class BranchSyncPageTests(TestCase):
         StockOutReason.objects.create(branch=self.source, name="Event")
         Category.objects.create(branch=self.source, name="Empty shelf")
         make_product(self.source, name="Brownie")
-        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
+        self.set_payments(self.source, "Grab")
         before = (DiscountType.objects.count(), StockOutReason.objects.count(),
                   Category.objects.count(), Product.objects.count(),
                   PaymentType.objects.count())

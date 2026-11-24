@@ -9,7 +9,9 @@
   section lives; a new list is one entry there and shows up here unchanged.
 
   Every section adds what the target is missing and edits what it has to
-  match. Rows only the target has are left alone, and stock is never copied.
+  match. Rows only the target has are left alone, and stock is never copied —
+  except payment types, which mirror the source exactly (extras deleted, same
+  order); the preview names every type it would delete.
 
   Two forms, not one. Choosing branches and sections is a GET that only
   previews; the sync is a separate POST carrying the same choices as hidden
@@ -35,7 +37,9 @@
   <svg><use href="#i-zap"/></svg>
   <span>Whatever you tick is <b>added</b> to each target if missing, or
     <b>edited to match</b> <b>Copy from</b>. What a target has on its own is
-    left alone, and stock is never copied. Check the preview before you sync.</span>
+    left alone, and stock is never copied. <b>Payment types</b> are the exception:
+    they are made identical, so a type the target has on its own is deleted.
+    Check the preview before you sync.</span>
 </div>
 
 {# ── Choosing branches and sections: a GET, so it can only ever preview ── #}
@@ -126,6 +130,7 @@
         <th class="r" style="width:110px">Will be edited</th>
         <th class="r" style="width:110px">Already match</th>
         {% if pv.section.key == 'products' %}<th class="r" style="width:130px">Taken off sale</th>{% endif %}
+        {% if pv.section.key == 'payment_types' %}<th class="r" style="width:120px">Will be deleted</th>{% endif %}
         <th>What changes there</th>
       </tr>
     </thead>
@@ -151,6 +156,12 @@
         {% if pv.section.key == 'products' %}
         <td class="r money">
           {% if p.retiring %}<b style="color:var(--red-d)">{{ p.retiring|length }}</b>
+          {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
+        </td>
+        {% endif %}
+        {% if pv.section.key == 'payment_types' %}
+        <td class="r money">
+          {% if p.removing %}<b style="color:var(--red-d)">{{ p.removing|length }}</b>
           {% else %}<span style="color:var(--mut2)">0</span>{% endif %}
         </td>
         {% endif %}
@@ -181,11 +192,19 @@
           <div style="color:var(--red-d);margin-top:4px">
             Off sale: {{ p.retiring|join:", " }}</div>
           {% endif %}
+          {% if p.removing %}
+          <div style="color:var(--red-d);margin-top:4px">
+            <b>Delete:</b> {{ p.removing|join:", " }}</div>
+          {% endif %}
+          {% if p.final_order %}
+          <div style="color:var(--mut2);margin-top:4px">
+            Till order after sync: {{ p.final_order|join:" · " }}</div>
+          {% endif %}
           {% if p.parents_adding %}
           <div style="color:var(--mut2);margin-top:4px">
             New groups: {{ p.parents_adding|join:", " }}</div>
           {% endif %}
-          {% if not p.adding and not p.updating and not p.conflicts and not p.skipped and not p.retiring and not p.parents_adding %}
+          {% if not p.adding and not p.updating and not p.conflicts and not p.skipped and not p.retiring and not p.parents_adding and not p.removing and not p.final_order %}
           <span style="color:var(--mut2)">Nothing — this branch already matches
             {{ source.name }}.</span>
           {% endif %}
@@ -205,7 +224,7 @@
   so nothing is taken off sale unseen.
 {% endcomment %}
 <form method="post" action="{% url 'backoffice:branch_sync' %}"
-      onsubmit="return confirm('Sync {{ source.name|escapejs }} onto the branches above?\n\n{% for s in sections %}{{ s.label|escapejs }}{% if not forloop.last %}, {% endif %}{% endfor %} will be added and edited to match. Stock is not touched.');">
+      onsubmit="return confirm('Sync {{ source.name|escapejs }} onto the branches above?\n\n{% for s in sections %}{{ s.label|escapejs }}{% if not forloop.last %}, {% endif %}{% endfor %} will be added and edited to match.{% if 'payment_types' in section_keys %} Payment types will be made identical — types only the target has are deleted.{% endif %} Stock is not touched.');">
   {% csrf_token %}
   <input type="hidden" name="source" value="{{ source.id }}">
   <input type="hidden" name="picked" value="1">
