@@ -373,6 +373,7 @@ const en = {
     counted_qty: "Counted Qty",
     on_hand: "On Hand",
     check_stock_qty: "Check Stock",
+    enter_qty_above_zero: "Enter a quantity above 0 for the highlighted products.",
     saving_customer: "Saving customer\u2026",
     updating: "Updating\u2026",
     required: "Required",

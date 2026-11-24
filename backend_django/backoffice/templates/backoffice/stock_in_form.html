@@ -403,10 +403,20 @@
     imClose();
   });
 
+  // One save per click: a double click would post the form twice. Locked
+  // until the page changes; reopened from the back button, it unlocks.
+  var submitting = false;
+  window.addEventListener("pageshow", function (e) {
+    if (e.persisted) { submitting = false; document.getElementById("ckSave").disabled = false; }
+  });
   form.addEventListener("submit", function (e) {
+    if (submitting) { e.preventDefault(); return; }
     if (!rows.querySelector("tr")) {
       e.preventDefault();
       empty.textContent = "Add at least one product before saving.";
+    } else {
+      submitting = true;
+      document.getElementById("ckSave").disabled = true;
     }
   });
 

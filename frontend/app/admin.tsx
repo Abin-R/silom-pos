@@ -3776,9 +3776,14 @@ function CreateStockDocModal({
   // Stock-in/out documents must record one selected type rather than silently
   // saving a blank value.
   const missingReason = type === "out" && !outReason;
-  const canSave = type === "in"
+  // A stock in / out line left at 0 saves a document that moves nothing —
+  // Central Pinklao's expired cookies on 2026-11-23. Highlight it and hold Save.
+  const qtyMissing = (l: DraftLine) =>
+    (type === "in" || type === "out") && !((parseFloat(l.qty) || 0) > 0);
+  const anyQtyMissing = lines.some(qtyMissing);
+  const canSave = (type === "in"
     ? canSaveStockIn(lines.length, inReason)
-    : lines.length > 0 && !missingReason;
+    : lines.length > 0 && !missingReason) && !anyQtyMissing;
 
   const confirmSave = () => {
     if (!canSave || saveLock.current) return;
@@ -3965,7 +3970,7 @@ function CreateStockDocModal({
             if (compact) {
               const deltaColour = d > 0 ? C.ok : d < 0 ? C.danger : C.ink2Soft;
               return (
-                <View key={l.product_id} style={styles.itemCard}>
+                <View key={l.product_id} style={[styles.itemCard, qtyMissing(l) && styles.itemLineMissing]}>
                   <View style={styles.itemCardHead}>
                     <Text style={styles.itemCardIdx}>{i + 1}</Text>
                     <View style={{ flex: 1 }}>
@@ -4002,7 +4007,7 @@ function CreateStockDocModal({
                       <>
                         <View style={styles.itemCardField}>
                           <Text style={styles.itemCardLabel} numberOfLines={1}>{tr("common.quantity")}</Text>
-                          <TouchableOpacity style={styles.itemInput} onPress={() => setKeypad({ idx: i, field: "qty" })}>
+                          <TouchableOpacity style={[styles.itemInput, qtyMissing(l) && styles.itemInputMissing]} onPress={() => setKeypad({ idx: i, field: "qty" })} testID={`qty-${i}`}>
                             <Text style={styles.itemInputText}>{l.qty}</Text>
                           </TouchableOpacity>
                         </View>
@@ -4029,7 +4034,7 @@ function CreateStockDocModal({
               );
             }
             return (
-              <View key={l.product_id} style={styles.itemRow}>
+              <View key={l.product_id} style={[styles.itemRow, qtyMissing(l) && styles.itemLineMissing]}>
                 <Text style={[styles.itemCell, { width: 30 }]}>{i + 1}</Text>
                 <Text style={[styles.itemCell, { width: 130, fontSize: 11 }]} numberOfLines={1}>{l.barcode}</Text>
                 <Text style={[styles.itemCell, { flex: 1, textAlign: "left" }]} numberOfLines={1}>{l.product_name}</Text>
@@ -4047,7 +4052,7 @@ function CreateStockDocModal({
                   </>
                 ) : (
                   <>
-                    <TouchableOpacity style={[styles.itemInput, { width: 70 }]} onPress={() => setKeypad({ idx: i, field: "qty" })}>
+                    <TouchableOpacity style={[styles.itemInput, { width: 70 }, qtyMissing(l) && styles.itemInputMissing]} onPress={() => setKeypad({ idx: i, field: "qty" })} testID={`qty-${i}`}>
                       <Text style={styles.itemInputText}>{l.qty}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.itemInput, { width: 80 }]} onPress={() => setKeypad({ idx: i, field: "price" })}>
@@ -4066,6 +4071,9 @@ function CreateStockDocModal({
             );
           })}
 
+          {anyQtyMissing && (
+            <Text style={styles.itemsQtyHint} testID="qty-missing-hint">{tr("admin.enter_qty_above_zero")}</Text>
+          )}
           <TouchableOpacity style={styles.itemsAddBar} onPress={() => setPicker(true)} testID="add-items">
             <Text style={styles.itemsAddBarText}>{tr(cfg.addBarLabel)}</Text>
           </TouchableOpacity>
@@ -9112,6 +9120,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6, paddingHorizontal: 6, alignItems: "center",
   },
   itemInputText: { fontSize: 13, color: C.ink },
+  itemLineMissing: { backgroundColor: C.dangerTint },
+  itemInputMissing: { borderColor: C.danger, borderWidth: 2, backgroundColor: C.surface },
+  itemsQtyHint: { color: C.danger, fontSize: 13, fontWeight: "600", marginHorizontal: 14, marginTop: 12 },
   itemCard: {
     paddingHorizontal: 14, paddingVertical: 10, gap: 8,
     borderBottomWidth: 1, borderBottomColor: C.bg,

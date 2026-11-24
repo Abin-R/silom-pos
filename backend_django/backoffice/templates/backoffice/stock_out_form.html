@@ -329,7 +329,14 @@
     close();
   });
 
+  // One save per click: a double click would post the form twice. Locked
+  // until the page changes; reopened from the back button, it unlocks.
+  var submitting = false;
+  window.addEventListener("pageshow", function (e) {
+    if (e.persisted) { submitting = false; document.getElementById("ckSave").disabled = false; }
+  });
   form.addEventListener("submit", function (e) {
+    if (submitting) { e.preventDefault(); return; }
     if (!rows.querySelector("tr")) {
       e.preventDefault();
       empty.textContent = "Add at least one product before saving.";
@@ -337,6 +344,9 @@
       e.preventDefault();
       imgErr.textContent = "Still preparing the images — try Save again in a moment.";
       imgErr.hidden = false;
+    } else {
+      submitting = true;
+      document.getElementById("ckSave").disabled = true;
     }
   });
 
@@ -430,7 +440,7 @@
     })).then(function (done) {
       done.forEach(function (f) { if (f) imgFiles.push(f); });
       imgBusy -= 1;
-      ckSave.disabled = imgBusy > 0;
+      ckSave.disabled = submitting || imgBusy > 0;
       syncInput();
       drawImages();
       imgErr.textContent = problems.join(" ");

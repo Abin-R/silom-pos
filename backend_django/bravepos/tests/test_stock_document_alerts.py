@@ -252,11 +252,12 @@ class StockDocumentAlertTests(TestCase):
         sign_in(self.client, make_user(username="stockalerts", email="alerts@test.local", role="admin"))
         for kind in ("in", "out"):
             url = reverse(f"backoffice:stock_{kind}_new") + f"?branch={self.branch.id}"
-            for _ in range(2):
+            # Different quantities: the same form posted twice is one document.
+            for qty in ("1", "2"):
                 with self.captureOnCommitCallbacks(execute=True):
                     response = self.client.post(url, {
                         "reason": "Shop Supply" if kind == "in" else "Expired",
-                        "product_id": [str(self.product.id)], "qty": ["1"], "price": ["10"],
+                        "product_id": [str(self.product.id)], "qty": [qty], "price": ["10"],
                     })
                 self.assertEqual(response.status_code, 302, response.content)
         self.assertEqual(self.send.call_count, 2)

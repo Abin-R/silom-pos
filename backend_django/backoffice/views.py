@@ -65,6 +65,7 @@ from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
 from bravepos.production_policy import lock_settings, update_cutoff
 from bravepos.staff_provisioning import DEFAULT_ADMIN_PIN, DEFAULT_CASHIER_PIN
 from bravepos.views import (
+    find_duplicate_stock_document, lock_branch_stock_documents,
     save_check_document, save_stock_in_document, save_stock_out_document,
     stock_document_reason_names, update_stock_document_info,
 )
@@ -3019,8 +3020,24 @@ def _stock_doc_images_post(request):
     return out, None
 
 
+def _repeat_of_recent_stock_doc(branch, doc_type, arrived, created_by, header, lines):
+    """The document a second post of the same form would duplicate, or None.
+
+    A double click on Save posts the form twice; the browser shows the second
+    answer, so it gets the first copy's page.  Call inside the transaction
+    that saves the document — the lock makes the second copy wait for the
+    first to commit.
+    """
+    lock_branch_stock_documents(branch)
+    return find_duplicate_stock_document(
+        branch, doc_type, arrived, created_by, header,
+        [(p.id, p.name, qty) for p, qty, _price, _discount in lines],
+    )
+
+
 def _stock_out_post(request, branch):
     """Validate the posted form and save it.  Returns ``(doc, error)``."""
+    arrived = timezone.now()
     reason = (request.POST.get("reason") or "").strip()
     if reason not in {r.name for r in _stock_out_reasons(branch)}:
         return None, "Choose a type."
@@ -3032,13 +3049,18 @@ def _stock_out_post(request, branch):
         return None, error
 
     created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
+    receiver = (request.POST.get("receiver") or "").strip()[:200]
+    ref_no = (request.POST.get("ref_no") or "").strip()[:120]
+    note = (request.POST.get("note") or "").strip()
     with transaction.atomic():
+        same = _repeat_of_recent_stock_doc(
+            branch, "out", arrived, created_by,
+            {"reason": reason, "receiver": receiver, "ref_no": ref_no, "note": note}, lines)
+        if same is not None:
+            return same, None  # its photos came with the first copy
         doc = save_stock_out_document(
             branch, lines, reason,
-            receiver=(request.POST.get("receiver") or "").strip()[:200],
-            ref_no=(request.POST.get("ref_no") or "").strip()[:120],
-            note=(request.POST.get("note") or "").strip(),
-            created_by=created_by,
+            receiver=receiver, ref_no=ref_no, note=note, created_by=created_by,
         )
         StockDocumentImage.objects.bulk_create([
             StockDocumentImage(document=doc, data=data, width=w, height=h, original_name=name)
@@ -3130,20 +3152,26 @@ def stock_in_new(request):
     branches, branch, _dfrom, _dto = _common_filters(request)
     error = None
     if request.method == "POST" and branch is not None:
+        arrived = timezone.now()
         reason = (request.POST.get("reason") or "").strip()
         if not StockInReason.objects.filter(branch=branch, active=True, name=reason).exists():
             error = "Choose a type."
         else:
             lines, error = _stock_lines_post(request, branch)
         if error is None:
-            doc = save_stock_in_document(
-                branch, lines,
-                reason=reason,
-                vendor=(request.POST.get("vendor") or "").strip()[:200],
-                ref_no=(request.POST.get("ref_no") or "").strip()[:120],
-                note=(request.POST.get("note") or "").strip(),
-                created_by=getattr(request.user, "name", "") or getattr(request.user, "username", ""),
-            )
+            header = {
+                "reason": reason,
+                "vendor": (request.POST.get("vendor") or "").strip()[:200],
+                "ref_no": (request.POST.get("ref_no") or "").strip()[:120],
+                "note": (request.POST.get("note") or "").strip(),
+            }
+            created_by = getattr(request.user, "name", "") or getattr(request.user, "username", "")
+            with transaction.atomic():
+                doc = _repeat_of_recent_stock_doc(
+                    branch, "in", arrived, created_by, header, lines)
+                if doc is None:
+                    doc = save_stock_in_document(
+                        branch, lines, created_by=created_by, **header)
             messages.success(request, f"{doc.document_no} was saved and stock added.")
             return redirect("backoffice:stock_in_document", doc_id=doc.id)
     vendors = []

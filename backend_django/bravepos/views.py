@@ -2067,6 +2067,68 @@ def _next_stock_doc_no(branch, doc_type, adjust_type='') -> str:
     return f"CK{seq:07d}"
 
 
+# Two saves of one stock in / out form a moment apart — a double tap on a till,
+# a double click in the backoffice — are one document.  Khlong San's stock out
+# was filed twice 86 ms apart on 2026-11-21 and took the stock off twice; the
+# till now locks its Save button, but tablets on older builds and the
+# backoffice's plain HTML forms still reach here twice.
+DUPLICATE_STOCK_DOC_SECONDS = 10
+_STOCK_DOC_HEADER_FIELDS = ('reason', 'note', 'ref_no', 'vendor', 'receiver')
+
+
+def lock_branch_stock_documents(branch):
+    """Serialise stock in / out creation for one branch until the transaction
+    ends, so a second copy waits for the first to commit and then finds it.
+
+    A transaction-scoped advisory lock, not the Branch row: order creation
+    locks that row, and saving stock must never hold up a sale.  SQLite (the
+    test database) allows one writer at a time anyway.
+    """
+    from django.db import connection
+    if connection.vendor != 'postgresql':
+        return
+    with connection.cursor() as cur:
+        cur.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', [f'stock-doc:{branch.pk}'])
+
+
+def _stock_doc_signature(header, lines):
+    """What makes two stock documents the same paperwork: the header text and
+    the product lines ``[(product_id or None, product_name, qty)]``."""
+    def line_key(pid, name, qty):
+        who = f'id:{pid}' if pid else f'name:{(name or "").strip()}'
+        return who, Decimal(str(qty or 0)).quantize(Decimal('0.01'))
+    return (
+        tuple(str(header.get(k) or '').strip() for k in _STOCK_DOC_HEADER_FIELDS),
+        sorted(line_key(*l) for l in lines),
+    )
+
+
+def find_duplicate_stock_document(branch, doc_type, arrived, created_by, header, lines):
+    """The stock in / out document this request would repeat, or None.
+
+    A match is the same branch, type, author, header and lines, created no
+    more than DUPLICATE_STOCK_DOC_SECONDS before this request *arrived* — the
+    second copy may have waited on the lock while the first compressed its
+    photos.  Call it inside the transaction that holds
+    ``lock_branch_stock_documents``.
+    """
+    want = _stock_doc_signature(header, lines)
+    since = arrived - timedelta(seconds=DUPLICATE_STOCK_DOC_SECONDS)
+    recent = (StockDocument.objects
+              .filter(branch=branch, type=doc_type, created_by=created_by, created_at__gte=since)
+              .prefetch_related('items'))
+    for doc in recent:
+        have = _stock_doc_signature(
+            {k: getattr(doc, k) for k in _STOCK_DOC_HEADER_FIELDS},
+            [(it.product_id, it.product_name, it.qty) for it in doc.items.all()],
+        )
+        if have == want:
+            logger.warning('Refused a duplicate stock %s at %s: same as %s',
+                           doc_type, branch.name, doc.document_no)
+            return doc
+    return None
+
+
 @api_view(['GET', 'POST'])
 @require_session
 def stock_documents(request):
@@ -2086,6 +2148,7 @@ def stock_documents(request):
         return Response(StockDocumentSerializer(qs[:500], many=True).data)
 
     # POST — create the document, snapshot lines, and apply stock deltas.
+    arrived = djtz.now()
     payload = dict(request.data)
     doc_type = payload.get('type')
     if doc_type not in ('in', 'out', 'adjust', 'check'):
@@ -2118,6 +2181,20 @@ def stock_documents(request):
     def _dec(v):
         return Decimal(str(v if v not in (None, '') else 0))
 
+    if doc_type in ('in', 'out'):
+        # A line left at 0 files paperwork that moves no stock (Central
+        # Pinklao, 2026-11-23).  The till holds Save since 1.5.1's OTA; this
+        # covers older builds, which show ``detail`` as it is — so both languages.
+        for line in items:
+            try:
+                qty = _dec(line.get('qty'))
+            except InvalidOperation:
+                qty = Decimal(0)
+            if qty <= 0:
+                name = (line.get('product_name') or '').strip() or 'A product'
+                return Response({'detail': f'{name}: enter a quantity above 0. '
+                                           f'/ กรุณาใส่จำนวนมากกว่า 0'}, status=400)
+
     is_reconcile = doc_type in ('adjust', 'check')
     # For adjust, the "Update" delta per line (qty) reconciles on-hand to the
     # counted value; the document's A+/A- type is the sign of the net delta.
@@ -2130,6 +2207,28 @@ def stock_documents(request):
     doc_no = _next_stock_doc_no(branch, doc_type, adjust_type)
 
     with transaction.atomic():
+        if doc_type in ('in', 'out'):
+            lock_branch_stock_documents(branch)
+            pids = [l.get('product_id') for l in items if l.get('product_id')]
+            known = {str(i) for i in Product.objects.filter(
+                branch=branch, id__in=pids).values_list('id', flat=True)}
+            same = find_duplicate_stock_document(
+                branch, doc_type, arrived, staff_name,
+                {
+                    'reason': (payload.get('reason', '') or '') if doc_type == 'out' else in_reason,
+                    'note': payload.get('note', '') or '',
+                    'ref_no': payload.get('ref_no', '') or '',
+                    'vendor': payload.get('vendor', '') or '',
+                    'receiver': payload.get('receiver', '') or '',
+                },
+                [(l.get('product_id') if str(l.get('product_id') or '') in known else None,
+                  l.get('product_name', '') or '', _dec(l.get('qty')))
+                 for l in items],
+            )
+            if same is not None:
+                # The first copy already moved the stock; answer as if this
+                # one had saved it, so the till closes the form either way.
+                return Response(StockDocumentSerializer(same).data, status=200)
         doc = StockDocument.objects.create(
             branch=branch,
             type=doc_type,
