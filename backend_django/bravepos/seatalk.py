@@ -15,7 +15,7 @@ Config is env vars, all read at call time:
 * ``SEATALK_STOCK_GROUP_ID`` — repeat stock-in/out submission alerts
   (``stock_alerts``). Optional: unset, they go to Bot Testing.
 * ``SEATALK_GRAB_GROUP_ID`` — the group the Grab stock sync's alerts go to
-  (orders for staff to review, the poller going quiet). No fallback: unset
+  (the poller going quiet). No fallback: unset
   means no Grab alerts.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev

@@ -1,27 +1,38 @@
 """Tell SeaTalk when the Grab stock sync goes quiet, and when it is back.
 
-The poller (shopify_django_app) sends a heartbeat after every cycle.  With live
-pushes on, no good heartbeat for five minutes — or a heartbeat that reports a
-problem — is an outage: Grab's count can no longer be kept right, so the till
-and self-order hold back whatever Grab can still sell (``stock_pool``).  Nobody
-is told by that alone, and the poller cannot report that it is down, so this
-runs here, on its own timer, and works even if the shopify server is gone:
+The poller (shopify_django_app) sends a heartbeat after every cycle.  No good
+heartbeat for ``QUIET_AFTER`` — or a heartbeat that names a problem — means
+Grab orders are not being deducted and Grab's stock is not being kept up to
+date.  Shop sales are never affected, but someone should know.  The poller
+cannot report that it is down, so this runs here, on its own timer, and works
+even if the shopify server is gone.  Install it in the
+server's crontab (paths as in ``deploy.sh``):
 
-    * * * * * cd /srv/bravepos && .venv/bin/python manage.py grab_sync_watchdog
+    * * * * * cd /home/azureuser/silom-pos/backend_django && /home/azureuser/.local/share/virtualenvs/backend_django-43C1HBFU/bin/python manage.py grab_sync_watchdog
 
-One alert when an outage starts and one when it ends, however often it runs;
-``GrabSyncStatus.outage_alerted_at`` remembers.  Alerts go to
-``SEATALK_GRAB_GROUP_ID``; unset, nothing is sent (and nothing is remembered as
-sent, so setting it later still announces an outage that is still going on).
-Safe to run concurrently: the "alerted" mark is won with one conditional UPDATE.
+Only branches with a Grab merchant ID whose poller has sent at least one
+heartbeat are watched.  One alert when the quiet spell starts and one when it
+ends, however often this runs; ``GrabSyncStatus.quiet_alerted_at`` remembers.
+Alerts go to ``SEATALK_GRAB_GROUP_ID``; when SeaTalk is not configured or a
+send fails, nothing is remembered as sent, so the next run tries again.
 """
 from __future__ import annotations
+
+from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone as djtz
 
-from bravepos import grab_sync, seatalk, stock_pool
+from bravepos import seatalk
 from bravepos.models import GrabSyncStatus
+
+QUIET_AFTER = timedelta(minutes=15)   # more than 3 order cycles (the poller runs one every 4 minutes)
+
+
+def is_quiet(status, now) -> bool:
+    if status.problem or status.last_ok_at is None:
+        return True
+    return now - status.last_ok_at > QUIET_AFTER
 
 
 def describe(status, now) -> str:
@@ -42,36 +53,33 @@ class Command(BaseCommand):
             help="Report what would be alerted without sending or remembering anything.",
         )
 
+    def _send(self, text) -> bool:
+        # Synchronous on purpose: this process exits right after, and a
+        # background thread would die with it before the message went out.
+        group = seatalk.grab_group_id()
+        return bool(group) and seatalk.send_group_text(group, text)
+
     def handle(self, *args, **opts):
         dry = opts["dry_run"]
         now = djtz.now()
-        configured = bool(seatalk.grab_group_id())
         rows = (
             GrabSyncStatus.objects.select_related("branch")
             .filter(branch__active=True).exclude(branch__grab_merchant_id="")
         )
         for status in rows:
             name = status.branch.name
-            outage = stock_pool.in_outage(status, now)
-            if outage and status.outage_alerted_at is None:
+            quiet = is_quiet(status, now)
+            if quiet and status.quiet_alerted_at is None:
                 text = (
                     f"Grab stock sync is down at {name}: {describe(status, now)}. "
-                    "Grab's stock is not being kept up to date, so the till and the QR "
-                    "menu are holding back the units Grab can still sell."
+                    "Grab orders are not being deducted and Grab's stock is not being updated. "
+                    "Shop sales are not affected."
                 )
-                self.stdout.write(f"{name}: outage — {text}")
-                if not dry and configured and (
-                    GrabSyncStatus.objects
-                    .filter(pk=status.pk, outage_alerted_at__isnull=True)
-                    .update(outage_alerted_at=now)
-                ):
-                    grab_sync.alert(text)
-            elif not outage and status.outage_alerted_at is not None:
-                text = f"Grab stock sync is back at {name}. The till and QR menu are back to normal."
+                self.stdout.write(f"{name}: quiet — {text}")
+                if not dry and self._send(text):
+                    GrabSyncStatus.objects.filter(pk=status.pk).update(quiet_alerted_at=now)
+            elif not quiet and status.quiet_alerted_at is not None:
+                text = f"Grab stock sync is back at {name}."
                 self.stdout.write(f"{name}: recovered")
-                if not dry and configured and (
-                    GrabSyncStatus.objects
-                    .filter(pk=status.pk, outage_alerted_at__isnull=False)
-                    .update(outage_alerted_at=None)
-                ):
-                    grab_sync.alert(text)
+                if not dry and self._send(text):
+                    GrabSyncStatus.objects.filter(pk=status.pk).update(quiet_alerted_at=None)

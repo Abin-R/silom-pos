@@ -1,14 +1,14 @@
 """Context available to every backoffice page.
 
-The rail carries live counts next to Catalogue, Branches and Users, and a\nred one on Transactions while late self-order payments wait for a refund (and one on Grab review while Grab orders wait for a decision). Those are
+The rail carries live counts next to Catalogue, Branches and Users, and a\nred one on Transactions while late self-order payments wait for a refund. Those are
 chrome, not page data — asking each of ~30 views to supply them would mean
 every new view remembering to, and a rail that silently loses a number when
 one forgets. A processor keeps it in one place.
 
-Five cheap COUNT queries, and only for signed-in backoffice pages: the API
+Four cheap COUNT queries, and only for signed-in backoffice pages: the API
 and the public self-order pages render no template that uses them.
 """
-from bravepos.models import Branch, GrabOrderHold, Product, SelfOrder, Settings, Staff
+from bravepos.models import Branch, Product, SelfOrder, Settings, Staff
 
 
 def nav(request):
@@ -39,7 +39,5 @@ def nav(request):
         "nav_users": Staff.objects.filter(backoffice_access=True).count(),
         # Self-orders paid after their time ran out, waiting on a refund.
         "nav_refund_due": SelfOrder.objects.filter(status="late_paid").count(),
-        # Grab orders staff must decide on (deduct / restore / ignore).
-        "nav_grab_review": GrabOrderHold.objects.filter(review_status="open").count(),
     })
     return context

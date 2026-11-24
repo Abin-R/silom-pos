@@ -6,12 +6,25 @@ import django.utils.timezone
 import uuid
 
 
+def keep_db_default(apps, schema_editor):
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute(
+            "ALTER TABLE bravepos_branch ALTER COLUMN grab_merchant_id SET DEFAULT ''")
+
+
 class Migration(migrations.Migration):
     """Grab stock sync: the branch's Grab merchant ID and the two tables behind it.
 
-    Additive only: one new column that defaults to blank (and a unique
-    constraint that exempts blank, so no existing row can clash) and two new
-    empty tables.  Never applied outside throwaway local databases.
+    Additive only: two new branch columns (the merchant ID, blank by default,
+    with a unique constraint that exempts blank so no existing row can clash;
+    and the time it was linked, null) and two new empty tables.  ``deploy.sh`` applies it before the new code starts.
+
+    The new column also gets a database-side default of '' on PostgreSQL.
+    Django 4.2 drops the default after adding a column, which would make the
+    *old* code (still serving while ``deploy.sh`` migrates, or after a code
+    rollback) fail every branch insert with a NOT NULL violation, because it
+    does not know the column exists.  Keeping the default makes both versions
+    work against this schema.
     """
 
     dependencies = [
@@ -20,29 +33,16 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='GrabOrderHold',
+            name='GrabOrderDeduction',
             fields=[
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('order_id', models.CharField(max_length=64)),
                 ('display_id', models.CharField(blank=True, default='', max_length=64)),
-                ('status', models.CharField(choices=[('held', 'Held'), ('converted', 'Converted'), ('released', 'Released'), ('restored', 'Restored')], default='held', max_length=16)),
-                ('items', models.JSONField(blank=True, default=list)),
-                ('deducted', models.JSONField(blank=True, default=dict)),
-                ('grab_state', models.CharField(blank=True, default='', max_length=32)),
                 ('placed_at', models.DateTimeField(blank=True, null=True)),
-                ('ready_at', models.DateTimeField(blank=True, null=True)),
+                ('deducted', models.JSONField(blank=True, default=dict)),
                 ('first_seen_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('last_seen_at', models.DateTimeField(default=django.utils.timezone.now)),
                 ('changed_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('converted_at', models.DateTimeField(blank=True, null=True)),
-                ('closed_at', models.DateTimeField(blank=True, null=True)),
-                ('close_reason', models.CharField(blank=True, default='', max_length=64)),
-                ('review_status', models.CharField(blank=True, default='', max_length=8)),
-                ('review_reason', models.CharField(blank=True, default='', max_length=32)),
-                ('review_detail', models.JSONField(blank=True, default=dict)),
-                ('resolved_by', models.CharField(blank=True, default='', max_length=120)),
-                ('resolved_at', models.DateTimeField(blank=True, null=True)),
-                ('resolution', models.CharField(blank=True, default='', max_length=16)),
+                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='grab_order_deductions', to='bravepos.branch')),
             ],
             options={
                 'ordering': ['-first_seen_at'],
@@ -53,10 +53,8 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('last_ok_at', models.DateTimeField(blank=True, null=True)),
-                ('push_live', models.BooleanField(default=False)),
                 ('problem', models.TextField(blank=True, default='')),
-                ('grab_shown', models.JSONField(blank=True, default=dict)),
-                ('outage_alerted_at', models.DateTimeField(blank=True, null=True)),
+                ('quiet_alerted_at', models.DateTimeField(blank=True, null=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
             ],
         ),
@@ -64,6 +62,12 @@ class Migration(migrations.Migration):
             model_name='branch',
             name='grab_merchant_id',
             field=models.CharField(blank=True, default='', max_length=32),
+        ),
+        migrations.RunPython(keep_db_default, migrations.RunPython.noop),
+        migrations.AddField(
+            model_name='branch',
+            name='grab_linked_at',
+            field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AddConstraint(
             model_name='branch',
@@ -74,21 +78,8 @@ class Migration(migrations.Migration):
             name='branch',
             field=models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='grab_sync_status', to='bravepos.branch'),
         ),
-        migrations.AddField(
-            model_name='graborderhold',
-            name='branch',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='grab_order_holds', to='bravepos.branch'),
-        ),
-        migrations.AddIndex(
-            model_name='graborderhold',
-            index=models.Index(fields=['branch', 'status'], name='bravepos_gr_branch__e9850e_idx'),
-        ),
-        migrations.AddIndex(
-            model_name='graborderhold',
-            index=models.Index(fields=['review_status', 'branch'], name='bravepos_gr_review__d7bf57_idx'),
-        ),
         migrations.AddConstraint(
-            model_name='graborderhold',
-            constraint=models.UniqueConstraint(fields=('branch', 'order_id'), name='grab_hold_branch_order_unique'),
+            model_name='graborderdeduction',
+            constraint=models.UniqueConstraint(fields=('branch', 'order_id'), name='grab_deduction_branch_order_unique'),
         ),
     ]

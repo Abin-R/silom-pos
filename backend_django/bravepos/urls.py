@@ -53,16 +53,10 @@ urlpatterns = [
     path('shopster/create-product/', views.shopster_create_product),
 
     # Grab stock sync — called by the poller with an X-API-Key, no session.
-    path('grab/orders/hold', grab_views.grab_hold_orders),
-    path('grab/orders/convert', grab_views.grab_convert_order),
-    path('grab/orders/release', grab_views.grab_release_order),
-    path('grab/orders/restore', grab_views.grab_restore_order),
-    path('grab/orders/correct', grab_views.grab_correct_order),
-    path('grab/orders/review', grab_views.grab_review_order),
+    path('grab/outlets', grab_views.grab_outlets),
+    path('grab/orders/deduct', grab_views.grab_deduct_orders),
     path('grab/heartbeat', grab_views.grab_heartbeat),
     path('grab/stock', grab_views.grab_stock),
-    # The till asks this before it takes payment — a session, not the key.
-    path('grab/till-check', views.grab_till_check),
 
     # Settings — single document, GET + PUT.
     path('settings', views.settings_view),

@@ -25,7 +25,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder, stock_pool
+from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
 from . import till_devices
 from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
@@ -640,43 +640,6 @@ def shopster_create_product(request):
     body = ProductSerializer(product).data
     body['sale_windows'] = SaleWindowSerializer(product.sale_windows.all(), many=True).data
     return Response(body, status=201)
-
-
-@api_view(['POST'])
-@require_session
-def grab_till_check(request):
-    """Before the till takes payment: may it sell this cart?
-
-    Units held for Grab orders we know of (and, in a sync outage, whatever Grab
-    can still sell) are not the till's to sell.  ``{"items": [{product_id, qty}],
-    "free_items": [...]}`` answers ``{"ok": bool, "blocked": [{product_id, name,
-    wanted, can_sell, held_for_grab}]}``.  Only products with Grab holds (or an
-    outage figure) can ever be blocked.  The check is repeated under the lock
-    when the sale is saved; see ``orders.create_order_from_items``.
-    """
-    branch = request.session_obj.branch
-    data = request.data if isinstance(request.data, dict) else {}
-    wanted: dict[str, int] = {}
-    for key in ('items', 'free_items'):
-        lines = data.get(key) or []
-        if not isinstance(lines, list):
-            return Response({'detail': f'{key} must be a list.'}, status=400)
-        for line in lines:
-            if not isinstance(line, dict):
-                continue
-            try:
-                pid = str(uuid.UUID(str(line.get('product_id') or '')))
-                qty = int(line.get('qty') or 0)
-            except (ValueError, TypeError):
-                continue
-            if qty > 0:
-                wanted[pid] = wanted.get(pid, 0) + qty
-    short = stock_pool.till_shortfalls(branch, wanted) if branch is not None else []
-    names = dict(Product.objects.filter(
-        pk__in=[row['product_id'] for row in short]).values_list('pk', 'name'))
-    for row in short:
-        row['name'] = names.get(uuid.UUID(row['product_id']), '')
-    return Response({'ok': not short, 'blocked': short})
 
 
 class CustomerViewSet(TillPermissionMixin, SessionRequiredMixin, viewsets.ModelViewSet):
