@@ -3,7 +3,7 @@
   Screen — Sync branches.
 
   Two jobs, one screen: a branch that has just opened needs a menu,
-  promotions and dropdowns, and something added at one shop needs to reach
+  promotions, dropdowns and payment types, and something added at one shop needs to reach
   the others. Both are "make that branch's lists look like this one". What
   travels is ticked per section — see bravepos/branch_sync.py, where each
   section lives; a new list is one entry there and shows up here unchanged.
@@ -235,7 +235,7 @@
     <span class="sm">
       {% if not sections %}
       <b>Tick at least one thing to copy</b>
-      <u>Products, categories, promotions or dropdowns — this page only touches
+      <u>Products, categories, promotions, dropdowns or payment types — this page only touches
         what is ticked.</u>
       {% else %}
       <b>Pick the branches to copy onto</b>

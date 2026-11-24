@@ -4415,7 +4415,8 @@ def _branch_sync_message(source, targets, sections, results):
 @login_required
 def branch_sync(request):
     """Make other branches match one branch — products, categories,
-    promotions, stock-in and stock-out types; whichever are ticked.
+    promotions, stock-in and stock-out types, payment types; whichever are
+    ticked.
 
     The sections and what each one does live in `bravepos.branch_sync`; this
     is the page around them.  Every section adds what the target is missing

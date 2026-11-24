@@ -28,8 +28,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
 
-from . import catalog, discounts
-from .models import DiscountType, StockInReason, StockOutReason
+from . import catalog, discounts, payment_types
+from .models import DiscountType, PaymentType, StockInReason, StockOutReason
 
 
 @dataclass(frozen=True)
@@ -235,6 +235,66 @@ def apply_stock_in(source, target, ctx):
     return out
 
 
+# ── Payment types (the till's Custom Pay list) ─────────────────────────────
+def _payment_plan(target, ctx):
+    """Matched by name ignoring case, as `payment_types.find` does.  A name
+    that differs only in case is edited to the source's spelling — the till
+    shows it as written.  A name held twice (``QR`` and ``qr``) at either end
+    cannot be matched to one row, so it is reported and left alone."""
+    target_rows = list(PaymentType.objects.filter(branch=target))
+    have = {_norm(r.name): r for r in target_rows}
+    source_counts = Counter(_norm(r.name) for r in ctx["payment_types"])
+    target_counts = Counter(_norm(r.name) for r in target_rows)
+    plan, reported = [], set()
+    for r in ctx["payment_types"]:
+        key = _norm(r.name)
+        if source_counts[key] > 1 or target_counts[key] > 1:
+            if key not in reported:
+                plan.append(("skip", r, None, [
+                    f"{r.name} — the name is held twice in the source or target branch",
+                ]))
+                reported.add(key)
+            continue
+        dest = have.get(key)
+        if dest is None:
+            # Hidden at the source means not offered there; a branch that
+            # never had it gains nothing by getting it hidden.
+            if r.active:
+                plan.append(("create", r, None, []))
+            continue
+        changed = [f for f in ("name", "active") if getattr(dest, f) != getattr(r, f)]
+        plan.append(("update" if changed else "same", r, dest, changed))
+    return plan
+
+
+def preview_payment_types(source, target, ctx):
+    plan = _payment_plan(target, ctx)
+    return {
+        "adding": [r.name for a, r, _, _ in plan if a == "create"],
+        "updating": [{"name": r.name, "changes": [
+            {"name": "spelling", "active": "shown/hidden"}[f] for f in ch]}
+            for a, r, _, ch in plan if a == "update"],
+        "already": sum(1 for a, *_ in plan if a == "same"),
+        "skipped": [ch[0] for a, _, _, ch in plan if a == "skip"],
+    }
+
+
+def apply_payment_types(source, target, ctx):
+    out = {"created": 0, "updated": 0, "skipped": []}
+    for action, r, dest, changed in _payment_plan(target, ctx):
+        if action == "create":
+            payment_types.create(target, r.name, active=r.active)
+            out["created"] += 1
+        elif action == "update":
+            for f in changed:
+                setattr(dest, f, getattr(r, f))
+            dest.save(update_fields=changed)
+            out["updated"] += 1
+        elif action == "skip":
+            out["skipped"].extend(changed)
+    return out
+
+
 # ── Promotions ──────────────────────────────────────────────────────────────
 def _promo_plan(target, dt, assume=()):
     """``(action, reason)`` for one promotion at ``target``.
@@ -317,6 +377,9 @@ SECTIONS = [
     Section("stock_out", "Stock-Out Dropdowns",
             "The Type list on Stock out and the till.",
             preview_stock_out, apply_stock_out),
+    Section("payment_types", "Payment Types",
+            "The Custom Pay list on the till.",
+            preview_payment_types, apply_payment_types),
     Section("promotions", "Promotions",
             "Running, scheduled and paused promotions — not ended ones.",
             preview_promotions, apply_promotions),
@@ -335,6 +398,8 @@ def context(source, sections, *, retire=True):
         ctx["stock_in"] = list(StockInReason.objects.filter(branch=source))
     if "stock_out" in ctx["sections"]:
         ctx["stock_out"] = list(StockOutReason.objects.filter(branch=source))
+    if "payment_types" in ctx["sections"]:
+        ctx["payment_types"] = list(PaymentType.objects.filter(branch=source))
     if "promotions" in ctx["sections"]:
         ctx["promotions"] = source_promotions(source)
     return ctx

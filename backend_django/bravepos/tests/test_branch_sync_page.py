@@ -1,7 +1,7 @@
 """Sync branches — the sections beyond products.
 
 Products have their own suite (test_product_sync_page); this covers
-categories, stock-in and stock-out types, promotions, choosing sections, and the old
+categories, stock-in and stock-out types, payment types, promotions, choosing sections, and the old
 Catalogue address.
 
 Run:
@@ -18,7 +18,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from bravepos.models import (
-    Category, DiscountType, ParentCategory, Product, Staff, StockInReason, StockOutReason,
+    Category, DiscountType, ParentCategory, PaymentType, Product, Staff, StockInReason,
+    StockOutReason,
 )
 
 from .factories import make_branch, make_product
@@ -64,9 +65,10 @@ class BranchSyncPageTests(TestCase):
 
     def test_first_visit_ticks_every_section(self):
         res = self.client.get(self.url)
-        for label in ("Products", "Categories", "Promotions", "Stock-Out Dropdowns", "Stock-In Dropdowns"):
+        for label in ("Products", "Categories", "Promotions", "Stock-Out Dropdowns", "Stock-In Dropdowns",
+                      "Payment Types"):
             self.assertContains(res, label)
-        self.assertEqual(len(res.context["section_keys"]), 5)
+        self.assertEqual(len(res.context["section_keys"]), 6)
 
     def test_an_unticked_section_writes_nothing(self):
         make_product(self.source, name="Brownie")
@@ -116,6 +118,47 @@ class BranchSyncPageTests(TestCase):
         StockOutReason.objects.create(branch=self.source, name="Old", active=False)
         self.sync("stock_out")
         self.assertFalse(StockOutReason.objects.filter(branch=self.target, name="Old").exists())
+
+    # ── Payment types ───────────────────────────────────────────────────
+    def test_a_missing_payment_type_is_added_and_extras_survive(self):
+        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
+        PaymentType.objects.create(branch=self.target, name="Silom terminal", sort_order=99)
+        res = self.client.get(self.url, self.params("payment_types"))
+        self.assertContains(res, "Grab")
+        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Grab").exists())
+
+        self.sync("payment_types")
+        self.assertTrue(PaymentType.objects.filter(branch=self.target, name="Grab", active=True).exists())
+        self.assertTrue(PaymentType.objects.filter(branch=self.target, name="Silom terminal").exists())
+        self.assertFalse(PaymentType.objects.filter(branch=self.other, name="Grab").exists())
+
+    def test_a_payment_type_is_edited_to_match_spelling_and_visibility(self):
+        PaymentType.objects.filter(branch=self.source, name="QR").update(active=False)
+        PaymentType.objects.create(branch=self.source, name="LINE MAN", sort_order=99)
+        PaymentType.objects.create(branch=self.target, name="Line Man", sort_order=99)
+        self.sync("payment_types")
+        self.assertFalse(PaymentType.objects.get(branch=self.target, name="QR").active)
+        self.assertEqual(
+            list(PaymentType.objects.filter(branch=self.target, name__iexact="line man")
+                 .values_list("name", flat=True)), ["LINE MAN"])
+
+    def test_a_hidden_payment_type_is_not_created_elsewhere(self):
+        PaymentType.objects.create(branch=self.source, name="Old EDC", active=False, sort_order=99)
+        self.sync("payment_types")
+        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Old EDC").exists())
+
+    def test_a_payment_name_held_twice_is_skipped_and_named(self):
+        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=98)
+        PaymentType.objects.create(branch=self.target, name="Grab", active=False, sort_order=98)
+        PaymentType.objects.create(branch=self.target, name="GRAB", sort_order=99)
+        res = self.sync("payment_types")
+        self.assertContains(res, "held twice")
+        self.assertFalse(PaymentType.objects.get(branch=self.target, name="Grab").active)
+
+    def test_unticked_payment_types_are_untouched(self):
+        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
+        self.sync("stock_out")
+        self.assertFalse(PaymentType.objects.filter(branch=self.target, name="Grab").exists())
 
     # ── Stock-in types ──────────────────────────────────────────────────
     def test_stock_in_preview_lists_changes_without_writing(self):
@@ -282,8 +325,12 @@ class BranchSyncPageTests(TestCase):
         StockOutReason.objects.create(branch=self.source, name="Event")
         Category.objects.create(branch=self.source, name="Empty shelf")
         make_product(self.source, name="Brownie")
+        PaymentType.objects.create(branch=self.source, name="Grab", sort_order=99)
         before = (DiscountType.objects.count(), StockOutReason.objects.count(),
-                  Category.objects.count(), Product.objects.count())
-        self.client.get(self.url, self.params("products", "categories", "stock_out", "promotions"))
+                  Category.objects.count(), Product.objects.count(),
+                  PaymentType.objects.count())
+        self.client.get(self.url, self.params("products", "categories", "stock_out",
+                                              "payment_types", "promotions"))
         self.assertEqual(before, (DiscountType.objects.count(), StockOutReason.objects.count(),
-                                  Category.objects.count(), Product.objects.count()))
+                                  Category.objects.count(), Product.objects.count(),
+                                  PaymentType.objects.count()))
