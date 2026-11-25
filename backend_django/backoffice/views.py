@@ -58,6 +58,7 @@ from bravepos.models import (
     TillDevice,
     Unit,
 )
+from backoffice import payment_filters
 from bravepos import (
     appdist, catalog, crm, discounts, grab_sync, images, inventory_history, permissions,
     sale_windows,
@@ -820,7 +821,7 @@ def _transactions_qs(request):
 
     payment = (request.GET.get("payment") or "").strip()
     if payment:
-        qs = qs.filter(payment_method__icontains=payment)
+        qs = qs.filter(payment_filters.payment_q(payment))
 
     # By the SelfOrder link, not source='self_order', which any order can carry.
     channel = request.GET.get("channel") or ""
@@ -930,6 +931,16 @@ def transactions(request):
     if (request.GET.get("status") or "") == "refund_due":
         return _refund_due_page(request, branches, branch)
 
+    payment = (request.GET.get("payment") or "").strip()
+    # From every bill in the window, not the filtered ones: picking one type
+    # must not empty the list of the others.
+    start, end = _date_window(dfrom, dto)
+    window_orders = Order.objects.filter(created_at__gte=start, created_at__lte=end)
+    if branch:
+        window_orders = window_orders.filter(branch=branch)
+    used_methods = sorted(
+        window_orders.order_by().values_list("payment_method", flat=True).distinct())
+
     paginator = Paginator(qs, 25)
     page_obj = paginator.get_page(request.GET.get("page"))
 
@@ -968,7 +979,7 @@ def transactions(request):
         "qs": _filter_qs(
             request,
             status=request.GET.get("status") or None,
-            payment=request.GET.get("payment") or None,
+            payment=payment or None,
             q=(request.GET.get("q") or "").strip() or None,
             channel=request.GET.get("channel") or None,
         ),
@@ -977,8 +988,10 @@ def transactions(request):
         "channels": [("", "All channels"), ("till", "Till"), ("self_order", "Self-order")],
         "status": request.GET.get("status") or "all",
         "statuses": _TRX_STATUSES,
-        "payment": request.GET.get("payment") or "",
-        "payments": ["Cash", "PromptPay", "Card"],
+        "payment": payment,
+        "payments": list(payment_filters.GROUPS),
+        "more_payments": payment_filters.more_types(
+            branch, branches, used_methods, selected=payment),
         "query": (request.GET.get("q") or "").strip(),
         "window_bills": window_totals["bills"] or 0,
         "window_total": window_totals["total"] or Decimal(0),

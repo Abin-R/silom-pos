@@ -82,6 +82,7 @@ PAYMENT_TAGS = {
     "scb easy": ("Mobile banking", "t-info"),
     "krungsri": ("Mobile banking", "t-info"),
     "bangkok bank": ("Mobile banking", "t-info"),
+    "beam card": ("Card", "t-purple"),  # ahead of "beam", which is PromptPay
     "cash": ("Cash", "t-ok"),
     "promptpay": ("PromptPay", "t-info"),
     "qr": ("PromptPay", "t-info"),
@@ -107,6 +108,9 @@ def iso_dt(value):
 @register.filter
 def payment_label(method):
     key = (method or "").strip().lower()
+    # By the name the cashier picked: "Custom · QR" is not our PromptPay.
+    if key == "custom" or key.startswith("custom · "):
+        return "Custom Pay" + (method or "").strip()[len("custom"):]
     for needle, (label, _) in PAYMENT_TAGS.items():
         if needle in key:
             return label
@@ -116,6 +120,8 @@ def payment_label(method):
 @register.filter
 def payment_class(method):
     key = (method or "").strip().lower()
+    if key == "custom" or key.startswith("custom · "):
+        return "t-out"
     for needle, (_, css) in PAYMENT_TAGS.items():
         if needle in key:
             return css

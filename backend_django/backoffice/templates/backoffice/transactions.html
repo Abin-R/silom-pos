@@ -66,6 +66,20 @@
       <a class="{% if payment == p %}on{% endif %}" href="?{% qs_replace request payment=p page=None %}">{{ p }}</a>
     {% endfor %}
   </div>
+  {% comment %}Too many for buttons: each Custom Pay type and each banking app.{% endcomment %}
+  <label class="ctl">
+    <select aria-label="More payment types" onchange="location.href = this.value">
+      <option value="?{% qs_replace request payment=None page=None %}">More types</option>
+      {% for heading, options in more_payments %}
+      <optgroup label="{{ heading }}">
+        {% for value, label in options %}
+        <option value="?{% qs_replace request payment=value page=None %}" {% if payment|lower == value|lower %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+    <svg class="cv"><use href="#i-chev"/></svg>
+  </label>
   <div class="seg">
     {% for key, label in channels %}
       <a class="{% if channel == key %}on{% endif %}"
