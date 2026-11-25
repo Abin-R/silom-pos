@@ -2630,16 +2630,48 @@ def _stock_report_filters(request):
     if sort not in dict(_STOCK_PRODUCT_SORTS):
         sort = "name"
     q = (request.GET.get("q") or "").strip()
-    return branches, branch, dfrom, dto, view, field, sort, q
+    category = request.GET.get("category") or ""
+    if category not in _stock_report_categories(branch):
+        category = ""  # e.g. the branch was switched to one without it
+    return branches, branch, dfrom, dto, view, field, sort, q, category
 
 
-def _stock_report_docs(branch, kind, dfrom, dto, field, q):
-    """Documents of one direction in the window, newest first."""
+def _stock_report_categories(branch):
+    """Category names to filter by, in the catalogue's order.
+
+    Names, not ids: each branch has its own Category rows, and a filter keyed
+    on the name survives switching to another branch that has it too.
+    """
+    qs = Category.objects.all()
+    if branch:
+        qs = qs.filter(Q(branch=branch) | Q(branch__isnull=True))
+    names = qs.order_by("order", "name").values_list("name", flat=True)
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _stock_report_docs(branch, kind, dfrom, dto, field, q, category=""):
+    """Documents of one direction in the window, newest first.
+
+    ``line_count`` and ``line_total`` are what the list shows. With a
+    ``category``, only documents holding a product of it are kept, and both
+    figures cover that category's lines alone — so the totals agree with the
+    By product view under the same filter.
+    """
     start, end = _date_window(dfrom, dto)
+    if category:
+        lines = Q(items__product__category__name=category)
+        figures = {
+            "line_count": Count("items", filter=lines),
+            "line_total": Sum("items__total", filter=lines),
+        }
+    else:
+        figures = {"line_count": Count("items"), "line_total": F("total")}
     qs = (StockDocument.objects
           .filter(type=kind, created_at__gte=start, created_at__lte=end)
-          .annotate(line_count=Count("items"))
+          .annotate(**figures)
           .order_by("-created_at"))
+    if category:
+        qs = qs.filter(line_count__gt=0)
     if branch:
         qs = qs.filter(branch=branch)
     if q:
@@ -2658,7 +2690,7 @@ def _stock_report_docs(branch, kind, dfrom, dto, field, q):
     return qs
 
 
-def _stock_report_products(branch, kind, dfrom, dto, sort, q):
+def _stock_report_products(branch, kind, dfrom, dto, sort, q, category=""):
     """Document lines summed per product.
 
     Grouped in Python, like ``stock_movement_export``: a line whose product
@@ -2668,6 +2700,8 @@ def _stock_report_products(branch, kind, dfrom, dto, sort, q):
     items = (StockDocumentItem.objects
              .filter(document__in=_stock_report_docs(branch, kind, dfrom, dto, "all", ""))
              .select_related("document", "product__unit", "product__category"))
+    if category:
+        items = items.filter(product__category__name=category)
 
     rows: dict[object, dict] = {}
     for it in items:
@@ -2714,11 +2748,11 @@ def _stock_report_products(branch, kind, dfrom, dto, sort, q):
 
 def _stock_report(request, kind):
     conf = _STOCK_REPORT_KINDS[kind]
-    branches, branch, dfrom, dto, view, field, sort, q = _stock_report_filters(request)
+    branches, branch, dfrom, dto, view, field, sort, q, category = _stock_report_filters(request)
 
     docs = _stock_report_docs(branch, kind, dfrom, dto, field if view == "documents" else "all",
-                              q if view == "documents" else "")
-    totals = docs.aggregate(count=Count("id"), value=Sum("total"))
+                              q if view == "documents" else "", category)
+    totals = docs.aggregate(count=Count("id"), value=Sum("line_total"))
     context = {
         "active": conf["active"],
         "kind": kind,
@@ -2734,11 +2768,13 @@ def _stock_report(request, kind):
         "sort": sort,
         "sorts": _STOCK_PRODUCT_SORTS,
         "q": q,
+        "category": category,
+        "categories": _stock_report_categories(branch),
         "doc_count": totals["count"] or 0,
         "doc_value": totals["value"] or Decimal(0),
         "export_url": reverse(f"backoffice:{conf['active']}_export"),
         "qs": _filter_qs(
-            request, view=view, q=q or None,
+            request, view=view, q=q or None, category=category or None,
             field=field if view == "documents" and field != "all" else None,
             sort=sort if view == "products" and sort != "name" else None,
         ),
@@ -2747,7 +2783,7 @@ def _stock_report(request, kind):
     if view == "documents":
         paginator = Paginator(docs, 50)
     else:
-        rows = _stock_report_products(branch, kind, dfrom, dto, sort, q)
+        rows = _stock_report_products(branch, kind, dfrom, dto, sort, q, category)
         context.update(
             product_count=len(rows),
             qty_total=sum((r["qty"] for r in rows), Decimal(0)),
@@ -2763,7 +2799,7 @@ def _stock_report(request, kind):
 def _stock_report_export(request, kind):
     """CSV of whichever view is on screen, every row rather than one page."""
     conf = _STOCK_REPORT_KINDS[kind]
-    _branches, branch, dfrom, dto, view, field, sort, q = _stock_report_filters(request)
+    _branches, branch, dfrom, dto, view, field, sort, q, category = _stock_report_filters(request)
 
     fname_branch = branch.name.replace(" ", "_") if branch else "all"
     response, writer = _csv_response(
@@ -2772,23 +2808,30 @@ def _stock_report_export(request, kind):
 
     if view == "documents":
         _write_export_header(writer, f"{conf['title']} documents", branch, dfrom, dto)
+        if category:
+            writer.writerow(["Category", category])
+            writer.writerow([])
         header = ["Created", "Document No.", "Ref. No.", conf["party"]]
         header.append("Type" if kind == "in" else "Reason")
-        writer.writerow(header + ["Lines", "Total", "Created by", "Note"])
-        for d in _stock_report_docs(branch, kind, dfrom, dto, field, q):
+        header += ["Category lines", "Category total"] if category else ["Lines", "Total"]
+        writer.writerow(header + ["Created by", "Note"])
+        for d in _stock_report_docs(branch, kind, dfrom, dto, field, q, category):
             row = [
                 timezone.localtime(d.created_at).strftime("%d/%m/%Y %H:%M:%S"),
                 d.document_no, d.ref_no, d.vendor if kind == "in" else d.receiver,
             ]
             row.append(d.reason)
-            writer.writerow(row + [d.line_count, _csv_num(d.total), d.created_by, d.note])
+            writer.writerow(row + [d.line_count, _csv_num(d.line_total), d.created_by, d.note])
         return response
 
     _write_export_header(writer, f"{conf['title']} by Product", branch, dfrom, dto)
+    if category:
+        writer.writerow(["Category", category])
+        writer.writerow([])
     writer.writerow(["#", "Barcode", "Product Name", "Unit", "Document Qty.",
                      "Quantity", "Total Discount", "Total"])
     qty = disc = value = Decimal(0)
-    for i, r in enumerate(_stock_report_products(branch, kind, dfrom, dto, sort, q), start=1):
+    for i, r in enumerate(_stock_report_products(branch, kind, dfrom, dto, sort, q, category), start=1):
         writer.writerow([i, r["barcode"], r["name"], r["unit"], r["doc_count"],
                          _stock_qty(r["qty"]), _csv_num(r["discount"]), _csv_num(r["total"])])
         qty += r["qty"]

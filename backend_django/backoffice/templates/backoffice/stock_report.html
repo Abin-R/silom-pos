@@ -38,6 +38,16 @@
     </div>
     <div class="spacer"></div>
 
+    <div class="ctl" style="height:34px" title="Category">
+      <svg><use href="#i-filter"/></svg>
+      <select name="category" form="filterForm" onchange="this.form.submit()" aria-label="Category">
+        <option value="">All categories</option>
+        {% for name in categories %}
+          <option value="{{ name }}" {% if category == name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <svg class="cv"><use href="#i-chev"/></svg>
+    </div>
     {% if view == 'documents' %}
       <div class="ctl" style="height:34px">
         <select name="field" form="filterForm" aria-label="Search in">
@@ -72,7 +82,8 @@
           <th style="width:150px">Created</th><th>Document No.</th><th>Ref. No.</th>
           <th>{{ party_label }}</th>
           <th>{% if kind == 'in' %}Type{% else %}Reason{% endif %}</th>
-          <th class="r">Lines</th><th class="r">Total</th><th>Created by</th><th>Note</th>
+          <th class="r">{% if category %}Category lines{% else %}Lines{% endif %}</th>
+          <th class="r">{% if category %}Category total{% else %}Total{% endif %}</th><th>Created by</th><th>Note</th>
         </tr>
       </thead>
       <tbody>
@@ -85,14 +96,14 @@
           <td>{% if kind == 'in' %}{{ d.vendor|default:"—" }}{% else %}{{ d.receiver|default:"—" }}{% endif %}</td>
           <td>{{ d.reason|default:"—" }}</td>
           <td class="r money">{{ d.line_count }}</td>
-          <td class="r money" style="font-weight:660">฿{{ d.total|floatformat:2|intcomma }}</td>
+          <td class="r money" style="font-weight:660">฿{{ d.line_total|floatformat:2|intcomma }}</td>
           <td>{{ d.created_by|default:"—" }}</td>
           <td class="sub">{{ d.note|default:"" }}</td>
         </tr>
         {% empty %}
         <tr><td colspan="9" class="empty">
           <svg><use href="#i-inbox"/></svg>
-          {% if q %}No document matches “{{ q }}”.{% else %}No {{ title|lower }} documents between {{ date_from }} and {{ date_to }}.{% endif %}
+          {% if q %}No document matches “{{ q }}”.{% else %}No {{ title|lower }} documents{% if category %} with {{ category }}{% endif %} between {{ date_from }} and {{ date_to }}.{% endif %}
         </td></tr>
         {% endfor %}
       </tbody>
@@ -133,7 +144,7 @@
         {% empty %}
         <tr><td colspan="9" class="empty">
           <svg><use href="#i-inbox"/></svg>
-          {% if q %}No product matches “{{ q }}”.{% else %}No {{ title|lower }} between {{ date_from }} and {{ date_to }}.{% endif %}
+          {% if q %}No product matches “{{ q }}”.{% else %}No {{ title|lower }}{% if category %} of {{ category }}{% endif %} between {{ date_from }} and {{ date_to }}.{% endif %}
         </td></tr>
         {% endfor %}
       </tbody>

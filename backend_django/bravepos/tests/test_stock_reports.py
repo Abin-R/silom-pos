@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import csv
 import io
+from decimal import Decimal
 
 from django.test import TestCase
 from django.urls import reverse
 
-from bravepos.models import BranchSession, Settings, Staff, Unit
+from bravepos.models import BranchSession, Category, Settings, Staff, Unit
 
 from .factories import make_branch, make_product
 
@@ -114,6 +115,77 @@ class StockReportTests(TestCase):
         doc = self._doc("in", [(self.cookie, 1, 0)])
         other = make_branch(name="Central World")
         self.assertNotContains(self._get("stock_in", branch=str(other.id)), doc["document_no"])
+
+    # ── Category filter ─────────────────────────────────────────────────
+    def _bakery(self):
+        """Move the cake into its own category; the cookie stays in Drinks."""
+        self.cake.category = Category.objects.create(
+            branch=self.branch, name="Cakes & Pies", order=2)
+        self.cake.save()
+
+    def test_category_keeps_only_documents_holding_it(self):
+        self._bakery()
+        for type_, page in (("in", "stock_in"), ("out", "stock_out")):
+            with self.subTest(type=type_):
+                extra = {"reason": "Expired"} if type_ == "out" else {}
+                cookies = self._doc(type_, [(self.cookie, 4, 0)], **extra)
+                mixed = self._doc(type_, [(self.cookie, 1, 0), (self.cake, 2, 5)], **extra)
+                res = self._get(page, category="Cakes & Pies")
+                self.assertContains(res, mixed["document_no"])
+                self.assertNotContains(res, cookies["document_no"])
+                # Only the cake's line counts, not the whole document.
+                self.assertEqual([(d.line_count, d.line_total) for d in res.context["rows"]],
+                                 [(1, Decimal("15.00"))])
+                self.assertEqual(res.context["doc_count"], 1)
+                self.assertEqual(res.context["doc_value"], Decimal("15.00"))
+
+    def test_without_a_category_the_whole_document_counts(self):
+        self._bakery()
+        self._doc("in", [(self.cookie, 1, 0), (self.cake, 2, 5)])
+        res = self._get("stock_in")
+        self.assertEqual([(d.line_count, d.line_total) for d in res.context["rows"]],
+                         [(2, res.context["rows"][0].total)])
+        self.assertEqual(res.context["doc_value"], res.context["rows"][0].total)
+
+    def test_category_filters_the_product_view(self):
+        self._bakery()
+        self._doc("out", [(self.cookie, 1, 0), (self.cake, 2, 5)], reason="Expired")
+        res = self._get("stock_out", view="products", category="Cakes & Pies")
+        self.assertEqual([r["name"] for r in res.context["rows"]], ["Mochi Cake"])
+        self.assertEqual(res.context["value_total"], Decimal("15.00"))
+
+    def test_category_filters_both_exports(self):
+        self._bakery()
+        self._doc("in", [(self.cookie, 4, 0)])
+        mixed = self._doc("in", [(self.cookie, 1, 0), (self.cake, 2, 5)])
+        rows = self._csv("stock_in_export", category="Cakes & Pies")
+        self.assertIn(["Category", "Cakes & Pies"], rows)
+        header = next(i for i, r in enumerate(rows) if r[:1] == ["Created"])
+        self.assertEqual(rows[header][5:7], ["Category lines", "Category total"])
+        self.assertEqual([(r[1], r[5], r[6]) for r in rows[header + 1:]],
+                         [(mixed["document_no"], "1", "15.00")])
+        rows = self._csv("stock_in_export", view="products", category="Cakes & Pies")
+        self.assertEqual(rows[-1][5:], ["2", "5.00", "15.00"])
+
+    def test_category_survives_export_paging_and_the_view_switch(self):
+        self._bakery()
+        res = self._get("stock_in", category="Cakes & Pies")
+        self.assertIn("category=Cakes+%26+Pies", res.context["qs"])
+        self.assertContains(res, '<option value="Cakes &amp; Pies" selected>')
+
+    def test_category_the_branch_does_not_have_is_ignored(self):
+        self._bakery()
+        doc = self._doc("in", [(self.cookie, 1, 0)])
+        res = self._get("stock_in", category="Nope")
+        self.assertEqual(res.context["category"], "")
+        self.assertContains(res, doc["document_no"])
+
+    def test_category_choices_are_the_branchs_own(self):
+        self._bakery()
+        other = make_branch(name="Central World")
+        Category.objects.create(branch=other, name="Wine")
+        self.assertEqual(self._get("stock_in").context["categories"],
+                         ["Drinks", "Cakes & Pies"])
 
     def test_document_row_links_to_a_read_only_view_of_its_lines(self):
         doc = self._doc("in", [(self.cookie, 24, 5), (self.cake, 3, 0)],
