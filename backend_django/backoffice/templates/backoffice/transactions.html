@@ -53,10 +53,16 @@
   <div class="seg">
     {% for key, label in statuses %}
       <a class="{% if status == key %}on{% endif %}"
-         href="?{% qs_replace request status=key page=None o=None %}">{{ label }}{% if key == 'refund_due' and nav_refund_due %} <span class="seg-alert">{{ nav_refund_due }}</span>{% endif %}</a>
+         href="?{% qs_replace request status=key all=None page=None o=None %}">{{ label }}{% if key == 'refund_due' and nav_refund_due %} <span class="seg-alert">{{ nav_refund_due }}</span>{% endif %}</a>
     {% endfor %}
   </div>
   {% if refund_due_view %}
+  {% if branch %}
+  <div class="seg">
+    <a class="{% if not all_branches %}on{% endif %}" href="?{% qs_replace request all=None %}">{{ branch.name }}</a>
+    <a class="{% if all_branches %}on{% endif %}" href="?{% qs_replace request all='1' %}">All branches{% if nav_refund_due %} <span class="seg-alert">{{ nav_refund_due }}</span>{% endif %}</a>
+  </div>
+  {% endif %}
 </div>
 {% include "backoffice/_refund_due.html" %}
 {% else %}

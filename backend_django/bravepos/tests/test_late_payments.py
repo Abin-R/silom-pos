@@ -7,6 +7,7 @@ refuses, or by making the order after all.
 """
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -159,6 +160,56 @@ class BackofficeRefundDueTests(TestCase):
         user.set_password(self.password)
         user.save()
         self.assertTrue(self.client.login(username='boss', password=self.password))
+        # The page shows the branch picked in the header; pick this one.
+        self.page(branch=str(self.branch.id))
+
+    def page(self, **params):
+        return self.client.get(reverse('backoffice:transactions'),
+                               {'status': 'refund_due', **params})
+
+    def references(self, page):
+        return ({r['reference'] for r in page.context['due_rows']},
+                {r['reference'] for r in page.context['settled_rows']})
+
+    def test_both_lists_follow_the_picked_branch(self):
+        other = make_branch(name='Central Surat Thani')
+        mine = f'SELF-{self.draft.token[:12]}'
+        done = late_draft(self.branch, self.p)
+        selforder.mark_refunded(done.id, 'Boss', by_hand=True)
+        settled = f'SELF-{done.token[:12]}'
+        self.assertEqual(self.references(self.page()), ({mine}, {settled}))
+        page = self.page(branch=str(other.id))
+        self.assertEqual(self.references(page), (set(), set()))
+        # The badge counts every branch, so the rest must be reachable.
+        self.assertContains(page, 'All branches')
+        page = self.page(all='1')
+        self.assertEqual(self.references(page), ({mine}, {settled}))
+
+    def test_filters_that_do_nothing_are_not_shown(self):
+        picker, dates = 'aria-label="Branch"', 'title="Date range"'
+        make_branch(name='Second')
+        page = self.page()
+        self.assertContains(page, picker)
+        self.assertNotContains(page, dates)
+        page = self.page(all='1')
+        self.assertNotContains(page, picker)
+        self.assertNotContains(page, dates)
+        # Leaving for the bills drops "all" and has both again.
+        links = [h for h in re.findall(r'href="([^"]*)"', page.content.decode())
+                 if 'status=paid' in h]
+        self.assertTrue(links)
+        self.assertFalse([h for h in links if 'all=' in h])
+        page = self.client.get(reverse('backoffice:transactions'))
+        self.assertContains(page, picker)
+        self.assertContains(page, dates)
+
+    def test_all_branches_includes_a_closed_branch(self):
+        self.branch.active = False
+        self.branch.save()
+        make_branch(name='Second')
+        self.assertEqual(self.references(self.page())[0], set())
+        self.assertEqual(self.references(self.page(all='1'))[0],
+                         {f'SELF-{self.draft.token[:12]}'})
 
     def test_badge_and_list(self):
         page = self.client.get(reverse('backoffice:transactions'), {'status': 'refund_due'})

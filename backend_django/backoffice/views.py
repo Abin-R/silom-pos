@@ -1010,14 +1010,17 @@ def _refund_due_page(request, branches, branch):
     """Transactions › Refund due: self-orders paid after their time ran out.
 
     No bill exists for these, so they are not Orders and the date window does
-    not apply: every unsettled one is listed until someone settles it.  Every
-    branch, not just the one picked in the header: money owed to a customer is
-    the shop's problem wherever it happened, and the rail's badge counts them
-    all.  The last 30 days of settled ones sit underneath, for who-did-what.
+    not apply: every unsettled one is listed until someone settles it.  The
+    last 30 days of settled ones sit underneath, for who-did-what.
+
+    Both lists are the branch picked in the header.  ``all=1`` is every
+    branch, closed ones included, since the rail's badge counts them all; the
+    header's picker is hidden there rather than naming a branch it ignores.
     """
     from bravepos import selforder
 
-    due = selforder.refund_due()
+    all_branches = request.GET.get("all") == "1" or branch is None
+    due = selforder.refund_due(None if all_branches else branch)
     settled = (
         SelfOrder.objects.filter(
             resolved_at__gte=timezone.now() - timedelta(days=LATE_PAYMENT_SETTLED_DAYS))
@@ -1025,12 +1028,17 @@ def _refund_due_page(request, branches, branch):
         .select_related("branch", "order")
         .order_by("-resolved_at")
     )
+    if not all_branches:
+        settled = settled.filter(branch=branch)
     return render(request, "backoffice/transactions.html", {
         "active": "transactions",
         "page_title": "Transactions",
         "branches": branches,
         "branch": branch,
         "refund_due_view": True,
+        "all_branches": all_branches,
+        "hide_branch": all_branches,
+        "hide_dates": True,
         "status": "refund_due",
         "statuses": _TRX_STATUSES,
         "due_rows": [selforder.late_payment_row(d) for d in due],
