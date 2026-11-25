@@ -3,7 +3,7 @@ existing frontend already sends and expects."""
 from django.db import transaction
 from rest_framework import serializers
 
-from . import images
+from . import images, inventory_history
 from .customers import to_e164
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
@@ -336,6 +336,12 @@ class OrderSerializer(serializers.ModelSerializer):
     # safe answer — asserting someone else's machine number on a tax invoice is
     # worse than printing none.
     branch_pos_id = serializers.SerializerMethodField()
+    # True once the bill is too old to be voided or refunded; the till hides
+    # both buttons.  Worked out here because a tablet's clock can be wrong.
+    cancel_closed = serializers.SerializerMethodField()
+
+    def get_cancel_closed(self, obj):
+        return inventory_history.order_is_closed(obj)
 
     def get_branch_id(self, obj):
         return str(obj.branch_id) if obj.branch_id else None
@@ -366,6 +372,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'delivery_provider', 'delivery_status',
             'created_at', 'created_time', 'staff',
             'voided_by', 'voided_at', 'cancel_type', 'beam_refund_id', 'beam_refund_error',
+            'cancel_closed',
             # Buyer details captured when a full tax invoice is issued for this
             # bill.  Exposed read-only so Transactions can tell which bills
             # already have one and prefill the form on a re-issue; writes go

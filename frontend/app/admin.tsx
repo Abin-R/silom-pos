@@ -170,6 +170,8 @@ type Order = {
   // How the bill was cancelled.  Blank on bills cancelled before the till
   // offered the choice, and read as a void.
   cancel_type?: "" | "void" | "refund";
+  // Too old to be voided or refunded: the server says so, and refuses both.
+  cancel_closed?: boolean;
 };
 
 // What /orders/<id>/tax-invoice stores and returns.  ``issued_by`` /
@@ -2056,22 +2058,26 @@ function TransactionDetail({
               <Ionicons name="print-outline" size={15} color={C.surface} />
               <Text style={styles.tdReprintText}>{reprintBusy ? tr("admin.printing") : tr("admin.re_print")}</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tdCancelBtn, (isVoided || !!cancelBusy) && styles.tdCancelBtnDisabled]}
-              onPress={() => confirmCancel("void")}
-              disabled={isVoided || !!cancelBusy}
-              testID={`void-${order.order_number}`}
-            >
-              <Text style={styles.tdCancelText}>{cancelBusy === "void" ? tr("admin.voiding") : tr("admin.void")}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tdCancelBtn, (isRefunded || !!cancelBusy) && styles.tdCancelBtnDisabled]}
-              onPress={() => confirmCancel("refund")}
-              disabled={isRefunded || !!cancelBusy}
-              testID={`refund-${order.order_number}`}
-            >
-              <Text style={styles.tdCancelText}>{cancelBusy === "refund" ? tr("admin.refunding") : tr("admin.refund")}</Text>
-            </TouchableOpacity>
+            {!order.cancel_closed && (
+              <>
+                <TouchableOpacity
+                  style={[styles.tdCancelBtn, (isVoided || !!cancelBusy) && styles.tdCancelBtnDisabled]}
+                  onPress={() => confirmCancel("void")}
+                  disabled={isVoided || !!cancelBusy}
+                  testID={`void-${order.order_number}`}
+                >
+                  <Text style={styles.tdCancelText}>{cancelBusy === "void" ? tr("admin.voiding") : tr("admin.void")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tdCancelBtn, (isRefunded || !!cancelBusy) && styles.tdCancelBtnDisabled]}
+                  onPress={() => confirmCancel("refund")}
+                  disabled={isRefunded || !!cancelBusy}
+                  testID={`refund-${order.order_number}`}
+                >
+                  <Text style={styles.tdCancelText}>{cancelBusy === "refund" ? tr("admin.refunding") : tr("admin.refund")}</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
 

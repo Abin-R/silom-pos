@@ -16,7 +16,8 @@ Config is env vars, all read at call time:
   (``stock_alerts``). Optional: unset, they go to Bot Testing.
 
 The Grab stock sync's alerts (the poller going quiet) go to ``GRAB_GROUP_ID``,
-set here in code — Bot Testing for now.
+set here in code — Bot Testing for now.  The inventory snapshot job's go to
+``INVENTORY_GROUP_ID``, the same group.
 
 Unset means "no alerts": :func:`send_group_text` quietly does nothing, so a dev
 box or a fresh install never fails a sale over a chat message.
@@ -66,6 +67,15 @@ GRAB_GROUP_ID = "MzM0NzQ2MjIyOTM5"
 
 def grab_group_id() -> str:
     return GRAB_GROUP_ID
+
+
+# Where the inventory snapshot job says a night was missed or failed: Bot
+# Testing.  Change it here.
+INVENTORY_GROUP_ID = "MzM0NzQ2MjIyOTM5"
+
+
+def inventory_group_id() -> str:
+    return INVENTORY_GROUP_ID
 
 
 def is_configured() -> bool:

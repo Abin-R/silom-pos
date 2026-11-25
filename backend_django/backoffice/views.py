@@ -58,7 +58,10 @@ from bravepos.models import (
     TillDevice,
     Unit,
 )
-from bravepos import appdist, catalog, crm, discounts, grab_sync, images, permissions, sale_windows
+from bravepos import (
+    appdist, catalog, crm, discounts, grab_sync, images, inventory_history, permissions,
+    sale_windows,
+)
 from bravepos import branch_sync as sync_sections
 from bravepos import payment_types as payment_type_rules
 from bravepos.gateways import BEAM_APP_METHODS, seed_branch_payment
@@ -2235,7 +2238,11 @@ def _inventory_qs(request):
     if not selected and branch:
         selected = [branch]
 
-    qs = Product.objects.filter(active=True).select_related("category", "branch")
+    # A past day lists what was on sale then, including products removed since;
+    # ``rewind_stock`` drops the ones that weren't.
+    qs = Product.objects.select_related("category", "branch")
+    if not _inventory_as_of(request):
+        qs = qs.filter(active=True)
     if selected:
         qs = qs.filter(branch__in=selected)
 
@@ -2283,121 +2290,52 @@ def _set_stock_level(p):
         p.level_label, p.level_class, p.level_colour, p.fill = "Untracked", "t-out", "var(--mut2)", 0
 
 
-def _week_sold_and_received(products, as_of=None):
-    """Units sold in the seven days up to ``as_of`` (default today) and the
-    last stock-in on or before it, by product id."""
-    end_day = as_of or timezone.localdate()
-    week_start, week_end = _date_window(end_day - timedelta(days=6), end_day)
-    sold = {
-        row["product_id"]: row["qty"] or 0
-        for row in OrderItem.objects.filter(
-            product__in=products,
-            order__created_at__range=(week_start, week_end),
-        ).exclude(order__status="cancel").values("product_id").annotate(qty=Sum("qty"))
-    }
-    received = {
-        row["product_id"]: row["last"]
-        for row in StockMovement.objects.filter(
-            product__in=products, type="in", created_at__lte=week_end)
-        .values("product_id").annotate(last=Max("created_at"))
-    }
-    return sold, received
-
-
 def _inventory_as_of(request):
     """The ``?as_of=`` date, or None for "now" (blank, unparseable, today or
-    later). Clamped to ``_as_of_floor`` so the page never shows a rewind it
-    can't do."""
+    later). Clamped to the first day there are figures for, so the page never
+    shows a day it can't."""
     today = timezone.localdate()
     as_of = _parse_date(request.GET.get("as_of"), None)
     if as_of is None or as_of >= today:
         return None
-    floor = _as_of_floor()
+    floor = inventory_history.first_day()
     if floor is not None and as_of < floor:
         as_of = floor
     return as_of if as_of < today else None
 
 
-def _as_of_floor():
-    """The earliest day stock can be rewound to: the day of the first audited
-    Product change. Edits from the product forms, the till's product save and
-    catalogue sync overwrite ``stock`` without a StockMovement; the audit log
-    is their only record, and it didn't exist before this."""
-    first = (AuditLog.objects.filter(model="Product")
-             .order_by("at").values_list("at", flat=True).first())
-    return timezone.localtime(first).date() if first else None
-
-
-def _rewind_stock(products, as_of):
-    """Set each product's ``stock`` to what it was at the end of ``as_of``,
-    working back from today's figure, and drop products that didn't exist yet.
-
-    Everything that changed stock since then is undone:
-
-    * sales — ``create_order_from_items`` decrements with a queryset
-      ``update()`` (no audit row), so they're read from the StockMovement it
-      writes alongside, recognised by ``document_no`` being an order number.
-      A voided or refunded sale counts too: its stock left then and came back
-      later, as a ``return`` movement on the same document;
-    * every other change — stock documents, the app's stock modal, product
-      edits from the till or the backoffice, catalogue sync — goes through
-      ``Product.save()``, whose audit row carries ``stock`` from/to. That
-      covers absolute overwrites a StockMovement can't express.
-    """
-    if not products:
-        return products
-    _, cutoff = _date_window(as_of, as_of)
-    branch_ids = {p.branch_id for p in products}
-    by_id = {str(p.id): p for p in products}
-    change = {}          # product id -> net stock change after the cutoff
-    born_later = set()
-
-    for oid, action, changes in (
-        AuditLog.objects.filter(model="Product", branch_id__in=branch_ids,
-                                at__gt=cutoff, action__in=("create", "update"))
-        .values_list("object_id", "action", "changes")
-    ):
-        if oid not in by_id:
-            continue
-        if action == "create":
-            born_later.add(oid)
-            continue
-        stock = (changes or {}).get("stock")
-        if isinstance(stock, dict):
-            change[oid] = (change.get(oid, 0)
-                           + int(stock.get("to") or 0) - int(stock.get("from") or 0))
-
-    sales = (
-        StockMovement.objects
-        .filter(product__in=products, type="out", created_at__gt=cutoff)
-        .filter(Exists(Order.objects.filter(order_number=OuterRef("document_no"))))
-        .values("product_id").annotate(qty=Sum("qty"))
-    )
-    for row in sales:
-        oid = str(row["product_id"])
-        change[oid] = change.get(oid, 0) - (row["qty"] or 0)
-
-    returns = (
-        StockMovement.objects
-        .filter(product__in=products, type="return", created_at__gt=cutoff)
-        .filter(Exists(Order.objects.filter(order_number=OuterRef("document_no"))))
-        .values("product_id").annotate(qty=Sum("qty"))
-    )
-    for row in returns:
-        oid = str(row["product_id"])
-        change[oid] = change.get(oid, 0) + (row["qty"] or 0)
-
-    kept = []
+def _add_week_figures(products, end_day):
+    sold, received = inventory_history.week_sold_and_received(products, end_day)
     for p in products:
-        oid = str(p.id)
-        if oid in born_later:
-            continue
-        p.stock = p.stock - change.get(oid, 0)
-        kept.append(p)
-    return kept
+        p.sold_7d = sold.get(p.id, 0)
+        p.last_received = received.get(p.id)
 
 
-def _inventory_grouped(qs, sort, as_of=None):
+def _inventory_rows(selected, field, q, qs, as_of):
+    """``(rows, saved)``: the matching products, one per branch, now or at the
+    end of ``as_of``. A day more than 15 days ago is read from its saved
+    figures; until the nightly job has saved it, it is worked out like the
+    last 15 days are."""
+    if as_of and inventory_history.is_closed(as_of) and inventory_history.is_saved(as_of):
+        rows = inventory_history.saved_rows(as_of, [b.id for b in selected])
+        if q:
+            # The search ``_inventory_qs`` does in SQL.
+            needle = q.lower()
+            fields = [field] if field in ("name", "barcode", "category") else [
+                "name", "barcode", "category"]
+            rows = [r for r in rows if any(
+                needle in ((r.category.name if r.category else "") if f == "category"
+                           else getattr(r, f) or "").lower()
+                for f in fields)]
+        return rows, True
+    rows = list(qs)
+    if as_of:
+        rows = inventory_history.rewind_stock(rows, as_of)
+    _add_week_figures(rows, as_of or timezone.localdate())
+    return rows, False
+
+
+def _inventory_grouped(products, sort):
     """Several branches' products merged by name into one row each.
 
     Each branch has its own Product row, so "Hella Nutella" at three branches
@@ -2405,12 +2343,6 @@ def _inventory_grouped(qs, sort, as_of=None):
     how catalogue sync decides two branches carry the same product. On hand,
     par level, sales and stock value add up; ``by_branch`` keeps the split.
     """
-    products = list(qs)
-    if as_of:
-        # Before grouping, so the merged row sums the rewound figures.
-        products = _rewind_stock(products, as_of)
-    sold, received = _week_sold_and_received(products, as_of)
-
     groups: dict = {}
     for p in products:
         key = (p.name or "").strip().lower()
@@ -2430,9 +2362,9 @@ def _inventory_grouped(qs, sort, as_of=None):
         g.category = g.category or p.category
         g.stock += p.stock
         g.par_level += p.par_level or 0
-        g.sold_7d += sold.get(p.id, 0)
+        g.sold_7d += p.sold_7d
         g.value += p.cost * p.stock
-        last = received.get(p.id)
+        last = p.last_received
         if last and (g.last_received is None or last > g.last_received):
             g.last_received = last
         g.by_branch.append((p.branch.name if p.branch_id else "", p.stock))
@@ -2465,18 +2397,14 @@ def _sort_rows(rows, sort):
         rows.sort(key=keys[sort])
 
 
-def _inventory_as_of_rows(qs, sort, as_of):
-    """One branch's products with stock rewound to ``as_of``. The stock
-    filters, totals and sort can't run in SQL on a figure that isn't in the
-    table, so the rows are built here like the merged ones."""
-    rows = _rewind_stock(list(qs), as_of)
-    sold, received = _week_sold_and_received(rows, as_of)
+def _inventory_past_rows(rows, sort):
+    """One branch's rows for a past day. The stock filters, totals and sort
+    can't run in SQL on figures that aren't in the Product table, so the rows
+    are finished here like the merged ones."""
     for p in rows:
-        p.sold_7d = sold.get(p.id, 0)
         daily = p.sold_7d / 7 if p.sold_7d else 0
         p.days_cover = (p.stock / daily) if daily else None
         p.value = p.cost * p.stock
-        p.last_received = received.get(p.id)
         _set_stock_level(p)
     _sort_rows(rows, sort)
     return rows
@@ -2490,6 +2418,7 @@ def inventory_summary(request):
     branches, selected, field, q, sort, qs = _inventory_qs(request)
     multi_branch = len(selected) > 1
     as_of = _inventory_as_of(request)
+    saved = False
 
     # "Needs attention" first, because that is what the page is opened for.
     # `all` is a click away, and the tab says which one you're looking at.
@@ -2505,10 +2434,11 @@ def inventory_summary(request):
         return True
 
     if multi_branch or as_of:
-        # Merged or rewound rows are built in Python, so the level filter, the
+        # Merged or past rows are built in Python, so the level filter, the
         # cards and the paging all work on those rows rather than the queryset.
-        all_rows = (_inventory_grouped(qs, sort, as_of) if multi_branch
-                    else _inventory_as_of_rows(qs, sort, as_of))
+        rows, saved = _inventory_rows(selected, field, q, qs, as_of)
+        all_rows = (_inventory_grouped(rows, sort) if multi_branch
+                    else _inventory_past_rows(rows, sort))
         paginator = Paginator([g for g in all_rows if wanted(g)], 50)
         page_obj = paginator.get_page(request.GET.get("page"))
         products = list(page_obj.object_list)
@@ -2543,13 +2473,11 @@ def inventory_summary(request):
         # Days cover is the column that decides anything: "4 on hand" is
         # meaningless without the sell-through rate beside it. Measured over the
         # last seven days, so a weekend spike doesn't dominate a single day.
-        sold, received = _week_sold_and_received(products)
+        _add_week_figures(products, timezone.localdate())
         for p in products:
-            p.sold_7d = sold.get(p.id, 0)
             daily = p.sold_7d / 7 if p.sold_7d else 0
             p.days_cover = (p.stock / daily) if daily else None
             p.value = p.cost * p.stock
-            p.last_received = received.get(p.id)
             _set_stock_level(p)
 
     context = {
@@ -2563,7 +2491,9 @@ def inventory_summary(request):
         "selected_ids": {str(b.id) for b in selected},
         "multi_branch": multi_branch,
         "as_of": as_of,
-        "as_of_min": _as_of_floor(),
+        "as_of_min": inventory_history.first_day(),
+        "saved": saved,
+        "open_days": inventory_history.OPEN_DAYS,
         "hide_branch": True,
         "sorts": [("name", "Name"), ("barcode", "Barcode"), ("category", "Category"),
                   ("stock_min", "On hand: low → high"), ("stock_max", "On hand: high → low")],
@@ -2602,7 +2532,7 @@ def inventory_summary(request):
 def inventory_export(request):
     """CSV download of the inventory summary for the current branch / search /
     sort selection. Covers every matching product, not just the visible page."""
-    _branches, selected, _field, _q, _sort, qs = _inventory_qs(request)
+    _branches, selected, field, q, _sort, qs = _inventory_qs(request)
     multi = len(selected) > 1
     as_of = _inventory_as_of(request)
 
@@ -2632,7 +2562,8 @@ def inventory_export(request):
         # and the per-branch split spelled out beside it.
         writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category",
                          "Balance", "By branch"])
-        for no, g in enumerate(_inventory_grouped(qs, _sort, as_of), start=1):
+        rows, _saved = _inventory_rows(selected, field, q, qs, as_of)
+        for no, g in enumerate(_inventory_grouped(rows, _sort), start=1):
             writer.writerow([
                 no, g.barcode or "", g.name, "ชิ้น",
                 g.category.name if g.category else "", g.stock,
@@ -2641,7 +2572,11 @@ def inventory_export(request):
         return response
 
     writer.writerow(["No.", "Barcode", "Product Name", "Unit", "Category", "Balance"])
-    rows = _inventory_as_of_rows(qs, _sort, as_of) if as_of else qs.iterator()
+    if as_of:
+        rows, _saved = _inventory_rows(selected, field, q, qs, as_of)
+        rows = _inventory_past_rows(rows, _sort)
+    else:
+        rows = qs.iterator()
     for no, p in enumerate(rows, start=1):
         balance = p.stock
         writer.writerow([
@@ -2649,7 +2584,7 @@ def inventory_export(request):
             p.barcode or "",
             p.name,
             "ชิ้น",
-            p.category.name if p.category_id else "",
+            p.category.name if p.category else "",
             balance,
         ])
 

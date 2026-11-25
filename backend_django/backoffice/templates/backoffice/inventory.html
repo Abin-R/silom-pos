@@ -57,8 +57,9 @@
   {% comment %}
     One date, not a range: the on-hand table is a balance, so the question it
     can answer is "what was on the shelf at the end of that day". Blank means
-    now. It can't go back past the first recorded stock edit (`as_of_min`) —
-    before that, product-form overwrites left no trace to rewind.
+    now. The last 15 days are worked out; older ones are saved figures. It
+    can't go back past the first recorded stock edit (`as_of_min`) — before
+    that, product-form overwrites left no trace to work back from.
   {% endcomment %}
   <div class="ctl" title="Stock as it stood at the end of this day">
     <svg><use href="#i-cal"/></svg>
@@ -79,7 +80,8 @@
 <div class="banner b-blue">
   <svg><use href="#i-cal"/></svg>
   <span><b>Stock at the end of {{ as_of|date:"j F Y" }}.</b>
-    Rebuilt from sales and stock edits since then. Value uses today's unit cost; products added later aren't listed.</span>
+    {% if saved %}Saved figures. Days more than {{ open_days }} days ago are saved and don't change.
+    {% else %}Worked out from sales and stock edits since then.{% endif %}</span>
   <div class="spacer"></div>
   <a class="btn btn-sm" href="?{% qs_replace request as_of=None page=None %}">Back to today</a>
 </div>

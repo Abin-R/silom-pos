@@ -12,7 +12,7 @@ from unittest import mock
 from django.test import TestCase
 from django.utils import timezone
 
-from backoffice.views import _rewind_stock
+from bravepos.inventory_history import rewind_stock
 from bravepos import gateways
 from bravepos.models import (
     BranchSession, Order, Product, Staff, StockDocument, StockMovement,
@@ -188,7 +188,7 @@ class VoidAndRefundTests(TestCase):
         self._cancel(order, 'void')
         yesterday = timezone.localdate() - timedelta(days=1)
         product = Product.objects.get(pk=self.product.pk)
-        _rewind_stock([product], yesterday)
+        rewind_stock([product], yesterday)
         self.assertEqual(product.stock, 50)
 
     # ── repeats and reversals ───────────────────────────────────────────────

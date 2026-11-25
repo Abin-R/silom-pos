@@ -2463,3 +2463,45 @@ class TillDevice(models.Model):
         """Last 6 characters of the OTA id — what the till's nav rail and
         Settings → About show (``OTA …b32167``), so the two can be matched."""
         return self.update_id[-6:] if self.update_id else ""
+
+
+# ─── Inventory history ──────────────────────────────────────────────────────
+class InventorySnapshot(models.Model):
+    """One product's stock at one branch at the end of one past day.
+
+    Written once, by the ``save_inventory_snapshots`` cron, when the day is
+    more than ``inventory_history.OPEN_DAYS`` days old, and never changed.
+    Backoffice › Inventory reads these for such a day instead of working it out.
+
+    The branch and product are plain ids with their names beside them, not
+    foreign keys: deleting either must not take its history along.
+    """
+    date = models.DateField()
+    branch_id = models.UUIDField()
+    branch_name = models.CharField(max_length=120)
+    product_id = models.UUIDField()
+    name = models.CharField(max_length=200)
+    name_th = models.CharField(max_length=200, blank=True, default="")
+    sku = models.CharField(max_length=64, blank=True, default="")
+    barcode = models.CharField(max_length=64, blank=True, default="")
+    category_name = models.CharField(max_length=120, blank=True, default="")
+    stock = models.IntegerField()
+    cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    par_level = models.IntegerField(default=0)
+    # Units sold in the seven days ending that day, cancelled bills left out.
+    sold_7d = models.IntegerField(default=0)
+    last_received = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date", "branch_name", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["date", "product_id"], name="inventory_snapshot_once_a_day"),
+        ]
+        indexes = [
+            models.Index(fields=["date", "branch_id"], name="inv_snapshot_date_branch_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.date} {self.branch_name}: {self.name}"

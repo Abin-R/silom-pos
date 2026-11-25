@@ -466,7 +466,7 @@ class StockEndpointTests(GrabTestCase):
 
 
 class InventoryAsOfTests(GrabTestCase):
-    """``_rewind_stock`` works back from today's stock; a Grab order must not
+    """``rewind_stock`` works back from today's stock; a Grab order must not
     make the past wrong."""
 
     def setUp(self):
@@ -475,9 +475,9 @@ class InventoryAsOfTests(GrabTestCase):
         self.yesterday = timezone.localdate() - timedelta(days=1)
 
     def rewound(self, product):
-        from backoffice.views import _rewind_stock
+        from bravepos.inventory_history import rewind_stock
         product.refresh_from_db()
-        return _rewind_stock([product], self.yesterday)[0].stock
+        return rewind_stock([product], self.yesterday)[0].stock
 
     def test_stock_yesterday_is_before_todays_grab_order(self):
         self.deduct()

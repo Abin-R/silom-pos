@@ -26,7 +26,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import audit, crm, discounts, gateways, images, loyalty, permissions, sale_windows, selforder
-from . import till_devices
+from . import inventory_history, till_devices
 from . import payment_types as payment_type_rules
 from .customers import phone_search_digits
 from .orders import create_order_from_items, retake_bill_stock, return_bill_stock
@@ -1414,6 +1414,16 @@ def order_update_status(request, order_id):
             Order.objects.select_for_update(),
             id=order_id, branch=request.session_obj.branch,
         )
+        # A closed day's figures are final, so its bills can't be cancelled,
+        # refunded or brought back.  Checked here and not only on the till: a
+        # till on an older bundle still shows the buttons.
+        if ((new_status == 'cancel' or order.status == 'cancel')
+                and inventory_history.order_is_closed(order)):
+            return Response(
+                {'detail': f'Bills more than {inventory_history.OPEN_DAYS} days old '
+                           'cannot be voided or refunded.'},
+                status=409,
+            )
         # The money has gone back to the customer; un-voiding would put a sale
         # on the books that nobody paid for.
         if new_status != 'cancel' and order.beam_refund_id:
