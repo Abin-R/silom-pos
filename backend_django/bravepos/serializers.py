@@ -7,6 +7,7 @@ from . import images, inventory_history
 from .customers import to_e164
 from .models import (
     Branch, Category, Product, StockMovement, Customer,
+    RESERVED_STOCK_TYPE_MESSAGE, is_reserved_stock_type,
     Settings, Order, OrderItem, ParkedOrder, Shift, ShiftMovement,
     DrawerCategory, StockDocument, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride,
@@ -427,11 +428,21 @@ class StockOutReasonSerializer(serializers.ModelSerializer):
         model = StockOutReason
         fields = ['id', 'name', 'name_th', 'sort_order', 'active']
 
+    def validate_name(self, value):
+        if is_reserved_stock_type(value):
+            raise serializers.ValidationError(RESERVED_STOCK_TYPE_MESSAGE)
+        return value
+
 
 class StockInReasonSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockInReason
         fields = ['id', 'name', 'name_th', 'sort_order', 'active']
+
+    def validate_name(self, value):
+        if is_reserved_stock_type(value):
+            raise serializers.ValidationError(RESERVED_STOCK_TYPE_MESSAGE)
+        return value
 
 
 class StockDocumentItemSerializer(serializers.ModelSerializer):

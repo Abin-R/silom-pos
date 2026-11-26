@@ -38,6 +38,7 @@ from .models import (
     ParkedOrder, Product, SelfOrder, Settings, Shift, ShiftMovement, Staff,
     StockMovement, StockDocument, StockDocumentImage, StockDocumentItem, StockOutReason, StockInReason,
     SuggestionOverride, SuggestionRule, TillBeamCharge,
+    RESERVED_STOCK_TYPE_MESSAGE, is_reserved_stock_type,
 )
 from .serializers import (
     BranchSerializer,
@@ -1561,51 +1562,13 @@ def stock_movements(request):
             qs = qs.filter(product_id=pid)
         return Response(StockMovementSerializer(qs[:500], many=True).data)
 
-    # POST — update product stock and snapshot the movement.
-    payload = dict(request.data)
-    product_id = payload.get('product_id')
-    type_ = payload.get('type')
-    qty = int(payload.get('qty', 0))
-    note = payload.get('note', '') or ''
-    if type_ not in ('in', 'out', 'adjust', 'check'):
-        return Response({'detail': 'Invalid type'}, status=400)
-    staff = request.session_obj.staff
-    denied = perm_denied(staff, 'manage_inventory')
-    if denied is None and type_ == 'adjust':
-        denied = perm_denied(staff, 'adjust_stock')
-    if denied is not None:
-        return denied
-    # The row is locked and read again inside the transaction: the till, a Grab
-    # sync call or another stock write may have moved it since the page was
-    # loaded, and a stale read here would silently undo that.
-    with transaction.atomic():
-        try:
-            product = Product.objects.select_for_update().get(id=product_id, branch=branch)
-        except Product.DoesNotExist:
-            return Response({'detail': 'Product not found'}, status=404)
-
-        if type_ == 'in':
-            product.stock = (product.stock or 0) + qty
-        elif type_ == 'out':
-            product.stock = (product.stock or 0) - qty
-        elif type_ == 'adjust':
-            product.stock = qty
-        # type_ == 'check' is a non-mutating audit entry
-        product.save(update_fields=['stock'])
-
-        doc_no = f"SM{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}"
-        mv = StockMovement.objects.create(
-            branch=branch,
-            product=product,
-            product_name=product.name,
-            type=type_,
-            qty=qty,
-            note=note,
-            document_no=doc_no,
-            staff=staff,
-            created_by=staff.name or '',
-        )
-    return Response(StockMovementSerializer(mv).data, status=201)
+    # POST was the till's Stock Movement tab, which changed stock without a
+    # document.  The tab is gone (its past entries are Stock In / Stock Out
+    # documents of type "Stock Movement", migration 0104); a till still on an
+    # older build shows ``detail`` as it is, so both languages.
+    return Response({'detail': 'Stock Movement has been removed. Use Stock-In or Stock-Out. '
+                               '/ ยกเลิกเมนูนี้แล้ว กรุณาใช้ รับสินค้าเข้า หรือ ตัดสินค้าออก'},
+                    status=400)
 
 
 # ─── Shifts ──────────────────────────────────────────────────────────────────
@@ -2196,6 +2159,8 @@ def stock_documents(request):
         if in_reason and not StockInReason.objects.filter(
                 branch=branch, active=True, name=in_reason).exists():
             return Response({'detail': 'Choose a valid stock-in type.'}, status=400)
+    if doc_type == 'out' and is_reserved_stock_type(payload.get('reason')):
+        return Response({'detail': RESERVED_STOCK_TYPE_MESSAGE}, status=400)
     items = payload.get('items') or []
     if not items:
         return Response({'detail': 'At least one item is required'}, status=400)

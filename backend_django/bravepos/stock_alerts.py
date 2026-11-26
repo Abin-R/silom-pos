@@ -17,7 +17,9 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import seatalk
-from .models import StockDocument, StockDocumentAlertDay, StockDocumentAlertEvent
+from .models import (
+    STOCK_MOVEMENT_TYPE, StockDocument, StockDocumentAlertDay, StockDocumentAlertEvent,
+)
 
 log = logging.getLogger(__name__)
 
@@ -65,10 +67,13 @@ def process_day(branch_id, document_type, day, using="default"):
                 zone = timezone.get_default_timezone()
                 start = datetime.combine(day, time.min, tzinfo=zone)
                 end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone)
+                # The old Stock Movement tab's entries, filed as documents by
+                # migration 0104, are history, not stock done twice that day.
                 daily.document_count = StockDocument.objects.using(using).filter(
                     branch_id=branch_id, type=document_type,
                     created_at__gte=start, created_at__lt=end,
-                ).exclude(pk__in=events.values("document_id")).count()
+                ).exclude(pk__in=events.values("document_id")).exclude(
+                    reason=STOCK_MOVEMENT_TYPE).count()
             for event in events.filter(processed=False).order_by("created_at", "pk"):
                 daily.document_count += 1
                 if daily.document_count >= 2:

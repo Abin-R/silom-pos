@@ -99,11 +99,6 @@ class TillApiTests(TestCase):
 
     def test_adjust_refused_without_permission(self):
         self.login(['manage_inventory'])
-        r = self.client.post('/api/stock-movements', {
-            'product_id': str(self.product.id), 'type': 'adjust', 'qty': 99,
-        }, format='json')
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.json()['code'], 'perm_denied')
         r = self.client.post('/api/stock-documents', {
             'type': 'adjust',
             'items': [{'product_id': str(self.product.id), 'qty': 89,
@@ -115,31 +110,29 @@ class TillApiTests(TestCase):
 
     def test_in_out_check_still_work_and_are_attributed(self):
         member = self.login(['manage_inventory'])
-        for type_ in ('in', 'out', 'check'):
-            r = self.client.post('/api/stock-movements', {
-                'product_id': str(self.product.id), 'type': type_, 'qty': 2,
+        for type_ in ('in', 'out'):
+            r = self.client.post('/api/stock-documents', {
+                'type': type_, 'items': [{'product_id': str(self.product.id), 'qty': 3}],
             }, format='json')
             self.assertEqual(r.status_code, 201, r.content)
             self.assertEqual(r.json()['created_by'], 'Nok')
-        r = self.client.post('/api/stock-documents', {
-            'type': 'in', 'items': [{'product_id': str(self.product.id), 'qty': 3}],
-        }, format='json')
-        self.assertEqual(r.status_code, 201, r.content)
-        self.assertEqual(StockMovement.objects.filter(staff=member).count(), 4)
+        self.assertEqual(StockMovement.objects.filter(staff=member).count(), 2)
 
     def test_adjust_allowed_with_permission(self):
         self.login(['manage_inventory', 'adjust_stock'])
-        r = self.client.post('/api/stock-movements', {
-            'product_id': str(self.product.id), 'type': 'adjust', 'qty': 7,
+        r = self.client.post('/api/stock-documents', {
+            'type': 'adjust',
+            'items': [{'product_id': str(self.product.id), 'qty': -3,
+                       'before_qty': 10, 'reconcile_qty': 7}],
         }, format='json')
-        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.status_code, 201, r.content)
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 7)
 
     def test_no_inventory_means_no_stock_moves(self):
         self.login([])
-        r = self.client.post('/api/stock-movements', {
-            'product_id': str(self.product.id), 'type': 'in', 'qty': 1,
+        r = self.client.post('/api/stock-documents', {
+            'type': 'in', 'items': [{'product_id': str(self.product.id), 'qty': 1}],
         }, format='json')
         self.assertEqual(r.status_code, 403)
 

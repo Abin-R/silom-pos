@@ -141,6 +141,7 @@ const en = {
     in_stock: "In stock",
     invalid_tax_id: "Invalid tax ID",
     inventory: "Inventory",
+    inventory_no_access: "Ask an admin to tick \"Manage inventory\" for you in the backoffice.",
     items: "Items",
     its_lines_totals_and_reprint_options: "Its lines, totals and reprint options open here.",
     just_now: "just now",

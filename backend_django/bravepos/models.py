@@ -1393,6 +1393,20 @@ DEFAULT_STOCK_IN_REASONS = [
 ]
 
 
+# The type the till's old Stock Movement tab is filed under (migration 0104).
+# It belongs to those documents alone: no branch may create a type of that
+# name, and no other document may be switched to it.
+STOCK_MOVEMENT_TYPE = "Stock Movement"
+
+
+def is_reserved_stock_type(name) -> bool:
+    """Is ``name`` "Stock Movement", whatever its case or spacing?"""
+    return " ".join(str(name or "").split()).casefold() == STOCK_MOVEMENT_TYPE.casefold()
+
+
+RESERVED_STOCK_TYPE_MESSAGE = f'"{STOCK_MOVEMENT_TYPE}" is reserved. Choose another name.'
+
+
 class StockInReason(models.Model):
     """Branch-scoped types for stock received; documents snapshot the name."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

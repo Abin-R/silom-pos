@@ -55,6 +55,7 @@ from bravepos.models import (
     StockDocumentItem,
     StockMovement,
     StockOutReason, StockInReason,
+    RESERVED_STOCK_TYPE_MESSAGE, is_reserved_stock_type,
     TillDevice,
     Unit,
 )
@@ -3211,6 +3212,8 @@ def stock_out_types(request):
         existing = StockOutReason.objects.filter(branch=branch)
         if not name:
             error = "Enter a type name."
+        elif is_reserved_stock_type(name):
+            error = RESERVED_STOCK_TYPE_MESSAGE
         elif existing.filter(name__iexact=name).exists():
             error = f"“{name}” is already a type."
         else:
@@ -3284,6 +3287,8 @@ def stock_in_types(request):
         existing = StockInReason.objects.filter(branch=branch)
         if not name:
             error = "Enter a type name."
+        elif is_reserved_stock_type(name):
+            error = RESERVED_STOCK_TYPE_MESSAGE
         elif existing.filter(name__iexact=name).exists():
             error = f"“{name}” is already a type."
         else:

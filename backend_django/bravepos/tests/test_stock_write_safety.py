@@ -1,6 +1,6 @@
 """Every stock write holds a row lock and leaves a movement.
 
-* The stock modal, stock documents and the backoffice's stock-in / stock-out
+* Stock documents and the backoffice's stock-in / stock-out
   pages read a product, add to it and save it.  Without a lock a sale or a Grab
   deduction made in between is silently undone; they now lock the row first and
   work from what they read there.  (SQLite ignores ``SELECT ... FOR UPDATE``; the
@@ -59,15 +59,6 @@ class LockedWritesUseFreshStockTests(TestCase):
         self.p.refresh_from_db()
         return self.p.stock
 
-    def test_stock_modal_adds_to_the_current_stock(self):
-        stale = Product.objects.get(pk=self.p.pk)
-        Product.objects.filter(pk=self.p.pk).update(stock=7)      # a sale since
-        res = self.client.post('/api/stock-movements', {
-            'product_id': str(stale.id), 'type': 'in', 'qty': 5, 'note': 'x'},
-            content_type='application/json', **self.auth)
-        self.assertEqual(res.status_code, 201, res.content)
-        self.assertEqual(self.stock(), 12)
-
     def test_stock_documents_work_from_the_current_stock(self):
         res = self.client.post('/api/stock-documents', {
             'type': 'out', 'reason': 'Waste',
@@ -86,12 +77,6 @@ class LockedWritesUseFreshStockTests(TestCase):
         Product.objects.filter(pk=self.p.pk).update(stock=20)
         save_stock_in_document(self.branch, [(stale, Decimal(5), Decimal(0), Decimal(0))])
         self.assertEqual(self.stock(), 25)
-
-    def test_an_unknown_product_in_the_modal_is_404(self):
-        res = self.client.post('/api/stock-movements', {
-            'product_id': '00000000-0000-0000-0000-000000000000', 'type': 'in', 'qty': 1},
-            content_type='application/json', **self.auth)
-        self.assertEqual(res.status_code, 404)
 
     def test_each_product_is_locked_once_in_id_order(self):
         q = make_product(self.branch, name='Cake', stock=5)
@@ -214,21 +199,6 @@ class LockedWriteRaceTests(TransactionTestCase):
         open_shift(self.branch)
         self.p = make_product(self.branch, stock=10)
         self.auth = till_auth(self.branch)
-
-    def test_concurrent_stock_modal_writes_all_land(self):
-        def add():
-            from django.test import Client
-            res = Client().post('/api/stock-movements', {
-                'product_id': str(self.p.id), 'type': 'in', 'qty': 1},
-                content_type='application/json', **self.auth)
-            assert res.status_code == 201, res.content
-
-        errors = run_concurrently([add] * 6)
-        self.assertEqual(errors, [])
-        self.p.refresh_from_db()
-        self.assertEqual(self.p.stock, 16)
-        self.assertEqual(StockMovement.objects.filter(product=self.p).count(), 6)
-        connections.close_all()
 
     def test_a_document_waits_for_a_concurrent_sale_and_keeps_it(self):
         locked, released = threading.Event(), threading.Event()

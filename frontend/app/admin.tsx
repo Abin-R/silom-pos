@@ -2806,8 +2806,10 @@ function channelLabel(source: string): string {
 }
 
 // =================== INVENTORY ===================
+// The Stock Movement tab (a product list whose Stock In / Stock Out / Adjust
+// changed stock with no document) is gone: every change is a document now, and
+// its past entries are Stock In / Stock Out documents of type "Stock Movement".
 const INV_TABS = [
-  { k: "movement", l: "admin.stock_movement" },
   { k: "in", l: "admin.stock_in" },
   { k: "out", l: "admin.stock_out" },
   { k: "adjust", l: "admin.adjust_stock" },
@@ -2815,18 +2817,13 @@ const INV_TABS = [
 ] as const;
 type InvTab = (typeof INV_TABS)[number]["k"];
 
-function Inventory({ isWide, canManage, canAdjust }: {
+function Inventory({ canManage, canAdjust }: {
   isWide: boolean; canManage: boolean; canAdjust: boolean;
 }) {
   useT(); // re-render this screen when the language changes
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [activeCat, setActiveCat] = useState<string>("");
-  const [tab, setTab] = useState<InvTab>("movement");
-  const [stockModal, setStockModal] = useState<Product | null>(null);
-  const [sortBy, setSortBy] = useState<"custom" | "name" | "inventory">("custom");
-  const [search, setSearch] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<InvTab>("in");
 
   const load = async () => {
     const [c, p] = await Promise.all([
@@ -2835,46 +2832,20 @@ function Inventory({ isWide, canManage, canAdjust }: {
     ]);
     setCategories(c);
     setProducts(p);
-    if (!activeCat && c.length) setActiveCat(c[1]?.id || c[0].id);
   };
   useEffect(() => { load(); }, []);
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    try { await load(); } finally { setRefreshing(false); }
-  };
+  // Every tab is a stock document, so without inventory there is none;
+  // without adjust, its tab goes.
+  const tabs = canManage ? INV_TABS.filter((t) => t.k !== "adjust" || canAdjust) : [];
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let list = products.filter((p) => p.category_id === activeCat);
-    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || (p.barcode || "").toLowerCase().includes(q));
-    if (sortBy === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
-    if (sortBy === "inventory") return [...list].sort((a, b) => a.stock - b.stock);
-    return list;
-  }, [products, activeCat, sortBy, search]);
-  const curCat = categories.find((c) => c.id === activeCat);
-
-  // Without inventory only the read-only movement list is left; without
-  // adjust, its tab and the modal's Adjust button go.
-  const tabs = INV_TABS.filter((t) =>
-    t.k === "movement" || (canManage && (t.k !== "adjust" || canAdjust)));
-
-  const doMovement = async (type: "in" | "out" | "adjust", qty: number) => {
-    if (!stockModal) return;
-    const res = await apiFetch(`${API}/stock-movements`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ product_id: stockModal.id, type, qty, note: `Admin ${type}` }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showAlert(tr("admin.save_failed"), err?.detail || tr("admin.please_try_again"));
-    }
-    setStockModal(null);
-    load();
-  };
-
-  const isDocTab = tab !== "movement";
+  if (!tabs.length) {
+    return (
+      <View style={styles.emptyBox} testID="inventory-section">
+        <Text style={styles.emptyText}>{tr("admin.inventory_no_access")}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1 }} testID="inventory-section">
@@ -2901,131 +2872,7 @@ function Inventory({ isWide, canManage, canAdjust }: {
         </ScrollView>
       </View>
 
-      {isDocTab ? (
-        <StockDocuments type={tab as DocType} products={products} categories={categories} onChanged={load} />
-      ) : (
-        <View style={[styles.twoCol, !isWide && styles.stackedCol, { flex: 1 }]}>
-          {isWide ? (
-            <View style={styles.leftNav}>
-              <View style={styles.invSearchRow}>
-                <Ionicons name="search" size={16} color={C.ink3} />
-                <TextInput
-                  style={styles.invSearchInput}
-                  placeholder={tr("common.search")}
-                  placeholderTextColor={C.ink3}
-                  value={search}
-                  onChangeText={setSearch}
-                />
-              </View>
-              <ScrollView>
-                {categories.map((c) => (
-                  <TouchableOpacity
-                    key={c.id}
-                    style={[styles.leftNavRow, activeCat === c.id && styles.leftNavRowActive]}
-                    onPress={() => setActiveCat(c.id)}
-                    testID={`inv-cat-${c.id}`}
-                  >
-                    <Text style={styles.leftNavText} numberOfLines={1}>{c.name}</Text>
-                    <Ionicons name="chevron-forward" size={14} color={C.ink3} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          ) : (
-            <View style={styles.narrowCatBar}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}
-              >
-                {categories.map((c) => {
-                  const active = activeCat === c.id;
-                  return (
-                    <TouchableOpacity
-                      key={c.id}
-                      style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
-                      onPress={() => setActiveCat(c.id)}
-                      testID={`inv-cat-${c.id}`}
-                    >
-                      <Text style={[styles.catChipText, active && { color: C.surface }]}>{c.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.sectionHeader}>
-              {curCat?.name} ({filtered.length})
-            </Text>
-            <View style={styles.sortRow}>
-              <Text style={styles.sortLabel}>{tr("admin.sort")}</Text>
-              {(["custom", "name", "inventory"] as const).map((s) => (
-                <TouchableOpacity
-                  key={s}
-                  style={[styles.sortTab, sortBy === s && styles.sortTabActive]}
-                  onPress={() => setSortBy(s)}
-                  testID={`inv-sort-${s}`}
-                >
-                  <Text style={[styles.sortTabText, sortBy === s && styles.sortTabTextActive]}>
-                    {s === "custom" ? tr("admin.custom") : s === "name" ? tr("common.name") : tr("admin.inventory")}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <FlatList
-              data={filtered}
-              keyExtractor={(i) => i.id}
-              contentContainerStyle={{ padding: 14 }}
-              refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.brand]} tintColor={C.brand} />
-              }
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.invRow}
-                  onPress={canManage ? () => setStockModal(item) : undefined}
-                  disabled={!canManage}
-                  testID={`inv-prod-${item.id}`}
-                >
-                  <Image source={{ uri: item.image_base64 || item.image_url }} style={styles.invImg} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.invName} numberOfLines={2}>{item.name}</Text>
-                    <Text style={styles.invPrice}>{THB(item.price)}</Text>
-                  </View>
-                  <View style={styles.stockBox}>
-                    {item.product_type === "BOM" ? (
-                      <Text style={styles.nonStockText}>{tr("admin.non_stock_product")}</Text>
-                    ) : (
-                      <>
-                        <Text style={[styles.stockNum, item.stock <= 0 && { color: C.danger }]}>
-                          {item.stock}
-                        </Text>
-                        <Text style={[styles.stockStatus, item.stock <= 0 && { color: C.danger }]}>
-                          {item.stock <= 0 ? tr("admin.out_of_stock") : tr("admin.in_stock")}
-                        </Text>
-                      </>
-                    )}
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={C.lineStrong} />
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>{tr("admin.no_products")}</Text>
-                </View>
-              }
-            />
-          </View>
-        </View>
-      )}
-
-      <StockMovementModal
-        product={stockModal}
-        defaultType={tab === "adjust" && canAdjust ? "adjust" : "in"}
-        canAdjust={canAdjust}
-        onClose={() => setStockModal(null)}
-        onSave={doMovement}
-      />
+      <StockDocuments type={tab} products={products} categories={categories} onChanged={load} />
     </View>
   );
 }
@@ -4442,72 +4289,6 @@ function SelectDocumentsModal({
             />
           )}
         </View>
-      </View>
-    </Modal>
-  );
-}
-
-function StockMovementModal({
-  product, defaultType, canAdjust, onClose, onSave,
-}: {
-  product: Product | null;
-  defaultType: "in" | "out" | "adjust";
-  canAdjust: boolean;
-  onClose: () => void;
-  onSave: (t: "in" | "out" | "adjust", qty: number) => void;
-}) {
-  useT(); // re-render this screen when the language changes
-  const [type, setType] = useState(defaultType);
-  const [qty, setQty] = useState("");
-  useEffect(() => {
-    if (product) { setType(defaultType); setQty(""); }
-  }, [product, defaultType]);
-
-  return (
-    <Modal visible={!!product} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        {product && (
-          <View style={styles.smallModal} testID="stock-modal">
-            <View style={styles.modalHead}>
-              <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={C.ink2} /></TouchableOpacity>
-              <Text style={styles.modalTitle}>{tr("admin.stock")} {product.name.slice(0, 24)}</Text>
-              <View style={{ width: 24 }} />
-            </View>
-            <View style={{ padding: 20, gap: 14 }}>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {(canAdjust ? (["in", "out", "adjust"] as const) : (["in", "out"] as const)).map((t) => (
-                  <TouchableOpacity
-                    key={t}
-                    style={[styles.typeBtn, type === t && styles.typeBtnActive]}
-                    onPress={() => setType(t)}
-                    testID={`stock-type-${t}`}
-                  >
-                    <Text style={[styles.typeBtnText, type === t && { color: C.surface }]}>
-                      {t === "in" ? tr("admin.stock_in") : t === "out" ? tr("admin.stock_out") : tr("admin.adjust")}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.formLabel}>{tr("admin.current_stock")} {product.stock}</Text>
-              <TextInput
-                placeholder={type === "adjust" ? tr("admin.new_stock_value") : tr("common.quantity")}
-                keyboardType="number-pad"
-                style={styles.formInput}
-                value={qty}
-                onChangeText={setQty}
-                testID="stock-qty"
-              />
-              <TouchableOpacity
-                style={[styles.primaryBtn, !qty && { opacity: 0.5 }]}
-                disabled={!qty}
-                onPress={() => onSave(type, parseInt(qty || "0"))}
-                testID="stock-save"
-              >
-                <Text style={styles.primaryBtnText}>{tr("admin.save_movement")}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
       </View>
     </Modal>
   );

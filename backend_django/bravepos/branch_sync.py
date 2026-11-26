@@ -30,7 +30,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import catalog, discounts
-from .models import DiscountType, PaymentType, StockInReason, StockOutReason
+from .models import (
+    RESERVED_STOCK_TYPE_MESSAGE, DiscountType, PaymentType, StockInReason, StockOutReason,
+    is_reserved_stock_type,
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,8 @@ STOCK_OUT_FIELDS = ("name_th", "active")
 
 def add_stock_out_type(branch, name, name_th, active=True):
     """A new stock-out type at ``branch``, last in its list."""
+    if is_reserved_stock_type(name):
+        raise ValueError(RESERVED_STOCK_TYPE_MESSAGE)
     last = StockOutReason.objects.filter(branch=branch).order_by("-sort_order").first()
     return StockOutReason.objects.create(
         branch=branch, name=name, name_th=name_th, active=active,
@@ -173,6 +178,8 @@ STOCK_IN_FIELDS = ("name_th", "active")
 
 def add_stock_in_type(branch, name, name_th, active=True):
     """A new stock-in type at ``branch``, last in its list."""
+    if is_reserved_stock_type(name):
+        raise ValueError(RESERVED_STOCK_TYPE_MESSAGE)
     last = StockInReason.objects.filter(branch=branch).order_by("-sort_order").first()
     return StockInReason.objects.create(
         branch=branch, name=name, name_th=name_th, active=active,

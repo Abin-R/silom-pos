@@ -140,6 +140,7 @@ const th = {
     in_stock: "มีสต็อก",
     invalid_tax_id: "เลขประจำตัวผู้เสียภาษีไม่ถูกต้อง",
     inventory: "สินค้าคงคลัง",
+    inventory_no_access: "กรุณาให้ผู้ดูแลติ๊ก \"Manage inventory\" ให้คุณในระบบหลังบ้าน",
     items: "รายการ",
     its_lines_totals_and_reprint_options: "รายการสินค้า ยอดรวม และตัวเลือกพิมพ์ซ้ำจะแสดงที่นี่",
     just_now: "เมื่อสักครู่",
