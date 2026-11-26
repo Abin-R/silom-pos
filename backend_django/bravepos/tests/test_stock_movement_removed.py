@@ -36,6 +36,7 @@ from bravepos.views import save_stock_in_document
 from .factories import make_branch, make_product
 
 MIGRATION = importlib.import_module("bravepos.migrations.0104_stock_movement_to_documents")
+FILL_STAFF = importlib.import_module("bravepos.migrations.0105_stock_movement_documents_staff")
 _state_apps = None
 
 
@@ -150,6 +151,18 @@ class MigrationTests(_Base):
                                      qty=-3, note="Opening stock")
         run_migration()
         self.assertFalse(self.migrated().exists())
+
+    def test_a_blank_staff_name_comes_from_the_audit_log(self):
+        named = self.entry("in", 5)
+        unknown = self.entry("out", 1, product=make_product(self.branch, name="Pie", stock=4))
+        StockMovement.objects.update(created_by="", staff=None)   # before 26 Oct
+        AuditLog.objects.filter(object_id=str(self.cake.id)).update(actor_label="Da")
+        run_migration()
+        self.assertEqual(set(self.migrated().values_list("created_by", flat=True)), {""})
+        FILL_STAFF.forwards(_state_apps, SimpleNamespace(connection=connection))
+        self.assertEqual(
+            dict(self.migrated().values_list("document_no", "created_by")),
+            {named.document_no: "Da", unknown.document_no: ""})
 
     def test_reverse_removes_only_the_filed_ones(self):
         self.entry("in", 5)
