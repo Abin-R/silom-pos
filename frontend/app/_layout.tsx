@@ -16,6 +16,7 @@ import { PrinterHost } from "../lib/printerHost";
 import { startOtaAutoUpdate } from "../lib/otaAutoUpdate";
 import { startStoreUpdateCheck } from "../lib/storeUpdate";
 import { OtaStatus } from "../components/OtaStatus";
+import { StoreUpdateRequired } from "../components/StoreUpdateRequired";
 
 // Error + performance monitoring. Needs EXPO_PUBLIC_SENTRY_DSN (set in
 // .env.production, so it only lands in release bundles) *and* a non-dev build.
@@ -143,6 +144,9 @@ function RootLayout() {
             a dialog raised from any screen renders over it. */}
         <DialogHost />
         <ToastHost />
+        {/* iPad: "Update required" until the new store version is installed
+            — see lib/storeUpdate. Renders nothing on Android. */}
+        <StoreUpdateRequired />
         {/* "Downloading update" / "Updating…" — see lib/otaAutoUpdate. */}
         <OtaStatus />
       </PrinterHost>

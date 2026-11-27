@@ -11,8 +11,12 @@
  *    Back) cannot be removed, so closing it closes Brave POS; reopening the app
  *    shows the updater again. Only works for an install that came from Play.
  *  - iOS: Apple has no in-app update and apps may not close themselves, so
- *    this opens the App Store sheet and opens it again whenever it is closed
- *    without updating. Nothing happens until the new version is live there.
+ *    the till is covered by a full-screen "Update required" page
+ *    (components/StoreUpdateRequired) and the App Store pop-up opens over it.
+ *    Closing the pop-up leaves the page up; its Update now button opens the
+ *    pop-up again. The page goes away only when the new version is installed
+ *    (iOS restarts the app on it) or the backoffice switch is turned off.
+ *    Nothing happens until the new version is live there.
  *
  * The update screen only opens when the till is idle (isTillIdle: PIN or sale
  * screen, no sale, payment, popup or print in progress) and never while an OTA
@@ -60,6 +64,9 @@ const RETRY_AFTER_FAILURE_MS = 60_000;
 // before opening it again, so a late cancel event lands first.
 const RESUME_GRACE_MS = 5_000;
 const CONFIG_TIMEOUT_MS = 8_000;
+// iOS: while the "Update required" page is up, look at the backoffice switch
+// this often, so turning it off frees the till without a restart.
+const SWITCH_RECHECK_MS = 5 * 60_000;
 
 function loadModule(): InAppUpdates | null {
   if (__DEV__ || Platform.OS === "web") return null;
@@ -105,6 +112,38 @@ async function readForcedUpdatesSwitch(): Promise<boolean> {
   return forcedUpdatesOn;
 }
 
+// iOS "Update required" page state, read by components/StoreUpdateRequired.
+export type StoreUpdateGate = {
+  required: boolean;
+  version: string | null;
+  // The App Store pop-up is being opened (Update now shows a spinner).
+  opening: boolean;
+};
+let gate: StoreUpdateGate = { required: false, version: null, opening: false };
+const gateListeners = new Set<(g: StoreUpdateGate) => void>();
+
+function setGate(patch: Partial<StoreUpdateGate>) {
+  gate = { ...gate, ...patch };
+  gateListeners.forEach((l) => l(gate));
+}
+
+export function getStoreUpdateGate(): StoreUpdateGate {
+  return gate;
+}
+
+export function subscribeStoreUpdateGate(l: (g: StoreUpdateGate) => void): () => void {
+  gateListeners.add(l);
+  return () => gateListeners.delete(l);
+}
+
+// Set by the running checker: Update now on the page.
+let openFromPage: (() => void) | null = null;
+
+/** The page's Update now button: open the App Store pop-up again. */
+export function openStoreUpdate() {
+  openFromPage?.();
+}
+
 // The root layout can mount twice (activity recreated after exitApp); only
 // one checker may run.
 let stopRunning: (() => void) | null = null;
@@ -116,6 +155,7 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
   if (!mod) return () => {};
 
   let available = false;
+  let storeVersion: string | null = null;
   let checking = false;
   let lastCheckAt = 0;
   // An update screen is open (or being opened) right now.
@@ -144,6 +184,7 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
       // progress"; startUpdate resumes it.
       if (info.updateAvailable) {
         available = true;
+        storeVersion = info.storeVersion ?? null;
         note("store update available", {
           storeVersion: info.storeVersion ?? null,
           inProgress: info.updateInProgress ?? false,
@@ -155,6 +196,36 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
       note("check failed", { error: String(e?.message ?? e) });
     } finally {
       checking = false;
+    }
+  };
+
+  // iOS: the backoffice switch was turned off while the page was up.
+  const unblock = () => {
+    note("forced updates switched off, page closed");
+    available = false;
+    showing = false;
+    setGate({ required: false, opening: false });
+  };
+
+  // iOS: open the App Store pop-up over the "Update required" page. A failure
+  // (the pop-up can't load, or one is already up after the iPad slept) leaves
+  // the page with its Update now button to try again.
+  const presentIosSheet = async (checkSwitch: boolean) => {
+    if (gate.opening) return;
+    setGate({ opening: true });
+    try {
+      if (checkSwitch && !(await readForcedUpdatesSwitch())) {
+        unblock();
+        return;
+      }
+      showing = true;
+      note("opening update screen");
+      await mod.startUpdate();
+    } catch (e: any) {
+      showing = false;
+      note("update screen failed", { error: String(e?.message ?? e) });
+    } finally {
+      setGate({ opening: false });
     }
   };
 
@@ -174,6 +245,13 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
     if (getOtaStatus() !== "idle" || !isTillIdle(getPath())) {
       showing = false;
       startIdleWatch();
+      return;
+    }
+
+    if (Platform.OS === "ios") {
+      // The page goes up first and stays until the update is installed.
+      setGate({ required: true, version: storeVersion });
+      await presentIosSheet(false);
       return;
     }
 
@@ -232,10 +310,22 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
       BackHandler.exitApp();
       return;
     }
-    // iOS can't close itself; show the App Store sheet again once idle.
+    // iOS can't close itself. The "Update required" page stays up; its
+    // Update now button opens the pop-up again.
     showing = false;
-    startIdleWatch();
+    if (!gate.required) startIdleWatch();
   });
+
+  openFromPage = Platform.OS === "ios" ? () => void presentIosSheet(true) : null;
+  const switchPoll =
+    Platform.OS === "ios"
+      ? setInterval(() => {
+          if (!gate.required) return;
+          void readForcedUpdatesSwitch().then((on) => {
+            if (!on) unblock();
+          });
+        }, SWITCH_RECHECK_MS)
+      : null;
 
   const poll = setInterval(() => {
     if (AppState.currentState === "active") void check();
@@ -243,6 +333,14 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
 
   const sub = AppState.addEventListener("change", (state) => {
     if (state !== "active") return;
+    if (Platform.OS === "ios" && gate.required) {
+      // The page is up and has its own button; only see whether the
+      // backoffice has turned forced updates off in the meantime.
+      void readForcedUpdatesSwitch().then((on) => {
+        if (!on) unblock();
+      });
+      return;
+    }
     if (showing) {
       // Reopened after closing the updater: straight back to it. Back from the
       // store page or a failed install with no cancel event: shortly.
@@ -260,6 +358,8 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
   const stop = () => {
     clearTimeout(first);
     clearInterval(poll);
+    if (switchPoll) clearInterval(switchPoll);
+    openFromPage = null;
     stopIdleWatch();
     sub.remove();
     stopCancelled();
