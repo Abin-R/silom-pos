@@ -582,6 +582,11 @@ const th = {
   },
   store_update: {
     failed: "เริ่มอัปเดตไม่ได้ ลองใหม่ภายหลัง หรืออัปเดตจากสโตร์",
+    required_title: "ต้องอัปเดตแอป",
+    required_note: "Brave POS มีเวอร์ชันใหม่บน App Store กรุณาอัปเดตเพื่อใช้งานเครื่องต่อ",
+    required_note_version: "Brave POS {{version}} พร้อมแล้วบน App Store กรุณาอัปเดตเพื่อใช้งานเครื่องต่อ",
+    update_now: "อัปเดตตอนนี้",
+    required_hint: "แตะ อัปเดต ใน App Store แล้ว Brave POS จะเปิดใหม่ในเวอร์ชันล่าสุด",
   },
   pos: {
     add_customer: "เพิ่มลูกค้า",

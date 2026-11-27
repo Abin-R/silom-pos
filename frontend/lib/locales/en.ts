@@ -588,6 +588,11 @@ const en = {
   },
   store_update: {
     failed: "Couldn't start the update. Try again later, or update from the store.",
+    required_title: "Update required",
+    required_note: "A new version of Brave POS is on the App Store. Update to keep using the till.",
+    required_note_version: "Brave POS {{version}} is on the App Store. Update to keep using the till.",
+    update_now: "Update now",
+    required_hint: "Tap Update in the App Store. Brave POS reopens on the new version.",
   },
   pos: {
     add_customer: "Add customer",
