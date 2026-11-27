@@ -13,7 +13,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { C } from "../lib/theme";
 import {
   FlatList,
-  Modal,
   StyleSheet,
   Text,
   TextInput,
@@ -29,6 +28,7 @@ import {
   parseE164,
   validatePhone,
 } from '../lib/phone';
+import Modal from './Modal';
 import { t as tr, useT } from "../lib/i18n";
 
 type Props = {

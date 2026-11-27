@@ -7,7 +7,6 @@ import {
   FlatList,
   Image,
   TextInput,
-  Modal,
   ScrollView,
   RefreshControl,
   ActivityIndicator,
@@ -20,6 +19,7 @@ import { StatusBar } from "expo-status-bar";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import PhoneInput from "../components/PhoneInput";
+import Modal from "../components/Modal";
 import { redactProps } from "../lib/logrocket";
 import { phoneMatchKey } from "../lib/phone";
 import { usePrinter } from "../lib/printerHost";

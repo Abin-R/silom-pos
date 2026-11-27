@@ -12,7 +12,8 @@
 // Mount <DialogHost /> once, at the root (see app/_layout.tsx).
 
 import React, { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import Modal from "../components/Modal";
 import { C, R } from "./theme";
 import { t as tr } from "./i18n";
 import { Btn } from "./ui";
