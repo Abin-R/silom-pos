@@ -351,6 +351,58 @@
     document.addEventListener('click', close);
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
   })();
+
+  // A chip is one target. The browser only answers clicks that land on the
+  // select or input inside a `.ctl`; the icon, the chevron, the "→" and
+  // the padding all hit the wrapper div, which does nothing. And Chrome
+  // only opens a date picker from its tiny calendar glyph; a click on the
+  // digits just selects "dd". One listener here fixes both on every page.
+  (function () {
+    var PICKER = 'input[type="date"], input[type="time"], input[type="month"], input[type="datetime-local"]';
+    var CONTROL = 'a, button, input, select, textarea, label, summary';
+
+    function usable(field) { return !field.disabled && !field.readOnly; }
+
+    function open(field) {
+      field.focus();
+      if (field.tagName === 'SELECT' || field.matches(PICKER)) {
+        // showPicker is missing on older browsers (select in Safari) and throws
+        // when the field cannot show a picker; focus alone is the fallback.
+        try { if (field.showPicker) field.showPicker(); } catch (e) { /* focused is enough */ }
+      }
+    }
+
+    document.addEventListener('click', function (e) {
+      var target = e.target;
+      if (!(target instanceof Element)) return;
+
+      // 1. The field itself: open the whole picker, not one segment of it.
+      if (target.matches(PICKER)) {
+        if (usable(target)) { try { target.showPicker(); } catch (err) { /* focused is enough */ } }
+        return;
+      }
+
+      // 2. The chip around a field: hand the click to the field.
+      var chip = target.closest('.ctl');
+      if (!chip || chip.classList.contains('is-static')) return;
+      if (chip.matches('label, summary')) return;  // the browser forwards these already
+      if (target.closest(CONTROL)) return;          // a real control took the click
+
+      var fields = Array.prototype.filter.call(
+        chip.querySelectorAll('select, input:not([type="hidden"]), textarea'), usable);
+      if (!fields.length) return;
+
+      // Two fields (from → to): the one nearer the click, so the calendar icon
+      // opens "from" and anything right of the arrow opens "to".
+      var best = fields[0], bestDist = Infinity;
+      fields.forEach(function (f) {
+        var r = f.getBoundingClientRect();
+        var d = e.clientX < r.left ? r.left - e.clientX : e.clientX > r.right ? e.clientX - r.right : 0;
+        if (d < bestDist) { best = f; bestDist = d; }
+      });
+      open(best);
+    });
+  })();
 </script>
 {% block extra_scripts %}{% endblock %}
 </body>
