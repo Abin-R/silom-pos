@@ -197,6 +197,20 @@ class DevicesPageTests(TestCase):
         self.assertEqual([g["name"] for g in res.context["branch_groups"]], ["Central World"])
         self.assertEqual(self.statuses(res)["behind-1"], "behind")
 
+    def test_an_ipad_only_update_leaves_android_tills_latest(self):
+        # 2026-11-27: an iOS-only OTA on 1.5.0 made every Android 1.5.0 till
+        # read "Behind" an iPad.  Each platform is judged on its own updates.
+        TillDevice.objects.create(
+            device_id="ipad-1", branch=self.cw, platform="ios", manufacturer="Apple",
+            model="iPad", os_version="18", app_version="1.5.0", runtime_version="1.5.0",
+            channel="production", update_id="u-ios-9d1c",
+            update_published_at=datetime(2026, 11, 27, 9, 0, tzinfo=timezone.utc))
+        res = self.client.get(reverse("backoffice:devices"))
+        statuses = self.statuses(res)
+        self.assertEqual(statuses["newer-1"], "latest")
+        self.assertEqual(statuses["ipad-1"], "latest")
+        self.assertEqual(res.context["behind_count"], 1)   # only behind-1
+
     def test_version_summary(self):
         res = self.client.get(reverse("backoffice:devices"))
         self.assertEqual(res.context["version_counts"], [("1.5.0", 1), ("1.4.1", 3), ("Unknown", 1)])

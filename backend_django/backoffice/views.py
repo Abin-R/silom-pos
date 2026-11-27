@@ -7688,21 +7688,23 @@ def _version_key(version: str):
 def _device_statuses(devices):
     """Tag each device with ``status`` and ``version_behind``.
 
-    No call to EAS: "latest" is the newest OTA any tablet on the same app
-    version and channel is running.  That can only lag the truth by as long as
+    No call to EAS: "latest" is the newest OTA any tablet on the same platform,
+    app version and channel is running.  That can only lag the truth by as long as
     it takes the first tablet to pick an update up — minutes.
 
     * unknown — its app predates the version headers, so it reports nothing
     * old_app — the ``preview`` channel: the sideloaded build from the old Expo
       project, which our updates never reach
-    * latest / behind — against the newest OTA on its app version + channel
+    * latest / behind — against the newest OTA on its platform + app version +
+      channel.  Platform matters: an update can go to iOS alone (the iPad's
+      printer fixes did), and Android tills are not behind an iPad-only update.
     """
     newest_ota = {}
     newest_version = {}
     for d in devices:
         if not d.reports_version:
             continue
-        key = (d.runtime_version, d.channel)
+        key = (d.platform, d.runtime_version, d.channel)
         if d.update_published_at and (newest_ota.get(key) is None
                                       or d.update_published_at > newest_ota[key]):
             newest_ota[key] = d.update_published_at
@@ -7719,7 +7721,7 @@ def _device_statuses(devices):
         if d.channel == "preview":
             d.status = "old_app"
             continue
-        newest = newest_ota.get((d.runtime_version, d.channel))
+        newest = newest_ota.get((d.platform, d.runtime_version, d.channel))
         if newest is None or (d.update_published_at and d.update_published_at >= newest):
             d.status = "latest"
         else:
