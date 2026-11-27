@@ -15,7 +15,6 @@ import React, { useEffect, useRef } from "react";
 import {
   Animated,
   Image,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -24,6 +23,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import Modal from "./Modal";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
 import { C, R } from "../lib/theme";

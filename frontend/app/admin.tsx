@@ -7,7 +7,6 @@ import {
   FlatList,
   Image,
   TextInput,
-  Modal,
   ScrollView,
   RefreshControl,
   ActivityIndicator,
@@ -27,6 +26,7 @@ import * as Sentry from "@sentry/react-native";
 import Constants from "expo-constants";
 import * as ImageManipulator from "expo-image-manipulator";
 import PhoneInput from "../components/PhoneInput";
+import Modal from "../components/Modal";
 import {
   discoverPrinters as starDiscover,
   testPrint as starTestPrint,
