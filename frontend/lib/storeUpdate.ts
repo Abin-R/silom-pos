@@ -11,8 +11,11 @@
  *    Back) cannot be removed, so closing it closes Brave POS; reopening the app
  *    shows the updater again. Only works for an install that came from Play.
  *  - iOS: Apple has no in-app update and apps may not close themselves, so
- *    this opens the App Store sheet and opens it again whenever it is closed
- *    without updating. Nothing happens until the new version is live there.
+ *    this switches to the App Store app on Brave POS's page, where the
+ *    cashier taps Update. Coming back without updating sends the iPad
+ *    straight back there. (It used to show the App Store as a sheet inside
+ *    the app; its X only closed the sheet, which read as a dismissable
+ *    pop-up.) Nothing happens until the new version is live there.
  *
  * The update screen only opens when the till is idle (isTillIdle: PIN or sale
  * screen, no sale, payment, popup or print in progress) and never while an OTA
@@ -60,6 +63,10 @@ const RETRY_AFTER_FAILURE_MS = 60_000;
 // before opening it again, so a late cancel event lands first.
 const RESUME_GRACE_MS = 5_000;
 const CONFIG_TIMEOUT_MS = 8_000;
+// iOS: openURL resolved but the App Store never came to the front (blocked
+// by Screen Time, say): stop waiting for the app to return and try again.
+const IOS_LEAVE_TIMEOUT_MS = 10_000;
+const IOS_APP_STORE_ID = "6835755529";
 
 function loadModule(): InAppUpdates | null {
   if (__DEV__ || Platform.OS === "web") return null;
@@ -83,6 +90,11 @@ function openStorePage() {
   Linking.openURL(`market://details?id=${pkg}`).catch(() =>
     Linking.openURL(`https://play.google.com/store/apps/details?id=${pkg}`).catch(() => {}),
   );
+}
+
+function appStoreUrl(): string {
+  const id = (Constants.expoConfig?.ios?.infoPlist as any)?.AppStoreID || IOS_APP_STORE_ID;
+  return `itms-apps://apps.apple.com/app/id${id}`;
 }
 
 // Last answer from /api/app-config. On until the backoffice says otherwise.
@@ -188,10 +200,19 @@ export function startStoreUpdateCheck(getPath: () => string): () => void {
           openStorePage();
         }
       } else {
-        await mod.startUpdate();
+        // The App Store app, not the in-app sheet: see the header.
+        await Linking.openURL(appStoreUrl());
+        setTimeout(() => {
+          if (showing && AppState.currentState === "active") {
+            note("app store did not open, retrying");
+            showing = false;
+            holdUntil = Date.now() + RETRY_AFTER_FAILURE_MS;
+            startIdleWatch();
+          }
+        }, IOS_LEAVE_TIMEOUT_MS);
       }
       // Stay `showing` until the screen is closed (cancel event) or the app
-      // comes back to the front.
+      // comes back to the front (iOS: back from the App Store).
     } catch (e: any) {
       note("update screen failed", { error: String(e?.message ?? e) });
       if (Platform.OS === "android") {
